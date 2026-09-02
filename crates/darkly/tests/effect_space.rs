@@ -11,6 +11,7 @@ use darkly::document::MoveTarget;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::{DarklyEngine, SavePurpose};
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::*;
 use darkly::layer::LayerId;
 
@@ -598,6 +599,135 @@ fn dragging_an_effect_above_the_divider_puts_it_in_the_run() {
         run_ids(&engine),
         vec![below, above],
         "the dragged effect joins the run without moving anything else"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Animation across the divider
+// ---------------------------------------------------------------------------
+
+/// Grain at full reshuffle rate: `needs_animation()` is true, and every tick
+/// reseeds the noise, so two frames taken across a tick cannot be
+/// byte-identical.
+fn animated_grain(engine: &mut DarklyEngine) -> LayerId {
+    engine
+        .add_filter_layer(
+            "grain",
+            vec![
+                ParamValue::Float(1.0), // speed
+                ParamValue::Float(0.0), // color
+                ParamValue::Float(1.0), // opacity
+            ],
+            None,
+        )
+        .expect("`grain` should be addable as an effect layer")
+}
+
+/// Drain startup async work and clear the flags `frame_needs_more` reports
+/// independently of animation demand — headless renders never reach
+/// `finish_present`, so `needs_present` would otherwise stay stuck set from
+/// engine setup. What `frame_needs_more` returns afterwards is the animation
+/// answer alone.
+fn quiesce(engine: &mut DarklyEngine) {
+    for _ in 0..8 {
+        engine.render(0.0);
+    }
+    engine.test_flush_readbacks();
+    engine.test_clear_needs_present();
+}
+
+/// Advance the master clock past several divisor boundaries. `frame_count`
+/// only moves here in a headless engine, so the divisor-2 defaults are crossed
+/// deterministically.
+fn tick_animations(engine: &mut DarklyEngine) {
+    engine.test_tick_animations(1.0); // primes last_wall_time; dt == 0
+    for i in 1..=8 {
+        engine.test_tick_animations(1.0 + i as f32 * 0.05);
+    }
+}
+
+/// Regression: a canvas-space animated effect is the document's only animated
+/// content. It must keep the frame loop alive and advance its clock across
+/// frames — the canvas tick and `needs_animation()` were both gated on animated
+/// *voids* only, so the effect froze unless a void coincidentally existed.
+#[test]
+fn canvas_space_animated_effect_animates() {
+    let mut engine = test_engine(32, 32);
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128);
+
+    // Baseline quiescence *before* the effect exists, so the assertion below
+    // can only be satisfied by the effect layer, not by a leftover flag.
+    quiesce(&mut engine);
+    assert!(
+        !engine.test_frame_needs_more(),
+        "engine must be quiescent before the animated effect is added"
+    );
+
+    // The boundary is at 0, so the effect is canvas-space.
+    let fx = animated_grain(&mut engine);
+
+    // Composite once — that realizes and syncs the effect instance — then clear
+    // the transient flags again.
+    let before = engine.test_readback_canvas();
+    engine.test_flush_readbacks();
+    engine.test_clear_needs_present();
+
+    assert!(
+        engine.test_frame_needs_more(),
+        "a visible canvas-space animated effect must keep the frame loop alive"
+    );
+
+    tick_animations(&mut engine);
+    assert_ne!(
+        before,
+        engine.test_readback_canvas(),
+        "ticking the clock must advance a canvas-space effect and re-composite; \
+         identical bytes mean the canvas gate never fired"
+    );
+
+    // Hiding it silences the loop — the predicate honors effective visibility
+    // like every other animation gate.
+    engine.set_layer_visible(fx, false);
+    assert!(
+        !engine.test_frame_needs_more(),
+        "a hidden canvas-space animated effect must not keep the loop alive"
+    );
+}
+
+/// The mirror case, which is what pins both spaces to one mechanism rather than
+/// two: the same effect above the divider animates too. This passed before the
+/// canvas gate was fixed and must keep passing after — it is the coverage for
+/// the screen predicate's enumeration source moving from the document's
+/// screen-space run to the realized instance's own space tag.
+#[test]
+fn screen_space_animated_effect_animates() {
+    let (vw, vh) = (32u32, 32u32);
+    let mut engine = test_engine(vw, vh);
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128);
+    let fx = animated_grain(&mut engine);
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![fx], "the effect is viewport-only");
+
+    quiesce(&mut engine);
+
+    // A headless engine never realizes a Screen instance until the run has been
+    // sized, so this readback is also what puts the instance in the map.
+    let before = engine.test_readback_screen_run(vw, vh);
+    engine.test_flush_readbacks();
+    engine.test_clear_needs_present();
+
+    assert!(
+        engine.test_frame_needs_more(),
+        "a visible screen-space animated effect must keep the frame loop alive"
+    );
+
+    tick_animations(&mut engine);
+    assert_ne!(
+        before,
+        engine.test_readback_screen_run(vw, vh),
+        "ticking the clock must advance a screen-space effect"
     );
 }
 

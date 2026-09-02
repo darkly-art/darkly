@@ -3207,17 +3207,24 @@ impl Compositor {
         })
     }
 
-    /// Whether any effect layer above the divider wants continuous frames.
-    /// Only the screen-space side: a canvas-space animated effect drives
-    /// `needs_composite` through the layer path instead.
-    fn any_animated_screen_effect(&self, doc: &Document) -> bool {
-        doc.screen_space_run().iter().any(|id| {
-            doc.effective_visible(*id)
-                && self
-                    .effect_instances
-                    .get(id)
-                    .is_some_and(|inst| inst.effect.needs_animation())
-        })
+    /// Whether an effect instance takes part in an animation tick for one side
+    /// of the divider: it is realized in that space, it animates at its current
+    /// parameters, and it is effectively visible. The scheduler's predicate and
+    /// the tick itself both go through here, so they cannot drift apart about
+    /// which instances are in scope.
+    fn effect_animates(inst: &EffectInstance, id: LayerId, doc: &Document, screen: bool) -> bool {
+        (inst.space == EffectSpace::Screen) == screen
+            && inst.effect.needs_animation()
+            && doc.effective_visible(id)
+    }
+
+    /// Whether any effect layer on one side of the divider wants continuous
+    /// frames. The instance is the authority — `needs_animation()` is an answer
+    /// about current parameter values, which only the realized effect holds.
+    fn any_animated_effect(&self, doc: &Document, screen: bool) -> bool {
+        self.effect_instances
+            .iter()
+            .any(|(id, inst)| Self::effect_animates(inst, *id, doc, screen))
     }
 
     /// Advance every effectively-visible animated effect instance in one space
@@ -3232,10 +3239,7 @@ impl Compositor {
         screen: bool,
     ) {
         for (id, inst) in self.effect_instances.iter_mut() {
-            if (inst.space == EffectSpace::Screen) != screen {
-                continue;
-            }
-            if !inst.effect.needs_animation() || !doc.effective_visible(*id) {
+            if !Self::effect_animates(inst, *id, doc, screen) {
                 continue;
             }
             inst.effect.update_time(queue, &inst.cache, dt);
@@ -3391,7 +3395,7 @@ impl Compositor {
         let canvas_divisor = crate::config::get_i64("animation.canvas_divisor") as u64;
 
         let screen_fires = screen_divisor > 0
-            && self.any_animated_screen_effect(doc)
+            && self.any_animated_effect(doc, true)
             && self.frame_count.is_multiple_of(screen_divisor);
 
         let overlay_fires = overlay_divisor > 0
@@ -3404,7 +3408,7 @@ impl Compositor {
         // `docs/lessons-learned/gpu-lessons-learned.md` master-clock
         // principle.
         let canvas_fires = canvas_divisor > 0
-            && self.any_animated_layer(doc)
+            && (self.any_animated_layer(doc) || self.any_animated_effect(doc, false))
             && self.frame_count.is_multiple_of(canvas_divisor);
 
         if screen_fires {
@@ -3428,12 +3432,14 @@ impl Compositor {
         }
     }
 
-    /// Returns true if any animations need continuous frames (veils, overlay,
-    /// or any effectively-visible animated layer). `doc` is consulted for
-    /// per-layer visibility — same contract as [`Self::update_animations`].
+    /// Returns true if any animations need continuous frames (effect layers on
+    /// either side of the divider, the overlay, or any effectively-visible
+    /// animated layer). `doc` is consulted for per-layer visibility — same
+    /// contract as [`Self::update_animations`].
     pub fn needs_animation(&self, doc: &Document) -> bool {
         self.tool_overlay.needs_animation()
-            || self.any_animated_screen_effect(doc)
+            || self.any_animated_effect(doc, true)
+            || self.any_animated_effect(doc, false)
             || self.any_animated_layer(doc)
     }
 
