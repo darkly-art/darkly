@@ -19,7 +19,7 @@ import type { DarklyStorage } from '../storage/types';
 import type { BrushInfo, BrushPackInfo } from '../engine/protocol_gen';
 import { recentBrushes } from './recents.svelte';
 import { newId } from '../lib/id';
-import { PALETTE_ROLES, type PackPalette } from '../lib/packPalette';
+import { NEUTRAL_PALETTE, PALETTE_ROLES, type PackPalette } from '../lib/packPalette';
 
 /** A painter-created brush, as stored. The graph lives in the engine; what we
  *  persist is enough to put it back. */
@@ -112,6 +112,27 @@ export class BrushLibraryStore {
     /** The pack with `id`, if it exists. */
     pack(id: string): BrushPackInfo | undefined {
         return this.packs.find(p => p.id === id);
+    }
+
+    /**
+     * The colours a brush is drawn in, wherever it is shown outside the
+     * library: the palette of the first pack holding it.
+     *
+     * Keyed by name because that is the identity the loaded-brush state carries
+     * (`brushGraph.activeBrush`), while membership is id-keyed, so the hop
+     * through `BrushInfo` happens here rather than at every caller.
+     *
+     * A brush may be in several packs (packs are groupings, not folders) and
+     * wears the first, in the packs' own order, which is the one whose section
+     * it appears under first in the explorer. A brush no pack holds, and the
+     * unnamed graph a painter has edited into something of their own, both get
+     * `NEUTRAL_PALETTE`: every caller has a real palette to paint with and none
+     * has to ask whether a pack is behind it.
+     */
+    paletteForBrush(name: string | null): PackPalette {
+        const brush = this.brushes.find(b => b.name === name);
+        if (!brush) return NEUTRAL_PALETTE;
+        return this.packs.find(p => p.members.includes(brush.id))?.palette ?? NEUTRAL_PALETTE;
     }
 
     /** Packs the painter may export: every one, since exporting reads only. */
