@@ -643,12 +643,17 @@ impl<'a> GpuPaintTarget<'a> {
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, None);
     }
 
-    /// Render a linear gradient on the target. Selection masking optional.
+    /// Render a linear gradient over a canvas-space rect. `rect` is in canvas
+    /// pixel coordinates; origin may be negative on paste-extent layers. The
+    /// gradient axis `(x0, y0) → (x1, y1)` is in the same coordinates and is
+    /// independent of `rect`, which bounds only where fragments are generated.
+    /// Selection masking optional.
     pub fn linear_gradient(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
+        rect: CanvasRect,
         x0: f32,
         y0: f32,
         x1: f32,
@@ -660,8 +665,8 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.gradient_pipeline(self.format);
 
         let uniforms = GradientUniforms {
-            origin: [self.offset_x as f32, self.offset_y as f32],
-            size: [self.width as f32, self.height as f32],
+            origin: [rect.x0() as f32, rect.y0() as f32],
+            size: [rect.width as f32, rect.height as f32],
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
@@ -818,7 +823,8 @@ impl<'a> GpuPaintTarget<'a> {
 /// Pre-built render pipelines for paint operations.
 ///
 /// Pipeline variants: {composite, erase, clear} × {RGBA8, R8} for circle/rect ops,
-/// plus {gradient} × {RGBA8, R8} with replace blend.
+/// plus {gradient} × {RGBA8, R8}, which composites so selection coverage can
+/// modulate alpha.
 pub struct PaintPipelines {
     composite_rgba: wgpu::RenderPipeline,
     composite_r8: wgpu::RenderPipeline,

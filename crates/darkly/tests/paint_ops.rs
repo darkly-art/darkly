@@ -67,6 +67,7 @@ fn gpu_gradient_linear_interpolation() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0, // start: top-left
         128.0,
@@ -130,6 +131,7 @@ fn gpu_gradient_undo() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0,
         64.0,
@@ -575,6 +577,7 @@ fn gpu_gradient_on_mask() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0,
         64.0,
@@ -711,13 +714,15 @@ fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
         darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
     );
 
-    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x.
-    // No selection so the full layer renders.
+    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x,
+    // drawn over the whole canvas window. No selection so every canvas pixel
+    // the layer covers renders.
     let mut enc = encoder(&device);
     target.linear_gradient(
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
         0.0,
         0.0,
         100.0,

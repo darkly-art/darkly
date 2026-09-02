@@ -17,6 +17,8 @@ import {
     renderGraphic,
     normalizedHash,
     rasterize,
+    decodeJpeg,
+    worstTileRmse,
 } from '../../../scripts/render-doc-graphics.mjs';
 import type { GraphicContext } from '../context';
 
@@ -54,6 +56,14 @@ beforeAll(async () => {
 afterAll(async () => {
     await close?.();
 });
+
+function staleMessage(catalog: string): string {
+    return (
+        `${catalog}.jpg is stale; re-render it:\n` +
+        '  cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json\n' +
+        '  node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json'
+    );
+}
 
 function sidecarFor(catalog: string): Sidecar {
     return JSON.parse(readFileSync(path.join(GRAPHICS, `${catalog}.hash.json`), 'utf8'));
@@ -213,12 +223,34 @@ describe('documentation graphics', () => {
                 width: committed.width,
                 height: committed.height,
             });
-            expect(
-                normalizedHash(svg),
-                `${catalog}.jpg is stale; re-render it:\n` +
-                    '  cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json\n' +
-                    '  node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json',
-            ).toBe(committed.svg);
+            expect(normalizedHash(svg), staleMessage(catalog)).toBe(committed.svg);
+        }
+    });
+
+    // The hash above attests to the SVG, not to the file on disk, so on its own
+    // the committed JPEG could be anything at all. This is the only assertion
+    // that reads the artifact the README actually embeds.
+    //
+    // Fuzzy because it must survive JPEG requantization and any rasterizer
+    // difference between machines, neither of which is a stale image. Measured
+    // headroom on this composition: round-trip noise scores 0.028 and a real
+    // edit (the label font on all ten veils) scores 0.101, so the threshold sits
+    // between them with roughly 2x margin on each side. If this ever flakes,
+    // raise the threshold rather than deleting the check.
+    it.each([0.06])('every committed image matches its pixels (worst-tile RMSE < %s)', limit => {
+        for (const g of loaded) {
+            const catalog = g.component.catalog as string;
+            const file = path.join(GRAPHICS, `${catalog}.jpg`);
+            expect(existsSync(file), `${file} is missing`).toBe(true);
+
+            const committed = decodeJpeg(readFileSync(file));
+            const fresh = rasterize(svgFor(g));
+
+            expect({ width: committed.width, height: committed.height }, g.file).toEqual({
+                width: fresh.width,
+                height: fresh.height,
+            });
+            expect(worstTileRmse(committed, fresh), staleMessage(catalog)).toBeLessThan(limit);
         }
     });
 });

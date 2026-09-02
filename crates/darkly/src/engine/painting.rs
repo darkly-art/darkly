@@ -490,14 +490,17 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
-        // Brush strokes may extend past the layer's current canvas extent
-        // (e.g. paste-extent layers, or any stroke that wanders past the
-        // canvas). Grow the layer texture in chunked steps so the dab
-        // dispatch and undo paths see a sufficiently-large layer.
-        // Non-BrushStroke ops (gradient, flood fill, fill rect) operate on
-        // existing pixels and don't need preemptive growth.
-        if let StrokeOp::BrushStroke { x, y, .. } = op {
-            self.ensure_layer_covers_dab(layer_id, x, y);
+        // An op can reach past the target's current canvas extent: a brush
+        // wanders off a paste-extent layer, a gradient claims a canvas the
+        // layer predates. Grow the texture in chunked steps first, so the dab
+        // dispatch, the draw, and the undo paths all see a large enough target.
+        // The op answers how far it reaches; this call site never asks which
+        // op it is holding. An unavailable extent skips growth only: the op
+        // itself still runs, clipped to whatever the target covers.
+        if let Some(current) = self.node_canvas_extent(layer_id) {
+            if let Some(needed) = op.required_coverage(current, self.doc.canvas_rect()) {
+                self.ensure_layer_covers(layer_id, current, needed);
+            }
         }
 
         // Lazy init: save the paint target to scratch for undo on first
@@ -549,18 +552,31 @@ impl DarklyEngine {
                     Some(t) => t,
                     None => return,
                 };
+                // The canvas window is the region, not the target's own extent:
+                // a layer allocated before a resize would otherwise reproduce
+                // the old canvas, and one larger than the window (paste-extent,
+                // post-crop) would spill paint outside it.
+                let rect = self.doc.canvas_rect();
+                let sel_bg = if self.has_selection() {
+                    self.compositor
+                        .selection_state()
+                        .map(|s| s.selection_bind_group())
+                } else {
+                    None
+                };
                 self.gpu.encode("stroke-gradient", |encoder| {
                     target.linear_gradient(
                         encoder,
                         &self.paint_pipelines,
                         &self.gpu.queue,
+                        rect,
                         x0,
                         y0,
                         x1,
                         y1,
                         [r0, g0, b0, a0],
                         [r1, g1, b1, a1],
-                        None,
+                        sel_bg,
                     );
                 });
             }
@@ -618,12 +634,19 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
     }
 
-    /// Grow the layer texture if the next dab at canvas `(x, y)` would land
-    /// outside its current bounds. Triggered only when the dab CENTER falls
-    /// outside the layer's canvas extent; strokes within the layer don't
-    /// extend it (matching Krita's behavior of growing only when paint
-    /// actually escapes the layer's recorded bounds; dab footprints that
-    /// cross a layer edge are GPU-clipped).
+    /// Canvas extent of whichever pixel-bearing node `node_id` names, or `None`
+    /// when it has no paint target. `paint_target()` resolves the id against the
+    /// unified texture pool, so format and layer-vs-filter dispatch stay behind
+    /// that interface.
+    fn node_canvas_extent(&self, node_id: LayerId) -> Option<crate::coord::CanvasRect> {
+        self.paint_target(node_id)
+            .map(|t| t.canvas_frame().canvas_extent)
+    }
+
+    /// Grow the stroke target to cover `needed` (canvas-space), starting from
+    /// its `current_extent`. Callers get `needed` from
+    /// [`StrokeOp::required_coverage`], so how far an op reaches is the op's
+    /// own business; this is only the machinery that makes room for it.
     ///
     /// On growth, the StrokeBuffer scratch and RegionScratch scratch are both
     /// re-anchored to the new layer's local coordinate system so canvas-
@@ -631,43 +654,12 @@ impl DarklyEngine {
     /// referencing the old textures are rebuilt by their owners. Layer
     /// blend uniforms are refreshed so the next composite pass sees the
     /// new offset/size.
-    ///
-    /// The `needed` rect padded outward by `DAB_REFERENCE_SIZE/2` so the new
-    /// chunk-aligned extent comfortably covers the dab's worst-case
-    /// footprint, not just its center pixel.
-    fn ensure_layer_covers_dab(&mut self, layer_id: LayerId, x: f32, y: f32) {
-        // Fetch the current paint-target extent before mutating the compositor.
-        // `paint_target()` resolves the node id against the unified texture
-        // pool; format dispatch lives behind that interface.
-        let current_extent = match self.paint_target(layer_id) {
-            Some(t) => t.canvas_frame().canvas_extent,
-            None => return,
-        };
-
-        // Trigger: dab center outside current extent. Doesn't grow when the
-        // artist paints inside the canvas with a brush whose footprint
-        // happens to cross the canvas edge; those edge pixels would clip
-        // anyway with the canvas-aligned layer, matching pre-P2 behavior.
-        let cx = x.floor() as i32;
-        let cy = y.floor() as i32;
-        if cx >= current_extent.x0()
-            && cx < current_extent.x1()
-            && cy >= current_extent.y0()
-            && cy < current_extent.y1()
-        {
-            return;
-        }
-
-        // Center-out-of-bounds: pad the requested rect by half of
-        // DAB_REFERENCE_SIZE so the grown extent includes the dab's footprint.
-        const HALF: i32 = (crate::brush::DAB_REFERENCE_SIZE / 2) as i32;
-        let needed = crate::coord::CanvasRect::from_xywh(
-            cx - HALF,
-            cy - HALF,
-            (HALF as u32) * 2,
-            (HALF as u32) * 2,
-        );
-
+    fn ensure_layer_covers(
+        &mut self,
+        layer_id: LayerId,
+        current_extent: crate::coord::CanvasRect,
+        needed: crate::coord::CanvasRect,
+    ) {
         // Grow the stroke target itself: raster grows the raster, a mask
         // stroke grows the mask (no host coupling).
         let new_extent = match self.grow_node_to_fit(layer_id, needed) {

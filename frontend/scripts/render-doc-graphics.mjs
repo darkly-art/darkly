@@ -172,6 +172,48 @@ export function encodeJpeg({ rgba, width, height }) {
     return jpeg.encode({ data: rgba, width, height }, JPEG_QUALITY).data;
 }
 
+export function decodeJpeg(bytes) {
+    const { data, width, height } = jpeg.decode(bytes, { useTArray: true });
+    return { rgba: data, width, height };
+}
+
+/**
+ * The worst tile's RMSE between two rasters, 0 to 1.
+ *
+ * Tiled rather than whole-image on purpose. These graphics are mostly
+ * photographic stills, which dominate the pixel count, so a real edit is a
+ * rounding error globally: swapping the face on all ten veil labels moves 0.25%
+ * of pixels, against 0.09% for JPEG round-trip noise alone. Taking the worst
+ * tile localizes the change instead of averaging it away, which widens that
+ * margin from 2.8x to 3.6x (0.101 against 0.028 on the same pair).
+ */
+export function worstTileRmse(a, b, cols = 8, rows = 6) {
+    if (a.width !== b.width || a.height !== b.height) return 1;
+    const tw = Math.ceil(a.width / cols);
+    const th = Math.ceil(a.height / rows);
+    let worst = 0;
+    for (let ty = 0; ty < rows; ty++) {
+        for (let tx = 0; tx < cols; tx++) {
+            let sum = 0;
+            let n = 0;
+            const yEnd = Math.min((ty + 1) * th, a.height);
+            const xEnd = Math.min((tx + 1) * tw, a.width);
+            for (let y = ty * th; y < yEnd; y++) {
+                for (let x = tx * tw; x < xEnd; x++) {
+                    const i = (y * a.width + x) * 4;
+                    for (let c = 0; c < 3; c++) {
+                        const d = a.rgba[i + c] - b.rgba[i + c];
+                        sum += d * d;
+                        n++;
+                    }
+                }
+            }
+            if (n) worst = Math.max(worst, Math.sqrt(sum / n) / 255);
+        }
+    }
+    return worst;
+}
+
 /**
  * What the committed image was rendered from, written beside it.
  *

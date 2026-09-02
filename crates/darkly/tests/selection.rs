@@ -129,6 +129,7 @@ fn gpu_gradient_with_selection() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0,
         64.0,

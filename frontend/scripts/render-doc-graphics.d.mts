@@ -51,6 +51,11 @@ export function rasterize(svg: string): Raster;
 
 export function encodeJpeg(raster: Raster): Uint8Array;
 
+export function decodeJpeg(bytes: Uint8Array): Raster;
+
+/** Worst tile RMSE between two rasters, 0 to 1. Returns 1 on a size mismatch. */
+export function worstTileRmse(a: Raster, b: Raster, cols?: number, rows?: number): number;
+
 /** A context over the real metadata export and the committed stills. */
 export function diskContext(
     metadata: unknown,

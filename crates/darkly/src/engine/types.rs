@@ -1,5 +1,6 @@
 //! FFI/serialization types: serde-serializable for any WASM bridge.
 
+use crate::coord::CanvasRect;
 use crate::gpu::params::{ParamDef, ParamKind, ParamValue};
 use crate::units::UnitType;
 
@@ -513,6 +514,56 @@ pub enum StrokeOp {
     },
 }
 
+impl StrokeOp {
+    /// The canvas region the paint target must cover before this op runs, or
+    /// `None` when the op cannot reach beyond the pixels the target already has.
+    ///
+    /// A generative op manufactures pixels where there were none, so it claims
+    /// the whole canvas window: a target smaller than the canvas (a layer
+    /// allocated before a canvas resize, a paste-extent layer) is grown to meet
+    /// it rather than silently clipping the result to its allocation. Krita
+    /// reaches the same place from the other side, handing its gradient the
+    /// image bounds as an apply rect over a paint device that grows implicitly
+    /// (`plugins/tools/basictools/kis_tool_gradient.cc`).
+    ///
+    /// `current` is the target's canvas extent, `canvas` the document window.
+    pub(crate) fn required_coverage(
+        &self,
+        current: CanvasRect,
+        canvas: CanvasRect,
+    ) -> Option<CanvasRect> {
+        match self {
+            StrokeOp::LinearGradient { .. } => Some(canvas),
+
+            // The reachable region is the computed fill mask, which does not
+            // exist until the async readback lands, and that readback is bounded
+            // by the target texture. Coverage is settled there, not here.
+            StrokeOp::FloodFill { .. } => None,
+
+            // Growth only once the dab CENTER escapes the target, matching
+            // Krita's rule of growing when paint escapes the recorded bounds.
+            // A footprint that merely crosses the edge clips, as it would
+            // against the canvas-aligned layer it started from.
+            StrokeOp::BrushStroke { x, y, .. } => {
+                let cx = x.floor() as i32;
+                let cy = y.floor() as i32;
+                if current.contains(CanvasRect::from_xywh(cx, cy, 1, 1)) {
+                    return None;
+                }
+                // Pad by half a reference dab so the grown extent takes in the
+                // dab's footprint, not just its center pixel.
+                const HALF: i32 = (crate::brush::DAB_REFERENCE_SIZE / 2) as i32;
+                Some(CanvasRect::from_xywh(
+                    cx - HALF,
+                    cy - HALF,
+                    (HALF as u32) * 2,
+                    (HALF as u32) * 2,
+                ))
+            }
+        }
+    }
+}
+
 /// Data returned to the WASM bridge on copy/cut: always RGBA pixels regardless
 /// of the internal clipboard variant.
 #[derive(serde::Serialize)]
@@ -712,5 +763,102 @@ pub(crate) fn modifier_to_info(
             crate::document::FilterKind::Selection(_) => false,
         },
         editable: doc.is_node_editable(modifier.id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brush_at(x: f32, y: f32) -> StrokeOp {
+        StrokeOp::BrushStroke {
+            x,
+            y,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: 0.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        }
+    }
+
+    fn gradient() -> StrokeOp {
+        StrokeOp::LinearGradient {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 1.0,
+            y1: 0.0,
+            r0: 255,
+            g0: 0,
+            b0: 0,
+            a0: 255,
+            r1: 0,
+            g1: 0,
+            b1: 255,
+            a1: 255,
+        }
+    }
+
+    /// A gradient is generative, so it claims the canvas window whether the
+    /// target is smaller than it (a layer predating a resize) or larger (a
+    /// paste-extent or post-crop layer).
+    #[test]
+    fn gradient_claims_the_canvas_window() {
+        let canvas = CanvasRect::from_xywh(16, 16, 128, 96);
+        let smaller = CanvasRect::from_xywh(0, 0, 64, 64);
+        let larger = CanvasRect::from_xywh(-256, -256, 1024, 1024);
+
+        assert_eq!(gradient().required_coverage(smaller, canvas), Some(canvas));
+        assert_eq!(gradient().required_coverage(larger, canvas), Some(canvas));
+    }
+
+    /// A flood fill's reach is settled by its async readback, not here.
+    #[test]
+    fn flood_fill_claims_nothing() {
+        let op = StrokeOp::FloodFill {
+            x: 10.0,
+            y: 10.0,
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+            tolerance: 0,
+        };
+        let canvas = CanvasRect::from_xywh(0, 0, 128, 96);
+        assert_eq!(
+            op.required_coverage(CanvasRect::from_xywh(0, 0, 64, 64), canvas),
+            None
+        );
+    }
+
+    /// A brush grows only once the dab CENTER leaves the target, and then by a
+    /// half-reference-dab pad around that center rather than by the canvas.
+    #[test]
+    fn brush_grows_only_when_its_center_escapes() {
+        let canvas = CanvasRect::from_xywh(0, 0, 128, 96);
+        let current = CanvasRect::from_xywh(0, 0, 64, 64);
+
+        assert_eq!(
+            brush_at(32.0, 32.0).required_coverage(current, canvas),
+            None
+        );
+        assert_eq!(brush_at(63.9, 0.0).required_coverage(current, canvas), None);
+
+        const HALF: i32 = (crate::brush::DAB_REFERENCE_SIZE / 2) as i32;
+        assert_eq!(
+            brush_at(100.0, 20.0).required_coverage(current, canvas),
+            Some(CanvasRect::from_xywh(
+                100 - HALF,
+                20 - HALF,
+                HALF as u32 * 2,
+                HALF as u32 * 2
+            )),
+            "an escaped dab claims a pad around itself, not the canvas"
+        );
     }
 }
