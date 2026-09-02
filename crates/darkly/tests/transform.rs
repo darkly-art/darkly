@@ -40,7 +40,7 @@ fn pixel_at(pixels: &[u8], w: u32, x: u32, y: u32, bpp: u32) -> &[u8] {
 /// Build a `TransformPass` for use by these tests, which all exercise the
 /// commit (live-target write) path. The derived-preview rework moved
 /// preview rendering to the compositor's wrapper, so the tests no longer
-/// need accumulator/cache views — but `TransformState` still owns a
+/// need accumulator/cache views, but `TransformState` still owns a
 /// per-target `preview_texture` for completeness, so the helpers below
 /// supply a placeholder.
 fn setup_transform_pass(
@@ -127,7 +127,7 @@ fn commit_to_texture(
 
 /// Mirror of the production paste path: uploads RGBA pixel data and
 /// allocates a placeholder preview texture sized to the canvas.
-/// `target_format` matches the live target texture's format — RGBA8 for
+/// `target_format` matches the live target texture's format: RGBA8 for
 /// regular layers, R8 when committing onto a mask (the commit shader's
 /// `is_r8` branch maps the source's R channel into the single-channel
 /// output).
@@ -150,7 +150,7 @@ fn set_floating_content_rgba(
         make_preview_placeholder(device, target_format, canvas_w, canvas_h);
     let preview_blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test-preview-blend-uniforms"),
-        // Same size the compositor allocates — these tests don't read it
+        // Same size the compositor allocates: these tests don't read it
         // back; the buffer just satisfies `TransformState`'s ownership.
         size: 64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -461,7 +461,7 @@ fn transform_commit_rotate_90() {
 
     // Horizontal line at y=12, x=10..14. The commit shader 2×2-supersamples,
     // so a 1px-thin feature lands anti-aliased (≈0.75 coverage at the core)
-    // rather than fully opaque — the rotated content is still clearly present
+    // rather than fully opaque, the rotated content is still clearly present
     // and blue; only the edge softens.
     for x in 10..15u32 {
         let p = pixel_at(&pixels, cw, x, 12, 4);
@@ -534,7 +534,7 @@ fn paste_commit_identity() {
         wgpu::TextureFormat::Rgba8Unorm,
     );
 
-    // Commit with identity — pixels land at their original position.
+    // Commit with identity: pixels land at their original position.
     let mut enc = encoder(&device);
     commit_to_texture(
         &pass,
@@ -700,7 +700,7 @@ fn paste_commit_undo() {
 // Commit composites onto existing content (source-over blend)
 // ============================================================================
 
-/// Commit a semi-transparent source onto a solid background — verify blending.
+/// Commit a semi-transparent source onto a solid background; verify blending.
 #[test]
 fn commit_composites_over_existing() {
     let (device, queue) = test_device();
@@ -1100,7 +1100,7 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
     let (cw, ch) = (256u32, 256u32);
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
-    // Layer texture is 200×200 placed at canvas (-50, -50) — paste-extent
+    // Layer texture is 200×200 placed at canvas (-50, -50), paste-extent
     // configuration. Layer-local (0..200, 0..200) maps to canvas (-50..150).
     let target_off = (-50i32, -50i32);
     let (target_w, target_h) = (200u32, 200u32);
@@ -1114,7 +1114,7 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
 
     let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
-    // Source: 4×4 green block at canvas (10, 10). Identity transform — the
+    // Source: 4×4 green block at canvas (10, 10). Identity transform: the
     // block should appear unchanged at canvas (10, 10), which is layer-local
     // (60, 60) on the offset target.
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [0, 255, 0, 255]);
@@ -1178,7 +1178,7 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
     }
 
     // The OLD buggy mapping would have placed the block at layer-local
-    // (10, 10) — that position must be untouched.
+    // (10, 10), that position must be untouched.
     for dy in 0..4u32 {
         for dx in 0..4u32 {
             let p = pixel_at(&pixels, target_w, 10 + dx, 10 + dy, 4);
@@ -1211,7 +1211,7 @@ fn cancel_floating_after_layer_grow() {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
     let (init_w, init_h) = (256u32, 256u32);
 
-    // Initial 256×256 layer filled red — represents the pre-floating layer
+    // Initial 256×256 layer filled red, representing the pre-floating layer
     // pixels at canvas (0, 0)..(256, 256).
     let red: Vec<u8> = (0..init_w * init_h)
         .flat_map(|_| [255u8, 0, 0, 255])
@@ -1345,13 +1345,13 @@ fn cancel_floating_after_layer_grow() {
     );
 
     // The OLD buggy mapping would have placed the restore at layer-local
-    // (50, 50) — that position must remain untouched (zero in the
+    // (50, 50), that position must remain untouched (zero in the
     // newly-grown area of the layer).
     let buggy = pixel_at(&pixels, new_w, 50, 50, 4);
     assert_eq!(
         buggy[3], 0,
         "layer-local (50, 50) (canvas (-206, -206)) is in the grown area \
-         and must be transparent — non-zero alpha here would mean the \
+         and must be transparent; non-zero alpha here would mean the \
          restore landed at the stale pre-grow layer origin, A={}",
         buggy[3],
     );

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // The clone source marker renders via the snapshot-invert overlay path
-// (white on dark, black on light — same as the selection marching ants) so
+// (white on dark, black on light, same as the selection marching ants) so
 // it stays legible over arbitrary canvas content. `crosshair({ invert })`
 // must tag all four arm primitives with FLAG_INVERT_COLOR.
 

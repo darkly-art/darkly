@@ -62,17 +62,17 @@ beforeEach(() => {
 });
 
 describe('clone set-source vs. color picker on the same modifier', () => {
-    it('under the clone brush, ctrl resolves to setCloneSource — the picker yields', () => {
+    it('under the clone brush, ctrl resolves to setCloneSource: the picker yields', () => {
         fakeBrushGraph.activeBrush = 'Clone';
         const resolved = dragModifierActions('canvas', 'ctrl');
         expect(resolved.has('setCloneSource')).toBe(true);
         expect(resolved.has('sampleColor')).toBe(false);
-        // Paint tool active, no pointer down — the picker still must NOT engage
+        // Paint tool active, no pointer down: the picker still must NOT engage
         // because the winning action isn't sampleColor.
         expect(pickerEngages(resolved, true, false)).toBe(false);
     });
 
-    it('under a normal brush, ctrl resolves to sampleColor — the picker engages', () => {
+    it('under a normal brush, ctrl resolves to sampleColor; the picker engages', () => {
         fakeBrushGraph.activeBrush = 'Ink Pen';
         const resolved = dragModifierActions('canvas', 'ctrl');
         expect(resolved.has('sampleColor')).toBe(true);

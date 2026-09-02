@@ -2,7 +2,7 @@
 //!
 //! A "filter" is a layer-tree adjustment node: it transforms the composite of
 //! everything below it (`1 - color` for invert, a per-channel tone map for
-//! curves). Each filter owns a [`FilterEffect`] — its render pipeline plus any
+//! curves). Each filter owns a [`FilterEffect`]: its render pipeline plus any
 //! parameter-derived GPU resources (a curves LUT, say), held in a reused
 //! [`EffectCache`](super::effect::EffectCache). Parameter-free filters like
 //! invert are a trivial wrapper over the shared
@@ -16,8 +16,8 @@
 //! veils are fullscreen viewport post-process passes over ping-pong buffers
 //! driven by `VeilChain`; filters run over a group accumulator at a fixed tree
 //! position. The two share the [`EffectCache`](super::effect::EffectCache) and
-//! the [`ParamDef`]/[`ParamValue`](super::params::ParamValue) schema — where the
-//! real reuse lives — not the invocation contract.
+//! the [`ParamDef`]/[`ParamValue`](super::params::ParamValue) schema (where the
+//! real reuse lives), not the invocation contract.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,13 +32,13 @@ use crate::catalog::{Catalog, CatalogEntry};
 
 /// A filter's GPU realization: a render pipeline plus optional param-derived
 /// resources built into an [`EffectCache`]. One instance is shared (Arc'd)
-/// across every filter layer of the same type — the per-layer state (the built
+/// across every filter layer of the same type: the per-layer state (the built
 /// LUT, the change-detection fingerprint) lives in the compositor's cache map,
 /// not on the effect.
 pub trait FilterEffect: Send + Sync {
     /// Build or refresh any parameter-derived GPU resources (e.g. a curves LUT)
     /// into `cache`. Called from the compositor's pre-compose ensure phase
-    /// whenever a layer's params change — never in the render loop. A genuine
+    /// whenever a layer's params change - never in the render loop. A genuine
     /// no-op for parameter-free filters, so a transient empty `EffectCache`
     /// satisfies the destructive path.
     fn ensure(
@@ -74,11 +74,11 @@ pub struct FilterPipelineRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
     /// Iconify name (e.g. `"fa6-solid:chart-line"`) shown wherever the filter
-    /// surfaces — the Colors menu action and the filter-layer picker/tree row.
+    /// surfaces: the Colors menu action and the filter-layer picker/tree row.
     pub icon: &'static str,
     /// One-sentence summary shown as a picker tooltip and folded into the
     /// Colors-menu action description, where the command palette's substring
-    /// search indexes it — include the terms users would search for.
+    /// search indexes it; include the terms artists would search for.
     pub description: &'static str,
     /// Id of the action that applies this filter to the active layer. Bindings
     /// in `presets/*.yaml` name this string; declaring it here rather than
@@ -87,17 +87,17 @@ pub struct FilterPipelineRegistration {
     pub hotkey_action: &'static str,
     pub params: &'static [ParamDef],
     /// How long this filter's preview runs, or `None` for a filter with nothing
-    /// worth showing. Declaring an animation is what makes a filter previewable
-    /// — the two facts are one.
+    /// worth showing. Declaring an animation is what makes a filter previewable:
+    /// the two facts are one.
     pub preview: Option<PreviewAnim>,
     /// The parameter values this filter's preview shows at `t ∈ [0, 1]`, in
     /// `params` order.
     ///
     /// A function on the registration rather than a method on the effect,
     /// because a [`FilterEffect`] is shared across every filter layer of its
-    /// type and holds no parameters of its own — they reach it through
-    /// [`ensure`](FilterEffect::ensure), which is what this feeds. `None` — the
-    /// default — is a still at the schema defaults, which is the honest answer
+    /// type and holds no parameters of its own; they reach it through
+    /// [`ensure`](FilterEffect::ensure), which is what this feeds. `None`
+    /// (the default) is a still at the schema defaults, which is the honest answer
     /// for a filter with no parameters to sweep.
     pub preview_at: Option<fn(f32) -> Vec<ParamValue>>,
     pub create_pipeline: fn(&wgpu::Device) -> Arc<dyn FilterEffect>,
@@ -119,7 +119,7 @@ impl FilterPipelineRegistration {
     }
 }
 
-/// The filter catalog — every registered filter, sorted by `type_id`.
+/// The filter catalog: every registered filter, sorted by `type_id`.
 pub fn catalog() -> Catalog {
     Catalog::new(
         CATALOG_ID,
@@ -169,7 +169,7 @@ impl FilterPipelineRegistry {
 
     /// Return every registered filter's full [`FilterPipelineRegistration`],
     /// sorted by `type_id` for a stable menu order. Callers read whatever
-    /// fields they need off the registration — a new field is free here.
+    /// fields they need off the registration; a new field is free here.
     pub fn types(&self) -> Vec<&FilterPipelineRegistration> {
         let mut types: Vec<&FilterPipelineRegistration> =
             self.entries.values().map(|e| &e.reg).collect();
@@ -240,7 +240,7 @@ impl FilterPipelineRegistry {
     }
 
     /// Get or create the shared effect for a filter type. Returns `None`
-    /// for an unknown type rather than panicking — the caller (a protocol
+    /// for an unknown type rather than panicking; the caller (a protocol
     /// request carrying an arbitrary string) decides how to fail.
     pub fn pipeline(
         &mut self,

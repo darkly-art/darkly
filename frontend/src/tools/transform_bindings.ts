@@ -1,19 +1,19 @@
 /**
  * Consumer bindings for the transform gizmo. Each wires the generic gizmo to a
- * specific consumer's protocol surface — this is where knowledge of *what's
+ * specific consumer's protocol surface: this is where knowledge of *what's
  * being transformed* lives (deliberately NOT in the gizmo).
  *
  * Reads go through the async typed request transport (`engine.api.*`); live
  * updates and commit/cancel are fire-and-forget.
  *
- * - `floatingTransformBinding` — destructive raster extract/commit (paste &
+ * - `floatingTransformBinding` - destructive raster extract/commit (paste &
  *   move). The floating session must already be begun (`begin_transform`)
  *   before `read()` returns non-null.
- * - `voidTransformBinding` — a void's live, persistent transform property.
- * - `vectorObjectTransformBinding` — a single vector object's live transform.
+ * - `voidTransformBinding` - a void's live, persistent transform property.
+ * - `vectorObjectTransformBinding` - a single vector object's live transform.
  *
- * The last two are the same shape — a live, persistent, coalesced transform
- * property read by one typed call and updated by another — so both are thin
+ * The last two are the same shape: a live, persistent, coalesced transform
+ * property read by one typed call and updated by another, so both are thin
  * wrappers over `liveTransformBinding`, differing only in the typed api calls
  * they close over.
  */
@@ -22,15 +22,15 @@ import { affineToMat3, mat3ToAffine, type Mat3 } from './transform_projective';
 import type { TransformBinding } from './transform_gizmo';
 import type { Transform } from '../engine/protocol_gen';
 
-/** A live accessor for the owning instance's current tool session — supplied by
+/** A live accessor for the owning instance's current tool session, supplied by
  *  the transform tool at binding construction. Read on every engine call so the
  *  binding follows the *instance's* fresh session (surviving a layer rebind),
  *  never a stale capture. The per-instance replacement for the old global
  *  `toolEngine()`. */
 export type SessionAccess = () => SessionEngine | null;
 
-/** The flat transform info the engine returns for a floating/void/vector query
- *  — `matrix` is 6 affine floats (mode 0) or 9 homography floats (mode 1). */
+/** The flat transform info the engine returns for a floating/void/vector query:
+ *  `matrix` is 6 affine floats (mode 0) or 9 homography floats (mode 1). */
 type TransformInfo = { ox: number; oy: number; w: number; h: number; mode: number; matrix: number[] };
 
 /** Wrap a `(matrix, modeTag)` pair as the Rust `Transform` enum's wire form
@@ -88,7 +88,7 @@ export function floatingTransformBinding(session: SessionAccess): TransformBindi
  * shared with the floating path, so consumers that opt in support perspective
  * like everything else.
  *
- * Commit is a no-op — edits are already live on the document and coalesced into
+ * Commit is a no-op: edits are already live on the document and coalesced into
  * the undo stack. Cancel re-pushes the transform captured on first read,
  * including its *mode*, so cancelling a consumer that was already perspective
  * restores perspective rather than a downgraded affine.

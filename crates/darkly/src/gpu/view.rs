@@ -5,7 +5,7 @@
 /// Fallback workspace color used until the frontend pushes the theme-sourced
 /// color via `set_viewport_bg()`.
 pub const DEFAULT_WORKSPACE_BG: [f32; 4] = [0.11, 0.11, 0.11, 1.0];
-/// Decomposed view parameters — the session-state inputs from which the
+/// Decomposed view parameters: the session-state inputs from which the
 /// present [`ViewTransform`] is derived. Retained so the matrix can be rebuilt
 /// whenever *either* input changes: pointer-driven pan/zoom/rotation (via
 /// `set_view_transform`) **or** a canvas-dimension change (resize / crop /
@@ -53,7 +53,7 @@ pub struct ViewTransform {
     /// Per-present flags consumed by the present shader. Stamped by the
     /// compositor on upload, parallel to `bg`.
     /// `flags[0]` = pixel filter mode: 0 = linear, 1 = nearest, 2 = auto
-    /// (nearest when zoom > 1, linear otherwise — decided in the shader
+    /// (nearest when zoom > 1, linear otherwise, decided in the shader
     /// from the inverse-zoom magnitude of `row0.xy`).
     pub flags: [f32; 4],
 }
@@ -131,7 +131,7 @@ impl ViewTransform {
     /// Transform a screen point to **window-local** canvas coordinates (origin at
     /// the canvas-window top-left, `canvas_origin` not applied) using the stored
     /// inverse matrix. This is the frame the present shader samples in; tools and
-    /// the overlay want plane coords instead — see [`Self::screen_to_plane`].
+    /// the overlay want plane coords instead (see [`Self::screen_to_plane`]).
     pub fn screen_to_window_local(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
         apply_2x3(&self.matrix, screen_x, screen_y)
     }
@@ -147,7 +147,7 @@ impl ViewTransform {
         m
     }
 
-    /// Forward (plane → screen) matrix — the inverse of [`Self::screen_to_plane_matrix`].
+    /// Forward (plane → screen) matrix: the inverse of [`Self::screen_to_plane_matrix`].
     pub fn plane_to_screen_matrix(&self, origin_x: f32, origin_y: f32) -> [[f32; 4]; 3] {
         invert_2x3(&self.screen_to_plane_matrix(origin_x, origin_y))
     }
@@ -170,14 +170,14 @@ impl ViewTransform {
     }
 }
 
-/// Pure constructor of the frontend coordinate matrices — the single source of
+/// Pure constructor of the frontend coordinate matrices: the single source of
 /// truth the JS coordinate path consumes (via the WASM bridge) instead of
 /// re-deriving the transform. Borrows no engine state, so the bridge wrapper is
 /// safe to call during a pointer event (no RefCell aliasing with `render`).
 ///
 /// Returns 12 floats: `[screen→plane (6), plane→screen (6)]`, each packed
 /// row-major `[m00, m01, m02, m10, m11, m12]` with
-/// `out_x = m00·x + m01·y + m02`, `out_y = m10·x + m11·y + m12` — one matvec
+/// `out_x = m00·x + m01·y + m02`, `out_y = m10·x + m11·y + m12`, one matvec
 /// convention for both directions on the JS side.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_view_matrices(
@@ -217,7 +217,7 @@ fn apply_2x3(m: &[[f32; 4]; 3], x: f32, y: f32) -> (f32, f32) {
 }
 
 /// Invert a 2×3 affine (screen↔canvas), preserving the std140 row layout.
-/// Single home for the matrix inversion — consumed by [`ViewTransform::plane_to_screen_matrix`]
+/// Single home for the matrix inversion: consumed by [`ViewTransform::plane_to_screen_matrix`]
 /// and the overlay's forward matrix. Degenerate (singular) input falls back to identity.
 pub(crate) fn invert_2x3(m: &[[f32; 4]; 3]) -> [[f32; 4]; 3] {
     let m00 = m[0][0];
@@ -260,7 +260,7 @@ mod tests {
     }
 
     /// Apply a forward (plane→screen) matrix the way `shaders/overlay.wgsl`
-    /// `canvas_to_screen` does — row convention `out_i = row_i · p`. The forward
+    /// `canvas_to_screen` does: row convention `out_i = row_i · p`. The forward
     /// matrices from `plane_to_screen_matrix` / `invert_2x3` are stored for this
     /// convention (it is the true functional inverse of the column-convention
     /// `apply_2x3` used for screen→canvas).
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn mirror_h_keeps_center_fixed() {
         // With mirror_h on, the screen-center pixel still resolves to the
-        // canvas center — mirror reflects around the canvas's vertical axis.
+        // canvas center; mirror reflects around the canvas's vertical axis.
         let t = ViewTransform::from_pan_zoom_rotate(
             0.0, 0.0, 1.0, 0.0, true, 800.0, 600.0, 400.0, 300.0,
         );
@@ -315,7 +315,7 @@ mod tests {
     }
 
     /// The plane forward (fed to the overlay) must map a plane point P to the
-    /// SAME screen pixel the paint path implies — i.e. the window-local forward
+    /// SAME screen pixel the paint path implies, i.e. the window-local forward
     /// of `P - canvas_origin`. This is the hover-vs-paint mismatch contract:
     /// with a non-zero origin the two must still agree.
     #[test]

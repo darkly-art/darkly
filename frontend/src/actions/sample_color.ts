@@ -5,7 +5,7 @@ import { setColorPickerPressed } from '../tools/colorpicker_cursor';
 import { screenToCanvas } from '../canvas/coordinates';
 
 /** Register the modifier-held "sample color" chord. The actual binding
- *  comes from the YAML preset layers — Krita/GIMP ship `ctrl+drag`,
+ *  comes from the YAML preset layers: Krita/GIMP ship `ctrl+drag`,
  *  Photoshop ships `alt+drag`; the action itself just declares the
  *  semantics. Tools can preempt this chord by returning `true` from
  *  `claimsPointer` (see `CanvasView.onPointerDown`'s dispatch order). */
@@ -25,7 +25,7 @@ export function registerSampleColorAction(): void {
             const { x, y } = screenToCanvas(e.clientX, e.clientY, app.canvasEl);
             startPick(app.engine, x, y);
         },
-        // `deactivate` only flips the cursor back to the idle indicator —
+        // `deactivate` only flips the cursor back to the idle indicator:
         // the picked color itself sticks (no need to undo any foreground
         // write). Without this the cursor would freeze on the "pressed"
         // variant after pointerup.

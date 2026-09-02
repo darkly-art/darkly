@@ -10,8 +10,8 @@
     let activeLayer = $derived(app.activeNode);
 
     // `activeVeilIndex` is a chain position (the engine's `index` field on
-    // each VeilInfo), not a position in `veilList` — the list is returned in
-    // reverse chain order for display. Look up by `index` so the two stay
+    // each VeilInfo), not a position in `veilList`, since the list is returned
+    // in reverse chain order for display. Look up by `index` so the two stay
     // aligned regardless of length.
     let activeVeil = $derived(
         app.activeVeilIndex !== null

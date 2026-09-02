@@ -5,7 +5,7 @@
 //! pool. Structural undo reuses the kind-uniform `EntityAddAction` /
 //! `EntityRemoveAction`; only the mask's *pixels* need mask-specific handling,
 //! via a `GpuRegionAction` in a `CompoundAction`. The "active node = paint
-//! target" rule means there's no `editing_mask_layer` redirect — the active
+//! target" rule means there's no `editing_mask_layer` redirect: the active
 //! node id directly identifies where strokes are routed.
 
 use darkly_macros::handlers;
@@ -66,7 +66,7 @@ impl DarklyEngine {
     /// Allocate an empty (unseeded) mask filter on `id`: create the filter,
     /// allocate its R8 node texture, and ensure the per-host snapshot/lerp
     /// resource. Does NOT seed from the active selection and does NOT push an
-    /// undo entry — callers frame it. [`Self::add_mask`] adds selection
+    /// undo entry; callers frame it. [`Self::add_mask`] adds selection
     /// seeding and an `EntityAddAction`; duplicate and rich paste fold the mask
     /// into the subtree undo their own action already covers, so they must not
     /// seed from (nor consume) the receiving document's selection.
@@ -89,7 +89,7 @@ impl DarklyEngine {
         // Per-host snapshot+lerp resource for the in-place masked-host path
         // (passthrough group or filter layer). Idempotent across every host
         // kind; only the in-place composite paths consume it, but the engine
-        // doesn't need to branch — the compositor reads it lazily.
+        // doesn't need to branch: the compositor reads it lazily.
         self.compositor
             .ensure_mask_snapshot_state(&self.gpu.device, id);
         Some(mod_id)
@@ -140,7 +140,7 @@ impl DarklyEngine {
     }
 
     /// Detach a modifier and return the matching undo action without pushing
-    /// it — the modifier-kind counterpart of `detach_for_remove`, so batch
+    /// it: the modifier-kind counterpart of `detach_for_remove`, so batch
     /// removal can fold modifiers into one undo step alongside layers.
     ///
     /// Owns the bookkeeping a modifier's pixels need and a tree node's don't:
@@ -210,14 +210,14 @@ impl DarklyEngine {
     }
 
     /// Bake the mask alpha into the host layer's RGBA, then remove the mask.
-    /// Mask-specific — not generalized to "bake any filter" because that has
+    /// Mask-specific, not generalized to "bake any filter" because that has
     /// no kind-uniform meaning.
     #[handler]
     pub fn apply_mask(&mut self, id: LayerId) {
         if !self.doc.is_node_editable(id) {
             return;
         }
-        // apply_mask is raster-only — groups have no pixel data to bake into.
+        // apply_mask is raster-only: groups have no pixel data to bake into.
         let host_is_raster = matches!(
             self.doc.find_node(id),
             Some(crate::layer::LayerNode::Layer(crate::layer::Layer::Raster(
@@ -248,7 +248,7 @@ impl DarklyEngine {
 
         // Save the mask's R8 pixels too. The filter is removed at the end
         // of apply_mask; without this save, undo gets back the filter shell
-        // with a fresh (all-white) mask texture and the user's painting on
+        // with a fresh (all-white) mask texture and the artist's painting on
         // the mask is lost forever. Its GpuRegionAction is bundled below into
         // the single CompoundAction alongside the host-alpha region and the
         // EntityRemoveAction, so one undo replays them in the right order:
@@ -373,12 +373,12 @@ impl DarklyEngine {
             self.isolated_node = None;
         }
 
-        // Apply baked the mask into the layer's alpha — layer pixels changed.
+        // Apply baked the mask into the layer's alpha: layer pixels changed.
         self.compositor.mark_node_pixels_dirty(id);
 
         // Remove the filter from the document and its GPU texture, then bundle
         // the EntityRemoveAction last in the vec so `CompoundAction::undo`
-        // (reverse) pops it first — the re-attach happens before
+        // (reverse) pops it first: the re-attach happens before
         // sync_compositor_layers re-allocates the R8 texture, after which the
         // pending mask-region restore can land.
         // Captured before the detach severs the parent link the position is
@@ -425,7 +425,7 @@ impl DarklyEngine {
             return;
         }
 
-        // Mask already exists — clone selection pixels into it.
+        // Mask already exists: clone selection pixels into it.
         let mask_id = match self.doc.mask_filter_id(id) {
             Some(id) => id,
             None => return,
@@ -484,7 +484,7 @@ impl DarklyEngine {
 
     /// GPU-to-GPU copy of one filter's R8 pixel buffer into another's.
     /// Resolves source and destination via [`Self::modifier_frame`], so it
-    /// works uniformly for any pair of pixel-bearing filter ids — selection
+    /// works uniformly for any pair of pixel-bearing filter ids, selection
     /// or mask, in either direction. This is the §4a unification: the kind-
     /// specific bridge ops (`selection_to_mask`, `mask_to_selection`) now
     /// delegate to one function instead of duplicating the encode dance.
@@ -492,14 +492,14 @@ impl DarklyEngine {
     /// **Clear-then-copy, bounds-aware.** The two textures may have different
     /// plane extents (a sub-canvas mask vs. the canvas-sized selection). `dst`
     /// is cleared to 0, then the plane-space *overlap* of the two extents is
-    /// copied into `dst`'s local origin — so `dst` faithfully equals `src` over
+    /// copied into `dst`'s local origin, so `dst` faithfully equals `src` over
     /// the overlap and reads 0 outside it, lossless across `dst`'s whole extent.
     /// Disjoint extents degrade to a pure clear, never a `copy range touches
     /// outside` validation crash. Callers that need the whole source represented
     /// grow `dst` to the union first (see `selection_to_mask` / `add_mask`).
     ///
     /// Marks `dst_id` thumbnail-dirty before returning per the write-site
-    /// invariant — callers don't need to. For the selection filter (which
+    /// invariant; callers don't need to. For the selection filter (which
     /// doesn't surface in the layer panel), the mark is a no-op: the drain
     /// only readbacks ids present in `compositor.node_textures`.
     pub(crate) fn clone_filter_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {

@@ -8,15 +8,15 @@
 //! Any function here that takes a `LayerId` and writes its texture must
 //! call [`crate::gpu::compositor::Compositor::mark_node_pixels_dirty`] on
 //! that id before returning. See the docs on that method for the full
-//! rationale — short version: the mark is the write-site's job so callers
-//! can't forget and produce thumbnail-less layers.
+//! rationale (short version: the mark is the write-site's job so callers
+//! can't forget and produce thumbnail-less layers).
 
 use super::DarklyEngine;
 use crate::layer::{LayerId, LayerNode};
 use crate::undo::{BakeLayersAction, BakeSourceSlot};
 
 impl DarklyEngine {
-    /// Every pixel-bearing node id under `root` — raster layers, mask
+    /// Every pixel-bearing node id under `root`: raster layers, mask
     /// filters, and any other filters that own a GPU texture in the
     /// compositor's `node_textures` pool.
     ///
@@ -36,8 +36,8 @@ impl DarklyEngine {
         match node {
             LayerNode::Layer(layer) => {
                 // The layer answers for itself whether its texture is
-                // irreplaceable. A derived one — a procedural void's render, a
-                // vector layer's rasterization — is cheaper to rebuild than to
+                // irreplaceable. A derived one (a procedural void's render, a
+                // vector layer's rasterization) is cheaper to rebuild than to
                 // retain; a void holding an externally-sourced image is not.
                 if layer.owns_disposable_texture() {
                     out.push(id);
@@ -71,12 +71,12 @@ impl DarklyEngine {
     }
 
     /// GPU-side copy of every pixel from one node's texture into another's.
-    /// Both nodes must already have textures of the same format and extent
-    /// — typically because the destination was just allocated with the
+    /// Both nodes must already have textures of the same format and extent,
+    /// typically because the destination was just allocated with the
     /// source's bounds. Submits a single `copy_texture_to_texture`.
     ///
     /// Marks `dst_id` thumbnail-dirty before returning per the write-site
-    /// invariant — callers don't need to do it.
+    /// invariant: callers don't need to do it.
     pub(crate) fn clone_node_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
         let extent = match self.compositor.node_texture(src_id) {
             Some(t) => t.canvas_extent(),
@@ -119,12 +119,12 @@ impl DarklyEngine {
     /// land the result in the slot, and push the [`BakeLayersAction`] that
     /// reverses it.
     ///
-    /// The shared tail of every bake op — flatten image, rasterize/flatten a
+    /// The shared tail of every bake op: flatten image, rasterize/flatten a
     /// node, merge down, merge a selection. They differ in what they composite
     /// and where the result belongs; from here on they are identical, and were
     /// four verbatim copies before this existed.
     ///
-    /// **Must be called while the sources are still attached** — the tombstone
+    /// **Must be called while the sources are still attached**, because the tombstone
     /// walk needs `find_node` to reach their subtrees, which `detach_for_undo`
     /// breaks. `sources` carries each one's pre-detach slot so undo can put it
     /// back exactly.
@@ -150,7 +150,7 @@ impl DarklyEngine {
         self.doc.detach_for_undo(result_id);
         self.doc.reinsert_entity(result_id, parent, position);
 
-        // Re-read rather than trusting the requested slot — `reinsert_entity`
+        // Re-read rather than trusting the requested slot: `reinsert_entity`
         // clamps, and undo has to reverse where the node actually landed.
         let result_parent = self.doc.parent_of(result_id);
         let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);

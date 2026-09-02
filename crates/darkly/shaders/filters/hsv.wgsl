@@ -1,11 +1,11 @@
-// Hue / Saturation / Value adjustment — Krita's `hsvadjustment`
+// Hue / Saturation / Value adjustment: Krita's `hsvadjustment`
 // (`plugins/color/colorspaceextensions/kis_hsv_adjustment.cpp`, `HSVTransform`
 // + colorize). Four modes:
 //
-//   model 0 HSV  — hue rotate + saturation/value scale in HSV
-//   model 1 HSL  — same, in HSL
-//   model 2 HSY  — same, in luma-weighted HCY (Krita calls it "HSY")
-//   colorize     — absolute hue/sat, luma preserved (like PS Hue/Saturation);
+//   model 0 HSV  - hue rotate + saturation/value scale in HSV
+//   model 1 HSL  - same, in HSL
+//   model 2 HSY  - same, in luma-weighted HCY (Krita calls it "HSY")
+//   colorize     - absolute hue/sat, luma preserved (like PS Hue/Saturation);
 //                  overrides the model selector
 //
 // The colour-space conversions (`rgb_to_hsv`/`hsv_to_rgb`, `rgb_to_hsl`/…,
@@ -43,7 +43,7 @@ fn wrap360(h: f32) -> f32 {
     return h - floor(h / 360.0) * 360.0;
 }
 
-// Saturation scale — Krita `HSVTransform`: a nonlinear boost for ds > 0
+// Saturation scale, Krita `HSVTransform`: a nonlinear boost for ds > 0
 // (ds=0.5 → ×2, ds=1 → ×4), a plain fade for ds ≤ 0 (ds=−1 → 0, fully grey).
 fn apply_sat(s: f32, ds: f32) -> f32 {
     if (ds > 0.0) {
@@ -52,7 +52,7 @@ fn apply_sat(s: f32, ds: f32) -> f32 {
     return s * (ds + 1.0);
 }
 
-// Value/lightness/luma scale — Krita `HSVTransform`: dv > 0 lerps toward 1,
+// Value/lightness/luma scale, Krita `HSVTransform`: dv > 0 lerps toward 1,
 // dv < 0 fades toward 0. dv=0 is identity.
 fn apply_val(v: f32, dv: f32) -> f32 {
     if (dv > 0.0) {
@@ -67,7 +67,7 @@ fn hsv_transform(rgb: vec3f) -> vec3f {
     let dv = params.value;
 
     // No-op fast path keeps an identity adjustment bit-exact (no round-trip
-    // drift) — the analog of the LUT filter's stage gates.
+    // drift), the analog of the LUT filter's stage gates.
     if (params.colorize == 0u && dh == 0.0 && ds == 0.0 && dv == 0.0) {
         return rgb;
     }

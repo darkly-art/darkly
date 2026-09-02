@@ -1,10 +1,10 @@
-//! Raster layer kind — pixel-storing leaf in the layer tree.
+//! Raster layer kind: pixel-storing leaf in the layer tree.
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire raster kind
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire raster kind
 //! lives in this file: data lives on [`crate::layer::RasterLayer`], and
 //! the wire format (`RasterBody`) plus serializer / deserializer /
 //! id-remap functions all live here. Adding a new layer kind copies
-//! this file's shape — no edits to save.rs, load.rs, or manifest.rs.
+//! this file's shape, with no edits to save.rs, load.rs, or manifest.rs.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ use crate::layer::{BlendProps, Layer, LayerId, LayerNode, NodeCommon, PixelBuffe
 
 /// Stable wire-format identifier. Owned by this module so dispatch sites
 /// (notably `LayerNode::kind`) reference the same constant the registration
-/// uses — no parallel string literal anywhere.
+/// uses, with no parallel string literal anywhere.
 pub const TYPE_ID: &str = "raster";
 
 pub static PIXEL_TRANSFORM_SEMANTICS: crate::document::PixelTransformSemantics =
@@ -28,7 +28,7 @@ pub static PIXEL_TRANSFORM_SEMANTICS: crate::document::PixelTransformSemantics =
     };
 
 /// On-disk shape for a raster layer. The central save/load code never
-/// names this struct — it crosses the wire as `serde_json::Value` inside
+/// names this struct; it crosses the wire as `serde_json::Value` inside
 /// a [`crate::format::manifest::ManifestEntry`] envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct RasterBody {
@@ -38,7 +38,7 @@ struct RasterBody {
     opacity: f32,
     /// Blend-mode `type_id` from [`crate::gpu::blend_mode`].
     blend_mode: String,
-    /// Pixel storage descriptor — bounds + format + zip-relative path.
+    /// Pixel storage descriptor: bounds + format + zip-relative path.
     pixels: ManifestPixelRef,
     /// Filter ids attached to this layer, in bottom-up order. Each id
     /// resolves to an entry in [`crate::format::manifest::Manifest::modifiers`].
@@ -50,7 +50,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Raster Layer",
-        description: "A grid of pixels — what a brush stroke paints into.",
+        description: "A grid of pixels: what a brush stroke paints into.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: true,
@@ -100,8 +100,8 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         .get(&body.blend_mode)
         .ok_or_else(|| LoadError::CorruptManifest {
             reason: format!(
-                "raster {} references undeclared blend_mode/{} \
-                 — `requires` block lies",
+                "raster {} references undeclared blend_mode/{}: \
+                 `requires` block lies",
                 id.to_ffi(),
                 body.blend_mode
             ),

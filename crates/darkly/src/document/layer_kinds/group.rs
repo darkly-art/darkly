@@ -1,6 +1,6 @@
-//! Group layer kind — a tree container for nested layers / groups.
+//! Group layer kind: a tree container for nested layers / groups.
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire group kind
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire group kind
 //! lives in this file: data lives on [`crate::layer::LayerGroup`], wire
 //! format (`GroupBody`) and serializer / deserializer / id-remap
 //! functions live here.
@@ -75,8 +75,8 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         .get(&body.blend_mode)
         .ok_or_else(|| LoadError::CorruptManifest {
             reason: format!(
-                "group {} references undeclared blend_mode/{} \
-                 — `requires` block lies",
+                "group {} references undeclared blend_mode/{}: \
+                 `requires` block lies",
                 id.to_ffi(),
                 body.blend_mode
             ),

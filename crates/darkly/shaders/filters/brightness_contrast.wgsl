@@ -1,11 +1,11 @@
-// Brightness/Contrast adjustment — GIMP's mapping (Michael Natterer,
+// Brightness/Contrast adjustment: GIMP's mapping (Michael Natterer,
 // `gimp/app/operations/gimpoperationbrightnesscontrast.c`,
 // https://gitlab.gnome.org/GNOME/gimp/-/blob/master/app/operations/gimpoperationbrightnesscontrast.c):
 // brightness lerps toward black/white, contrast slants the curve through
 // mid-gray. The Rust side (`gpu/filters/brightness_contrast.rs`) packs the
 // shader-ready values: `brightness` already halved to −0.5..0.5, `slant`
 // precomputed as tan((c+1)·π/4) with contrast 0 pinned to exactly 1.0.
-// Applied per RGB channel; alpha passes through. No explicit output clamp —
+// Applied per RGB channel; alpha passes through. No explicit output clamp;
 // the unorm render target clamps on store.
 
 @group(0) @binding(0) var t_src: texture_2d<f32>;
@@ -44,7 +44,7 @@ fn bc_map(v: f32) -> f32 {
 }
 
 fn bc_transform(rgb: vec3f) -> vec3f {
-    // No-op fast path keeps an identity adjustment bit-exact — sound because
+    // No-op fast path keeps an identity adjustment bit-exact, sound because
     // the Rust packing pins slant to exactly 1.0 at contrast 0.
     if (params.brightness == 0.0 && params.slant == 1.0) {
         return rgb;

@@ -9,8 +9,8 @@ vi.mock('../../../wasm/pkg/darkly_wasm', () => ({
 import { DarklyInstance } from '../../state/app.svelte';
 
 /** A minimal engine whose `render` returns `busy: true` so `runFrame` bails
- *  immediately after the render call. That isolates the property under test —
- *  "is the frame driven synchronously?" — from the heavy post-render pipeline
+ *  immediately after the render call. That isolates the property under test
+ *  ("is the frame driven synchronously?") from the heavy post-render pipeline
  *  (tool hooks, readback polls) which this test does not exercise. */
 function fakeEngine(rec: string[]) {
     return {
@@ -53,14 +53,14 @@ describe('atomic canvas resize scheduling', () => {
 
         inst.renderNow();
 
-        // Rendered in THIS task — not deferred to a captured rAF. This is the
+        // Rendered in THIS task, not deferred to a captured rAF. This is the
         // atomicity the Firefox resize fix depends on: the present runs in the
         // same JS task as the canvas resize, never straddling a browser turn.
         expect(rec).toEqual(['render']);
         expect(rafCbs).toHaveLength(0);
     });
 
-    it('requestFrame defers to a rAF — the split the old resize path relied on', () => {
+    it('requestFrame defers to a rAF: the split the old resize path relied on', () => {
         const rec: string[] = [];
         const inst = new DarklyInstance();
         inst.engine = fakeEngine(rec);
@@ -88,7 +88,7 @@ describe('atomic canvas resize scheduling', () => {
         expect(cancelled).toEqual([1]);
         expect(rec).toEqual(['render']);
 
-        // The pending flag must not be left stuck — a later requestFrame must
+        // The pending flag must not be left stuck: a later requestFrame must
         // still schedule (a stuck flag would silently freeze all rendering).
         inst.requestFrame();
         expect(rafCbs).toHaveLength(2);

@@ -45,7 +45,7 @@
                 copied = null;
             }, 1500);
         } catch {
-            // Clipboard unavailable — fall through silently. User can still
+            // Clipboard unavailable: fall through silently. Artist can still
             // read and type the URL manually.
         }
     }
@@ -79,7 +79,7 @@
                     <dd>{adapterInfo.description || '(empty)'}</dd>
                 </dl>
                 <p class="hint">
-                    Include these values if you file a bug — they describe the adapter the browser handed us.
+                    Include these values if you file a bug: they describe the adapter the browser handed us.
                 </p>
             </details>
         {/if}

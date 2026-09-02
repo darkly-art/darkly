@@ -2,7 +2,7 @@
 //!
 //! Provides a generic graph data structure, topological compiler, and
 //! registration types parameterised by a `WireKind` trait.  No GPU,
-//! no brush concepts — this is pure data plumbing, fully testable with
+//! no brush concepts; this is pure data plumbing, fully testable with
 //! `cargo test`.
 
 mod compiler;
@@ -34,19 +34,19 @@ pub trait WireKind:
     fn compatible(from: Self, to: Self) -> bool;
 
     /// Returns `true` if an upstream wire may drive an input of this type
-    /// per-dab. Defaulted to `true` — a new wire type is wirable unless it
+    /// per-dab. Defaulted to `true`: a new wire type is wirable unless it
     /// opts out (branch/data shapes that resolve at compile time). Consumers
     /// call this; they never `matches!` on the variant (type-owned dispatch).
     fn is_wirable(self) -> bool {
         true
     }
 
-    /// Returns `true` if a user may *expose* an input of this type as a
+    /// Returns `true` if an artist may *expose* an input of this type as a
     /// brush-bar control (a scrub, toggle, dropdown, …). Orthogonal to
-    /// [`is_wirable`](Self::is_wirable): a value can be user-facing without
+    /// [`is_wirable`](Self::is_wirable): a value can be artist-facing without
     /// being per-dab wirable (an enum dropdown) and vice versa. A type is
     /// exposable only when the properties panel has a widget that can
-    /// render and edit it, so this is an explicit allow-list per domain —
+    /// render and edit it, so this is an explicit allow-list per domain;
     /// a new type is *not* exposable until its widget exists, which keeps
     /// an un-renderable control from being surfaced into a dead end.
     /// Defaulted to `true` for domains that don't distinguish; consumers
@@ -68,7 +68,7 @@ pub(crate) mod tests {
     pub enum TestWireKind {
         Scalar,
         Color,
-        /// A compile-time data shape used to exercise the wirability guard —
+        /// A compile-time data shape used to exercise the wirability guard:
         /// same type on both ends (so the type check passes) but not wirable.
         Data,
     }

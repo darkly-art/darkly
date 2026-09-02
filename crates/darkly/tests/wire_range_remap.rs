@@ -42,8 +42,8 @@ fn run_one_dab(runner: &mut BrushGraphRunner, pressure: f32, dab_index: u32) {
 
 /// Regression for the original bug: `random` output is now in `[0, 1)` (the
 /// natural PRNG range), no longer the old `[-1, 1]` remap, and produces a
-/// fresh value each dab. The previous behavior — `random` outputting in
-/// `[-1, 1]` and any downstream `as u32` cast collapsing it to 0 — is what
+/// fresh value each dab. The previous behavior (`random` outputting in
+/// `[-1, 1]` and any downstream `as u32` cast collapsing it to 0) is what
 /// caused `random → circle.seed` to repeat.
 #[test]
 fn random_outputs_unit_range_and_varies_per_dab() {
@@ -66,7 +66,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
         samples.push(v);
     }
 
-    // Strong evidence the value actually varies per dab — at least 10 of 16
+    // Strong evidence the value actually varies per dab: at least 10 of 16
     // distinct values rules out "always returns the same thing."
     let mut sorted = samples.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -83,7 +83,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
 /// spread across the destination range, varying per dab.
 ///
 /// We can't observe `circle.seed` directly without a GPU, but the runner's
-/// remap step happens at `gather_inputs` — same code path for CPU and GPU
+/// remap step happens at `gather_inputs`, the same code path for CPU and GPU
 /// nodes. So we exercise it through a CPU node (`multiply`) with a
 /// per-instance override on its `a` port: `natural_range = Some((0, 1024))`.
 /// The multiply evaluator computes `a * b` with the default `b = 1`, so
@@ -143,7 +143,7 @@ fn random_to_wide_range_input_remaps() {
     );
 }
 
-/// `pen.pressure → frequency-style port (natural_range [1, 16])` — the
+/// `pen.pressure → frequency-style port (natural_range [1, 16])`, the
 /// other half of the bug class. Today this works; before the fix, pen
 /// pressure ∈ [0, 1] cast to a frequency in [1, 16] rounded to 1 forever.
 #[test]
@@ -207,7 +207,7 @@ fn pen_pressure_to_frequency_range_remaps() {
 
 /// Source-side opt-out: `multiply.result` has no natural_range, so wiring
 /// it into a port that does still passes the raw value through (math nodes
-/// are intentionally unbounded — their range depends on inputs). This is
+/// are intentionally unbounded; their range depends on inputs). This is
 /// the invariant that lets us reshape random's behavior without disturbing
 /// any existing math-node-based brush.
 #[test]
@@ -271,7 +271,7 @@ fn math_node_output_passes_through_to_ranged_input() {
 
 /// Dest-side opt-out: wiring a normalized source (random, `[0, 1)`) into a
 /// port without a natural_range passes the value through raw. This is the
-/// invariant that lets `stamp.size` keep its over-drag behavior — even if
+/// invariant that lets `stamp.size` keep its over-drag behavior, even if
 /// you wire pen.pressure into it, the value flows as raw `[0, 1)` instead
 /// of being mapped onto the slider's `[0, 4]` hint.
 #[test]
@@ -282,7 +282,7 @@ fn ranged_source_to_unranged_input_passes_through() {
     let random_reg = registry.get("random").unwrap();
     let random = graph.add_node("random", random_reg.ports.clone());
 
-    // multiply.a — explicitly STRIP the natural_range so this node-instance
+    // multiply.a: explicitly STRIP the natural_range so this node-instance
     // behaves as if the consumer hadn't opted in.
     let multiply_reg = registry.get("multiply").unwrap();
     let mut multiply_ports = multiply_reg.ports.clone();
@@ -312,7 +312,7 @@ fn ranged_source_to_unranged_input_passes_through() {
     for dab in 0..8 {
         run_one_dab(&mut runner, 0.5, dab);
         let v = read_scalar(&runner, "multiply", "result");
-        // Raw random value, unscaled — should stay in [0, 1).
+        // Raw random value, unscaled: should stay in [0, 1).
         assert!(
             (0.0..1.0).contains(&v),
             "unranged dest should see raw random in [0, 1), got {v} on dab {dab}",
@@ -353,7 +353,7 @@ fn identity_range_is_a_noop() {
     for pressure in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
         run_one_dab(&mut runner, pressure, 0);
         let v = read_scalar(&runner, "curve", "output");
-        // Identity curve has small LUT-quantization noise — same tolerance
+        // Identity curve has small LUT-quantization noise, same tolerance
         // the existing `curve_spline_identity` test uses.
         assert!(
             (v - pressure).abs() < 0.02,
@@ -366,7 +366,7 @@ fn identity_range_is_a_noop() {
 /// halves, verifying the affine remap handles a negative `dst_min`.
 ///
 /// Note: radian-typed ports (`circle.rotation`, `liquify.direction`, etc.)
-/// deliberately do NOT have a `natural_range` — radians are a unit, not
+/// deliberately do NOT have a `natural_range`: radians are a unit, not
 /// a normalized signal, and wires like `pen.drawing_angle → rotation`
 /// must preserve them exactly. This test uses an abstract `[-100, 100]`
 /// to exercise the math without conflating "negative remap target" with
@@ -421,7 +421,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
             max = v;
         }
     }
-    // We should see both halves of the range — at least one negative and
+    // We should see both halves of the range: at least one negative and
     // one positive sample across 32 dabs.
     assert!(
         min < 0.0,
@@ -434,7 +434,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
 }
 
 /// Radian-unit ports (`pen.drawing_angle → stamp.rotation`) are
-/// unit-preserving identity wires — both speak radians, so the value
+/// unit-preserving identity wires: both speak radians, so the value
 /// must pass through raw without any range remap. This is the regression
 /// the broader [`rotation.rs`] integration test covers; this minimal
 /// CPU-only test pins the contract at the runner level.

@@ -8,7 +8,7 @@
 // frames are bridged explicitly: window_uv → plane → mask-local.
 //
 // Outside the mask footprint the result reveals (mask_alpha = 1.0), matching
-// the white default — a mask only hides where it has explicit coverage. A
+// the white default: a mask only hides where it has explicit coverage. A
 // `mask_size == 0` sentinel means "no footprint" → reveal everywhere. Isolated
 // mode renders the mask channel as grayscale (GIMP-style debug view).
 

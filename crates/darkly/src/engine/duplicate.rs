@@ -26,7 +26,7 @@ impl DarklyEngine {
 
     /// Duplicate every id in `ids` in document order and return their new
     /// counterparts as a single undo step. Ids whose ancestor is already in
-    /// `ids` are skipped — duplicating the ancestor takes the descendant
+    /// `ids` are skipped: duplicating the ancestor takes the descendant
     /// with it, so a second pass would produce a redundant copy. Cross-
     /// parent selections are supported: each duplicate lands above its own
     /// source, no matter which parent group that source lives in.
@@ -71,8 +71,8 @@ impl DarklyEngine {
         let root_new_id = self.clone_subtree(source_id, None, /* is_root: */ true)?;
         // `clone_subtree(..., None, ...)` lands the new node at the top of
         // root via `add_*(None) → IntoGroupTop(root)`. Move it next to the
-        // source so each duplicate sits directly above its own original —
-        // critical for multi-duplicate, where N "tops" would otherwise
+        // source so each duplicate sits directly above its own original;
+        // this is critical for multi-duplicate, where N "tops" would otherwise
         // stack all duplicates together at the top of the panel.
         //
         // `MoveTarget::After(source)` lands the new node at source's
@@ -214,7 +214,7 @@ impl DarklyEngine {
                 let transform = v.transform;
                 // A void that holds an externally-sourced image (a placed photo,
                 // a captured frame) has pixels that exist nowhere else, so the
-                // copy has to declare one too — see the GPU copy below.
+                // copy has to declare one too; see the GPU copy below.
                 let frame = v.frame.clone();
                 // The duplicated layer's name is overwritten with the
                 // source's `"… copy"` below; the display_label here only
@@ -242,7 +242,7 @@ impl DarklyEngine {
                     nv.blend.blend_mode = blend_mode_reg;
                     nv.frame = frame.clone();
                 }
-                // A purely procedural void needs no pixel copy — its output is
+                // A purely procedural void needs no pixel copy: its output is
                 // identical from identical params, and the compositor allocates
                 // its cache lazily. One holding a source image is the opposite:
                 // those texels came from outside the document and cannot be
@@ -297,7 +297,7 @@ impl DarklyEngine {
                     nf.blend.opacity = blend_opacity;
                     nf.blend.blend_mode = blend_mode_reg;
                 }
-                // No GPU resource to allocate — the filter pipeline is shared
+                // No GPU resource to allocate: the filter pipeline is shared
                 // and resolved lazily in `compose_filter_arm`. The
                 // `refresh_blend_uniforms` call no-ops (a filter layer has no
                 // `layer_cache` entry), so it's skipped.
@@ -310,7 +310,7 @@ impl DarklyEngine {
             LayerNode::Layer(Layer::Vector(v)) => {
                 // Vector state is fully procedural: copy the object list and
                 // layer transform, then re-realize on the copy. No pixels to
-                // clone — the texture rebuilds from the objects.
+                // clone: the texture rebuilds from the objects.
                 let objects = v.objects.clone();
                 let transform = v.transform;
                 let new_id = self.doc.add_vector_layer(anchor);
@@ -378,7 +378,7 @@ impl DarklyEngine {
     /// Goes through [`Self::add_mask_unseeded`] (not [`Self::add_mask`]) so we
     /// don't push a spurious `FilterAddAction` that the parent
     /// [`DuplicateAction`] already covers, and don't seed from the active
-    /// selection — the pixels come from the source mask below.
+    /// selection: the pixels come from the source mask below.
     fn clone_modifiers(&mut self, src_host: LayerId, dst_host: LayerId) {
         let src_mod_ids = self.doc.filters_of(src_host).to_vec();
         for src_mod_id in src_mod_ids {

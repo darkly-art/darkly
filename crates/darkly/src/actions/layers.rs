@@ -16,13 +16,13 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "newVeil",
         display_name: "New Veil",
-        description: "Add a veil — a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
+        description: "Add a veil, a post-process effect (rainy glass, VHS, grain, …) over the whole canvas.",
         icon: "material-symbols:curtains-rounded",
     },
     ActionDef {
         id: "newVoid",
         display_name: "New Void",
-        description: "Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).",
+        description: "Add a void: a layer filled from a procedural or live source (noise, camera, screen share, …).",
         icon: "tabler:galaxy",
     },
     ActionDef {
@@ -88,7 +88,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "convertLayerToSmartObject",
         display_name: "Convert to Smart Object",
-        description: "Turn the selected layer into a smart object — the pixels are kept as an embedded original, so you can resize the layer freely without losing quality.",
+        description: "Turn the selected layer into a smart object: the pixels are kept as an embedded original, so you can resize the layer freely without losing quality.",
         icon: "tabler:photo-scan",
     },
     ActionDef {

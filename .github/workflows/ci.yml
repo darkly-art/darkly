@@ -22,6 +22,13 @@ env:
   CARGO_HTTP_MULTIPLEXING: "false"
 
 jobs:
+  dashes:
+    name: no en/em dashes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check-dashes.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -85,7 +92,7 @@ jobs:
           # Coverage upload is best-effort: tests are the gate, and we
           # don't want a Codecov-side outage to redden a PR whose tests
           # pass. The GPG signature check on Codecov's CLI binary stays
-          # ON — when their keyserver fails to serve the public key the
+          # ON: when their keyserver fails to serve the public key the
           # upload step aborts before running the unverified binary
           # (which has access to CODECOV_TOKEN and the repo), and CI
           # surfaces it as a job-level warning instead of a failure.

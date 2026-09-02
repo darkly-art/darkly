@@ -25,7 +25,7 @@ pub fn register() -> VeilRegistration {
         display_name: "Frozen",
         description: "Frost the view behind a pane of refracting ice.",
         params: PARAMS,
-        // Just short of the sweep's peak — `swing(0.4375)` is 0.96, so the
+        // Just short of the sweep's peak: `swing(0.4375)` is 0.96, so the
         // still shows the frost within a few percent of its heaviest.
         preview: Some(PreviewAnim::LOOPING.with_still_at(0.4375)),
         create_pipeline: create_frozen_pipeline,
@@ -68,7 +68,7 @@ pub struct Frozen {
     /// Size of the ice crystals. 1.0 = one tile of the normal map across
     /// `sqrt(area)`; higher = **fewer, larger** crystals, because the shader
     /// divides the sampling extent by this. Note the refraction magnitude does
-    /// *not* ride along — `strength` is absolute UV displacement, so raising
+    /// *not* ride along: `strength` is absolute UV displacement, so raising
     /// `scale` alone makes the frost read as milder.
     pub scale: f32,
     /// Chromatic aberration: 0 = clean refraction, 1 = pronounced prism edge.
@@ -124,13 +124,13 @@ impl Veil for Frozen {
         ]
     }
 
-    /// The ice crystals coarsen and tighten again — `scale` sweeps across a
+    /// The ice crystals coarsen and tighten again: `scale` sweeps across a
     /// wide band so the frost pattern visibly grows and shrinks.
     ///
     /// `strength` rides with it rather than holding at its schema default.
     /// Displacement is absolute UV (`disp = n.xy * strength * …` in the
     /// shader, with no `scale` term), so a fixed `strength` against a zooming
-    /// pattern halves the warp *per crystal* as the crystals double — which
+    /// pattern halves the warp *per crystal* as the crystals double, which
     /// the eye reads as the refraction weakening, not as the crystals growing.
     /// Sweeping the two together holds warp-per-crystal constant, and that is
     /// what makes the motion read as size. `chromatic` holds, so no colour

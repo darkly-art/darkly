@@ -4,7 +4,7 @@ import { screenToCanvas } from '../canvas/coordinates';
 import { setCloneSourceAnchor } from '../tools/clone_source_cursor';
 
 /** Register the brush-scoped "set clone source" gesture. Like
- *  `sampleColor`, the actual binding comes from the YAML preset layers —
+ *  `sampleColor`, the actual binding comes from the YAML preset layers;
  *  it ships brush-scoped (`canvas@paint@clone:$mod+drag`) so it only
  *  fires while the Clone brush is active, out-ranking the group-scoped
  *  color sampler that shares the same modifier (see

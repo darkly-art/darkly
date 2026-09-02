@@ -10,11 +10,9 @@ pub mod manifest;
 pub mod registry_io;
 pub mod stroke_recording;
 pub mod unzip;
-// Zip assembly is a test-only mirror of what the frontend does with `fflate`
-// (see the module docs). Gated on the same `testing` feature as
-// `gpu::test_utils` so integration tests can round-trip a document, and
-// compiled out of production builds either way.
-#[cfg(any(test, feature = "testing"))]
+// Zip assembly mirrors what the frontend does with `fflate` (see the module
+// docs). `brush::pack_file` writes `.darkly-brush` archives with it, so it is
+// part of the production build and not only of the round-trip tests.
 pub mod zip_io;
 
 #[cfg(test)]

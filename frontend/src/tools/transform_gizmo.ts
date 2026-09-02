@@ -1,10 +1,10 @@
 /**
- * Generic transform gizmo — the consumer-agnostic helper.
+ * Generic transform gizmo: the consumer-agnostic helper.
  *
  * It takes a bounding box + an initial transform + pointer input and outputs
  * numbers (an updated affine), which it hands to whatever `TransformBinding` is
  * wired to it. It has ZERO knowledge of voids, floating, layers, or the
- * document — it imports only the overlay renderer, the affine util, and the
+ * document; it imports only the overlay renderer, the affine util, and the
  * mode registry. A consumer owns a transform and supplies a binding; the gizmo
  * just drives it.
  *
@@ -56,7 +56,7 @@ export class TransformGizmo {
     private canvasEl: HTMLCanvasElement;
     /** Live accessor for the owning instance's current tool session. Read on
      *  every overlay push/clear so the gizmo always targets the *instance's*
-     *  fresh session (which survives a layer rebind), never a stale capture —
+     *  fresh session (which survives a layer rebind), never a stale capture:
      *  the per-instance replacement for the old global `toolEngine()`. */
     private session: () => SessionEngine | null;
     private binding: TransformBinding | null = null;
@@ -80,7 +80,7 @@ export class TransformGizmo {
     async attach(binding: TransformBinding): Promise<boolean> {
         this.binding = binding;
         if ((await this.adopt(binding)) !== 'adopted') {
-            // 'stale' means we were re-attached to a newer binding mid-read —
+            // 'stale' means we were re-attached to a newer binding mid-read:
             // leave that one alone; only clear if we're still on this binding.
             if (this.binding === binding) this.clear();
             return false;
@@ -159,7 +159,7 @@ export class TransformGizmo {
 
     /**
      * Switch the gizmo to `tag`, seeding the new mode's matrix from the current
-     * geometry and **pushing it through the binding** — mode is
+     * geometry and **pushing it through the binding**: mode is
      * document-derived (the stored `Transform`), not a session-local flag, so
      * the next `adopt()` reads the same mode back and the gizmo stays put. A
      * no-op when inactive or already in `tag`.
@@ -174,7 +174,7 @@ export class TransformGizmo {
 
     /**
      * Mirror the content about the source rect's centre, horizontally (`'h'`) or
-     * vertically (`'v'`) — Krita's transform-tool `Mirror Horizontal` /
+     * vertically (`'v'`): Krita's transform-tool `Mirror Horizontal` /
      * `Mirror Vertical` (`kis_tool_transform_config_widget.cpp::slotFlipX`,
      * which negates `scaleX` around the anchor).
      *

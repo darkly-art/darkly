@@ -21,17 +21,21 @@
 </button>
 
 <style>
-    /* Raised well on the black picker slab — separation is fill contrast,
-     * not a border. Hover/selected lighten the fill; no outlines, no
-     * shadows. */
+    /* Tiles are the theme's own neutrals. The pack's identity is already under
+     * them (the section they sit on is filled with its surface), and the grid
+     * is the largest area in the picker, so it is the last place that should be
+     * spending colour. The one vivid mark is the outline on the loaded brush.
+     *
+     * Being the theme's means they take the theme's text too, which is what
+     * keeps a tile legible whatever a pack is made of and in either theme. */
     .brush-tile {
         display: flex;
         flex-direction: column;
         gap: 6px;
         padding: 8px;
         /* Buttons shrink-to-fit their content by default; fill the
-         * (definite) grid track instead, so the preview strip — and
-         * any percentage inside it — has a real width to resolve
+         * (definite) grid track instead, so the preview strip (and
+         * any percentage inside it) has a real width to resolve
          * against even when its content has no intrinsic size (the
          * icon fallback is just a 1em svg). */
         width: 100%;
@@ -41,8 +45,8 @@
         color: var(--text-muted);
         cursor: pointer;
         text-align: left;
-        transition: background 0.1s, color 0.1s;
-        /* Backstop for the grid `minmax(0, 1fr)` columns — children
+        transition: background 0.1s, outline-color 0.1s;
+        /* Backstop for the grid `minmax(0, 1fr)` columns: children
          * (especially imgs) can't blow the tile out horizontally. */
         min-width: 0;
     }
@@ -50,10 +54,14 @@
         background: var(--bg-active);
         color: var(--text);
     }
-    /* Loaded brush: a clearly lighter slab, not an outline. */
+    /* The loaded brush: the lightest slab of the three, ringed in one pixel of
+     * the pack's chroma: a strand, the same as every other place chroma is
+     * spent, and all it takes to be findable in a grid. */
     .brush-tile.active {
         background: var(--thumb-bg);
         color: var(--text);
+        outline: 1px solid var(--pack-chroma);
+        outline-offset: -1px;
     }
     .name {
         font-size: 11px;

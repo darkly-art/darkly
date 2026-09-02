@@ -1,5 +1,5 @@
 /**
- * NodeFsStorage — adapter over a host-injected bridge.
+ * NodeFsStorage: adapter over a host-injected bridge.
  *
  * In the desktop bundle, the Electron preload exposes `window.electronAPI.storage`
  * with the shape declared in types.ts. The host maps each call to a real

@@ -2,7 +2,7 @@
 //!
 //! A compute shader scans a texture and produces the tight bounding rect of
 //! all non-transparent pixels using atomic min/max. The result is 16 bytes
-//! (4× u32) read back asynchronously — no full-texture readback required.
+//! (4× u32) read back asynchronously, with no full-texture readback required.
 //!
 //! The compositor owns a [`ContentBoundsPass`] and exposes cached per-layer
 //! bounds. Bounds are invalidated on [`mark_dirty`](super::compositor::Compositor::mark_dirty)
@@ -20,7 +20,7 @@ pub struct ContentBoundsPass {
     /// Cached content bounds per layer: `[x, y, w, h]`.
     cached: HashMap<LayerId, Option<[u32; 4]>>,
 
-    /// Generation counter per layer — incremented on invalidation.
+    /// Generation counter per layer, incremented on invalidation.
     /// Pending results whose generation doesn't match are discarded.
     generation: HashMap<LayerId, u64>,
 
@@ -167,7 +167,7 @@ impl ContentBoundsPass {
     /// for RGBA targets, red for R8 targets. Driven by the texture's format,
     /// not by node kind.
     ///
-    /// Results arrive asynchronously — call [`poll`] each frame.
+    /// Results arrive asynchronously; call [`poll`] each frame.
     pub fn request(
         &mut self,
         device: &wgpu::Device,
@@ -261,7 +261,7 @@ impl ContentBoundsPass {
                         completed.push(p.layer_id);
                     }
                     // Stale result (generation changed since dispatch) → drop it.
-                    // Don't increment i — swap_remove moved the last element here.
+                    // Don't increment i: swap_remove moved the last element here.
                 }
                 None => {
                     i += 1;

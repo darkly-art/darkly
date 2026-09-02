@@ -39,7 +39,7 @@ vi.mock('../../canvas/coordinates', () => ({
 }));
 
 // Module state (engagement map, pointer tracking) must not leak between
-// tests — re-import a fresh instance each time.
+// tests, so re-import a fresh instance each time.
 let mc: typeof import('../modifier_cursor');
 
 beforeEach(async () => {
@@ -88,7 +88,7 @@ describe('engagement and the cursor slot', () => {
         mc.trackPointer({ clientX: 30, clientY: 40 });
         mc.engageModifierCursor('a', 'crosshair');
         mc.disengageModifierCursor('a', { release: false });
-        expect(fakeApp.toolCursor).toBe('crosshair'); // untouched — new owner will set it
+        expect(fakeApp.toolCursor).toBe('crosshair'); // untouched, new owner will set it
         expect(paintTool.restoreHover).not.toHaveBeenCalled();
         expect(mc.isToolHoverSuppressed()).toBe(false);
     });

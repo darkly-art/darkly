@@ -1,19 +1,19 @@
-//! Procedural circle coverage GPU node — the brush-tip silhouette.
+//! Procedural circle coverage GPU node: the brush-tip silhouette.
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`].
 //! Downstream consumers (stamp's AlphaMask mode, watercolor's
 //! `mask`, smudge's `mask`, liquify's `mask`) inline
-//! the expression directly into their fragment body — no dab texture,
+//! the expression directly into their fragment body: no dab texture,
 //! no separate render pass.
 //!
-//! A polar-`r(θ)` family — a disc and its smooth bumpy variants — exposed
+//! A polar-`r(θ)` family (a disc and its smooth bumpy variants) exposed
 //! via the `algorithm` enum param:
 //!
-//! - **Sine harmonic** — `r(θ) = 1 + A·sin(n·θ + φ)`. Symmetric bumps.
-//! - **1D Perlin / value-noise fBm** — periodic value-noise summed over
+//! - **Sine harmonic** - `r(θ) = 1 + A·sin(n·θ + φ)`. Symmetric bumps.
+//! - **1D Perlin / value-noise fBm** - periodic value-noise summed over
 //!   `octaves` with `persistence` falloff. Organic blobs.
-//! - **Gielis Superformula** — single closed-form spanning circles,
+//! - **Gielis Superformula** - single closed-form spanning circles,
 //!   stars, flowers, and asteroids.
 //!
 //! Straight-edged polygons live in the separate [`super::polygon`] node,
@@ -49,9 +49,9 @@ pub fn register() -> BrushNodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
         display_name: "Circle",
-        description: "Procedural brush-tip silhouette — disc, bumpy circle, or superformula.",
+        description: "Procedural brush-tip silhouette: disc, bumpy circle, or superformula.",
         ports: vec![
-            // Compile-time branch selector — picks the silhouette algorithm.
+            // Compile-time branch selector: picks the silhouette algorithm.
             // Not wirable (an enum can't be driven per-dab); exposable like
             // every other input.
             PortDef::input("algorithm", BrushWireType::Enum)
@@ -77,7 +77,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_visible_when("algorithm", [ALGO_SINE as i32, ALGO_PERLIN as i32])
                 .with_description("Bump amplitude as a fraction of the base radius."),
             // Frequency / rotation are universal: the bump count, period, or
-            // symmetry order — and the rotation around the shape's centre —
+            // symmetry order, and the rotation around the shape's centre,
             // matter for every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
                 .with_range(1.0, 16.0, 6.0)
@@ -87,14 +87,14 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Raw)
                 .with_description(
                     "Sine: number of bumps (n). Perlin: base period in cells per revolution. \
-                     Superformula: symmetry order m. Must be an integer — \
+                     Superformula: symmetry order m. Must be an integer, since \
                      non-integer values would create a seam at θ = ±π where the \
                      shape fails to close.",
                 ),
             // No `natural_range`: radians are a unit, not a normalized
             // signal. `pen.drawing_angle → rotation_input` is a unit-
-            // preserving identity wire — values pass through raw and
-            // sum with the user's `rotation` offset. Users wanting
+            // preserving identity wire: values pass through raw and
+            // sum with the artist's `rotation` offset. Artists wanting
             // `random → rotation_input` to span a full revolution must
             // pre-scale through `multiply`.
             PortDef::input("rotation_input", BrushWireType::Scalar)
@@ -108,13 +108,13 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
-                // Orientation is part of shape identity; if the user
+                // Orientation is part of shape identity; if the artist
                 // exposes this knob, the dab thumbnail should follow it.
                 .persist_in_thumbnail()
                 .with_description(
                     "Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.",
                 ),
-            // Anisotropy is universal across every algorithm — it squashes the
+            // Anisotropy is universal across every algorithm: it squashes the
             // whole silhouette into an ellipse, the basis of a calligraphic nib.
             PortDef::input("aspect", BrushWireType::Scalar)
                 .with_range(0.1, 1.0, 1.0)
@@ -126,7 +126,7 @@ pub fn register() -> BrushNodeRegistration {
                 // thumbnail should show the ellipse.
                 .persist_in_thumbnail()
                 .with_description(
-                    "Squash the tip into an ellipse: 100% = round, lower = thinner. Rotates with the shape — set Rotation for a fixed-angle calligraphy nib.",
+                    "Squash the tip into an ellipse: 100% = round, lower = thinner. Rotates with the shape; set Rotation for a fixed-angle calligraphy nib.",
                 ),
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
@@ -173,7 +173,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("mask", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .preview_image()
-                .with_description("Per-fragment mask value (0..1) — the procedural shape's alpha at this fragment"),
+                .with_description("Per-fragment mask value (0..1): the procedural shape's alpha at this fragment"),
         ],
         is_gpu: true,
         is_terminal: false,
@@ -214,7 +214,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
     ///
     /// `params.algorithm` is read from the node param at compile time
     /// (constant per brush). Per-port shape inputs (`amplitude`,
-    /// `rotation`, `seed`, etc.) become input expressions — wired to
+    /// `rotation`, `seed`, etc.) become input expressions: wired to
     /// dab-record fields when modulated, literals when not.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
@@ -237,7 +237,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
         let softness = cctx.input("softness").as_f32();
 
         // Emit the shape evaluation as an inline block inside
-        // `fs_main` rather than a top-level function — the input
+        // `fs_main` rather than a top-level function: the input
         // expressions reference `d.<field>` and `u.<field>` which are
         // only in scope inside the fragment shader body. Using a
         // block-let preserves a single `let` binding name downstream
@@ -285,7 +285,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
         let algorithm = (ctx.port_enum("algorithm").max(0) as u32).min(2);
         let base = match algorithm {
             // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
-            // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both
+            // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]); both
             // peak at 1 + amplitude_max.
             ALGO_SINE | ALGO_PERLIN => 1.0 + ctx.port_max_value("amplitude").max(0.0),
             // Superformula's r is unbounded as n1 → 0; the best we

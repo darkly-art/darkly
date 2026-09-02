@@ -1,6 +1,6 @@
 //! Tests for the compiled `liquify` terminal.
 //!
-//! The load-bearing invariant — same as smudge — is the
+//! The load-bearing invariant (same as smudge) is the
 //! per-dab feedback loop: dab 2's warp source samples scratch *after*
 //! dab 1 has written to it. A single instanced draw would have both
 //! dabs reading pre-stroke. The discriminator test places two dabs so
@@ -57,7 +57,7 @@ fn two_tone_canvas(red_x_threshold: u32) -> Vec<u8> {
 }
 
 /// 4 px-period vertical stripes: maximum frequency along the drag axis,
-/// and exactly two tones — so any intermediate red value in the output is
+/// and exactly two tones, so any intermediate red value in the output is
 /// resampling loss, not content.
 fn stripe_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
@@ -78,8 +78,8 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
     [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]]
 }
 
-/// One `(pos, direction_rad, distance)` per dab. `distance > 0.5` so
-/// the per-dab first-dab gate doesn't fire.
+/// One `(pos, direction_rad, distance)` per dab: the direction sets the
+/// per-dab motion vector. `distance > 0.5` so the first-dab gate doesn't fire.
 fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec<u8> {
     render_liquify_dabs_on(&two_tone_canvas(36), size_override, dabs)
 }
@@ -178,11 +178,11 @@ fn render_liquify_dabs_on(
             // Simulate a real stroke's per-dab motion: in a live
             // stroke the engine places dabs a spacing apart along
             // the cursor's path, so `pen.motion` per dab has that
-            // magnitude along the drawing angle.
+            // magnitude along the drawing angle. `motion` is the only
+            // direction signal liquify consumes.
             let motion = [TEST_DAB_STEP_PX * dir.cos(), TEST_DAB_STEP_PX * dir.sin()];
             let info = PaintInformation {
                 pos: *pos,
-                drawing_angle: *dir,
                 distance: *dist,
                 motion,
                 pressure: 1.0,
@@ -211,7 +211,7 @@ fn render_liquify_dabs_on(
 /// *image* once per dab: each dab snapshotted the scratch, sampled it at a
 /// displaced UV and wrote the colour straight back. With 4 px dab spacing
 /// and a 30.7 px radius a material point passed through ~15 bilinear
-/// filters per swipe, and their composition is not a bilinear filter — it
+/// filters per swipe, and their composition is not a bilinear filter; it
 /// is a low-pass cascade. Detail decayed monotonically with dab count,
 /// which is what "liquify ghosts everything" meant.
 ///
@@ -219,7 +219,7 @@ fn render_liquify_dabs_on(
 /// exactly once holds detail constant no matter how many dabs pass over a
 /// pixel.
 ///
-/// Two assertions, and the pairing is the point — neither alone is
+/// Two assertions, and the pairing is the point; neither alone is
 /// sufficient:
 ///
 /// * **A (sharpness)** is what fails under the bug, but is satisfied
@@ -257,8 +257,8 @@ fn liquify_scrubbing_preserves_high_frequency_detail() {
     // size 0.12 → radius = 0.12 * DAB_REFERENCE_SIZE * 0.5 = 30.72 px.
     let rgba = render_liquify_dabs_on(&source, 0.12, &dabs);
 
-    // A — sharpness. Every row crossing the stroke must still contain both
-    // tones. Source scores 255; the pre-fix implementation scored 0–42.
+    // A: sharpness. Every row crossing the stroke must still contain both
+    // tones. Source scores 255; the pre-fix implementation scored 0-42.
     let mut worst = (255u8, 0u32);
     for y in 44..86 {
         let (mut lo, mut hi) = (255u8, 0u8);
@@ -276,14 +276,14 @@ fn liquify_scrubbing_preserves_high_frequency_detail() {
         worst.0 >= 150,
         "liquify must not low-pass the image it warps: row {} has red \
          peak-to-peak {} (need >= 150). The source is a two-tone stripe \
-         pattern, so anything in between is resampling loss — this is the \
+         pattern, so anything in between is resampling loss; this is the \
          ghosting bug, and it means liquify is resampling the picture per \
          dab instead of accumulating a displacement field.",
         worst.1,
         worst.0,
     );
 
-    // B — displacement. A liquify that does nothing would sail through A.
+    // B: displacement. A liquify that does nothing would sail through A.
     let mut moved = 0u32;
     let mut total = 0u32;
     for y in 44..86 {
@@ -309,9 +309,9 @@ fn liquify_scrubbing_preserves_high_frequency_detail() {
 /// Confidence test: a single liquify dab at (38, 64) pulling
 /// rightward (direction = 0, strength = 1) lifts red into the dab
 /// centre. With `|motion| = TEST_DAB_STEP_PX = 4`, displacement at
-/// strength=1 is 4 px, so the centre fragment sources from (34, 64)
-/// — inside the red bar at `x < 36`. (Size is irrelevant to the
-/// per-dab displacement now — kept at 0.3 only so the disc actually
+/// strength=1 is 4 px, so the centre fragment sources from (34, 64),
+/// inside the red bar at `x < 36`. (Size is irrelevant to the
+/// per-dab displacement now, kept at 0.3 only so the disc actually
 /// covers both the centre and the source.)
 #[test]
 fn single_liquify_dab_warps_red_into_center() {
@@ -341,11 +341,11 @@ fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
     let rgba = render_liquify_dabs(
         0.3,
         &[
-            // Dab 1 at (38, 64): centre source at (34, 64) —
+            // Dab 1 at (38, 64): centre source at (34, 64),
             // inside the red bar.
             ([38.0, 64.0], 0.0, 10.0),
-            // Dab 2 at (42, 64): centre source at (38, 64) —
-            // coincides with dab 1's centre where the red deposit
+            // Dab 2 at (42, 64): centre source at (38, 64),
+            // which coincides with dab 1's centre where the red deposit
             // lives.
             ([42.0, 64.0], 0.0, 20.0),
         ],
@@ -354,7 +354,7 @@ fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
     assert!(
         centre_2[0] > 120,
         "dab 2's warp source must read dab 1's red deposit through \
-         the per-dab barrier — got centre {centre_2:?}. Pre-stroke at \
+         the per-dab barrier: got centre {centre_2:?}. Pre-stroke at \
          (38, 64) was BLACK; if dab 2 sees this value it means the \
          inter-dab `copy_texture_to_texture` (and thus the per-dab \
          serialization) is broken."
@@ -374,19 +374,19 @@ fn liquify_dab2_reads_dab1_deposit_not_pre_stroke() {
 /// `|motion| = TEST_DAB_STEP_PX = 4`. The pre-stroke red bar lives
 /// at `x < 36`. With the (now-fixed) formula `displacement = strength
 /// × |motion| = 4 px`, a fragment at (42, 64) samples from (38, 64)
-/// — background. The brush centre at (38, 64) samples from (34, 64)
-/// — well inside the red bar — confirming the warp is actually
+/// (background). The brush centre at (38, 64) samples from (34, 64),
+/// well inside the red bar, confirming the warp is actually
 /// running (not silently zero).
 ///
 /// Under the previous radius-coupled formula `displacement = 0.08 ×
 /// radius × strength`, the large brush (size=1.0, radius=256) gave
 /// displacement = 20.48 px, so (42, 64) would have sampled from
-/// (~21.5, 64) — well inside the red bar — and read RED. The test
+/// (~21.5, 64), well inside the red bar, and read RED. The test
 /// fails loudly if that coupling comes back.
 #[test]
 fn warp_magnitude_is_size_invariant() {
-    // Small brush (radius=76.8) — positive control: warp ran at all.
-    // Centre (38, 64) samples from (34, 64) — inside the red bar.
+    // Small brush (radius=76.8): positive control, warp ran at all.
+    // Centre (38, 64) samples from (34, 64), inside the red bar.
     let small = render_liquify_dabs(0.3, &[([38.0, 64.0], 0.0, 10.0)]);
     let small_at_centre = pixel(&small, 38, 64);
     assert!(
@@ -401,7 +401,7 @@ fn warp_magnitude_is_size_invariant() {
          {small_at_42:?}"
     );
 
-    // Large brush (radius=256) — the discriminator. Same |motion|
+    // Large brush (radius=256): the discriminator. Same |motion|
     // and strength, so the same displacement (4 px). (42, 64) must
     // still sample from background; under any radius-coupled formula
     // displacement at this size would be much larger and (42, 64)
@@ -416,7 +416,7 @@ fn warp_magnitude_is_size_invariant() {
     let large_at_42 = pixel(&large, 42, 64);
     assert!(
         large_at_42[0] < 60,
-        "large brush: (42, 64) must still sample from background — \
+        "large brush: (42, 64) must still sample from background; \
          if this is red the radius-coupled formula has come back and \
          the strength slider once again grows with brush size. Got \
          {large_at_42:?}"
@@ -434,10 +434,10 @@ fn warp_magnitude_is_size_invariant() {
 /// texture, any liquify stroke long enough to check-point died on a wgpu
 /// validation error.
 ///
-/// It also closes the loop on the ghosting bug at the level the user
+/// It also closes the loop on the ghosting bug at the level the artist
 /// actually meets it: a real stroke through `DarklyEngine`, with
 /// stabilization, dab scheduling, checkpointing and mid-stroke commits
-/// all live — not the hand-driven dab harness the tests above use.
+/// all live, not the hand-driven dab harness the tests above use.
 #[test]
 fn liquify_stroke_through_engine_preserves_detail() {
     use darkly::engine::types::StrokeOp;
@@ -510,14 +510,14 @@ fn liquify_stroke_through_engine_preserves_detail() {
         assert!(
             hi - lo >= 150,
             "row {y}: red peak-to-peak {} after a full engine-driven \
-             liquify stroke (need >= 150) — detail was destroyed",
+             liquify stroke (need >= 150): detail was destroyed",
             hi - lo,
         );
     }
 }
 
 /// The brush's configured spacing and [`LIQUIFY_SPACING_RATIO`] are the
-/// same decision written in two files — the YAML the engine actually
+/// same decision written in two files: the YAML the engine actually
 /// reads, and the Rust constant whose doc comment carries the reasoning
 /// (why 0.05, and what banding measurement bounds it). Pin them together
 /// so neither can drift silently.
@@ -547,7 +547,7 @@ fn shipped_liquify_spacing_matches_the_declared_ratio() {
          falls back to the pixel floor and restores O(radius²) cost",
     );
 
-    // A large brush must actually get large steps — the whole point.
+    // A large brush must actually get large steps: the whole point.
     let big_diameter = 1000.0;
     assert!(
         spacing.distance(big_diameter) >= 40.0,

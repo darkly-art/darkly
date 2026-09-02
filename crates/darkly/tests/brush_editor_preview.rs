@@ -2,8 +2,8 @@
 //!
 //! Asserts the stroke engine runs end-to-end against the preview's own
 //! scratch target and produces non-empty RGBA pixels where the S-curve was
-//! drawn. Uses the blocking `test_utils::readback_texture` helper — native
-//! only; the wasm path does async readback via the ReadbackScheduler.
+//! drawn. Uses the blocking `test_utils::readback_texture` helper (native
+//! only); the wasm path does async readback via the ReadbackScheduler.
 
 use darkly::brush::{
     default_graph,
@@ -153,7 +153,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
 }
 
 /// Decode a `brush_stroke_preview()` PNG to raw RGBA bytes plus its
-/// canonical `BRUSH_THUMBNAIL_SIZE` dimensions — same shape the frontend
+/// canonical `BRUSH_THUMBNAIL_SIZE` dimensions: same shape the frontend
 /// receives via the `Blob` URL path.
 fn decode_preview_png(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     let img = image::load_from_memory(png_bytes).expect("valid PNG bytes");
@@ -171,8 +171,8 @@ fn engine_brush_stroke_preview_caches_after_readback() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    // First call: cache empty, kicks off a readback, returns an empty Vec
-    // — the frontend uses that as a "no fresh bytes" signal so it
+    // First call: cache empty, kicks off a readback, returns an empty Vec.
+    // The frontend uses that as a "no fresh bytes" signal so it
     // preserves whatever was last shown rather than flashing transparent.
     let first = engine.brush_stroke_preview();
     assert!(
@@ -185,7 +185,7 @@ fn engine_brush_stroke_preview_caches_after_readback() {
     // event loop polling the ReadbackScheduler via the render loop).
     engine.test_flush_readbacks();
 
-    // Second call: cache now populated with PNG bytes — same shape as
+    // Second call: cache now populated with PNG bytes, same shape as
     // `brush_active_dab_preview` / `brush_thumbnail`.
     let second = engine.brush_stroke_preview();
     assert!(
@@ -278,7 +278,7 @@ fn set_preview_theme_invalidates_cache() {
 
 #[test]
 fn brush_save_bakes_thumbnail_asynchronously() {
-    use darkly::brush::bundle::Brush;
+    use darkly::brush::library;
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -286,15 +286,13 @@ fn brush_save_bakes_thumbnail_asynchronously() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    // Save a brush — kicks off an async thumbnail readback against the
-    // engine's library copy.
-    engine.brush_save("TestBrush", "basic").unwrap();
+    // Save a brush: kicks off an async thumbnail readback against the
+    // process-wide library.
+    engine.brush_save("test_brush", "TestBrush").unwrap();
 
     // Before the readback lands, the library entry has no thumbnail.
-    let exported_before = engine.brush_export("TestBrush").expect("brush exported");
-    let bundle_before = Brush::from_bytes(&exported_before).unwrap();
     assert!(
-        bundle_before.thumbnail_png.is_none(),
+        library::with(|lib| lib.thumbnail_png("test_brush").is_none()),
         "thumbnail should be absent before readback completes"
     );
 
@@ -302,12 +300,12 @@ fn brush_save_bakes_thumbnail_asynchronously() {
     // back onto the library entry.
     engine.test_flush_readbacks();
 
-    let exported_after = engine.brush_export("TestBrush").unwrap();
-    let bundle_after = Brush::from_bytes(&exported_after).unwrap();
-    let png = bundle_after
-        .thumbnail_png
-        .expect("thumbnail present after readback");
-    // Valid PNG — starts with the PNG magic signature.
+    let png = library::with(|lib| {
+        lib.thumbnail_png("test_brush")
+            .expect("thumbnail present after readback")
+            .to_vec()
+    });
+    // Valid PNG: starts with the PNG magic signature.
     assert_eq!(
         &png[..8],
         &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
@@ -317,10 +315,10 @@ fn brush_save_bakes_thumbnail_asynchronously() {
 
 /// Regression: Hard Round (no `pressure → size_input` wire) paints every
 /// dab at full size, including the endpoints. The endpoint dabs must not
-/// be clipped against the cache border — the leftmost and rightmost
+/// be clipped against the cache border: the leftmost and rightmost
 /// columns of the framed preview must contain only background pixels.
 ///
-/// This is the user-visible bug: with the previous size-aware inset
+/// This is the artist-visible bug: with the previous size-aware inset
 /// hack, the path was shrunk so endpoints landed inside the canvas,
 /// but the inset clamped to half the canvas at any non-trivial size and
 /// the path degenerated. Without an inset, endpoints sit on the canvas
@@ -334,8 +332,8 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    // Pin the theme so the bg pixel value is deterministic for the test
-    // — black bg, white stroke.
+    // Pin the theme so the bg pixel value is deterministic for the test:
+    // black bg, white stroke.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
 
     // Airbrush is a built-in: shape tip with a fixed `size_input` constant
@@ -357,7 +355,7 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
         pixels[i] > TOLERANCE || pixels[i + 1] > TOLERANCE || pixels[i + 2] > TOLERANCE
     };
 
-    // The leftmost and rightmost columns must be entirely background —
+    // The leftmost and rightmost columns must be entirely background:
     // any stroke pixel there means an endpoint dab was clipped.
     let edge_band = 1u32;
     for x_band in [0..edge_band, (width - edge_band)..width] {
@@ -366,7 +364,7 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
                 let i = ((y * width + x) * 4) as usize;
                 assert!(
                     !is_stroke(i),
-                    "Airbrush preview cuts off at the edge — column {x} y={y} \
+                    "Airbrush preview cuts off at the edge: column {x} y={y} \
                      has stroke pixel rgba={:?}",
                     [pixels[i], pixels[i + 1], pixels[i + 2]],
                 );
@@ -378,9 +376,9 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
 /// Regression: scrubbing a `pen_input.stabilize` setting must not
 /// invalidate the editor-preview cache. The synthetic-stroke preview
 /// always renders with `PassThrough`, so the rendered pixels can't
-/// change in response to a user scrub. Bumping `brush_graph_version`
+/// change in response to an artist scrub. Bumping `brush_graph_version`
 /// on these scrubs would trigger a wasted full-stroke re-render every
-/// 100 ms while the user drags the slider (~1 GB/s of GPU work for no
+/// 100 ms while the artist drags the slider (~1 GB/s of GPU work for no
 /// visible effect).
 ///
 /// The fix declares stabilize via `preview_irrelevant_scrub()` and routes
@@ -400,7 +398,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Ink Pen exposes both `stabilize` (default 0.6) and `size` so we can
     // contrast a preview-irrelevant scrub against a preview-affecting
-    // one in the same engine — avoids creating a second wgpu device.
+    // one in the same engine, which avoids creating a second wgpu device.
     engine.brush_load("Ink Pen").expect("Ink Pen built-in");
 
     // Prime the editor preview cache and let the readback land so the
@@ -410,7 +408,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     let v_before_stabilize = engine.brush_graph_version();
 
     // Find the exposed `stabilize` port and scrub it through
-    // `brush_set_exposed_port` — the same entry point the brush bar uses.
+    // `brush_set_exposed_port`: the same entry point the brush bar uses.
     let stabilize = engine
         .brush_exposed_ports()
         .into_iter()
@@ -425,7 +423,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         v_before_stabilize,
         "stabilize is preview-irrelevant (PassThrough is hardcoded for \
          the synthetic stroke); scrubbing it must not bump \
-         brush_graph_version — bumping invalidates the editor preview \
+         brush_graph_version: bumping invalidates the editor preview \
          cache and triggers a wasted full-stroke re-render."
     );
 
@@ -434,7 +432,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     // `softness` lives on the upstream `circle` node (the
     // `paint` terminal has no softness port). It has no
     // `preview_irrelevant_scrub` flag, is read by the preview shader,
-    // and is unwired — the perfect canary for "rule too broad". Find
+    // and is unwired: the perfect canary for "rule too broad". Find
     // its node via the exposed-port listing.
     let softness = engine
         .brush_exposed_ports()
@@ -455,22 +453,22 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 }
 
-/// Regression: scrubbing `brush_settings.size` — or any port flagged with
-/// `preview_value` — must not invalidate the editor-preview cache.
+/// Regression: scrubbing `brush_settings.size` (or any port flagged with
+/// `preview_value`) must not invalidate the editor-preview cache.
 ///
 /// The previous "continued charcoal debugging" attempt deleted the
 /// caller-side `graph.apply_preview_overrides()` on the stroke-preview
 /// path and rewrote the `ChangeKind` classifier to key off
 /// `preview_irrelevant_scrub` only, with the rationale "the preview
-/// must match what the user would actually paint". That made the
-/// brush picker tile and the editor stroke preview inconsistent —
+/// must match what the artist would actually paint". That made the
+/// brush picker tile and the editor stroke preview inconsistent:
 /// the tile stayed size-invariant via `reset_exposed_scrubs`, but the
 /// stroke preview now mutated visibly on every size scrub.
 ///
 /// Both previews share the same intent: brush identity, not momentary
 /// scrub state. This test pins the restored behavior: a scrub of a pinned
 /// port on the active brush must not bump `brush_graph_version` (which
-/// is what gates the editor preview cache) — because the renderer
+/// is what gates the editor preview cache), because the renderer
 /// neutralizes `preview_value` ports before rendering, so the output
 /// is identical anyway.
 ///
@@ -478,7 +476,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 /// two pins cost different things and only one of them is free. A size
 /// scrub was never legible in a preview rendered at a canonical size, so
 /// nothing was lost; a strength scrub *was* visible before the port was
-/// pinned, and freezing it is a deliberate trade — a stroke preview says
+/// pinned, and freezing it is a deliberate trade: a stroke preview says
 /// what kind of brush this is, not what one parameter is currently set to.
 /// Asserting it here is what records that as intended rather than
 /// accidental.
@@ -514,7 +512,7 @@ fn pinned_ports_are_pinned_in_previews() {
             "scrubbing '{brush}' `{port}` must not bump brush_graph_version. \
              The port is flagged `preview_value`, and the stroke-preview render \
              path applies `apply_preview_overrides` to neutralize it before \
-             rendering — so the editor preview's output cannot change in \
+             rendering, so the editor preview's output cannot change in \
              response to the scrub, and invalidating its cache would just \
              trigger a wasted full-stroke re-render and a visible blink as the \
              new value briefly shows."
@@ -522,9 +520,9 @@ fn pinned_ports_are_pinned_in_previews() {
     }
 }
 
-/// Assert no pixel on the outermost border row/column carries ink — i.e. the
+/// Assert no pixel on the outermost border row/column carries ink (i.e. the
 /// rendered content stayed clear of the render-canvas edge and nothing was
-/// clipped away before the framer's changed-pixel crop ran. `bg` is assumed
+/// clipped away before the framer's changed-pixel crop ran). `bg` is assumed
 /// near-black (the tests pin a black theme bg), so any bright border pixel is
 /// clipped stroke.
 fn assert_no_ink_on_render_border(pixels: &[u8], w: u32, h: u32, label: &str) {
@@ -580,7 +578,7 @@ fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine)
 /// stroke-preview render canvas. The tip's anisotropy stretches the dab
 /// footprint up to ~10×, so a fixed small canvas + absolute inset clipped the
 /// endpoints (and even mid-stroke edges) before the changed-pixel crop ever
-/// saw them — the user-reported "calligraphy stroke is cut off" bug.
+/// saw them: the artist-reported "calligraphy stroke is cut off" bug.
 ///
 /// The invariant is size-agnostic: whatever canvas the preview pipeline picks,
 /// the neutralized preview stroke must stay clear of its border. We assert
@@ -608,7 +606,7 @@ fn calligraphy_stroke_preview_not_clipped_against_render_border() {
 /// Regression: the same broad-nib calligraphy tip must not be clipped against
 /// the single-dab preview render canvas either. `aspect` is
 /// `persist_in_thumbnail` and not a default-exposed scrub, so it survives the
-/// dab path's `reset_exposed_scrubs` — the nib the picker tile shows is the
+/// dab path's `reset_exposed_scrubs`: the nib the picker tile shows is the
 /// full ellipse, not a truncated one.
 #[test]
 fn calligraphy_dab_preview_not_clipped_against_render_border() {

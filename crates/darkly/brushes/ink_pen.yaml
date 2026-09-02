@@ -1,5 +1,4 @@
 name: Ink Pen
-category: Basic
 description: A crisp-edged nib with a slow pressure ramp, for confident line work that holds its weight.
 nodes:
   brush_settings:

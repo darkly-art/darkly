@@ -11,7 +11,7 @@
     let rect = $state<{ left: number; top: number; width: number; height: number } | null>(null);
 
     // CanvasStack must first mount only once the overlay has a real, visible
-    // rect — CanvasView sizes its WebGPU surface from getBoundingClientRect on
+    // rect; CanvasView sizes its WebGPU surface from getBoundingClientRect on
     // mount, and a 0×0 init (which happens if it mounts while display:none)
     // leaves the surface and initial view fit broken. This latches true on the
     // first valid rect and never flips back, so the canvases mount exactly once
@@ -34,7 +34,7 @@
 
     // Track the current placeholder: reposition on its resize (covers gutter
     // drags, which resize the slot) and on window resize. Re-runs when the
-    // placeholder element itself changes — i.e. when the Document panel remounts
+    // placeholder element itself changes, i.e. when the Document panel remounts
     // in a new spot after being moved/tiled.
     $effect(() => {
         const el = canvasSlot.current;
@@ -67,7 +67,7 @@
 </script>
 
 <!-- Gated on `everSized` for the FIRST mount only (so the canvas inits at a
-     real size); once mounted it stays mounted — unmounting would destroy every
+     real size); once mounted it stays mounted; unmounting would destroy every
      canvas's WebGPU surface. When no Document panel is showing (rect null) the
      overlay is only hidden via display:none, never removed. -->
 {#if everSized}

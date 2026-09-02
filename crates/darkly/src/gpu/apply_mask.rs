@@ -4,7 +4,7 @@
 //! This is the de-fused replacement for the fused mask sampling that used to
 //! live inside the layer-blend pass. A masked host composites its content into
 //! an isolated projection; this pass multiplies that projection's alpha by the
-//! mask before it blends down onto the parent — so the mask never samples the
+//! mask before it blends down onto the parent, so the mask never samples the
 //! host layer's texture or geometry. See `gpu::compositor` projection path.
 
 /// Per-pass uniform: the mask texture's plane geometry + the isolated-debug
@@ -30,7 +30,7 @@ pub struct ApplyMaskPipeline {
 impl ApplyMaskPipeline {
     /// Build the pipeline. Group 1 (mask texture) reuses the blend pipelines'
     /// `mask_bind_group_layout`; group 2 (canvas geometry) reuses their
-    /// `canvas_bind_group_layout` — one shared layout per resource kind.
+    /// `canvas_bind_group_layout`: one shared layout per resource kind.
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,

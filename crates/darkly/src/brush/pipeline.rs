@@ -1,11 +1,11 @@
 //! Central brush pipeline registry, plumbing pipelines, and shared infra.
 //!
 //! Each brush terminal node (paint, liquify, watercolor, smudge) declares
-//! its own GPU pipeline alongside its node `register()` — see
+//! its own GPU pipeline alongside its node `register()`; see
 //! [`crate::brush::nodes`].  Their `BrushPipelineRegistration`s are
 //! harvested at [`BrushPipelines::new`] time and stored in a typed map.
-//! Pipelines that are not tied to any one node — `blit`, `mask_blit`,
-//! `scratch_blit_r8` — are format-bridging plumbing and live directly on
+//! Pipelines that are not tied to any one node (`blit`, `mask_blit`,
+//! `scratch_blit_r8`) are format-bridging plumbing and live directly on
 //! [`BrushPipelines`].
 //!
 //! ## Per-node pipeline contract
@@ -15,7 +15,7 @@
 //! - is a `struct` implementing [`BrushPipelineEntry`];
 //! - is built by a `fn build(ctx: &BuildContext) -> Self` constructor;
 //! - exposes its own typed `write_uniforms` / `pipeline` / `uniform_bind_group`
-//!   methods — uniform struct shapes vary, so dispatch is type-owned;
+//!   methods: uniform struct shapes vary, so dispatch is type-owned;
 //! - returns its dynamic-uniform-ring (if any) from `ring()` so the
 //!   registry can iterate all rings for frame reset / overflow checks.
 //!
@@ -51,7 +51,7 @@ pub struct BlitUniforms {
 /// each dab writes to a unique offset.  All render passes can go into one
 /// command encoder and be submitted once.
 ///
-/// Uses `Cell` for `next_index` so `write()` can take `&self` — the ring is
+/// Uses `Cell` for `next_index` so `write()` can take `&self`: the ring is
 /// never shared across threads.
 pub const UNIFORM_RING_CAPACITY: u32 = 256;
 
@@ -120,17 +120,17 @@ pub fn align_up(value: u64, alignment: u64) -> u64 {
 pub struct BuildContext<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
-    /// `group(0)` layout — single dynamic-offset uniform buffer.  Every
+    /// `group(0)` layout: single dynamic-offset uniform buffer.  Every
     /// per-node pipeline binds its dab uniforms here.
     pub uniform_bgl: &'a wgpu::BindGroupLayout,
-    /// Texture + linear sampler — bound where composites need to modulate
+    /// Texture + linear sampler: bound where composites need to modulate
     /// fragment output by the selection mask.
     pub selection_bgl: &'a wgpu::BindGroupLayout,
-    /// Texture + linear sampler — bound where shaders sample the per-dab
+    /// Texture + linear sampler: bound where shaders sample the per-dab
     /// scratch read mirror snapshot (composite, smudge,
     /// liquify, watercolor atlas). After the
     /// `dab_pool` deletion this BGL is the single shape for every
-    /// `texture_2d<f32> + sampler` binding in the brush stack — the
+    /// `texture_2d<f32> + sampler` binding in the brush stack; the
     /// scratch's write bind group also lives on it.
     pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
     pub canvas_copy_sampler: &'a wgpu::Sampler,
@@ -180,7 +180,7 @@ impl<'a> BuildContext<'a> {
 /// kinds in a single map.  Consumers downcast via [`BrushPipelines::get`].
 ///
 /// Not `Sync`: per-node pipelines own a [`DynamicUniformRing`] backed by
-/// a `Cell<u32>` write cursor (intentional — see `DynamicUniformRing`'s
+/// a `Cell<u32>` write cursor (intentional; see `DynamicUniformRing`'s
 /// doc).  The brush engine is single-threaded.
 pub trait BrushPipelineEntry: Any {
     fn as_any(&self) -> &dyn Any;
@@ -215,8 +215,8 @@ pub struct BrushPipelineRegistration {
     pub build: fn(&BuildContext) -> Box<dyn BrushPipelineEntry>,
 }
 
-/// Brush pipelines that aren't owned by any single node — the
-/// commit composite blit, future plumbing — funnel through here so
+/// Brush pipelines that aren't owned by any single node (the
+/// commit composite blit, future plumbing) funnel through here so
 /// [`BrushPipelines::new`] has a single uniform input alongside
 /// `nodes::registrations()`. Adding a future plumbing pipeline means
 /// dropping its registration into this list; the harvest loop picks
@@ -285,7 +285,7 @@ pub struct BrushPipelines {
     texture_registry: crate::gpu::texture_registry::TextureRegistry,
 
     // ── Engine-owned baked procedural-source cache ───────────────────
-    /// Baked tiles for the `noise` node's static-field path — the
+    /// Baked tiles for the `noise` node's static-field path: the
     /// procedural field is rendered once into a texture and sampled like
     /// any graph texture. See
     /// [`crate::gpu::baked_source_cache::BakedSourceCache`].
@@ -455,9 +455,9 @@ impl BrushPipelines {
         });
 
         // Nearest counterpart, for the non-filtering layout above. Warp
-        // terminals never sample through it — it exists because the
-        // layout declares a sampler slot — but a `Filtering` sampler is
-        // illegal against a `NonFiltering` entry, so it must be nearest.
+        // terminals never sample through it. It exists because the layout
+        // declares a sampler slot, but a `Filtering` sampler is illegal
+        // against a `NonFiltering` entry, so it must be nearest.
         let canvas_copy_nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("brush-canvas-copy-nearest-sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -473,7 +473,7 @@ impl BrushPipelines {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/brush/blit.wgsl").into()),
         });
         // `canvas_copy_bgl` is the canonical `texture_2d<f32> + sampler`
-        // layout — same shape the old dab-pool BGL had, used here for
+        // layout: same shape the old dab-pool BGL had, used here for
         // the blit's source texture binding.
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-blit-layout"),
@@ -528,8 +528,8 @@ impl BrushPipelines {
         });
 
         // Mask blit (R8 → RGBA8 broadcast) and Scratch blit R8 (RGBA8 →
-        // R8 passthrough) share `mask_blit.wgsl` and a no-uniforms layout
-        // — just the source texture at group(0).
+        // R8 passthrough) share `mask_blit.wgsl` and a no-uniforms layout:
+        // just the source texture at group(0).
         let mask_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("brush-mask-blit"),
             source: wgpu::ShaderSource::Wgsl(
@@ -678,7 +678,7 @@ impl BrushPipelines {
     }
 
     /// Look up a per-node pipeline by id.  Panics if the id is not
-    /// registered or the type doesn't match — both are programming
+    /// registered or the type doesn't match; both are programming
     /// errors discovered at the first paint.
     pub fn get<P: BrushPipelineEntry>(&self, id: &'static str) -> &P {
         self.entries
@@ -722,7 +722,7 @@ impl BrushPipelines {
     /// Build a one-shot bind group over a single source texture view,
     /// using the canvas-copy BGL (texture + linear sampler).  For
     /// format-bridging blits invoked from `GpuPaintTarget` (`mask_blit`,
-    /// `scratch_blit_r8`).  One bind group allocation per stroke — not
+    /// `scratch_blit_r8`).  One bind group allocation per stroke, not
     /// per dab.
     pub fn create_blit_source_bind_group(
         &self,
@@ -767,7 +767,7 @@ impl BrushPipelines {
     /// against. Color scratches get the filtering pair; float32 warp
     /// fields get the non-filtering pair, because `Rg32Float` is not
     /// filterable without the optional `float32-filterable` feature.
-    /// Callers pass the result straight to `Scratch::new` — this is the
+    /// Callers pass the result straight to `Scratch::new`; this is the
     /// single place the pairing is decided.
     pub fn canvas_copy_layout_for(
         &self,
@@ -787,7 +787,7 @@ impl BrushPipelines {
         }
     }
 
-    /// The 1×1 white selection bind group — bound when no selection is
+    /// The 1×1 white selection bind group: bound when no selection is
     /// active.  Exposed for out-of-crate tests that construct a
     /// `BrushGpuContext` manually and need a default selection mask.
     pub fn default_selection_bind_group(&self) -> &wgpu::BindGroup {
@@ -819,7 +819,7 @@ impl BrushPipelines {
     /// Shared cache of compiled-brush *preview* pipelines, keyed by
     /// `topology_hash`. All four compiled terminals (paint, watercolor,
     /// smudge, liquify) route their hover-cursor preview through this
-    /// single cache — preview pipelines look identical across terminals
+    /// single cache: preview pipelines look identical across terminals
     /// (single-quad vertex stage, no `@group(2)` selection, no
     /// `@group(3)` terminal bindings, REPLACE blend, `Rgba8Unorm`
     /// target). Their shape depends only on the brush's
@@ -889,7 +889,7 @@ pub struct PreviewPipeline {
     uniform_bind_group: wgpu::BindGroup,
     dabs_buffer: wgpu::Buffer,
     dabs_bind_group: wgpu::BindGroup,
-    /// Total uniform-block size for this brush — intrinsic header +
+    /// Total uniform-block size for this brush: intrinsic header +
     /// node-contributed uniforms, rounded to the ring's alignment.
     uniform_size: usize,
     /// `@group(3)` graph-texture bind group + the empty placeholder
@@ -916,7 +916,7 @@ impl PreviewPipeline {
         uniform_bytes: &[u8],
         dab_bytes: &[u8],
     ) {
-        // Pad uniform bytes up to the ring's binding size — the dynamic
+        // Pad uniform bytes up to the ring's binding size: the dynamic
         // offset bind group's `binding_size` is the ring stride, so
         // writes shorter than the stride leave the tail of the ring
         // slot whatever it had before. Zeroing keeps reads of node-
@@ -966,21 +966,21 @@ impl PreviewPipeline {
     }
 }
 
-/// Shared cache of preview pipelines for compiled brushes — see
+/// Shared cache of preview pipelines for compiled brushes; see
 /// [`BrushPipelines::cursor_preview_cache`].
 ///
 /// Pipelines are built on demand. The cache key is `topology_hash`;
 /// two brushes that compile to identical dab/uniform layouts share
 /// one entry. The pipeline shape is derived entirely from
-/// `CompiledBrush::cursor_preview_wgsl`, `dab_layout`, and `uniform_layout`
-/// — independent of which terminal compiled the brush.
+/// `CompiledBrush::cursor_preview_wgsl`, `dab_layout`, and `uniform_layout`,
+/// independent of which terminal compiled the brush.
 pub struct CursorPreviewPipelineCache {
     pipelines: std::cell::RefCell<HashMap<u64, PreviewPipeline>>,
     dabs_bgl: wgpu::BindGroupLayout,
     /// Empty bind-group layout used as a positional placeholder for
     /// `@group(2)` and `@group(3)` when a brush samples graph textures
     /// (`@group(4)`). The preview shader doesn't reference 2 or 3, but
-    /// pipeline layouts are positional — slot 4 only lines up if 2 and
+    /// pipeline layouts are positional: slot 4 only lines up if 2 and
     /// 3 exist. Shared across every preview pipeline; built once.
     empty_bgl: wgpu::BindGroupLayout,
     empty_bind_group: wgpu::BindGroup,
@@ -1081,7 +1081,7 @@ fn build_cursor_preview_pipeline(
     });
     // `@group(3)` texture slots for the preview pipeline. Hover has no
     // stroke and no dabs, so nothing is published for a live slot and
-    // `make_bind_group` resolves it to the registry `_fallback` tile —
+    // `make_bind_group` resolves it to the registry `_fallback` tile:
     // the shader body samples it and the cursor thumbnail comes out
     // neutral. Named and baked slots resolve normally.
     let preview_sources = compiled.graph_sources.clone();
@@ -1189,9 +1189,9 @@ fn build_cursor_preview_pipeline(
         let (_layout, bg) =
             texture_registry.make_bind_group(device, queue, baked_sources, &preview_sources, &[]);
         // Per-pipeline empty bind group bound at @group(2) (matches
-        // the cache's `empty_bgl`). Cheap to create — no GPU
-        // resources — and keeps `render` self-contained without
-        // taking a `&CursorPreviewPipelineCache`.
+        // the cache's `empty_bgl`). Cheap to create (no GPU resources)
+        // and keeps `render` self-contained without taking a
+        // `&CursorPreviewPipelineCache`.
         let empty_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-preview-empty-bg"),
             layout: empty_bgl,

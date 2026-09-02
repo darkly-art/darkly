@@ -6,9 +6,9 @@
 //
 // Each output pixel takes 4 bilinear taps positioned at the corners of
 // its footprint in the input texture. The footprint size is derived from
-// screen-space derivatives — `dpdx(uv)` is the change in input UV per
+// screen-space derivatives: `dpdx(uv)` is the change in input UV per
 // output pixel in X, i.e. exactly one output pixel's width in input-UV
-// space — so the shader self-adapts to any source/destination ratio
+// space, so the shader self-adapts to any source/destination ratio
 // without needing a uniform.
 
 struct VertexOutput {
@@ -33,7 +33,7 @@ struct VertexOutput {
     let footprint = vec2f(abs(dpdx(in.uv.x)), abs(dpdy(in.uv.y)));
 
     // 4 bilinear taps at the centers of the 4 quadrants of the output
-    // pixel's input footprint — i.e. ±¼ of the footprint from center
+    // pixel's input footprint, i.e. ±¼ of the footprint from center
     // along each axis. At exactly 2× downscale this lands each tap at a
     // half-texel position so bilinear filtering averages 2 input texels
     // and the 4 taps tile the 2×2 input area exactly. At lighter

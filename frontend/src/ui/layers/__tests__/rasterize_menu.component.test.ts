@@ -4,9 +4,9 @@
 //
 // Regression: the entry rendered for a layer whose pixels are generated, but
 // its click handler carried its own copy of the "should this be offered?" rule
-// and still bailed unless the layer had a mask. Clicking it dispatched nothing
-// — no engine call, no error, nothing in the console. A test of the predicate
-// alone can't see that; this mounts the row and clicks the entry.
+// and still bailed unless the layer had a mask. Clicking it dispatched
+// nothing: no engine call, no error, nothing in the console. A test of the
+// predicate alone can't see that; this mounts the row and clicks the entry.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount, type ComponentProps } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';

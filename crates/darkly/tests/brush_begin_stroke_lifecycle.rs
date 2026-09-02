@@ -2,7 +2,7 @@
 //!
 //! Before this refactor, each of the four scratch-touching terminals
 //! (`paint`, `watercolor`, `smudge`, `liquify`) carried its own
-//! `begin_stroke` impl with copy-pasted scratch prep — clear-to-transparent
+//! `begin_stroke` impl with copy-pasted scratch prep: clear-to-transparent
 //! for paint/watercolor, copy-from-pre-stroke for smudge/liquify. Commit
 //! `24ccdcf` ("fix other watercolor bug") landed a literal copy-paste of
 //! paint's clear pass into watercolor because the prologue had silently
@@ -11,7 +11,7 @@
 //! adding a new terminal can't re-introduce the divergence.
 //!
 //! These tests assert the *framework-observable* effect of `begin_stroke`
-//! on the scratch — independent of whichever terminal's `begin_stroke`
+//! on the scratch, independent of whichever terminal's `begin_stroke`
 //! impl ran (after Stage 2, all four are the trait default no-op).
 
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use darkly::nodegraph::Graph;
 const W: u32 = 32;
 const H: u32 = 32;
 
-/// Magenta sentinel — distinct from the transparent-black clear and from
+/// Magenta sentinel: distinct from the transparent-black clear and from
 /// any incidental zero data, so a missed framework hook is unambiguous.
 const SENTINEL_RGBA: [u8; 4] = [255, 0, 255, 255];
 
@@ -98,19 +98,19 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     );
     // StrokeBuffer owns scratch + pre_stroke (texture, view, bind group),
     // which is the exact bundle `StrokeResources` wants. Whichever lifecycle
-    // the terminal declares, only one of the two textures is read — the
+    // the terminal declares, only one of the two textures is read; the
     // other is harmlessly present.
     // Compile first: the terminal's declared scratch format decides how
     // the scratch is allocated, and a warp terminal's is not colour.
     let mut runner: BrushGraphRunner = compile_graph(graph).expect("brush compiles");
     let mut stroke_buffer = StrokeBuffer::new(&device, W, H, &pipelines, runner.scratch_format());
-    // Dummy paint target — `apply_lifecycle` never reads it, but the new
+    // Dummy paint target: `apply_lifecycle` never reads it, but the new
     // `StrokeResources` shape requires it. Reuse the pre-stroke texture as
     // a stand-in (same RGBA8 / W×H format).
     let (paint_target_tex, paint_target_view) = make_pre_stroke(&device);
 
     // Build pre-stroke (if needed) and pre-fill scratch (if needed) on
-    // the same device/queue the runner uses — wgpu rejects cross-device
+    // the same device/queue the runner uses; wgpu rejects cross-device
     // resource use.
     match &setup {
         Setup::PreStrokeWithSentinel => {
@@ -251,14 +251,14 @@ fn smudge_terminal_seeds_scratch_from_pre_stroke() {
 }
 
 /// Liquify's scratch holds a displacement field, not colour, so its
-/// prologue clears rather than seeds — a transparent clear *is* a zero
+/// prologue clears rather than seeds: a transparent clear *is* a zero
 /// field, and a zero field resolves to the pre-stroke image unchanged.
 /// Seeding colour into it would be meaningless (and would decode as
 /// enormous bogus displacements).
 ///
 /// Pre-fill with a non-zero field first, so a missed clear is visible:
 /// stale displacement surviving into a new stroke would warp the image
-/// before the user has moved the pen.
+/// before the artist has moved the pen.
 #[test]
 fn liquify_terminal_clears_scratch_to_zero_field() {
     let raw = run_begin_stroke(

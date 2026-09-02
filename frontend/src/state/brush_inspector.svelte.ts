@@ -7,7 +7,7 @@
 import init, { KritaInspector } from '../../wasm/pkg/darkly_wasm';
 
 // --------------------------------------------------------------------------
-// JSON shapes — mirror crates/darkly/src/brush/import/krita/.
+// JSON shapes, mirroring crates/darkly/src/brush/import/krita/.
 // Kept in this file so the inspector is self-contained. If the Rust types
 // gain fields, add them here too.
 // --------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-//! `.darkly` save flow — async readback of every pixel-bearing texture
+//! `.darkly` save flow: async readback of every pixel-bearing texture
 //! plus the composite, gathered into a [`SaveBundle`] for JS to encode
 //! and zip.
 //!
@@ -7,13 +7,13 @@
 //! filters, selection metadata, veil chain, and the `requires`
 //! inventory at submit time. Pixels are pinned via refcounted
 //! [`wgpu::Texture`] handles in the same synchronous prelude, so the
-//! user can keep painting / mutating the doc while readbacks complete
+//! artist can keep painting / mutating the doc while readbacks complete
 //! over the next few frames without affecting (or being affected by)
 //! the in-flight save.
 //!
 //! The build is registry-driven: each entity's `serialize` returns its
 //! own opaque body plus a list of [`PixelBlobSpec`]s. Save never branches
-//! on layer kind or filter kind — the same loop handles raster, mask,
+//! on layer kind or filter kind: the same loop handles raster, mask,
 //! selection, and any future kind that registers itself.
 
 use std::collections::{HashMap, HashSet};
@@ -49,21 +49,21 @@ impl std::fmt::Display for SaveError {
 
 impl std::error::Error for SaveError {}
 
-/// Why a save was kicked off — determines whether draining its result
+/// Why a save was kicked off: determines whether draining its result
 /// clears the document's [`crate::document::Document::dirty`] flag.
 ///
 /// Autosave reuses the exact same readback pipeline as a real save, so
 /// without this distinction every autosave tick would mark the document
-/// clean even though nothing reached the user's file — silently
+/// clean even though nothing reached the artist's file, silently
 /// suppressing the close-confirmation guard and the `beforeunload`
 /// warning that protect genuinely-unsaved work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SavePurpose {
-    /// A real save to the user's `.darkly` file. Draining clears `dirty`
-    /// — the document on disk now matches the snapshot we sealed.
+    /// A real save to the artist's `.darkly` file. Draining clears `dirty`:
+    /// the document on disk now matches the snapshot we sealed.
     File,
     /// An autosave recovery snapshot written to OPFS. Draining must NOT
-    /// clear `dirty`: nothing reached the user's file, so unsaved-work
+    /// clear `dirty`: nothing reached the artist's file, so unsaved-work
     /// tracking must still see the document as dirty.
     Snapshot,
 }
@@ -75,15 +75,15 @@ pub enum SavePurpose {
 /// `(width, height, rgba)` triple for the composite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveReadbackKind {
-    /// One pixel-bearing entity's bytes — stored under `key` (the zip-relative
+    /// One pixel-bearing entity's bytes: stored under `key` (the zip-relative
     /// blob path matching the entity's [`crate::format::manifest::ManifestPixelRef::pixels`]).
     BlobBytes { key: String },
-    /// The whole composited canvas — stored as the bundle's
+    /// The whole composited canvas: stored as the bundle's
     /// `(composite_width, composite_height, composite_rgba)`.
     Composite,
 }
 
-/// In-flight save state — created by [`DarklyEngine::start_save_document`]
+/// In-flight save state: created by [`DarklyEngine::start_save_document`]
 /// and drained by [`DarklyEngine::poll_save_result`]. The fields capture
 /// everything the save needs that's *not* a pixel readback (those land
 /// asynchronously into `pending_blobs` / `composite`).
@@ -95,7 +95,7 @@ pub struct SaveJob {
     manifest: Manifest,
     /// Refcounted handles to every texture this save reads from. wgpu
     /// `Texture` is internally `Arc`-shared, so cloning here keeps the
-    /// GPU resource alive even if the user deletes the source layer
+    /// GPU resource alive even if the artist deletes the source layer
     /// mid-save and the compositor drops its handle.
     #[allow(dead_code)] // held purely to keep textures alive across readbacks
     pinned_textures: Vec<wgpu::Texture>,
@@ -107,11 +107,11 @@ pub struct SaveJob {
     /// fires.
     composite: Option<(u32, u32, Vec<u8>)>,
     /// Embedded-font blobs (`fonts/<hash>.ttf`), captured synchronously at
-    /// submit time — their bytes are already in CPU RAM, so unlike pixel blobs
+    /// submit time; their bytes are already in CPU RAM, so unlike pixel blobs
     /// they need no async readback. Merged verbatim into the bundle's `blobs`
     /// at drain.
     font_blobs: Vec<SaveBlob>,
-    /// Why this save was started — gates whether the drain clears
+    /// Why this save was started: gates whether the drain clears
     /// `doc.dirty` (see [`SavePurpose`]).
     purpose: SavePurpose,
 }
@@ -200,7 +200,7 @@ impl DarklyEngine {
     /// blob and the composite have landed.
     ///
     /// A [`SavePurpose::File`] drain also clears the [`Document::dirty`]
-    /// flag — the bundle handoff is the moment the document's contents
+    /// flag: the bundle handoff is the moment the document's contents
     /// are no longer "unsaved." Edits queued between `start_save_document`
     /// and this drain are intentionally lost from the dirty flag's POV:
     /// the snapshot built at submit time is what's leaving the engine, so
@@ -208,7 +208,7 @@ impl DarklyEngine {
     /// [`SavePurpose::Snapshot`] (autosave) drain leaves `dirty` alone.
     ///
     /// Drives the readback scheduler itself before checking completion,
-    /// so a backgrounded tab — whose `render()` loop isn't running — can
+    /// so a backgrounded tab (whose `render()` loop isn't running) can
     /// still finish its snapshot when pumped via this method alone.
     pub fn poll_save_result(&mut self) -> Option<SaveBundle> {
         // Advance any in-flight GPU readbacks (non-blocking) so a save can
@@ -237,8 +237,8 @@ impl DarklyEngine {
         blobs.extend(job.font_blobs);
         // Stable ordering for tests + bit-stable output.
         blobs.sort_by(|a, b| a.path.cmp(&b.path));
-        // Only a real file save means "disk matches" — an autosave snapshot
-        // wrote to OPFS, not the user's file, so it must leave `dirty` set.
+        // Only a real file save means "disk matches"; an autosave snapshot
+        // wrote to OPFS, not the artist's file, so it must leave `dirty` set.
         if job.purpose == SavePurpose::File {
             self.doc.dirty = false;
         }
@@ -251,7 +251,7 @@ impl DarklyEngine {
         })
     }
 
-    /// Dispatch from `handle_completed_readback` — populate the matching
+    /// Dispatch from `handle_completed_readback`: populate the matching
     /// blob slot or the composite triple. Unknown keys are silently
     /// dropped (the save was cancelled or a stale readback completed
     /// after `poll_save_result` drained the job).
@@ -283,7 +283,7 @@ impl DarklyEngine {
 /// produce a [`Manifest`] capturing every piece of state that survives
 /// save: tree, filters, selection, veils. Also returns the
 /// per-entity pixel-blob declarations the save flow uses to queue
-/// readbacks. Synchronous — runs as part of `start_save_document`'s
+/// readbacks. Synchronous: runs as part of `start_save_document`'s
 /// prelude.
 fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<SaveBlob>) {
     let doc = &engine.doc;
@@ -357,14 +357,14 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<S
 /// Collect every font a text object references that the registry has runtime
 /// bytes for, and produce (a) the `ManifestFontRef` list for the manifest and
 /// (b) one `fonts/<hash>.ttf` [`SaveBlob`] per unique hash. Fonts are treated
-/// exactly like pixel blobs — content-addressed and deduped — except the bytes
+/// exactly like pixel blobs (content-addressed and deduped) except the bytes
 /// are already in CPU RAM, so no GPU readback is queued; they go straight into
 /// the bundle. Families with no runtime bytes (the binary-resident fallback,
 /// generic `sans-serif`) resolve to `None` and are skipped naturally, so a
 /// document whose text uses only the fallback embeds nothing.
 ///
 /// Google-imported fonts have runtime bytes like any upload, so they embed by
-/// value here — never by URL reference. A URL-only form would break opening the
+/// value here, never by URL reference. A URL-only form would break opening the
 /// `.darkly` offline, so this must stay by-value.
 fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlob>) {
     // Every distinct family referenced by a text object across the document.
@@ -388,7 +388,7 @@ fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlo
             continue;
         };
         let path = format!("fonts/{hash}.ttf");
-        // One blob per unique hash — several families can share one file.
+        // One blob per unique hash: several families can share one file.
         if seen_hashes.insert(hash.to_string()) {
             blobs.push(SaveBlob {
                 path: path.clone(),
@@ -409,7 +409,7 @@ fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
     let count = chain.count();
     let mut veils = Vec::with_capacity(count);
     // Chain order on the wire matches apply order (bottom of stack to
-    // top). `chain.info(i)` is in chain order — no need to reverse.
+    // top). `chain.info(i)` is in chain order; no need to reverse.
     for i in 0..count {
         let Some((type_id, visible)) = chain.info(i) else {
             continue;
@@ -424,7 +424,7 @@ fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
 }
 
 /// Walk the live document + veil chain and collect every modular
-/// `type_id` in use. Registry-driven — no hand-maintained list to keep
+/// `type_id` in use. Registry-driven: no hand-maintained list to keep
 /// in sync when a new module is added. The load path diffs this against
 /// the binary's registries before parsing the body.
 pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
@@ -471,8 +471,8 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
 
 /// Queue one pixel readback and reserve its blob slot. Pins the source
 /// texture so the readback survives concurrent mutation. Returns
-/// without queueing (silent) when the entity has no GPU texture today
-/// — typically a freshly-added layer that hasn't been touched yet, which
+/// without queueing (silent) when the entity has no GPU texture today,
+/// typically a freshly-added layer that hasn't been touched yet, which
 /// has nothing to save.
 fn queue_pixel_readback(
     engine: &mut DarklyEngine,
@@ -547,7 +547,7 @@ mod tests {
 
         // The veil chain's GPU textures size with the viewport; tests
         // run headless (no surface), so seed the size manually before
-        // adding a veil — otherwise `ensure_textures` no-ops on a 0×0
+        // adding a veil; otherwise `ensure_textures` no-ops on a 0×0
         // viewport and `add_veil` panics on the `views.unwrap()`.
         engine
             .compositor
@@ -586,7 +586,7 @@ mod tests {
     }
 
     /// Successful save clears the sticky [`crate::document::Document::dirty`]
-    /// bit. This is the "file matches disk now" handoff — anything the user
+    /// bit. This is the "file matches disk now" handoff: anything the artist
     /// did between `start_save_document` and the drain is intentionally not
     /// re-dirty: the snapshot the bundle holds *is* the file we just wrote.
     #[test]
@@ -612,12 +612,12 @@ mod tests {
         bundle.expect("save should complete within 16 frames");
         assert!(
             !engine.is_dirty(),
-            "successful save must clear dirty — bundle handoff matches disk"
+            "successful save must clear dirty: bundle handoff matches disk"
         );
     }
 
     /// Regression: an autosave [`SavePurpose::Snapshot`] writes to OPFS,
-    /// not the user's file, so draining it must leave `dirty` set.
+    /// not the artist's file, so draining it must leave `dirty` set.
     /// Otherwise the close-confirmation guard + `beforeunload` warning
     /// would silently treat genuinely-unsaved work as saved.
     #[test]
@@ -641,12 +641,12 @@ mod tests {
         bundle.expect("snapshot should complete within 16 frames");
         assert!(
             engine.is_dirty(),
-            "autosave snapshot must NOT clear dirty — nothing reached the user's file"
+            "autosave snapshot must NOT clear dirty: nothing reached the user's file"
         );
     }
 
     /// A snapshot save must be drivable to completion via
-    /// `poll_save_result` alone — no `render()`/present — because a
+    /// `poll_save_result` alone (no `render()`/present) because a
     /// backgrounded tab's render loop isn't running. `poll_save_result`
     /// drains the readback scheduler itself.
     #[test]
@@ -660,8 +660,8 @@ mod tests {
         let mut bundle = None;
         for _ in 0..32 {
             // Native stand-in for the browser event loop: fire the GPU map
-            // callbacks but DON'T poll/dispatch the scheduler here — leave
-            // that to poll_save_result. NO engine.render() — the whole point.
+            // callbacks but DON'T poll/dispatch the scheduler here; leave
+            // that to poll_save_result. NO engine.render(): the whole point.
             engine.test_wait_gpu();
             if let Some(b) = engine.poll_save_result() {
                 bundle = Some(b);
@@ -675,7 +675,7 @@ mod tests {
         );
     }
 
-    /// The save snapshot must survive concurrent edits — the manifest
+    /// The save snapshot must survive concurrent edits: the manifest
     /// is built at submit time, GPU textures are refcount-pinned, and
     /// readbacks see GPU command-buffer state at submit time. Adding a
     /// layer between start_save and poll_save_result must *not* end up
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(
             raster_count, 1,
             "snapshot must reflect doc state at start_save_document time, \
-             not the post-mutation state — found {raster_count} rasters"
+             not the post-mutation state: found {raster_count} rasters"
         );
     }
 }

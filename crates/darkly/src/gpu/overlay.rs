@@ -11,7 +11,7 @@ pub const KIND_FILLED_CIRCLE: u32 = 5;
 pub const KIND_ELLIPSE: u32 = 6;
 pub const KIND_FILLED_ELLIPSE: u32 = 7;
 /// Rotated rect sampled from the bound mask texture. Coverage comes from the
-/// mask's red channel — greyscale softness, speckles, textured tips all work
+/// mask's red channel: greyscale softness, speckles, textured tips all work
 /// by construction. p0 = center, p1 = half-extent, rotation in radians.
 pub const KIND_MASKED_STAMP: u32 = 8;
 
@@ -72,9 +72,9 @@ struct OverlayUniforms {
     time: f32,
     /// Multiplier applied to KIND_MASKED_STAMP sampled coverage. Lifts
     /// attenuated brushes (paper × shape masks) to the same apparent
-    /// visibility as natural full-coverage brushes — the cursor-follow
+    /// visibility as natural full-coverage brushes (the cursor-follow
     /// analogue of the dab-tile auto-brighten that used to live in
-    /// `frame_dab_thumbnail`. Set per cursor-preview re-compile via
+    /// `frame_dab_thumbnail`). Set per cursor-preview re-compile via
     /// `set_preview_coverage_scale`; defaults to 1.0 (no boost).
     preview_coverage_scale: f32,
     fwd_row0: [f32; 4],
@@ -98,14 +98,14 @@ pub struct ToolOverlay {
     prim_buf: wgpu::Buffer,
     prim_capacity: usize,
     sampler: wgpu::Sampler,
-    /// 1×1 dummy texture — bound when no snapshot-sampling primitives are
+    /// 1×1 dummy texture, bound when no snapshot-sampling primitives are
     /// present, avoiding allocation of a viewport-sized snapshot texture.
     dummy_view: wgpu::TextureView,
     /// Viewport-sized snapshot for snapshot-sampling primitives (allocated on demand).
     snapshot: Option<wgpu::Texture>,
     snapshot_view: Option<wgpu::TextureView>,
     snapshot_size: (u32, u32),
-    /// 1×1 white fallback mask — bound when the user hasn't uploaded one.
+    /// 1×1 white fallback mask, bound when the user hasn't uploaded one.
     /// With it, KIND_MASKED_STAMP degrades to a solid rectangle.
     dummy_white_mask_view: wgpu::TextureView,
     /// User-uploaded mask texture (set via set_mask_texture). Sampled by
@@ -301,7 +301,7 @@ impl ToolOverlay {
             ..Default::default()
         });
 
-        // 1×1 dummy texture — always available for solid-only bind groups.
+        // 1×1 dummy texture, always available for solid-only bind groups.
         let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("overlay-dummy"),
             size: wgpu::Extent3d {
@@ -318,7 +318,7 @@ impl ToolOverlay {
         });
         let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // 1×1 white fallback mask — used when no user mask is set. The red
+        // 1×1 white fallback mask, used when no user mask is set. The red
         // channel samples as 1.0 so KIND_MASKED_STAMP becomes a solid rect.
         use wgpu::util::DeviceExt;
         let dummy_mask = device.create_texture_with_data(
@@ -473,7 +473,7 @@ impl ToolOverlay {
     pub fn use_cursor_preview_mask_as_mask(&mut self) {
         if let Some(view) = &self.cursor_preview_mask_view {
             self.mask_view = Some(view.clone());
-            // Drop any CPU-uploaded texture — preview-mask is now authoritative.
+            // Drop any CPU-uploaded texture; preview-mask is now authoritative.
             self.mask = None;
         }
     }
@@ -491,13 +491,13 @@ impl ToolOverlay {
     /// Set the coverage scale applied to KIND_MASKED_STAMP samples. Used
     /// by the engine to normalize attenuated cursor-preview masks (e.g.
     /// charcoal's paper × shape product) up to natural full-coverage
-    /// visibility — the GPU-resident analogue of the dab-tile auto-bright
-    /// that used to live in `frame_dab_thumbnail`. Set to 1.0 to disable.
+    /// visibility (the GPU-resident analogue of the dab-tile auto-bright
+    /// that used to live in `frame_dab_thumbnail`). Set to 1.0 to disable.
     pub fn set_preview_coverage_scale(&mut self, scale: f32) {
         self.preview_coverage_scale = scale;
     }
 
-    /// Read the currently-applied coverage scale. Test-only — the
+    /// Read the currently-applied coverage scale. Test-only: the
     /// production overlay shader reads this from the uniform buffer.
     #[cfg(any(test, feature = "testing"))]
     pub fn preview_coverage_scale(&self) -> f32 {
@@ -535,7 +535,7 @@ impl ToolOverlay {
 
     /// Advance overlay animation time by the given delta.
     /// Called by the compositor's frame scheduler on overlay-scheduled frames.
-    /// No throttle — the frame scheduler handles rate limiting.
+    /// No throttle: the frame scheduler handles rate limiting.
     pub fn advance_time(&mut self, dt: f32) {
         self.time += dt;
     }
@@ -576,7 +576,7 @@ impl ToolOverlay {
     /// CPU-side work: partition, upload buffers, build bind group.
     /// Must be called once per frame before draw_solid() or encode_snapshot().
     /// `plane_fwd` / `plane_inv` are the **plane**-space forward (plane→screen)
-    /// and inverse (screen→plane) matrices — derived by the caller from the
+    /// and inverse (screen→plane) matrices, derived by the caller from the
     /// present view transform + `canvas_origin`. The overlay stays frame-agnostic:
     /// `FLAG_CANVAS_SPACE` primitives are pushed in plane coords, so feeding the
     /// plane forward (not window-local) is what keeps the cursor preview aligned
@@ -690,7 +690,7 @@ impl ToolOverlay {
     }
 
     /// Draw solid overlay primitives into an existing render pass.
-    /// Call after prepare(). Does not create a render pass — the caller
+    /// Call after prepare(). Does not create a render pass: the caller
     /// provides one (e.g. the final present or veil-blit pass).
     pub fn draw_solid<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>) {
         if self.solid_count == 0 {
@@ -779,7 +779,7 @@ impl ToolOverlay {
 }
 
 // ---------------------------------------------------------------------------
-// CPU-side SDF for hit testing — delegates to shared sdf module
+// CPU-side SDF for hit testing, delegates to shared sdf module
 // ---------------------------------------------------------------------------
 
 fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
@@ -807,7 +807,7 @@ fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
             sdf::sdf_ellipse(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1]).abs()
         }
         KIND_FILLED_ELLIPSE => {
-            // p0 = center, p1 = [rx, ry] — interior is signed-negative
+            // p0 = center, p1 = [rx, ry]: interior is signed-negative
             sdf::sdf_ellipse(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1])
         }
         _ => f32::MAX,
@@ -935,7 +935,7 @@ mod tests {
     }
 
     /// GPU integration: render a soft-contrast filled ellipse over a pure
-    /// red surface and verify desaturation — the interior should shift
+    /// red surface and verify desaturation: the interior should shift
     /// toward grey (R drops significantly, G and B rise from 0).
     #[test]
     fn soft_contrast_desaturates_bg() {
@@ -1009,7 +1009,7 @@ mod tests {
         assert!(spread < 15, "result should be near-grey: {inside:?}");
     }
 
-    /// GPU integration: KIND_MASKED_STAMP — coverage comes from the uploaded
+    /// GPU integration: KIND_MASKED_STAMP coverage comes from the uploaded
     /// mask texture. Upload a mask with two clearly-separated regions (mostly
     /// black left, mostly white right) and verify over a red surface that
     /// the white-mask region gets desaturated (R drops, G/B rise) while

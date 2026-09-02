@@ -8,7 +8,7 @@
 //!
 //! A second half is a **composition suite**: flip/rotate combined with painting,
 //! cropping (non-zero `canvas_origin`), document rescale, masks, multiple layers,
-//! deep round-trips, and long undo/redo sequences — the coordinate frames that
+//! deep round-trips, and long undo/redo sequences: the coordinate frames that
 //! a transform can quietly corrupt (cf. the `image_rescale.rs` tool-accuracy
 //! suite). The crop cases are the ones that exercise a non-`(0,0)` origin.
 //!
@@ -372,7 +372,7 @@ fn flip_layer_with_ellipse_selection_clips_to_shape() {
 }
 
 // ===========================================================================
-// Composition suite — flip/rotate combined with paint, crop, rescale, masks,
+// Composition suite: flip/rotate combined with paint, crop, rescale, masks,
 // multiple layers, deep round-trips, and long undo/redo sequences.
 // ===========================================================================
 
@@ -431,7 +431,7 @@ fn pump(engine: &mut DarklyEngine, n: u32) {
 }
 
 /// A transparent `cw`×`ch` RGBA buffer with an opaque red `sz`×`sz` square at
-/// plane `(x0, y0)`. A deterministic position marker — unlike the default brush
+/// plane `(x0, y0)`. A deterministic position marker: unlike the default brush
 /// (which floods small canvases), a pasted square has an exact, clip-free
 /// centroid, so it's the right tool for absolute-position assertions.
 fn rgba_with_marker(cw: u32, ch: u32, x0: u32, y0: u32, sz: u32) -> Vec<u8> {
@@ -695,7 +695,7 @@ fn flip_then_rescale_undo_undo_restores_original() {
 
 // ---- Painting AFTER a transform lands at the right plane coordinate ---------
 
-// (64px base: the default brush floods a 32px canvas, masking position — see
+// (64px base: the default brush floods a 32px canvas, masking position; see
 // image_rescale.rs. Position-of-paint assertions need the larger canvas.)
 
 #[test]
@@ -728,7 +728,7 @@ fn paint_after_rotate_lands_at_plane_coords() {
     let r = e.canvas_rect();
     assert_eq!((r.width, r.height), (64, 96));
 
-    // Off-centre interior target window-local (40, 60) — ≥20px from every edge
+    // Off-centre interior target window-local (40, 60), ≥20px from every edge
     // so the ~20px brush dab fits and the centroid is clean. Painted via its
     // plane coordinate so this exercises the post-rotate plane→paint mapping.
     let (lx, ly) = (40.0f32, 60.0f32);
@@ -814,7 +814,7 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
     assert_eq!(
         alpha_at(&buf, w, 8, 16),
         0,
-        "the original (left) band is no longer selected after the flip — must stay clear"
+        "the original (left) band is no longer selected after the flip, must stay clear"
     );
 }
 

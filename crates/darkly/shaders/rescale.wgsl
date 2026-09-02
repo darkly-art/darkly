@@ -1,13 +1,13 @@
 // Image-rescale resampling.
 //
 // `fs_resample` maps each destination pixel back to a normalized position
-// inside the source's old canvas extent and bilinearly samples it — used for
+// inside the source's old canvas extent and bilinearly samples it, used for
 // upscaling and for the final (≤2x) downscale step. `fs_halve` box-reduces a
 // texture to half size; the engine chains it (a box pyramid) so large
 // reductions stay anti-aliased, then runs one `fs_resample` to the exact size.
 //
 // RGBA is resampled in premultiplied alpha (premultiply on load, un-premultiply
-// on store) so transparent texels don't bleed colour across edges — the same
+// on store) so transparent texels don't bleed colour across edges, the same
 // discipline as transform_commit.wgsl. R8 masks are single-channel and straight.
 //
 // Samples are taken with `textureLoad` (no hardware sampler) so the premultiply
@@ -20,7 +20,7 @@
 //   p2 = [old_size.xy,    is_r8, premul_io]
 // new_origin:    canvas-space offset of the destination texture's (0,0) pixel.
 // canvas_origin: the rescale anchor (document scales about it).
-// inv_scale:     old_size / new_size — maps a dest canvas point back to source.
+// inv_scale:     old_size / new_size, mapping a dest canvas point back to source.
 // old_origin:    canvas-space offset of the source's old extent (0,0) pixel.
 // old_size:      source old-extent dimensions in canvas pixels.
 // is_r8:         0.0 = RGBA (premultiplied resample), 1.0 = R8 (straight).
@@ -57,7 +57,7 @@ fn unpremul(c: vec4f) -> vec4f {
 }
 
 // `raw` means "the stored texels are already in a form that averages
-// linearly" — either single-channel R8, or RGBA that is already
+// linearly": either single-channel R8, or RGBA that is already
 // premultiplied. Both skip the premultiply/un-premultiply round trip that
 // straight-alpha RGBA needs.
 fn load_weighted(p: vec2i, dims: vec2i, raw: bool) -> vec4f {

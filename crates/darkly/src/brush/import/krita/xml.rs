@@ -23,7 +23,7 @@ fn unescape_text(t: &BytesText<'_>) -> Result<String, quick_xml::Error> {
 /// nested-XML param values (e.g. `brush_definition`) so the inspector can
 /// show every element/attribute the engine consumes.
 ///
-/// Attributes are kept in document order — Krita's XML doesn't guarantee
+/// Attributes are kept in document order; Krita's XML doesn't guarantee
 /// any order but reading them as written keeps diffs across presets stable.
 #[derive(Debug, Serialize)]
 pub struct XmlNode {
@@ -36,7 +36,7 @@ pub struct XmlNode {
 
 /// Parse a snippet of XML into an [`XmlNode`] tree rooted at the first
 /// element. Doctype declarations, comments, and processing instructions are
-/// skipped. Returns `None` if no element is found or parsing fails — the
+/// skipped. Returns `None` if no element is found or parsing fails, and the
 /// caller falls back to displaying the raw string.
 pub fn parse_xml_node(xml: &str) -> Option<XmlNode> {
     let mut reader = Reader::from_str(xml);
@@ -277,7 +277,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                 text_buf.push_str(&s);
             }
             Event::CData(t) => {
-                // CDATA preserves bytes verbatim — no entity unescaping.
+                // CDATA preserves bytes verbatim: no entity unescaping.
                 let s = std::str::from_utf8(t.as_ref())?;
                 text_buf.push_str(s);
             }
@@ -303,7 +303,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
 /// is actually readable. Krita writes the entire preset as a single line, so
 /// without this the document scrolls hundreds of pixels off the right edge.
 /// Returns `None` (and the caller falls back to the original) if the input
-/// doesn't parse cleanly — better to show ugly XML than swallowed XML.
+/// doesn't parse cleanly: better to show ugly XML than swallowed XML.
 fn pretty_print_xml(xml: &str) -> Option<String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);

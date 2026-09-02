@@ -3,7 +3,7 @@
 //! The brush stack operates in RGBA8 throughout (composition source); the
 //! paint target's storage format may be RGBA8 (raster layer) or R8 (mask).
 //! Format-bridging at the paint-surface boundary lives here, **not** in the
-//! brush terminals — terminals call uniform methods on the paint target and
+//! brush terminals; terminals call uniform methods on the paint target and
 //! never branch on R8 vs RGBA8.
 //!
 //! Three operations bridge:
@@ -21,7 +21,7 @@
 //! as `(v, v, v, 1)` (broadcast), passes through the brush stack unmodified,
 //! and is committed back as `mix(pre.r, scratch.r, dab.a)`. With `scratch.r =
 //! v` and `pre.r = v`, the result equals `v` exactly. Smudge/warp produce
-//! `mix(v_dst, v_src, dab.a)` — identical to a pure-R8 blend.
+//! `mix(v_dst, v_src, dab.a)`: identical to a pure-R8 blend.
 
 use crate::brush::composite_pipeline::{CompositePipeline, CompositeUniforms};
 use crate::brush::pipeline::BrushPipelines;
@@ -65,7 +65,7 @@ pub trait BrushPaintTargetExt {
     /// Populate an RGBA8 pre-stroke snapshot from this paint target.
     ///
     /// `snapshot_view` and `snapshot_texture` reference the snapshot's RGBA8
-    /// destination. Source and destination must share `(width, height)` —
+    /// destination. Source and destination must share `(width, height)`:
     /// the brush's `StrokeBuffer` already sizes its pre-stroke snapshot to
     /// match the paint target's pixel dimensions.
     fn save_pre_stroke_snapshot(
@@ -162,7 +162,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
     ) {
         let extent = self.layer_extent();
         if self.format() != wgpu::TextureFormat::R8Unorm {
-            // Same-format hardware copy — fast path for raster layers.
+            // Same-format hardware copy: fast path for raster layers.
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: self.texture(),
@@ -224,7 +224,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
     ) {
         let extent = self.layer_extent();
         if self.format() != wgpu::TextureFormat::R8Unorm {
-            // Same-format hardware copy — preserves today's path for layers.
+            // Same-format hardware copy: preserves today's path for layers.
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: scratch_texture,

@@ -19,6 +19,7 @@ import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
 import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
+import { registerPackActions } from './pack_actions';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { decodeToRgba, placeSmartObjectFromBlob } from './place_smart_object';
@@ -34,7 +35,7 @@ import { links, openExternal } from '../links';
 /** The commands that add something to the layer stack, in the order the
  *  layer panel's new-layer dropdown lists them. The dropdown renders straight
  *  from these registrations, so a new layer kind needs an action and nothing
- *  else — its label, icon and behaviour come along for free. */
+ *  else: its label, icon and behaviour come along for free. */
 export const NEW_LAYER_ACTION_IDS = [
     'newLayer',
     'newFilterLayer',
@@ -67,12 +68,12 @@ function tabNameFromFile(fileName: string): string {
 }
 
 /** Unified Open. Pick any supported file, sniff its kind, and route to
- *  the matching loader. Every Open lands in a new tab — image-as-layer
+ *  the matching loader. Every Open lands in a new tab; image-as-layer
  *  in the current doc is the drag-drop gesture (`CanvasView`'s drop
  *  handler) or the clipboard paste, not this action.
  *
  *  Exported so the canvas drop handler can re-enter this flow when the
- *  user drags a `.darkly` (drop bypasses the picker but routes to the
+ *  artist drags a `.darkly` (drop bypasses the picker but routes to the
  *  same loader). */
 export async function openFlow(): Promise<void> {
     const picked = await pickOpenFile();
@@ -97,9 +98,9 @@ async function routePickedFile(picked: OpenedFile): Promise<void> {
 }
 
 /** Open a `.darkly` archive in a new tab. The engine's
- *  `open_document(bytes)` is all-or-nothing — a refused load is
+ *  `open_document(bytes)` is all-or-nothing: a refused load is
  *  surfaced through `LoadErrorToast` and the failed tab is rolled
- *  back so the user is left with their previous focus. Exposed so
+ *  back so the artist is left with their previous focus. Exposed so
  *  the canvas drop handler can route a dropped `.darkly` through the
  *  same path the picker uses. */
 export function openDarklyAsTab(picked: OpenedFile): void {
@@ -111,7 +112,7 @@ export function openDarklyAsTab(picked: OpenedFile): void {
     const inst = shell.open(tabNameFromFile(picked.name));
     inst.fileHandle = picked.handle;
     // Seed the tab's recording scratch from the file's embedded recording
-    // now, while the async engine bootstrap runs — the scratch lock orders
+    // now, while the async engine bootstrap runs; the scratch lock orders
     // this ahead of the recorder's segment scan, so this session's capture
     // appends after the absorbed segments.
     void processRecording.absorbDarkly(inst, picked.bytes);
@@ -124,14 +125,14 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             void fontLibrary.absorbDarkly(picked.bytes);
             // Tab strip reads through the engine's `document_name`
             // request (which the loader populated from `manifest.name`),
-            // but the shell's `nameVersion` doesn't bump on its own —
+            // but the shell's `nameVersion` doesn't bump on its own:
             // nudge it so the strip re-derives.
             const name = await engine.api.documentName();
             shell.setName(inst.id, name);
             // The loaded manifest's dimensions override whatever the tab
             // was seeded with; refresh the JS mirror so coord transforms
             // recenter around the real canvas size.
-            // Sync the full canvas window (dims + plane origin) — a loaded
+            // Sync the full canvas window (dims + plane origin): a loaded
             // `.darkly` may carry a non-zero `canvas_origin` from a crop.
             await inst.syncCanvasRect();
             await app.refreshLayerTree();
@@ -146,7 +147,7 @@ export function openDarklyAsTab(picked: OpenedFile): void {
 
 /** Open a PNG / JPEG / WebP in a new tab sized to the image's
  *  intrinsic dimensions, with the image as the single raster layer.
- *  No file handle is cached on the new tab — re-saving the image as
+ *  No file handle is cached on the new tab; re-saving the image as
  *  `.darkly` is a Save As, not a write-back to the source PNG. */
 async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void> {
     // BlobPart requires Uint8Array<ArrayBuffer>; TS 5.7+ defaults to
@@ -160,7 +161,7 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
 
     const inst = shell.open(tabNameFromFile(picked.name), { width, height });
     inst.onHandleReady = async (engine) => {
-        // Pass anchor = -1 (no specific layer) — the new tab has no
+        // Pass anchor = -1 (no specific layer): the new tab has no
         // bg seed (the `onHandleReady` presence suppresses it), so
         // paste lands at the bottom of root, which is the only sensible
         // position for the doc's first layer.
@@ -171,8 +172,8 @@ async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void>
 }
 
 /** Decode an image file and paste it as a new raster layer in the
- *  CURRENT document. Used by the canvas drag-drop handler — drop is
- *  the explicit "user wants this image in this doc" gesture (Open from
+ *  CURRENT document. Used by the canvas drag-drop handler: drop is
+ *  the explicit "artist wants this image in this doc" gesture (Open from
  *  the menu / Ctrl+O always lands a new tab instead).
  *
  *  Returns the new layer id, or `-1` on decode failure. */
@@ -316,8 +317,8 @@ export function registerActions() {
         id: 'alphaToSelection',
         menuPath: ['Select:36'],
         // Sibling of `maskToSelection`, for the host rather than its mask.
-        // The engine op is node-kind agnostic — it reads whatever texture the
-        // id resolves to — but only pixel-bearing nodes have one, so the
+        // The engine op is node-kind agnostic (it reads whatever texture the
+        // id resolves to), but only pixel-bearing nodes have one, so the
         // guard follows the same fact the layer panel uses to decide whether
         // to draw a thumbnail at all.
         enabled: () => app.activeNode?.hasThumbnail === true || 'Active layer has no pixels',
@@ -465,8 +466,8 @@ export function registerActions() {
     actions.register({
         id: 'newDocument',
         menuPath: ['File:10'],
-        // No default hotkey — `$mod+KeyN` is reserved by every major browser
-        // for "new window" and cannot be intercepted by the page. Users can
+        // No default hotkey: `$mod+KeyN` is reserved by every major browser
+        // for "new window" and cannot be intercepted by the page. Artists can
         // still bind it via the Hotkeys tab if their browser/OS allows.
         handler: () => {
             newDocument.open = true;
@@ -527,7 +528,7 @@ export function registerActions() {
 
     // -- Tools (generated from registry) --
     // Tool key bindings come from the YAML preset layers (defaults.yaml +
-    // overlay) via `hotkeys.<hotkeyAction>` — actions register without any
+    // overlay) via `hotkeys.<hotkeyAction>`: actions register without any
     // built-in default; the binding is purely configuration.
     //
     // A tool-selecting action's documentation is the tool's own: the id, label,
@@ -565,7 +566,7 @@ export function registerActions() {
             }
             // No-op when the active brush's terminal opts out of erase
             // (smudge, liquify, watercolor). Same reason the BrushOptions
-            // toggle is hidden — flipping `gpu.blend_mode` would do
+            // toggle is hidden: flipping `gpu.blend_mode` would do
             // nothing, so the hotkey should match the visible UI.
             if (!brushGraph.supportsErase) {
                 return;
@@ -681,8 +682,8 @@ export function registerActions() {
             // Structural rule: operate on the current selection. The
             // right-click handler ensures the clicked row is in the
             // selection BEFORE the menu opens, so reading from
-            // `app.selectedLayerIds` here picks up exactly what the user
-            // expects. We do NOT accept a `ctx.layerId` override — the
+            // `app.selectedLayerIds` here picks up exactly what the artist
+            // expects. We do NOT accept a `ctx.layerId` override: the
             // v1 attempt did, and that's what made "Delete N Layers" act
             // on just one layer.
             const targets = app.selectedLayerIds.size > 0
@@ -763,7 +764,7 @@ export function registerActions() {
     for (const flt of app.entries?.('filters') ?? []) {
         const filterType = flt.type;
         if (!flt.hotkeyAction) continue;
-        // A parametric filter (curves/levels/hsv) can't apply in one click — its
+        // A parametric filter (curves/levels/hsv) can't apply in one click: its
         // params must be authored first, so it opens the modal (the same
         // `FilterParamsEditor` the layer panel uses). Param-free filters (invert)
         // apply immediately.
@@ -777,7 +778,7 @@ export function registerActions() {
             doc: {
                 displayName: parametric ? `${flt.displayName}…` : flt.displayName,
                 category: 'layers',
-                // Lead with the registry's own summary — the command palette's
+                // Lead with the registry's own summary: the command palette's
                 // substring search indexes descriptions, so its keywords (e.g.
                 // "desaturate" for Black and White) keep the filter findable.
                 description: `${flt.description ?? ''} Applies to the active layer or mask (respecting any selection).`.trim(),
@@ -884,7 +885,7 @@ export function registerActions() {
             if (hostId == null) return;
             engine.api.addMask({ id: hostId });
             // `add_mask` doesn't return the new modifier id, and we want
-            // the mask to be the active paint target after creation —
+            // the mask to be the active paint target after creation:
             // refresh the tree, then locate the freshly-added mask
             // modifier on the host and select it.
             await app.refreshLayerTree();
@@ -976,12 +977,15 @@ export function registerActions() {
     // -- Clone brush set-source gesture (brush-scoped modifier+drag) --
     registerCloneSourceAction();
 
+    // -- Brush pack import / export --
+    registerPackActions();
+
     // -- Brush builder --
     actions.register({
         id: 'addBrushNode',
         handler: () => {
             // No-op if the brush builder isn't visible. The actual placement
-            // — at the cursor in canvas coords — happens in NodeCanvas, which
+            // (at the cursor in canvas coords) happens in NodeCanvas, which
             // owns pan/zoom and the cursor; we just signal it via an event.
             if (!brushGraph.isVisible) return;
             window.dispatchEvent(new CustomEvent('darkly:add-node-request'));
@@ -991,9 +995,9 @@ export function registerActions() {
 
 // -- Layer isolation --
 //
-// Isolation is pure session state — the engine's `isolated_node` is the
+// Isolation is pure session state: the engine's `isolated_node` is the
 // single source of truth. We never touch `set_layer_visible` here, so eye
-// icons stay independent: a user can toggle visibility on hidden siblings
+// icons stay independent: an artist can toggle visibility on hidden siblings
 // while soloed and those changes persist after un-solo.
 
 function toggleIsolation(targetId: number) {

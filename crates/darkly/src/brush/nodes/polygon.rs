@@ -1,13 +1,13 @@
-//! Procedural regular-polygon coverage GPU node — a straight-edged brush tip.
+//! Procedural regular-polygon coverage GPU node: a straight-edged brush tip.
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`],
 //! inlined by downstream consumers (`stamp.tip`, …) exactly like
-//! [`super::circle`]'s `mask` — no dab texture, no separate pass.
+//! [`super::circle`]'s `mask`: no dab texture, no separate pass.
 //!
 //! Unlike the [`super::circle`] family, which measures coverage from a
 //! polar radius `r(θ)` corrected by a per-angle gradient, polygon coverage
-//! is a **true signed-distance field** — the exact screen distance to the
+//! is a **true signed-distance field**: the exact screen distance to the
 //! (squeezed) polygon. That is what makes the softness band a uniform width
 //! and lets `squeeze` and rounding compose cleanly: an exact SDF has parallel
 //! iso-contours everywhere, so the corner fillet is a real circular arc
@@ -35,11 +35,11 @@ pub fn register() -> BrushNodeRegistration {
         scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
-            // Shared UI grouping with `circle` and `stamp` — the tip
-            // generators — not a type id (see the Modularity Principle).
+            // Shared UI grouping with `circle` and `stamp` (the tip
+            // generators), not a type id (see the Modularity Principle).
             category: "shape",
             display_name: "Polygon",
-            description: "Procedural brush-tip silhouette — a rounded regular polygon (SDF-based).",
+            description: "Procedural brush-tip silhouette: a rounded regular polygon (SDF-based).",
             ports: vec![
                 // Side count. An integer knob (a fractional polygon can't
                 // close); wirable like every other input, clamped to a convex
@@ -70,8 +70,8 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:feather")
                     .with_description("Edge softness (0% = hard, 100% = feathered)"),
                 // No `natural_range`: radians are a unit, not a normalized
-                // signal — `pen.drawing_angle → rotation_input` passes through
-                // raw and sums with the user's `rotation` offset.
+                // signal. `pen.drawing_angle → rotation_input` passes through
+                // raw and sums with the artist's `rotation` offset.
                 PortDef::input("rotation_input", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_label("Rotation Input")
@@ -83,7 +83,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_label("Rotation")
                     .with_unit(UnitType::Degrees)
-                    // Orientation is part of shape identity; if the user
+                    // Orientation is part of shape identity; if the artist
                     // exposes this knob, the dab thumbnail should follow it.
                     .persist_in_thumbnail()
                     .with_description(
@@ -123,7 +123,7 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("mask", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .preview_image()
-                    .with_description("Per-fragment mask value (0..1) — the polygon's alpha at this fragment"),
+                    .with_description("Per-fragment mask value (0..1): the polygon's alpha at this fragment"),
             ],
             is_gpu: true,
             is_terminal: false,
@@ -133,17 +133,56 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
+/// Support of the rounded, squeezed silhouette, in units of the dab radius:
+/// the largest distance from the dab centre at which [`compile_wgsl`] can
+/// produce non-zero coverage.
+///
+/// `a` is the squeeze semi-axis (`1 − 0.9·squeeze`), `rounding` the corner
+/// radius `ρ`, `n` the side count, and `beta` the squeeze angle, or `None`
+/// when the axis is not known at compile time, which yields the
+/// orientation-agnostic worst case of a vertex on the stretched axis.
+///
+/// Shared by [`PolygonEvaluator::extent`] and the feature test that asserts
+/// nothing lies outside the bound, so the budgeted extent and the silhouette
+/// it bounds cannot drift apart.
+///
+/// [`compile_wgsl`]: PolygonEvaluator::compile_wgsl
+pub fn silhouette_support(a: f32, rounding: f32, n: f32, beta: Option<f32>) -> f32 {
+    let a = a.max(0.01);
+    let rounding = rounding.clamp(0.0, 1.0);
+    // The body builds the polygon at circumradius `1 − ρ` and then dilates the
+    // distance field by `ρ`, so those two are the whole reach.
+    let cr = 1.0 - rounding;
+    let radial = match beta {
+        None => 1.0 / a,
+        Some(beta) => {
+            let n = n.round().max(3.0);
+            let (sb, cb) = beta.sin_cos();
+            (0..n as u32).fold(0.0_f32, |acc, i| {
+                // Vertex i's base direction, matching the emitted body's
+                // `vec2(sin(ak), cos(ak))`, carried into the squeeze frame by
+                // `R(−β)` and scaled by `diag(a, 1/a)`.
+                let (s, c) = (std::f32::consts::TAU * i as f32 / n).sin_cos();
+                let wx = s * cb + c * sb;
+                let wy = c * cb - s * sb;
+                acc.max(((a * wx).powi(2) + (wy / a).powi(2)).sqrt())
+            })
+        }
+    };
+    cr * radial + rounding
+}
+
 pub struct PolygonEvaluator;
 
 impl BrushNodeEvaluator for PolygonEvaluator {
-    /// Polygon coverage is per-fragment only — no CPU realisation, like the
+    /// Polygon coverage is per-fragment only: no CPU realisation, like the
     /// [`super::circle`] family.
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }
 
     /// Emit the SDF helper into `.decls` under a node-id-suffixed name (so two
-    /// polygon nodes in one graph never redeclare a top-level fn — `.decls`
+    /// polygon nodes in one graph never redeclare a top-level fn; `.decls`
     /// are concatenated without dedup), and the per-fragment coverage into
     /// `.body`. Every input is either a literal (unwired) or an upstream
     /// expression (wired).
@@ -164,7 +203,7 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         // Exact signed distance to the squeezed regular n-gon, in screen space:
         // negative inside, unit-gradient Euclidean field. `tinv` maps a base
         // circumradius-`r` vertex (regular, vertex on +y) into screen space, so
-        // the polygon is generated already squeezed and oriented — the distance
+        // the polygon is generated already squeezed and oriented, so the distance
         // is then a *true* screen distance, which is what makes the softness band
         // uniform and lets the rounding operator carve real circular fillets.
         // Credit: Inigo Quilez, "distance to a polygon" (sdPoly, the per-edge
@@ -216,7 +255,7 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         // Because the distance is exact and Euclidean, the softness band is a
         // uniform width on every edge under any squeeze, and the rounding
         // operator `sd − ρ` carves true circular corner fillets tangent to the
-        // edges — a squeezed square rounds into a proper rounded rectangle
+        // edges: a squeezed square rounds into a proper rounded rectangle
         // (stadium ends when ρ exceeds the short half-side), never a balloon. The
         // base polygon is generated at circumradius `1 − ρ` so the ρ-radius
         // fillet keeps the tip within its nominal footprint (extent bound).
@@ -225,7 +264,7 @@ impl BrushNodeEvaluator for PolygonEvaluator {
             "    let {ident}_beta: f32 = ({squeeze_angle});\n\
              \x20   let {ident}_n: f32 = max(round(({points})), 3.0);\n\
              \x20   // Base orientation: half the angular step (π/n) rotates the\n\
-             \x20   // vertex-up polygon so a flat edge sits horizontal — the natural\n\
+             \x20   // vertex-up polygon so a flat edge sits horizontal: the natural\n\
              \x20   // \"resting on a base\" look. Reduces to +45° for a square (n=4),\n\
              \x20   // 60° for a triangle, 30° for a hexagon. Rotation inputs and view\n\
              \x20   // compensation add on top.\n\
@@ -256,15 +295,43 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         Ok(wgsl)
     }
 
-    /// The polygon's circumradius is a constant `1.0` (vertices on the unit
-    /// circle; rounding stays within that circumradius), stretched by the
-    /// worst-case anisotropy the `squeeze` knob can deliver — the tip grows by
-    /// `1/a` along the stretched axis, where `a = 1 − 0.9·squeeze` is the
-    /// semi-axis (matching the emitted body).
+    /// Support of the silhouette the emitted body actually paints, in units of
+    /// the dab radius.
+    ///
+    /// `compile_wgsl` builds the polygon at circumradius `cr = 1 − ρ`, maps its
+    /// vertices through `T⁻¹` (semi-axes `a` and `1/a`), and then dilates the
+    /// result by the rounding radius `ρ`: `sd − ρ` is an *isotropic* offset
+    /// applied after the anisotropic map. So the reach is
+    ///
+    /// ```text
+    /// cr · maxᵢ ‖ diag(a, 1/a) · R(−β) · v̂ᵢ ‖ + ρ
+    /// ```
+    ///
+    /// Bounding that with the ellipse's semi-major `1/a` is correct but loose:
+    /// it assumes `ρ = 0` *and* that some vertex lands on the stretched axis.
+    /// Looseness is not free here: the fragment stage's only early-out is a
+    /// circular discard at this radius, so every pixel inside the bound is
+    /// fully shaded (SDF loop included) before its coverage is evaluated.
+    ///
+    /// Only each mapped vertex's *magnitude* matters, and `T⁻¹`'s outer
+    /// `R(β − φ)` is a rotation, which preserves magnitude. Per-dab spin,
+    /// `rotation_input` (Sponge wires pen direction into it) and
+    /// `view_rotation`, therefore cannot affect this bound, which is what
+    /// makes evaluating it once at compile time sound.
     fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
         let squeeze_max = ctx.port_max_value("squeeze").clamp(0.0, 1.0);
-        let a_min = (1.0 - 0.9 * squeeze_max).max(0.01);
-        let aniso_max = (1.0 / a_min).max(1.0);
-        ExtentContribution::Multiply(aniso_max)
+        let a = 1.0 - 0.9 * squeeze_max;
+        // `β` and `n` decide which vertices sit where relative to the stretched
+        // axis. A wired input's value is unknown here, so drop to the
+        // orientation-agnostic worst case rather than guessing an axis.
+        let axis_known =
+            !ctx.wired_inputs.contains("squeeze_angle") && !ctx.wired_inputs.contains("points");
+        let beta = axis_known.then(|| ctx.port_max_value("squeeze_angle"));
+        ExtentContribution::Multiply(silhouette_support(
+            a,
+            ctx.port_max_value("rounding"),
+            ctx.port_max_value("points"),
+            beta,
+        ))
     }
 }

@@ -1,15 +1,15 @@
-//! Hue/Saturation filter — hue rotation plus saturation/value scaling, modeled
+//! Hue/Saturation filter: hue rotation plus saturation/value scaling, modeled
 //! on Krita's `hsvadjustment`
 //! (`plugins/color/colorspaceextensions/kis_hsv_adjustment.cpp`).
 //!
-//! Four modes over one shader: three colour models — **HSV, HSL, HSY**
-//! (luma-weighted HCY; Krita's "HSY" *is* HCY) — plus **Colorize** (absolute
+//! Four modes over one shader: three colour models, **HSV, HSL, HSY**
+//! (luma-weighted HCY; Krita's "HSY" *is* HCY), plus **Colorize** (absolute
 //! hue/saturation with luminance preserved, like Photoshop's Hue/Saturation
 //! colorize), which overrides the model selector. The transform lives entirely
 //! in [`hsv.wgsl`](../../../shaders/filters/hsv.wgsl); this module declares the
 //! param schema and packs the params into the shader's uniform.
 //!
-//! Unlike Curves/Levels this filter carries **no auxiliary texture** — it builds
+//! Unlike Curves/Levels this filter carries **no auxiliary texture**: it builds
 //! the no-aux [`ParamFilter`] specialization (`[src, uniform]`), packing the five
 //! params into a single 32-byte uniform. Ranges follow Krita
 //! (`kis_hsv_adjustment_filter.cpp`): hue −180..180°, saturation/value −100..100,
@@ -46,7 +46,7 @@ pub const PARAMS: &[ParamDef] = &[
 ];
 
 /// The HSV fragment shader: the shared colour-space lib prepended to `hsv.wgsl`
-/// (built at load time — the render shaders have no `#include` preprocessor).
+/// (built at load time, since the render shaders have no `#include` preprocessor).
 fn hsv_shader_source() -> String {
     format!(
         "{}\n{}",
@@ -86,7 +86,7 @@ fn pack_uniform(params: &[ParamValue]) -> [u32; 8] {
     ]
 }
 
-/// Allocate (once) and refresh the params uniform — the [`ParamFilter`]
+/// Allocate (once) and refresh the params uniform: the [`ParamFilter`]
 /// `prepare` half for the no-aux HSV filter.
 fn hsv_prepare(
     device: &wgpu::Device,
@@ -118,7 +118,7 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         &hsv_shader_source(),
         "fs_hsv",
         "fs_hsv_masked",
-        false, // no aux texture — packed uniform only
+        false, // no aux texture, packed uniform only
         SrcSampling::Load,
         hsv_prepare,
     ))
@@ -127,8 +127,8 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 /// The image lightens, darkens and returns while the hue rotates out and back,
 /// the two sweeps running concurrently. `model` and `colorize` stay at their
 /// defaults, so what moves is exactly the pair of knobs the filter is named
-/// for. A full 360° spin is expressible as `hue: -180 → 180` — the parameter's
-/// own endpoints are the same colour — but it would not end where it began, so
+/// for. A full 360° spin is expressible as `hue: -180 → 180` (the parameter's
+/// own endpoints are the same colour), but it would not end where it began, so
 /// the ping-pong closes instead.
 fn preview_params(t: f32) -> Vec<ParamValue> {
     let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();

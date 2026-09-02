@@ -1,8 +1,8 @@
-//! Vector layer kind — a leaf holding an ordered list of vector objects
+//! Vector layer kind: a leaf holding an ordered list of vector objects
 //! (text today; paths/shapes later, reusing the same layer and renderer).
 //!
-//! A vector layer carries no pixel buffer. Its entire authoritative state — the
-//! object list, the layer transform, blend — round-trips through the manifest
+//! A vector layer carries no pixel buffer. Its entire authoritative state (the
+//! object list, the layer transform, blend) round-trips through the manifest
 //! body, exactly like a procedural void with no persistent frame. The GPU
 //! texture is a realization the compositor rebuilds from the objects when they
 //! change (raster-first; never on view zoom). Geometry and style serialize via
@@ -162,7 +162,7 @@ mod tests {
     fn round_trips_text_object_and_declares_no_pixels() {
         let (node, id) = text_layer();
         let entity = serialize(&node);
-        // Fully procedural — the entire layer lives in the manifest body.
+        // Fully procedural: the entire layer lives in the manifest body.
         assert!(
             entity.pixel_blobs.is_empty(),
             "vector layers declare no pixel blobs"

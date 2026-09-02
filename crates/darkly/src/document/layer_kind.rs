@@ -1,4 +1,4 @@
-//! Layer-kind registry — metadata + serializer dispatch for the structural
+//! Layer-kind registry: metadata + serializer dispatch for the structural
 //! variants of [`crate::layer::LayerNode`] (today: `raster`, `group`).
 //!
 //! Adding a new layer kind is one new file under
@@ -6,7 +6,7 @@
 //! [`LayerKindRegistration`] that carries everything the save/load
 //! pipeline needs (display name, body serializer, body deserializer,
 //! id-remap function). Central save/load code dispatches through the
-//! registry — it never branches on which variant it got.
+//! registry; it never branches on which variant it got.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -15,7 +15,7 @@ use crate::format::error::LoadError;
 use crate::format::manifest::ManifestPixelRef;
 use crate::layer::{LayerId, LayerNode};
 
-/// Map from manifest-old ids (`u64`) to fresh slotmap ids — populated
+/// Map from manifest-old ids (`u64`) to fresh slotmap ids, populated
 /// in pass 1 of the load (allocate-every-entity), consumed in pass 2
 /// (rewrite cross-references). Each kind's [`LayerKindRegistration::remap_ids`]
 /// receives a reference and uses it to translate children / filters /
@@ -40,7 +40,7 @@ pub struct PixelBlobSpec {
     /// `"layers/42.pixels"`). Must match the corresponding
     /// [`ManifestPixelRef::pixels`] embedded inside the entity's body.
     pub blob_key: String,
-    /// The entity whose GPU texture is the readback source — always the
+    /// The entity whose GPU texture is the readback source, always the
     /// entity declaring this blob. `PixelBlobSpec` does not model
     /// cross-entity texture references; a future kind that needs that
     /// pattern should introduce a separate abstraction rather than
@@ -55,16 +55,16 @@ pub struct LayerKindRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
 
-    /// One-sentence summary of what this kind holds — the layer panel's
+    /// One-sentence summary of what this kind holds: the layer panel's
     /// tooltip and the reference manual's row for it.
     pub description: &'static str,
 
     /// May this kind host a mask modifier? Consumed by the layer panel to
-    /// gate "Add mask" without branching on `type_id` — a new kind opts in
+    /// gate "Add mask" without branching on `type_id`; a new kind opts in
     /// (or out) here, in its own file, and the UI follows automatically.
     pub can_have_mask: bool,
 
-    /// May the user rename instances of this kind? Drives the layer panel's
+    /// May the artist rename instances of this kind? Drives the layer panel's
     /// double-click-to-rename gate.
     pub can_rename: bool,
 
@@ -79,7 +79,7 @@ pub struct LayerKindRegistration {
     pub icon: &'static str,
 
     /// Produce the manifest body + any pixel-blob refs this entity wants
-    /// saved. Infallible by construction — the kind's serialize goes
+    /// saved. Infallible by construction: the kind's serialize goes
     /// through a typed body struct + derived `Serialize`, which can only
     /// fail on OOM. Texture-format-to-wire-slug failures are caught at
     /// texture-allocation time (the compositor only allocates
@@ -88,7 +88,7 @@ pub struct LayerKindRegistration {
     pub serialize: fn(&LayerNode) -> SerializedEntity,
 
     /// Reconstruct the entity from its manifest body. `id` is the
-    /// freshly-allocated slotmap key — passed in because we're called
+    /// freshly-allocated slotmap key, passed in because we're called
     /// from inside `entities.insert_with_key(|k| ...)`, before the
     /// entity exists in the doc. Cross-references inside `body` still
     /// carry manifest-old ids; the caller's second pass calls
@@ -97,7 +97,7 @@ pub struct LayerKindRegistration {
 
     /// Rewrite every cross-reference (children, filters, any future
     /// kind-specific id field) in `entity` from manifest-old id to
-    /// fresh slotmap id. Non-optional — the contract that a future kind
+    /// fresh slotmap id. Non-optional: the contract that a future kind
     /// can't silently break the load by storing ids in a private field
     /// is enforced by this signature.
     pub remap_ids: fn(&mut LayerNode, &IdMap),
@@ -116,7 +116,7 @@ impl LayerKindRegistration {
     }
 }
 
-/// The layer-kind catalog — every registered kind, sorted by `type_id`.
+/// The layer-kind catalog: every registered kind, sorted by `type_id`.
 pub fn catalog() -> crate::catalog::Catalog {
     crate::catalog::Catalog::new(
         CATALOG_ID,
@@ -131,7 +131,7 @@ pub fn catalog() -> crate::catalog::Catalog {
 }
 
 pub struct LayerKindRegistry {
-    /// Owned storage — stable addresses while the registry lives (forever).
+    /// Owned storage: stable addresses while the registry lives (forever).
     entries: Vec<LayerKindRegistration>,
     by_type_id: HashMap<&'static str, usize>,
 }
@@ -156,7 +156,7 @@ impl LayerKindRegistry {
     }
 
     /// Look up by stable `type_id`. Returns `&'static` because the registry
-    /// itself is — callers can hold the reference indefinitely.
+    /// itself is, so callers can hold the reference indefinitely.
     pub fn get(&'static self, type_id: &str) -> Option<&'static LayerKindRegistration> {
         self.by_type_id.get(type_id).map(|&i| &self.entries[i])
     }

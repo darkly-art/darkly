@@ -34,7 +34,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "pasteAsSmartObject",
         display_name: "Paste as Smart Object",
-        description: "Paste the clipboard image as a smart object — a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
+        description: "Paste the clipboard image as a smart object: a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
         icon: "tabler:photo-scan",
     },
     ActionDef {

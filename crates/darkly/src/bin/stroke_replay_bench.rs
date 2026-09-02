@@ -1,4 +1,4 @@
-//! Stroke-replay bench harness — replays a recorded brush stroke through
+//! Stroke-replay bench harness: replays a recorded brush stroke through
 //! a headless engine at the original real-time cadence and emits per-event
 //! CPU timings.
 //!
@@ -17,13 +17,13 @@
 //!
 //! CLI flags:
 //!
-//! - `--input <path>` (required) — recording file produced by the frontend recorder.
-//! - `--brush <name>` (default `ink pen`) — name from `builtin_brushes::all()`.
-//! - `--dab-size <px>` — override the `pen_input.size` base knob for the replay.
-//! - `--canvas <WxH>` — override the engine canvas dims; recorded `(x, y)`
+//! - `--input <path>` (required) - recording file produced by the frontend recorder.
+//! - `--brush <name>` (default `ink pen`) - name from `builtin_brushes::all()`.
+//! - `--dab-size <px>` - override the `pen_input.size` base knob for the replay.
+//! - `--canvas <WxH>` - override the engine canvas dims; recorded `(x, y)`
 //!   are scaled by `target / recording.canvas_*` so the stroke fills the
 //!   same fraction of the canvas.
-//! - `--output <path>` — TSV output path. Defaults to
+//! - `--output <path>` - TSV output path. Defaults to
 //!   `crates/darkly/bench-results/stroke-replay-<stem>-<sha>.tsv`.
 
 use std::fs;

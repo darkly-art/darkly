@@ -6,7 +6,7 @@
 //! **Alpha convention.** A void source is stored 8-bit *premultiplied* and the
 //! shader un-premultiplies on the way out (`shaders/voids/textured.wgsl`:
 //! `sample.rgb / max(sample.a, 1e-4)`). That round trip is lossy at partial
-//! alpha — a straight `(200, α=100)` stores as `round(200·100/255) = 78` and
+//! alpha: a straight `(200, α=100)` stores as `round(200·100/255) = 78` and
 //! returns as `round(78·255/100) = 199`. So fixtures here are **hard opaque or
 //! empty**, where the round trip is exact and `assert_eq!` is sound; anything
 //! partial-alpha states an expected value with a tolerance instead.
@@ -73,13 +73,13 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color
 /// Start a whole-layer transform session, driving frames until it takes.
 ///
 /// Without a selection the extraction is alpha-tight, and those bounds come
-/// from a GPU readback — so the first call reports "not yet" and the real tool
+/// from a GPU readback, so the first call reports "not yet" and the real tool
 /// retries on the next frame. (With a selection the bounds are known up front
 /// and it succeeds immediately, which is why other suites call it once.)
 fn begin_transform_settled(engine: &mut DarklyEngine, layer: LayerId) {
     // Called once: each call bumps the setup generation and drops the pending
     // retry, so re-calling in the loop would restart the wait forever. Frames
-    // are what advance it — `render` picks the pending setup back up.
+    // are what advance it: `render` picks the pending setup back up.
     engine.begin_transform(layer);
     for _ in 0..8 {
         // The alpha-content bounds arrive by async readback; flush it, then let
@@ -163,7 +163,7 @@ fn converted_floating_owns_the_source_pixels() {
 ///
 /// Without `sync_void_persistent_frame` the document never records that this
 /// void owns a frame, `owns_disposable_texture` reads false, and the tombstone
-/// machinery frees the source out from under the redo — leaving a blank layer
+/// machinery frees the source out from under the redo, leaving a blank layer
 /// that no structural assertion would catch.
 #[test]
 fn convert_floating_is_one_undo_step_and_redo_keeps_the_pixels() {
@@ -203,7 +203,7 @@ fn convert_floating_is_one_undo_step_and_redo_keeps_the_pixels() {
 }
 
 /// A paste with no target auto-creates a placeholder raster. Converting drops
-/// it silently — it carries no undo entry until commit, and leaving it behind
+/// it silently: it carries no undo entry until commit, and leaving it behind
 /// would litter the panel with empty layers.
 #[test]
 fn converting_floating_removes_the_paste_placeholder() {
@@ -223,7 +223,7 @@ fn converting_floating_removes_the_paste_placeholder() {
     assert!(engine.has_layer(id));
 }
 
-/// Refused with nothing floating — the menu entry is gated on the same
+/// Refused with nothing floating; the menu entry is gated on the same
 /// predicate, so this is the engine half of that gate.
 #[test]
 fn converting_with_no_floating_is_refused() {
@@ -346,11 +346,11 @@ fn converting_a_selection_transform_keeps_the_unlifted_remainder() {
     assert!(is_smart_object(&engine, id));
     assert!(
         engine.has_layer(layer),
-        "the source layer survives — only part of it was lifted",
+        "the source layer survives, only part of it was lifted",
     );
 
     // Erase zeroes alpha and leaves the colour channels alone (layers store
-    // straight alpha), so the hole reads as the original red at zero coverage —
+    // straight alpha), so the hole reads as the original red at zero coverage:
     // the same residue an ordinary commit's clear leaves.
     let px = engine.test_readback_layer(layer);
     assert_eq!(
@@ -375,7 +375,7 @@ fn converting_a_selection_transform_keeps_the_unlifted_remainder() {
 /// Installing a source by GPU blit flips the void off its canvas-covering
 /// placeholder, so the sampling uniform written when the layer was created
 /// describes the wrong extent until it is rewritten. Nothing between creation
-/// and the first drag rewrites it, so the image ships stretched to the canvas —
+/// and the first drag rewrites it, so the image ships stretched to the canvas,
 /// and the gizmo reads the *document* extent, so it looks correct while the
 /// pixels are wrong.
 #[test]
@@ -412,7 +412,7 @@ fn a_converted_smart_object_renders_at_its_source_size() {
     assert_eq!(
         rgba_at(&canvas, 64, 48, 48)[3],
         0,
-        "and nowhere else — a stretched source would cover this",
+        "and nowhere else; a stretched source would cover this",
     );
 }
 
@@ -474,7 +474,7 @@ fn converting_a_layer_replaces_it_with_a_smart_object() {
     assert!(engine.has_layer(below), "siblings are untouched");
 }
 
-/// Conversion must be visually inert — the whole promise is "same picture, now
+/// Conversion must be visually inert: the whole promise is "same picture, now
 /// scalable". The composite before and after has to match pixel for pixel, or
 /// the transform that re-anchors the source is wrong.
 #[test]

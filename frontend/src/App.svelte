@@ -14,6 +14,7 @@
     import LayerPickers from './ui/layers/LayerPickers.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import RecoveryModal from './ui/RecoveryModal.svelte';
+    import PackExportModal from './ui/PackExportModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
@@ -21,6 +22,8 @@
     import CanvasOverlay from './multi_tab/CanvasOverlay.svelte';
     import { shell } from './multi_tab/shell.svelte';
     import { anyTabDirty } from './multi_tab/closeGuard.svelte';
+    import { flushRecents } from './state/recents.svelte';
+    import { brushLibrary } from './state/brush_library.svelte';
     // Register all tools
     import './tools/index';
     // Register dockable workspace panels (layers, properties)
@@ -29,14 +32,19 @@
     // Open the first tab synchronously before children render. Sidebars and
     // ToolOptionsBar read `app.<x>` (the active-instance proxy) during their
     // initial template evaluation, so `activeInstance` must be set before
-    // they mount — `onMount` would be too late and the proxy would resolve
+    // they mount; `onMount` would be too late and the proxy would resolve
     // to `null`, throwing on any method call.
     if (shell.instances.length === 0) shell.open();
 
     // Browser-level "you have unsaved changes" prompt on reload / tab
-    // close / navigation away. Browsers ignore custom messages — setting
+    // close / navigation away. Browsers ignore custom messages: setting
     // `returnValue` to any non-empty string triggers their native prompt.
     function onBeforeUnload(e: BeforeUnloadEvent) {
+        // Land any write still inside its coalescing window, so a brush
+        // picked or a pack imported a moment before closing is still there
+        // next launch.
+        void flushRecents();
+        void brushLibrary.flush();
         if (anyTabDirty()) {
             e.preventDefault();
             e.returnValue = '';
@@ -55,8 +63,9 @@
     </div>
 </div>
 <!-- The WebGPU canvases live here, mounted once, positioned over the Document
-     panel's placeholder wherever the user tiles it (see CanvasOverlay). -->
+     panel's placeholder wherever the artist tiles it (see CanvasOverlay). -->
 <CanvasOverlay />
+<PackExportModal />
 <Toast />
 <LoadErrorToast />
 <PresetPicker />

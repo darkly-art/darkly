@@ -20,7 +20,7 @@
     // + Curve/Levels editor + scalar rows). Both the layer properties panel and
     // the destructive-apply modal embed this: it mutates each param's `value` in
     // place and reports via `oninput` (mid-drag, no commit) / `onchange`
-    // (commit). The consumer owns what a report *does* — a live
+    // (commit). The consumer owns what a report *does*: a live
     // `updateFilterParams`, or holding scratch params for a later `applyFilter`.
     let {
         params,
@@ -56,7 +56,7 @@
     const colorizeOn = $derived(colorizeActive(scalars));
 
     // The channel currently shown in the per-channel editor. Kept valid as the
-    // param set changes (layer swap, load) — defaults to the first channel.
+    // param set changes (layer swap, load), defaulting to the first channel.
     let selectedChannel = $state<string | null>(null);
     $effect(() => {
         if (channels.length === 0) {
@@ -79,7 +79,7 @@
         return Array.from(histogramBins.subarray(idx * HIST_BINS, (idx + 1) * HIST_BINS));
     });
 
-    // Live edit (mid-drag) — reports without committing. Works for both editors.
+    // Live edit (mid-drag): reports without committing. Works for both editors.
     function onChannelInput(value: CurvePoints | LevelsValues) {
         if (!selectedParam) return;
         selectedParam.value = value;

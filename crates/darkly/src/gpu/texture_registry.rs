@@ -14,7 +14,7 @@
 //! Built-in textures (paper grains, canvas, etc.) live under
 //! `crates/darkly/resources/textures/`. `build.rs` scans the
 //! directory and generates [`BUILTIN_TEXTURES`] (an
-//! `&[(name, &[u8])]` table) at compile time — drop a `.jpg`,
+//! `&[(name, &[u8])]` table) at compile time: drop a `.jpg`,
 //! `.png`, or `.webp` in and it shows up in the registry under its
 //! file basename. No Rust edit needed.
 
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::brush::texture_source::ResolvedSource;
 use crate::gpu::baked_source_cache::BakedSourceCache;
 
-// `BUILTIN_TEXTURES: &[(&str, &[u8])]` — auto-generated at build time
+// `BUILTIN_TEXTURES: &[(&str, &[u8])]`, auto-generated at build time
 // from every image under `crates/darkly/resources/textures/`. See
 // `build.rs::generate_texture_registry`.
 include!(concat!(env!("OUT_DIR"), "/textures_gen.rs"));
@@ -131,7 +131,7 @@ impl TextureRegistry {
 
     /// Decode a PNG / JPG byte buffer and register it. Errors fall
     /// through `log::warn` so a missing or corrupt asset doesn't take
-    /// the engine down — the name just stays unregistered and any
+    /// the engine down: the name just stays unregistered and any
     /// brush referencing it fails to load with a clear message.
     pub fn register_image(
         &mut self,
@@ -205,7 +205,7 @@ impl TextureRegistry {
 
     /// Build the `@group(3)` bind group for a compiled brush's
     /// `graph_sources`. A [`ResolvedSource::Named`] slot resolves against
-    /// this registry — a missing name (typing in the editor, a brush
+    /// this registry: a missing name (typing in the editor, a brush
     /// referencing a yet-to-be-registered texture) falls back to the
     /// built-in `_fallback` 1×1 white tile so the pipeline still builds.
     /// A [`ResolvedSource::Baked`] slot resolves through the bake cache,
@@ -226,7 +226,7 @@ impl TextureRegistry {
             .clone();
         // Two shapes of view reach the bind group: registry / bake-cache
         // textures own theirs, live slots borrow one published this flush.
-        // An unpublished live slot takes `_fallback` — the cursor preview
+        // An unpublished live slot takes `_fallback`, the cursor preview
         // path, where no stroke exists to publish anything.
         enum SlotView<'v> {
             Owned(Arc<GpuTexture>),
@@ -280,13 +280,13 @@ impl TextureRegistry {
 
 /// Name of the built-in 1×1 white texture used when a brush
 /// references a texture name that isn't registered. Lets the
-/// per-brush pipeline build succeed even while the user is
+/// per-brush pipeline build succeed even while the artist is
 /// mid-typing a texture name in the node editor.
 pub const FALLBACK_TEXTURE: &str = "_fallback";
 
 /// Register every built-in texture shipped with Darkly. Called once at
 /// `TextureRegistry::new` time. Failures inside `register_image` are
-/// logged and skipped — brushes referencing a missing texture surface
+/// logged and skipped: brushes referencing a missing texture surface
 /// a clear error at load time rather than crashing engine init.
 fn register_builtin_textures(
     reg: &mut TextureRegistry,
@@ -294,7 +294,7 @@ fn register_builtin_textures(
     queue: &wgpu::Queue,
 ) {
     // Always-available 1×1 white fallback for unresolved texture
-    // names — must be registered before any brush asks for it.
+    // names, must be registered before any brush asks for it.
     reg.register_rgba8(
         device,
         queue,
@@ -304,7 +304,7 @@ fn register_builtin_textures(
         &[255u8, 255, 255, 255],
     );
 
-    // Everything under `crates/darkly/resources/textures/` —
+    // Everything under `crates/darkly/resources/textures/`,
     // discovered + embedded by `build.rs`.
     for (name, bytes) in BUILTIN_TEXTURES {
         reg.register_image(device, queue, name, bytes);

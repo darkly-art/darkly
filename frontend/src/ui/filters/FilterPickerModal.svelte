@@ -29,7 +29,7 @@
     }
 </script>
 
-<Modal bind:open title="Add Filter Layer" size="md">
+<Modal bind:open title="Add Filter Layer" size="lg">
     <div class="grid">
         {#each filterTypes as ft (ft.type)}
             <button class="card" title={ft.description ?? undefined} onclick={() => pick(ft)}>

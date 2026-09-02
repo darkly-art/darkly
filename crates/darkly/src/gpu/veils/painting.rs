@@ -1,5 +1,5 @@
-// User-facing "Painting" veil. The underlying algorithm is the
-// generalized Kuwahara filter — see shader header for prior-art credit.
+// Artist-facing "Painting" veil. The underlying algorithm is the
+// generalized Kuwahara filter; see shader header for prior-art credit.
 
 use crate::gpu::effect::{create_effect_pipeline, Binding, EffectCache, EffectPipeline};
 use crate::gpu::preview::{swing, PreviewAnim};
@@ -10,7 +10,7 @@ use std::sync::Arc;
 const PARAMS: &[ParamDef] = &[
     ParamDef::int("kernel_size", 1, 7, 6)
         .with_label("Brush Size")
-        .with_description("Width of the region each output pixel is averaged from — larger reads as broader strokes.")
+        .with_description("Width of the region each output pixel is averaged from: larger reads as broader strokes.")
         .with_unit(UnitType::Pixels),
     ParamDef::float("sharpness", 1.0, 18.0, 8.0)
         .with_label("Sharpness")
@@ -108,7 +108,7 @@ impl Veil for Painting {
     }
 
     fn perf_scale_factor(&self) -> f32 {
-        // O(kernel²) samples per pixel — at default kernel_size=6 that's 169
+        // O(kernel²) samples per pixel: at default kernel_size=6 that's 169
         // texture taps. Painterly output is inherently smooth/blurry, so the
         // bilinear upscale is visually free.
         0.7
@@ -124,8 +124,8 @@ impl Veil for Painting {
 
     /// The brush widens from a single texel to the full Kuwahara window and
     /// back, so each quantised step of the control is plainly visible.
-    /// `kernel_size` sets the sampling radius inside one pass — `O(kernel²)`
-    /// samples — so the ramp averages a radius of 4 against the shipped default
+    /// `kernel_size` sets the sampling radius inside one pass (`O(kernel²)`
+    /// samples), so the ramp averages a radius of 4 against the shipped default
     /// of 6 and is *cheaper* per frame than a default-parameter render.
     fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
         self.kernel_size = (1.0 + 6.0 * swing(t)).round() as i32;

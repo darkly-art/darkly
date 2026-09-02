@@ -12,7 +12,7 @@ use crate::catalog::{Catalog, CatalogEntry};
 /// Viewport-level post-processing effect ("veil").
 /// Veils run on the fully-presented image at screen resolution,
 /// after the view transform has been applied. They are ephemeral
-/// editor state — they don't serialize with the document.
+/// editor state; they don't serialize with the document.
 ///
 /// Unlike filters (which the compositor drives pass-by-pass),
 /// veils get full control over their render passes via `encode()`.
@@ -26,14 +26,14 @@ pub trait Veil: std::fmt::Debug {
     fn param_values(&self) -> Vec<ParamValue>;
 
     /// Create GPU resources for this veil instance.
-    /// `ping_pong_views` are the veil chain's render textures — veils read
+    /// `ping_pong_views` are the veil chain's render textures: veils read
     /// from and write to these at whatever resolution the chain provides.
     /// When `rendering.veil_scale` is below 1.0 the chain passes smaller
     /// textures automatically; veils never need to know about the distinction.
     ///
     /// Takes `&mut self` so a veil whose uniform struct folds in something it
-    /// is only handed here — the render resolution, a decoded texture's aspect
-    /// — can keep it, and rewrite that struct later from state alone.
+    /// is only handed here (the render resolution, a decoded texture's aspect)
+    /// can keep it, and rewrite that struct later from state alone.
     fn create_cache(
         &mut self,
         device: &wgpu::Device,
@@ -74,8 +74,8 @@ pub trait Veil: std::fmt::Debug {
     /// whether it follows `preview_at(0.4)` or nothing at all.
     ///
     /// Answers whether `cache` still describes this instance. A veil whose
-    /// cache *shape* is a function of its parameters — pixelate's aux chain is
-    /// the one in the tree — sets its fields and answers `false`, and the
+    /// cache *shape* is a function of its parameters (pixelate's aux chain is
+    /// the one in the tree) sets its fields and answers `false`, and the
     /// caller rebuilds through [`create_cache`](Self::create_cache) before
     /// encoding. The default is a no-op answering `true`, which renders a still
     /// at the instance's own parameters.
@@ -103,12 +103,12 @@ pub trait Veil: std::fmt::Debug {
 pub struct VeilRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
-    /// One-sentence summary shown as a tooltip in the Add Veil picker —
-    /// include the terms users would search for.
+    /// One-sentence summary shown as a tooltip in the Add Veil picker:
+    /// include the terms artists would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
     /// How long this veil's preview runs, or `None` for a veil with nothing
-    /// worth showing. Declaring an animation is what makes a veil previewable —
+    /// worth showing. Declaring an animation is what makes a veil previewable;
     /// the two facts are one. What the preview *does* over that span is
     /// [`Veil::preview_at`].
     pub preview: Option<PreviewAnim>,
@@ -129,7 +129,7 @@ impl VeilRegistration {
     }
 }
 
-/// The veil catalog — every registered veil, sorted by `type_id`.
+/// The veil catalog: every registered veil, sorted by `type_id`.
 pub fn catalog() -> Catalog {
     Catalog::new(
         CATALOG_ID,
@@ -179,7 +179,7 @@ impl VeilRegistry {
 
     /// Return every registered veil's full [`VeilRegistration`], sorted by
     /// `type_id` for deterministic UI ordering. Callers read whatever fields
-    /// they need off the registration — a new field is free here.
+    /// they need off the registration; a new field is free here.
     pub fn types(&self) -> Vec<&VeilRegistration> {
         let mut types: Vec<&VeilRegistration> = self.entries.values().map(|e| &e.reg).collect();
         types.sort_by_key(|reg| reg.type_id);
@@ -204,7 +204,7 @@ impl VeilRegistry {
 
     /// True when this registry knows the given `type_id`. Used by the
     /// `.darkly` load pre-check to refuse files that name veils the
-    /// binary doesn't ship — see [`crate::format::error::LoadError`].
+    /// binary doesn't ship; see [`crate::format::error::LoadError`].
     pub fn has(&self, type_id: &str) -> bool {
         self.entries.contains_key(type_id)
     }
@@ -304,7 +304,7 @@ impl PreviewMechanism for VeilMechanism {
 
 /// One open veil preview: the instance and the cache it was built against.
 ///
-/// Rebuilding is a normal outcome rather than a failure mode — [`Veil::preview_at`]
+/// Rebuilding is a normal outcome rather than a failure mode: [`Veil::preview_at`]
 /// answers `false` when the state it just entered no longer fits the cache, and
 /// a rebuilt instance at `t` is fully described by `t`.
 struct VeilSession<'a> {
@@ -330,7 +330,7 @@ impl<'a> VeilSession<'a> {
 }
 
 /// The one place a veil's cache is built against a preview target, so the two
-/// callers — the first build and a `preview_at` that invalidated its cache —
+/// callers (the first build and a `preview_at` that invalidated its cache)
 /// cannot disagree about what it is built from.
 fn build_cache(
     veil: &mut dyn Veil,

@@ -1,10 +1,10 @@
 //! Turning existing content into a smart object.
 //!
 //! Two entry points converge here: a layer picked in the panel, and floating
-//! content under an active gizmo (`engine/floating.rs`). Both end the same way
-//! — the source layer is consumed and a smart object takes its tree slot,
-//! holding the original pixels at their own resolution behind a transform —
-//! so that ending lives in one place.
+//! content under an active gizmo (`engine/floating.rs`). Both end the same way:
+//! the source layer is consumed and a smart object takes its tree slot, holding
+//! the original pixels at their own resolution behind a transform, so that
+//! ending lives in one place.
 
 use darkly_macros::handlers;
 
@@ -21,7 +21,7 @@ use crate::undo::BakeSourceSlot;
 /// shown through a transform, and only a layer with its own buffer has a source
 /// at its own resolution to keep. A group or a generated layer would have to be
 /// baked to canvas size first, which caps the resolution at exactly what
-/// scaling a smart object is supposed to escape — flatten those and convert the
+/// scaling a smart object is supposed to escape; flatten those and convert the
 /// result.
 ///
 /// A mask disqualifies the layer. The conversion moves the layer's texture, not
@@ -42,7 +42,7 @@ pub(crate) fn layer_can_become_smart_object(doc: &Document, node_id: LayerId) ->
 
 #[handlers]
 impl DarklyEngine {
-    /// Whether `node_id` can become a smart object — see
+    /// Whether `node_id` can become a smart object; see
     /// [`layer_can_become_smart_object`] for the rule. The layer panel reads
     /// the same answer off `LayerInfo::can_become_smart_object`; this is the
     /// query for callers that hold an id and nothing else.

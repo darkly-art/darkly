@@ -1,7 +1,7 @@
 //! Lasso selection. The other selection ops are `#[handler]`-generated on
 //! `engine/filters/selection.rs`; lasso stays hand-written because its wire
 //! field is `verts` (the engine param is `vertices`) and it carries a `feather`
-//! field the engine ignores — neither maps cleanly to a derived `Req`.
+//! field the engine ignores; neither maps cleanly to a derived `Req`.
 
 use serde::Deserialize;
 

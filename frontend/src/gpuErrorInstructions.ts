@@ -1,7 +1,7 @@
 // Last reviewed: 2026-04
 //
 // Per (os, browser) instructions for enabling hardware-accelerated WebGPU.
-// Keep URLs in code blocks, not anchors — chrome://... cannot be opened from
+// Keep URLs in code blocks, not anchors: chrome://... cannot be opened from
 // a webpage and rendering them as <a href> looks broken.
 
 import type { Browser, Os, Platform } from './platform';
@@ -9,14 +9,14 @@ import type { Browser, Os, Platform } from './platform';
 export interface FlagLink {
     /** Displayed inline as code with a copy-to-clipboard button. */
     url: string;
-    /** What the user should change once they reach the URL. */
+    /** What the artist should change once they reach the URL. */
     action: string;
 }
 
 export interface Instructions {
     /** Short human-readable label, e.g. "Chromium on Linux". */
     title: string;
-    /** Ordered steps for the user to follow. */
+    /** Ordered steps for the artist to follow. */
     steps: string[];
     /** URLs to surface with copy buttons (flags, settings pages). */
     flags: FlagLink[];
@@ -126,7 +126,7 @@ const INSTRUCTIONS_MATRIX: Partial<Record<Browser, Partial<Record<Os, Instructio
                 'Return here and reload.',
             ],
             flags: [],
-            note: 'All iOS browsers (Chrome, Firefox, Edge on iPhone/iPad) use WebKit — the setting above applies regardless of which browser you\'re using. Older iOS devices may not support WebGPU at all.',
+            note: 'All iOS browsers (Chrome, Firefox, Edge on iPhone/iPad) use WebKit: the setting above applies regardless of which browser you\'re using. Older iOS devices may not support WebGPU at all.',
         },
     },
 };
@@ -151,7 +151,7 @@ const FALLBACK_INSTRUCTIONS: Instructions = {
     steps: [
         'We could not identify your browser precisely.',
         'Look for a "Hardware acceleration" toggle in your browser\'s settings and enable it.',
-        'Check your browser\'s documentation for "enable WebGPU" — it may be behind a feature flag.',
+        'Check your browser\'s documentation for "enable WebGPU"; it may be behind a feature flag.',
         'Make sure your graphics drivers are up to date.',
         'Restart the browser and reload this page.',
     ],

@@ -64,7 +64,7 @@ describe('bitrateFor', () => {
         expect(b).toBeLessThan(5e6);
     });
 
-    it('clamps to the 1–12 Mbps envelope', () => {
+    it('clamps to the 1-12 Mbps envelope', () => {
         expect(bitrateFor(64, 64, 30)).toBe(1e6);
         expect(bitrateFor(3840, 2160, 30)).toBe(12e6);
     });

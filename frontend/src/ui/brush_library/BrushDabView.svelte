@@ -14,16 +14,16 @@
     }
     let { width = 32, height = 32 }: Props = $props();
 
-    /** Throttle window for rAF-driven refreshes — same cadence
+    /** Throttle window for rAF-driven refreshes: same cadence
      *  `BrushStrokePreview.svelte` uses for the editor stroke preview. */
     const REFRESH_MS = 100;
 
     let dabUrl = $state('');
-    /** Byte length that produced `dabUrl` — skips redundant Blob/URL
+    /** Byte length that produced `dabUrl`: skips redundant Blob/URL
      *  churn when WASM hands back the same PNG (cache hit). */
     let lastLen = 0;
 
-    /** Active polling budget. 30 frames ≈ 500ms at 60Hz — well past the
+    /** Active polling budget. 30 frames ≈ 500ms at 60Hz, well past the
      *  ~10-30ms we measure for a single-dab render, so the pixels always
      *  arrive before we stop. */
     const POLL_FRAMES_PER_REQUEST = 30;
@@ -58,7 +58,7 @@
         rafHandle = 0;
         if (framesRemaining <= 0) return;
         framesRemaining--;
-        // Same trick as BrushStrokePreview — kick the engine's render loop so
+        // Same trick as BrushStrokePreview: kick the engine's render loop so
         // `poll_pending` advances the in-flight readback.
         app.requestFrame();
         void refresh();

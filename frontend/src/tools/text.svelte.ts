@@ -5,7 +5,7 @@ import { createTextFromPending, flushTextContent, type FullStyle, type Rgba } fr
 import { TextBoxGizmo } from './text_box_gizmo';
 import { ToolBase, type ToolDescriptor } from './registry';
 
-/** Creation *defaults* for the text tool — an app-global user preference (not
+/** Creation *defaults* for the text tool: an app-global artist preference (not
  *  per-document), written by panel style edits and read when the panel creates
  *  the next text object. Stays module-level even though the text *tool* is
  *  per-instance (the per-document edit/placement state moved onto {@link
@@ -31,7 +31,7 @@ class TextSession {
 
 export const textSession = new TextSession();
 
-/** Content a new text object is seeded with — shown selected in the editor so
+/** Content a new text object is seeded with, shown selected in the editor so
  *  the first keystroke replaces it. */
 const SEED_TEXT = 'text';
 
@@ -69,16 +69,16 @@ export interface TextPlacement {
 const DRAG_THRESHOLD = 4;
 
 /**
- * Text tool — per-instance. Chooses what the properties panel edits and drives
+ * Text tool: per-instance. Chooses what the properties panel edits and drives
  * the on-canvas box; the text controls live in `TextProperties.svelte`.
  *
  * Creating a text object is a session→document operation, so the tool does it
- * directly on pointer-up (via {@link createTextFromPending}) — it does not depend
+ * directly on pointer-up (via {@link createTextFromPending}); it does not depend
  * on any properties panel being mounted. The per-document edit state lives here
  * as reactive fields (read by the panel via {@link focusedTextTool}):
  *   - `focusObject` asks the panel to focus a specific object's editor next
  *     render (set when a text-tool click hits an existing object, or on create).
- *   - `editing` is the object whose box gizmo is shown — the one just clicked or
+ *   - `editing` is the object whose box gizmo is shown, the one just clicked or
  *     created. The box follows the active layer (see `onFrame`).
  */
 class TextTool extends ToolBase {
@@ -118,7 +118,7 @@ class TextTool extends ToolBase {
     }
 
     private foregroundTuple(): Rgba {
-        const c = this.inst.foreground;
+        const c = this.inst.consumeForeground();
         return [c.r, c.g, c.b, c.a];
     }
 
@@ -142,7 +142,7 @@ class TextTool extends ToolBase {
                 target,
                 (layerId, objectId) => {
                     // Show the box gizmo on the new object (drives `onFrame`) and
-                    // ask the panel — if/when mounted — to focus its editor.
+                    // ask the panel (if/when mounted) to focus its editor.
                     this.editing = { layerId, objectId };
                     this.focusObject = objectId;
                 },
@@ -161,7 +161,7 @@ class TextTool extends ToolBase {
         // is imminent, so the compile overlaps the gap before the first click
         // instead of stalling the frame that would show the new box.
         this.inst.engine?.api.warmVectorRenderer();
-        // Pick up the persisted default size if the user configured one.
+        // Pick up the persisted default size if the artist configured one.
         const cfgSize = config.get('tools.textSize');
         if (typeof cfgSize === 'number') textSession.size = cfgSize;
         // If a text layer is already selected, show its box immediately (the
@@ -317,7 +317,7 @@ class TextTool extends ToolBase {
 
 /** The focused instance's text tool, if the text tool is the active tool. The
  *  properties panel routes its per-document edit reads (editing / placement /
- *  focusObject) through this — reactive through the `app` proxy / instance
+ *  focusObject) through this, reactive through the `app` proxy / instance
  *  swap. */
 export function focusedTextTool(): TextTool | null {
     const inst = getActiveInstance();

@@ -28,7 +28,7 @@ class GradientTool extends ToolBase {
         const layerId = this.inst.activeLayerId;
         if (!layerId || !engine) return;
 
-        const c = this.inst.foreground;
+        const c = this.inst.consumeForeground();
         const bg = this.inst.background;
 
         beginPaintStroke(engine, layerId);

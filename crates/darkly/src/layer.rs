@@ -10,7 +10,7 @@ use crate::gpu::params::ParamValue;
 
 slotmap::new_key_type! {
     /// Unique identifier for any node, group, or filter in a [`Document`].
-    /// Backed by a slotmap key — generational, so stale ids return `None` from
+    /// Backed by a slotmap key (generational), so stale ids return `None` from
     /// [`Document`] lookups instead of aliasing onto a recycled slot.
     ///
     /// At the WASM/JS boundary, marshal as `u64` via [`LayerId::to_ffi`] /
@@ -39,7 +39,7 @@ impl LayerId {
 
 // A `LayerId` crosses the wire as the same packed `u64` it uses at the WASM/JS
 // boundary. The slotmap key's internal repr is index+version, so this can't be
-// a derive — it serializes *through* `to_ffi`/`from_ffi`, transparent as a
+// a derive: it serializes *through* `to_ffi`/`from_ffi`, transparent as a
 // single JSON number. This is the protocol's `LayerId` coercion (see the typed
 // engine bridge): with it, handlers carry `LayerId` directly instead of
 // shimming `u64` at every call site.
@@ -56,7 +56,7 @@ impl<'de> serde::Deserialize<'de> for LayerId {
 }
 
 // On the wire a `LayerId` is just its packed `u64`, so to the typed TS client it
-// is a `number` — mirroring the serde impls above. The slotmap key has no fields
+// is a `number`, mirroring the serde impls above. The slotmap key has no fields
 // to derive `TS` from, so this maps it to the same primitive `u64` exports as.
 #[cfg(feature = "ts-export")]
 impl ts_rs::TS for LayerId {
@@ -70,7 +70,7 @@ impl ts_rs::TS for LayerId {
     }
 }
 
-/// Properties shared by every node in the tree — raster layers, groups, and
+/// Properties shared by every node in the tree: raster layers, groups, and
 /// filters. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.
 pub struct NodeCommon {
@@ -90,13 +90,13 @@ impl NodeCommon {
 }
 
 /// Compositing properties for nodes that participate in normal blending
-/// (raster layers and groups). Filters don't have one — masks structurally
+/// (raster layers and groups). Filters don't have one: masks structurally
 /// have no opacity or blend mode.
 ///
 /// `blend_mode` is a registry reference, not an enum: `type_id` is the
 /// identity (used by the wire format, undo, and `set_blend_mode`), and
 /// `gpu_value` is the integer the composite shader switches on. There is no
-/// parallel enum representation — registry-resolved registrations are the
+/// parallel enum representation: registry-resolved registrations are the
 /// only carrier.
 pub struct BlendProps {
     pub opacity: f32,
@@ -122,7 +122,7 @@ impl Default for BlendProps {
 /// filters, future filter caches). Bulk pixel data is GPU-authoritative; this
 /// struct only carries canvas-space metadata: extent and texture format.
 ///
-/// Every `PixelBuffer` is sampled independently — the blend shader computes UV
+/// Every `PixelBuffer` is sampled independently: the blend shader computes UV
 /// from each buffer's own bounds. Lockstep growth (host + non-locked mask grow
 /// together) is a document-side convenience that drops out for free when both
 /// buffers receive the same rasterized transform.
@@ -152,10 +152,10 @@ pub struct RasterLayer {
 
 impl RasterLayer {
     /// Construct a raster layer. `name` is the display name shown in the
-    /// layer panel — owners (the [`Document`]) supply a sequential
+    /// layer panel: owners (the [`Document`]) supply a sequential
     /// "Layer N" string rather than letting each constructor invent one
     /// from the slotmap key, which would surface raw ffi values like
-    /// "Layer 4294967301" to the user.
+    /// "Layer 4294967301" to the artist.
     pub fn new(id: LayerId, bounds: CanvasRect, name: String) -> Self {
         RasterLayer {
             id,
@@ -168,12 +168,12 @@ impl RasterLayer {
 }
 
 /// A void (procedural) layer. Generates its pixels from a GPU shader instead
-/// of storing them — see [`crate::gpu::void::Void`] for the trait + registry,
-/// and the README's "Voids" section for the user-facing concept.
+/// of storing them (see [`crate::gpu::void::Void`] for the trait + registry,
+/// and the README's "Voids" section for the artist-facing concept).
 ///
 /// Void state is exactly: a [`crate::gpu::void::VoidRegistration::type_id`]
 /// string identifying which procedural kind to run, plus the parameter
-/// values for that kind. There is no pixel buffer — the compositor allocates
+/// values for that kind. There is no pixel buffer: the compositor allocates
 /// a derived texture on demand and re-renders it from these inputs.
 pub struct VoidLayer {
     pub id: LayerId,
@@ -187,7 +187,7 @@ pub struct VoidLayer {
     /// Parameter values matching the void type's
     /// [`crate::gpu::void::ParamDef`] schema, in order.
     pub params: Vec<ParamValue>,
-    /// User transform (pan / scale / rotate) applied to the void's output,
+    /// Artist transform (pan / scale / rotate) applied to the void's output,
     /// edited by the generic transform gizmo. Persistent / undoable /
     /// serializable document state. Voids that don't opt into live transform
     /// (see [`crate::gpu::void::VoidRegistration::supports_live_transform`])
@@ -195,7 +195,7 @@ pub struct VoidLayer {
     pub transform: crate::transform::Transform,
     pub filters: Vec<LayerId>,
     /// Optional persistent frame snapshot. Most voids leave this `None`
-    /// (their output is purely procedural — replays from params). The
+    /// (their output is purely procedural: replays from params). The
     /// camera void uses it to round-trip the last received webcam frame
     /// through save/load so reopening a `.darkly` doesn't show a black
     /// rectangle until permission is regranted. When set, the save flow
@@ -220,7 +220,7 @@ impl VoidLayer {
     }
 }
 
-/// A filter layer — a non-destructive procedural *transform* in the layer
+/// A filter layer: a non-destructive procedural *transform* in the layer
 /// tree. Where a [`VoidLayer`] is a procedural *source* (it generates pixels),
 /// a filter layer transforms the composite of everything below it in place
 /// (the group accumulator), leaving the lower layers' own pixels untouched.
@@ -230,7 +230,7 @@ impl VoidLayer {
 /// State is exactly: a `pipeline` id naming which
 /// [`crate::gpu::filter::FilterPipelineRegistry`] transform to run (e.g.
 /// `"invert"`), plus that transform's parameter values. There is no pixel
-/// buffer — the compositor runs the shared filter pipeline over the running
+/// buffer: the compositor runs the shared filter pipeline over the running
 /// accumulator each frame.
 pub struct FilterLayer {
     pub id: LayerId,
@@ -238,7 +238,7 @@ pub struct FilterLayer {
     pub blend: BlendProps,
     /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`]
     /// (e.g. `"invert"`). Named `pipeline` rather than `filter_type` because
-    /// `filters` (below) already means the attached mask/selection list — two
+    /// `filters` (below) already means the attached mask/selection list: two
     /// "filter" fields on one struct would be a footgun.
     pub pipeline: String,
     /// Parameter values matching the filter pipeline's schema, in order. Empty
@@ -263,7 +263,7 @@ impl FilterLayer {
 }
 
 /// Horizontal text alignment within a [`TextProps`] block. Maps onto parley's
-/// `Alignment` at shape time and is the only alignment authority — the renderer
+/// `Alignment` at shape time and is the only alignment authority: the renderer
 /// never re-derives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextAlign {
@@ -285,7 +285,7 @@ pub enum TextStyle {
 /// How a [`TextProps`] block lays out on the canvas. Modular by design so new
 /// layout modes slot in additively: `Point` (auto width, grows with content)
 /// and `Area` (fixed box, wraps + aligns within) today; a `Path` variant that
-/// maps glyphs onto a `kurbo` curve is the designed-for future addition — one
+/// maps glyphs onto a `kurbo` curve is the designed-for future addition: one
 /// new variant plus one shape/render arm, no rework of the readers here.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TextLayout {
@@ -299,7 +299,7 @@ pub enum TextLayout {
 
 impl TextLayout {
     /// The fixed area-box size in canvas pixels, or `None` for point text. The
-    /// one accessor box readers use — no consumer matches the enum inline, so a
+    /// one accessor box readers use; no consumer matches the enum inline, so a
     /// future `Path` variant (which is also `None`-sized) needs no edits here.
     pub fn area_size(&self) -> Option<(f32, f32)> {
         match self {
@@ -309,21 +309,21 @@ impl TextLayout {
     }
 }
 
-/// Editable text — the one bespoke vector source Darkly adds. Its persistent
+/// Editable text: the one bespoke vector source Darkly adds. Its persistent
 /// state is a string plus a font selection, **not** glyph outlines: the layer
 /// re-shapes (parley) and re-rasterizes (vello) whenever any field changes.
 /// Everything else about a vector object is generic kurbo/peniko geometry.
 ///
 /// Style is font-driven and open-ended: `variations` carries arbitrary
 /// variable-font axes (weight is just the `wght` axis), `features` carries
-/// OpenType features, and spacing/line-height are genuine fields — so a new
+/// OpenType features, and spacing/line-height are genuine fields, so a new
 /// font capability is additive data, never a new hard-coded knob.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextProps {
     pub content: String,
     /// Family name resolved against the engine's font collection at shape time
     /// (e.g. `"Inter"`). A family the binary doesn't ship falls back to the
-    /// collection default — see the font-portability open risk in the plan.
+    /// collection default (see the font-portability open risk in the plan).
     pub font_family: String,
     /// Italic is a *face selection* (upright vs italic face), not a variation
     /// axis, so it stays a distinct field rather than living in `variations`.
@@ -345,7 +345,7 @@ pub struct TextProps {
     /// Extra horizontal space between words, in canvas pixels (0 = natural).
     pub word_spacing: f32,
     pub align: TextAlign,
-    /// Point vs fixed-area layout — see [`TextLayout`].
+    /// Point vs fixed-area layout (see [`TextLayout`]).
     pub layout: TextLayout,
 }
 
@@ -369,7 +369,7 @@ impl TextProps {
 
 /// What a [`VectorObject`] draws. Two variants and no growth axis: shapes are
 /// plain [`BezPath`]s (rectangles/ellipses convert into one), and the only
-/// editable, non-path source is [`TextProps`]. No trait, no registry — a third
+/// editable, non-path source is [`TextProps`]. No trait, no registry: a third
 /// kind would only ever be another bespoke editable source, added here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ObjectSource {
@@ -379,7 +379,7 @@ pub enum ObjectSource {
 
 /// Stable identity of a [`VectorObject`] within its owning [`VectorLayer`].
 /// Scoped per layer (not globally) and minted monotonically by
-/// [`VectorLayer::push_object`] — never reused, so a delete-then-add can't
+/// [`VectorLayer::push_object`], never reused, so a delete-then-add can't
 /// alias a stale reference. Object addressing uses this rather than a list
 /// index, which would shift under reorder/insert/delete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -411,7 +411,7 @@ pub struct VectorObject {
 
 impl VectorObject {
     /// A text object filled with a solid color, placed by `transform`. The id
-    /// is left [`ObjectId::UNASSIGNED`] — the owning layer stamps it on push.
+    /// is left [`ObjectId::UNASSIGNED`]: the owning layer stamps it on push.
     pub fn text(text: TextProps, transform: Affine, fill: Brush) -> Self {
         VectorObject {
             id: ObjectId::UNASSIGNED,
@@ -423,7 +423,7 @@ impl VectorObject {
     }
 }
 
-/// A vector-object layer — a layer owning an ordered list of [`VectorObject`]s
+/// A vector-object layer: a layer owning an ordered list of [`VectorObject`]s
 /// (text today; paths/shapes later, reusing this layer and renderer). The
 /// objects are the authoritative, editable, serializable description; the GPU
 /// texture is a rebuildable realization. Darkly is raster-first: the texture
@@ -433,11 +433,11 @@ pub struct VectorLayer {
     pub common: NodeCommon,
     pub blend: BlendProps,
     pub objects: Vec<VectorObject>,
-    /// Next [`ObjectId`] to mint. Monotonic, never reused — survives
+    /// Next [`ObjectId`] to mint. Monotonic, never reused; survives
     /// serialization so reload can't re-issue a live id.
     pub next_object_id: u64,
-    /// Layer-level user transform (gizmo-edited). Baked into the realized
-    /// texture at rasterization — a change is an object change and re-rasters
+    /// Layer-level artist transform (gizmo-edited). Baked into the realized
+    /// texture at rasterization: a change is an object change and re-rasters
     /// on commit, never a shader-time affine on a stale texture.
     pub transform: crate::transform::Transform,
     pub filters: Vec<LayerId>,
@@ -457,7 +457,7 @@ impl VectorLayer {
     }
 
     /// Append `obj`, stamping it with a fresh monotonic [`ObjectId`] and
-    /// returning that id. The single entry point for adding objects — direct
+    /// returning that id. The single entry point for adding objects: direct
     /// `objects.push` would leave the id unassigned.
     pub fn push_object(&mut self, mut obj: VectorObject) -> ObjectId {
         let id = ObjectId(self.next_object_id);
@@ -501,7 +501,7 @@ pub struct LayerGroup {
 
 impl LayerGroup {
     /// Construct a group. `name` is the display name; same rationale as
-    /// [`RasterLayer::new`] — owners pass a sequential string.
+    /// [`RasterLayer::new`]: owners pass a sequential string.
     pub fn new(id: LayerId, name: String) -> Self {
         LayerGroup {
             id,
@@ -515,7 +515,7 @@ impl LayerGroup {
     }
 }
 
-/// A node in the layer tree — either a leaf layer or a group containing children.
+/// A node in the layer tree: either a leaf layer or a group containing children.
 /// Filters are NOT [`LayerNode`]s; they live on a host's `filters` list as
 /// [`LayerId`] references and are resolved through the owning [`Document`].
 ///
@@ -526,7 +526,7 @@ pub enum LayerNode {
 }
 
 /// Which of a node's two child lists an id lives in. A node owns both a
-/// `filters` list (modifiers such as masks) and — for groups — a `children`
+/// `filters` list (modifiers such as masks) and, for groups, a `children`
 /// list of tree nodes; the two are disjoint. Detach reports the slot it found
 /// an id in so reattach can put it back in the same one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,7 +597,7 @@ impl LayerNode {
         }
     }
 
-    /// Mutable group children, `None` for a leaf layer — a layer has no
+    /// Mutable group children, `None` for a leaf layer: a layer has no
     /// children list to insert into, and that distinction is the node's to
     /// report rather than the caller's to test for.
     pub fn children_mut(&mut self) -> Option<&mut Vec<LayerId>> {
@@ -609,7 +609,7 @@ impl LayerNode {
 
     /// Remove `child` from whichever of this node's two lists holds it, and
     /// report which one that was. Ids are unique across the document's
-    /// slotmap, so a child can only be in one — which is what lets detach be
+    /// slotmap, so a child can only be in one, which is what lets detach be
     /// kind-agnostic instead of asking the caller to know whether it holds a
     /// filter or a tree node.
     pub fn detach_child(&mut self, child: LayerId) -> Option<ChildSlot> {
@@ -625,7 +625,7 @@ impl LayerNode {
     }
 
     /// Insert `child` into the list named by `slot`, at `position` (clamped) or
-    /// at the end. Returns false when the node has no such list — a leaf layer
+    /// at the end. Returns false when the node has no such list: a leaf layer
     /// asked to take a tree child.
     pub fn attach_child(
         &mut self,
@@ -667,7 +667,7 @@ impl LayerNode {
         self.common().locked
     }
 
-    /// The registration record for this node's kind — owns `type_id` (wire
+    /// The registration record for this node's kind: owns `type_id` (wire
     /// format), `display_name` (UI), and any future per-kind metadata. The
     /// match arms reference each kind module's own `TYPE_ID` constant rather
     /// than re-typing the string literal, so there is no parallel name to
@@ -681,7 +681,7 @@ impl LayerNode {
         }
     }
 
-    /// Convenience for the wire format / save file — just the stable `type_id`
+    /// Convenience for the wire format / save file: just the stable `type_id`
     /// string from `kind()`.
     pub fn type_id(&self) -> &'static str {
         self.kind().type_id
@@ -691,7 +691,7 @@ impl LayerNode {
     /// variant dispatch is owned by `LayerNode` so the compositor's child
     /// walk never re-introduces a centralised match on node kind. Each arm
     /// delegates back through `ctx` into a compositor-private method that
-    /// owns the GPU work — variant *knows itself*, compositor *does the
+    /// owns the GPU work: variant *knows itself*, compositor *does the
     /// work*.
     pub fn compose_into(&self, ctx: &mut crate::gpu::compositor::CompositionContext<'_>) {
         match self {
@@ -706,7 +706,7 @@ impl LayerNode {
     /// parent; a filter layer runs its pipeline over the accumulator. Both want
     /// a snapshot+lerp detour when they carry a visible mask, so the compositor
     /// keys its mask-snapshot resource off this predicate instead of
-    /// enumerating which kinds qualify — a new in-place kind is purely additive.
+    /// enumerating which kinds qualify: a new in-place kind is purely additive.
     /// Isolated groups, raster, and void layers blend a texture and answer
     /// `false`.
     pub fn composites_in_place(&self) -> bool {
@@ -718,7 +718,7 @@ impl LayerNode {
     }
 }
 
-/// How a layer answers "can the user transform me, and how?" — consumed by the
+/// How a layer answers "can the artist transform me, and how?", consumed by the
 /// Transform tool to pick which binding drives the generic gizmo. This is the
 /// layer describing *itself* (type-owned dispatch); the transform subsystem
 /// never branches on layer kind.
@@ -727,9 +727,9 @@ pub enum TransformCapability {
     /// Live, non-destructive, persistent transform property (e.g. a camera
     /// void). The gizmo edits the stored [`crate::transform::Transform`].
     Live,
-    /// Destructive extract-and-commit (raster layers — today's floating).
+    /// Destructive extract-and-commit (raster layers: today's floating).
     Destructive,
-    /// Not user-transformable (groups, non-transformable voids).
+    /// Not artist-transformable (groups, non-transformable voids).
     None,
 }
 
@@ -741,8 +741,8 @@ pub enum Layer {
 }
 
 impl Layer {
-    /// Whether and how the user can transform this layer. The void's opinion is
-    /// static, looked up from the registry by `void_type` — passed in because
+    /// Whether and how the artist can transform this layer. The void's opinion is
+    /// static, looked up from the registry by `void_type`, passed in because
     /// [`VoidRegistry`] is owned by the compositor, not a global.
     ///
     /// [`VoidRegistry`]: crate::gpu::void::VoidRegistry
@@ -759,19 +759,19 @@ impl Layer {
                     TransformCapability::None
                 }
             }
-            // A full-frame filter has no meaningful transform — there are no
+            // A full-frame filter has no meaningful transform: there are no
             // pixels of its own to move.
             Layer::Filter(_) => TransformCapability::None,
             // Whole-layer vector transform is `None`: the transform gizmo drives
             // individual objects, not the layer as a unit. Per-object transform
             // is a different axis, routed by the object transform binding (see
             // `frontend/src/tools/transform.svelte.ts`) rather than this
-            // layer-level capability — so a vector layer reports `None` here.
+            // layer-level capability, so a vector layer reports `None` here.
             Layer::Vector(_) => TransformCapability::None,
         }
     }
 
-    /// Whether this layer participates in the standard blend pipeline — i.e.
+    /// Whether this layer participates in the standard blend pipeline, i.e.
     /// it has a node texture + blend uniforms in the compositor's
     /// `layer_cache`. Raster and void layers do; a filter layer transforms the
     /// running group accumulator instead of contributing a texture of its own,
@@ -796,7 +796,7 @@ impl Layer {
     }
 
     /// Whether this layer's pixels are *already* a pristine embedded source
-    /// shown through a stored transform — a smart object, or any future void
+    /// shown through a stored transform: a smart object, or any future void
     /// kind whose pixels arrive as one supplied image.
     ///
     /// Converting such a layer to a smart object could only discard the
@@ -815,7 +815,7 @@ impl Layer {
     ///
     /// Defaults to the kind's declaration. The exception is a void holding a
     /// supplied image: the kind says no, because most voids are procedural or
-    /// live and a glyph describes them better than a frame would — but a placed
+    /// live and a glyph describes them better than a frame would, but a placed
     /// photo *is* the thing the user recognises, and a converted layer that
     /// swapped its thumbnail for a glyph would look like it had lost its
     /// content on an operation that changes nothing visible.
@@ -830,8 +830,8 @@ impl Layer {
     /// Most non-raster layers say no because their texture is derived: a
     /// procedural void re-renders from its params, a vector layer re-rasterizes
     /// from its objects, a filter layer has no texture at all. The exception is
-    /// a void holding an externally-sourced image — a placed photo or a
-    /// captured frame — which exists nowhere else and can be large enough that
+    /// a void holding an externally-sourced image (a placed photo or a
+    /// captured frame), which exists nowhere else and can be large enough that
     /// leaking it matters.
     pub fn owns_disposable_texture(&self) -> bool {
         match self {
@@ -906,7 +906,7 @@ impl Layer {
     }
 
     /// Pixel buffer for this layer, if any. Void, filter, and vector layers
-    /// have no authoritative pixels — a void regenerates from `params`, a
+    /// have no authoritative pixels: a void regenerates from `params`, a
     /// filter transforms the accumulator below it, and a vector layer's texture
     /// is a realization of its `objects`.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
@@ -931,7 +931,7 @@ impl Layer {
         self.common().locked
     }
 
-    /// Regenerable procedural state — `(params, transform)` — for void layers,
+    /// Regenerable procedural state for void layers, as `(params, transform)`;
     /// `None` for raster. Used by `sync_compositor_layers` to push the doc's
     /// authoritative void state downhill to the compositor after any doc
     /// mutation (undo / redo / load), so the running void instance never drifts

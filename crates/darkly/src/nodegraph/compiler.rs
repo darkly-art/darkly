@@ -13,7 +13,7 @@ use super::WireKind;
 ///
 /// Only connected inputs appear in `ExecStep::input_slots` (disconnected
 /// inputs fall back to their port default at eval time), so `source` is
-/// always present — never `None`.
+/// always present, never `None`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputSlot {
     pub port_name: String,
@@ -34,7 +34,7 @@ pub struct ExecStep {
     /// registry at compile time so the runner / WGSL compiler can route
     /// terminal-specific behaviour without re-querying an evaluator.
     pub is_terminal: bool,
-    /// One entry per **connected** input port — disconnected inputs are
+    /// One entry per **connected** input port; disconnected inputs are
     /// resolved against the port's default at eval time and don't appear here.
     pub input_slots: Vec<InputSlot>,
     /// Mapping from each output port name → the slot index it writes to.
@@ -120,7 +120,7 @@ pub fn compile<W: WireKind>(
     let mut next_slot: usize = 0;
     let mut output_slot_map: HashMap<PortRef, usize> = HashMap::new();
 
-    // First pass: assign a slot to every wire source — all outputs, plus
+    // First pass: assign a slot to every wire source, namely all outputs, plus
     // settable-source inputs (whose resolved value is also readable as a
     // source). `is_source()` is the single predicate; keyed by
     // `PortRef { node, port }` with no direction, which stays collision-free
@@ -153,7 +153,7 @@ pub fn compile<W: WireKind>(
     // `stamp` because it records render passes) *or* any of its inputs
     // is produced by a GPU-phase step (so we can't evaluate until those
     // outputs exist). The second case auto-promotes pure-math helpers
-    // like `split_vec2` whenever they sit downstream of a GPU node —
+    // like `split_vec2` whenever they sit downstream of a GPU node;
     // the author doesn't have to know, the graph topology decides.
 
     let mut steps = Vec::with_capacity(sorted.len());
@@ -201,7 +201,7 @@ pub fn compile<W: WireKind>(
                             source: src.clone(),
                         });
                     }
-                    // Disconnected inputs use their default value — the
+                    // Disconnected inputs use their default value: the
                     // evaluator handles that (no slot assigned).
                     //
                     // A settable-source input is also a source: it owns an
@@ -376,7 +376,7 @@ mod tests {
     }
 
     /// A settable-source input owns an output slot and a wire leaving it
-    /// resolves to that slot — so a downstream node can read the source
+    /// resolves to that slot, so a downstream node can read the source
     /// input's value just like a real output.
     #[test]
     fn settable_source_input_owns_an_output_slot() {

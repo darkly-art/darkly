@@ -73,7 +73,7 @@ pub fn generate_protocol_ts() -> String {
 
     let mut out = String::new();
     out.push_str(
-        "// @generated from RequestRegistry (ts-rs) — do not edit by hand.\n\
+        "// @generated from RequestRegistry (ts-rs): do not edit by hand.\n\
          // Regenerate: DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing,ts-export\n\n",
     );
     out.push_str(

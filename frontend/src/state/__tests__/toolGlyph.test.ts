@@ -5,7 +5,7 @@ import { brushSession } from '../../tools/brush.svelte';
 
 // A tool's glyph is registry metadata and arrives in the `tools` catalog from
 // Rust. A descriptor may override it only when the glyph tracks live session
-// state — the brush swaps to the eraser icon while erase mode is on, which a
+// state: the brush swaps to the eraser icon while erase mode is on, which a
 // static registration cannot express. `toolGlyph` is the single place that
 // precedence is decided, so this pins both directions of it.
 
@@ -41,7 +41,7 @@ describe('toolGlyph', () => {
     it('uses the registry icon for a tool that declares no override', () => {
         const inst = new DarklyInstance();
         withToolsCatalog(inst, [['fill', 'fa6-solid:fill-drip']]);
-        // The fill descriptor carries no `icon` — its glyph is Rust's.
+        // The fill descriptor carries no `icon`; its glyph is Rust's.
         expect(toolRegistry.get('fill')?.icon).toBeUndefined();
         expect(inst.toolGlyph('fill')).toBe('fa6-solid:fill-drip');
     });

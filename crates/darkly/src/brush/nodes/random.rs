@@ -1,15 +1,15 @@
-//! Random node — per-dab or per-stroke random value.
+//! Random node: per-dab or per-stroke random value.
 //!
-//! Outputs a single scalar random value in `[0, 1)` — the raw PRNG natural
+//! Outputs a single scalar random value in `[0, 1)`: the raw PRNG natural
 //! range. Declares this as its wire-side `natural_range` so the runner
 //! remaps to whichever range the downstream port wants (e.g. `[0, 1024]`
 //! for `circle.seed`, `[-TAU, TAU]` for `circle.rotation`). A consumer that
 //! wants bipolar values just declares a `[-x, x]` natural range on its
-//! input — no special casing in this node.
+//! input: no special casing in this node.
 //!
 //! The mode param selects per-dab (changes every dab) or per-stroke
 //! (constant within a stroke). Multiple instances in the same graph
-//! produce independent sequences — the node's own ID salts the PRNG
+//! produce independent sequences: the node's own ID salts the PRNG
 //! seed automatically.
 
 use std::sync::Arc;
@@ -29,9 +29,9 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "input",
             display_name: "Random",
-            description: "A new random value for every brush mark — useful for jittering size, color, angle, etc.",
+            description: "A new random value for every brush mark, useful for jittering size, color, angle, etc.",
             ports: vec![
-                // Compile-time branch selector — 0 = per-dab, 1 = per-stroke.
+                // Compile-time branch selector: 0 = per-dab, 1 = per-stroke.
                 // A labeled dropdown; not wirable (an enum can't be driven
                 // per-dab), exposable like any input.
                 PortDef::input("mode", BrushWireType::Enum)

@@ -5,7 +5,7 @@ pub struct BlendPipelines {
     pub bind_group_layout: wgpu::BindGroupLayout,
     /// Separate bind group layout for the mask texture (group 1).
     pub mask_bind_group_layout: wgpu::BindGroupLayout,
-    /// Shared canvas-geometry uniform (group 2) — `canvas_size` + `canvas_origin`,
+    /// Shared canvas-geometry uniform (group 2): `canvas_size` + `canvas_origin`,
     /// one buffer for every composite draw (see `composite.wgsl`'s `CanvasUniform`).
     pub canvas_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -102,7 +102,7 @@ impl BlendPipelines {
         });
 
         // The composite shader's blend `switch` body is generated from the
-        // blend-mode registry — per-mode WGSL math lives in each
+        // blend-mode registry; per-mode WGSL math lives in each
         // `crates/darkly/src/gpu/blend_modes/<name>.rs`, not in the .wgsl file.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composite-shader"),

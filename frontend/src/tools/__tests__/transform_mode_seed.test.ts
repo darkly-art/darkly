@@ -18,7 +18,7 @@ const near = (p: [number, number], x: number, y: number) => {
 
 describe('TransformMode.seedMatrix', () => {
     it('perspective seedMatrix reproduces the current quad corners', () => {
-        // A rotate+scale affine — its quad corners must be reproduced exactly
+        // A rotate+scale affine: its quad corners must be reproduced exactly
         // by the homography perspective seeds from them.
         const aff = affineToMat3([1.2, -0.3, 15, 0.4, 0.9, -7]);
         const m = perspectiveMode.seedMatrix(geo(aff));

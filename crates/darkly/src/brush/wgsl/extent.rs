@@ -1,4 +1,4 @@
-//! Extent protocol — composition of per-node dab-bbox contributions.
+//! Extent protocol: composition of per-node dab-bbox contributions.
 //!
 //! Every node declares an [`ExtentContribution`] describing how it grows
 //! / clips the upstream dab bbox. [`compose_brush_extent`] walks the
@@ -27,12 +27,12 @@ use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir};
 /// the rasterized quad by a hardcoded `QUAD_R_MAX = 1.6` while the CPU
 /// layer-clip bbox used the un-inflated `radius`. On a mid-stroke
 /// save-point rewind, the save-point system cleared pixels outside the
-/// CPU bbox but only restored into it — so anything the shader wrote in
+/// CPU bbox but only restored into it, so anything the shader wrote in
 /// the inflation margin was lost, visibly truncating previous dabs to a
-/// smaller square as the user kept drawing.
+/// smaller square as the artist kept drawing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExtentContribution {
-    /// No effect — bbox passes through unchanged from upstream.
+    /// No effect: bbox passes through unchanged from upstream.
     Identity,
     /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
     /// sine/perlin (or the superformula's `r_max`) so the bbox covers
@@ -43,7 +43,7 @@ pub enum ExtentContribution {
     /// `passthrough` multiplies the upstream extent; `added_px` is the
     /// post-multiply additive padding in canvas pixels.
     AddCanvasPixels { passthrough: f32, added_px: f32 },
-    /// Hard cap below upstream — `bbox_target_px` is min'd with
+    /// Hard cap below upstream: `bbox_target_px` is min'd with
     /// `factor * radius`. For clip-to-circle style masks.
     ClipTo(f32),
 }
@@ -64,7 +64,7 @@ pub struct ExtentCtx<'a> {
 impl ExtentCtx<'_> {
     /// Maximum value the named input port can take, given the wire
     /// graph. For a wired input, returns the port's `natural_range`
-    /// max (or its slider `max` if no natural range is declared) —
+    /// max (or its slider `max` if no natural range is declared):
     /// the wire-boundary remap maps every wire to the dst's natural
     /// range, so that's the actual ceiling. For an unwired input,
     /// returns the port's `default` (the only value it can take).
@@ -84,7 +84,7 @@ impl ExtentCtx<'_> {
         }
     }
 
-    /// Read a compile-time enum input's selected index — the branch selector
+    /// Read a compile-time enum input's selected index: the branch selector
     /// (e.g. `circle.algorithm`). Enum inputs are non-wirable, so this always
     /// reflects the authored value. Unknown ports return `0`.
     pub fn port_enum(&self, port_name: &str) -> i32 {
@@ -95,7 +95,7 @@ impl ExtentCtx<'_> {
             .unwrap_or(0)
     }
 
-    /// Minimum value the named input port can take, given the wire graph —
+    /// Minimum value the named input port can take, given the wire graph:
     /// the mirror of [`Self::port_max_value`]. Needed when *smaller* port
     /// values grow the extent (e.g. `circle`'s `aspect`, where a thinner nib
     /// has a longer perpendicular axis). Unknown ports return `0.0`.

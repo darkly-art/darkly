@@ -18,7 +18,7 @@ strokeRecorder.init();
 const target = document.getElementById('app')!;
 
 async function boot() {
-    // Brush inspector is a self-contained dev page — no GPU init, no engine
+    // Brush inspector is a self-contained dev page: no GPU init, no engine
     // boot. Reach it via `?brush-inspect`.
     if (new URLSearchParams(window.location.search).has('brush-inspect')) {
         target.replaceChildren();

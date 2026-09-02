@@ -1,4 +1,4 @@
-//! Void layer effects — procedural per-layer content.
+//! Void layer effects: procedural per-layer content.
 //!
 //! A void is a GPU effect that *generates* a layer's pixel content from a
 //! shader (noise, screenshare, future portals), rather than storing static
@@ -7,13 +7,13 @@
 //! masking, and undo.
 //!
 //! A void [`Void::encode`] writes the layer's color content into `dst_view`
-//! from scratch — there is no upstream input texture. The compositor then
+//! from scratch; there is no upstream input texture. The compositor then
 //! composites the void's texture through the normal raster blend pipeline,
 //! so opacity / blend mode / mask work uniformly with raster layers.
 //!
 //! Adding a new void type is one new file under [`super::voids`]: the
 //! module's `register()` returns a [`VoidRegistration`] with everything the
-//! engine needs — display name, parameter schema, pipeline constructor, and
+//! engine needs: display name, parameter schema, pipeline constructor, and
 //! a factory that builds the trait object from a parameter slice.
 
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ use super::preview::{
 /// External image source for [`Void::upload_external_image`]. Today the only
 /// populated variant is `Web`, which wraps wgpu's WebGPU-only external-image
 /// copy descriptor (HTMLVideoElement, ImageBitmap, etc.). On native targets
-/// the enum is uninhabited — the trait method signature still exists for a
+/// the enum is uninhabited; the trait method signature still exists for a
 /// uniform API surface, but no caller can construct an argument.
 #[derive(Debug)]
 pub enum ExternalImageSource {
@@ -60,15 +60,15 @@ impl ExternalImageSource {
 
 /// A void's content rectangle, in fractional pixels.
 ///
-/// Voids draw content that need not align to the integer canvas grid — a
+/// Voids draw content that need not align to the integer canvas grid: a
 /// cover-fit webcam frame overhangs the canvas by a fractional amount, and a
-/// placed image sits wherever its transform puts it — so this cannot be a
+/// placed image sits wherever its transform puts it. So this cannot be a
 /// [`CanvasRect`], whose origin and size are integral.
 ///
 /// **The rect is in plane space** (the absolute document frame that does not
 /// move when the canvas is cropped). [`Self::to_window`] is the single
 /// conversion into the window-local frame the shader indexes, so no caller
-/// hand-writes `± canvas_origin` — see `docs/coordinate-systems.md`.
+/// hand-writes `± canvas_origin` (see `docs/coordinate-systems.md`).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ContentRect {
     pub x: f32,
@@ -146,7 +146,7 @@ impl Default for DirtyFlag {
 /// Layer-level procedural-content effect ("void"). Renders the layer's
 /// pixels from a shader instead of storing them.
 ///
-/// Voids do not receive an upstream texture — they have no input. The
+/// Voids do not receive an upstream texture; they have no input. The
 /// compositor allocates a per-void destination texture at canvas resolution
 /// and the void writes its full output there in `encode()`. The compositor
 /// then samples that texture through the existing blend pipeline, so every
@@ -174,12 +174,12 @@ pub trait Void: std::fmt::Debug {
 
     /// Allocate per-instance GPU resources. The compositor passes the
     /// destination view (the void's own texture) so the void can build
-    /// bind groups that target it directly — voids never sample from a
+    /// bind groups that target it directly; voids never sample from a
     /// ping-pong pair the way veils do.
     ///
     /// Takes `&mut self` so a void whose uniform struct folds in something it
-    /// is only handed here — the render resolution, the render-target→canvas
-    /// scale — can keep it, and rewrite that struct later from state alone.
+    /// is only handed here (the render resolution, the render-target→canvas
+    /// scale) can keep it, and rewrite that struct later from state alone.
     fn create_cache(
         &mut self,
         device: &wgpu::Device,
@@ -194,7 +194,7 @@ pub trait Void: std::fmt::Debug {
     /// the compositor calls [`Self::update_time`] each frame the
     /// `animation.void_divisor` master clock fires, and keeps the canvas
     /// re-presenting. The visibility half of that gate is enforced by the
-    /// engine, not the void — voids don't store layer visibility (the doc
+    /// engine, not the void; voids don't store layer visibility (the doc
     /// does).
     fn needs_animation(&self) -> bool {
         false
@@ -221,17 +221,17 @@ pub trait Void: std::fmt::Debug {
         true
     }
 
-    /// Replace this void's parameter values in place — update internal
+    /// Replace this void's parameter values in place: update internal
     /// fields, rewrite the uniform buffer, but leave any stateful GPU
     /// resources (aux textures holding the camera's last received frame,
     /// future readback buffers, etc.) untouched. Required because the
-    /// alternative — rebuilding the void from `from_params` — drops
+    /// alternative (rebuilding the void from `from_params`) drops
     /// `EffectCache::aux_textures`, which is where the camera void stores
     /// the live webcam frame. Toggling any param (including `freeze`)
     /// would otherwise wipe the displayed image.
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]);
 
-    /// Apply a user transform (pan / scale / rotate) in place — the void
+    /// Apply an artist transform (pan / scale / rotate) in place: the void
     /// *consuming* the generic transform helper's output. Like
     /// [`Self::update_params`], this rewrites the uniform buffer in place and
     /// must NOT rebuild via `from_params` (that drops the aux webcam texture).
@@ -249,9 +249,9 @@ pub trait Void: std::fmt::Debug {
     /// The void's natural content rectangle at the identity transform, in
     /// WINDOW-LOCAL coords (relative to the canvas-window top-left), as
     /// The void's content rectangle **in plane space**. The transform gizmo
-    /// draws its bbox around this rect directly — no lifting at the boundary.
+    /// draws its bbox around this rect directly, with no lifting at the boundary.
     ///
-    /// Default is the canvas window itself — correct for procedural voids like
+    /// Default is the canvas window itself: correct for procedural voids like
     /// noise whose field fills the canvas, and it moves with the window on a
     /// crop, which is what "fills the canvas" means. Voids anchored to the
     /// document rather than the window (a placed image) override it with a rect
@@ -264,8 +264,8 @@ pub trait Void: std::fmt::Debug {
 
     /// React to a canvas resize or crop. The compositor calls this on every
     /// void whenever the canvas rect changes, so a void that caches canvas
-    /// geometry in its sampling uniform can rewrite it in place — the same
-    /// shape as [`Self::set_transform`].
+    /// geometry in its sampling uniform can rewrite it in place (the same
+    /// shape as [`Self::set_transform`]).
     ///
     /// Default no-op: a void that derives everything from `content_extent` at
     /// draw time has nothing cached to refresh.
@@ -274,7 +274,7 @@ pub trait Void: std::fmt::Debug {
 
     /// Whether this void consumes per-frame external image input (webcam,
     /// screenshare, …). When true, the bridge plumbs frames through
-    /// [`Self::upload_external_image`] each render. The default is false —
+    /// [`Self::upload_external_image`] each render. The default is false:
     /// procedural voids (noise, future portals) ignore this path entirely.
     fn wants_external_input(&self) -> bool {
         false
@@ -323,8 +323,8 @@ pub trait Void: std::fmt::Debug {
     /// never declared a source.
     ///
     /// Two callers: document load (restoring a saved frame from the `.darkly`
-    /// zip) and placement (installing a user-supplied image). `bytes` are
-    /// **premultiplied** RGBA8 in both cases — the convention every sampled
+    /// zip) and placement (installing an artist-supplied image). `bytes` are
+    /// **premultiplied** RGBA8 in both cases: the convention every sampled
     /// void source uses, so linear filtering doesn't bleed colour out of
     /// transparent texels.
     fn set_source_pixels(
@@ -349,7 +349,7 @@ pub trait Void: std::fmt::Debug {
     /// The fresh texture is zero-initialised by wgpu, so the void reads as
     /// fully transparent between this call and the blit that fills it. It
     /// already reports `persistent_frame_size()` and a natural-size content
-    /// rect in that window — harmless for the synchronous allocate-then-blit
+    /// rect in that window, harmless for the synchronous allocate-then-blit
     /// sequences that use it, but the reason this is not a public two-phase
     /// API.
     ///
@@ -372,7 +372,7 @@ pub trait Void: std::fmt::Debug {
 /// How the frontend acquires a void's per-frame external image. Carried on
 /// [`VoidRegistration`] and surfaced to the frontend (serialized as `"camera"` /
 /// `"display"` / `"stream"`) so the app knows how to source each void kind's
-/// frames — `getUserMedia` for [`Self::Camera`], `getDisplayMedia` for
+/// frames: `getUserMedia` for [`Self::Camera`], `getDisplayMedia` for
 /// [`Self::Display`], and an HTTP frame stream for [`Self::Stream`] (the Blender
 /// void connects to a localhost server serving length-prefixed WebP frames).
 /// Purely procedural voids (noise) declare `None`.
@@ -388,7 +388,7 @@ pub enum CaptureKind {
     Stream,
 }
 
-/// Where a void's pixels come from — the one fact that decides how the
+/// Where a void's pixels come from: the one fact that decides how the
 /// frontend offers the kind, whether the engine feeds it frames, and whether
 /// its source is one-shot or continuous.
 ///
@@ -401,13 +401,13 @@ pub enum CaptureKind {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum VoidSource {
-    /// Generated from parameters alone — noise and friends. No external input,
+    /// Generated from parameters alone: noise and friends. No external input,
     /// no stored pixels.
     Procedural,
     /// A continuous stream of browser-supplied frames. The payload tells the
     /// frontend which capture API to open.
     Capture { capture: CaptureKind },
-    /// A single still image the user supplies once, held at its native
+    /// A single still image the artist supplies once, held at its native
     /// resolution and resampled through the layer's transform. The frontend
     /// opens a file picker rather than adding an empty layer.
     Image,
@@ -434,23 +434,23 @@ impl VoidSource {
 pub struct VoidRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
-    /// One-sentence summary shown as a tooltip in the Add Void picker —
-    /// include the terms users would search for.
+    /// One-sentence summary shown as a tooltip in the Add Void picker;
+    /// include the terms artists would search for.
     pub description: &'static str,
     pub params: &'static [ParamDef],
-    /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present — the layer
+    /// Iconify icon name (e.g. `"tabler:galaxy"`). Always present: the layer
     /// panel renders it for void layers of this kind, and the picker falls back
     /// to it when the void declares no rendered preview.
     pub icon: &'static str,
     /// How long this void's preview runs, or `None` for a void with nothing to
-    /// show. Declaring an animation is what makes a void previewable — the "Add
+    /// show. Declaring an animation is what makes a void previewable: the "Add
     /// Void" picker renders a live thumbnail for the ones that do and falls
     /// back to [`icon`](Self::icon) for the ones that don't. (The stream voids
     /// opt out: their aux texture is a 1×1 placeholder until a browser frame
     /// arrives, so there is nothing to render and nothing to animate.) What the
     /// preview *does* over that span is [`Void::preview_at`].
     pub preview: Option<PreviewAnim>,
-    /// Whether this void exposes a live, user-editable transform (driven by the
+    /// Whether this void exposes a live, artist-editable transform (driven by the
     /// generic gizmo, stored on [`crate::layer::VoidLayer::transform`]). Voids
     /// that opt in implement [`Void::set_transform`]; the rest leave it false
     /// and the engine never hands them a transform.
@@ -461,7 +461,7 @@ pub struct VoidRegistration {
     /// whether the source is one-shot.
     pub source: VoidSource,
     /// The void's initial gizmo transform, given the canvas dimensions at
-    /// creation time. Lets a kind seed a non-identity affine — the camera seeds
+    /// creation time. Lets a kind seed a non-identity affine: the camera seeds
     /// a horizontal flip about the canvas center (selfie view); everything else
     /// returns identity. Stored on [`crate::layer::VoidLayer::transform`] at
     /// creation so it round-trips through save/load and undo like any edit.
@@ -484,7 +484,7 @@ impl VoidRegistration {
     }
 }
 
-/// The void catalog — every registered void, sorted by `type_id`.
+/// The void catalog: every registered void, sorted by `type_id`.
 pub fn catalog() -> crate::catalog::Catalog {
     crate::catalog::Catalog::new(
         CATALOG_ID,
@@ -538,7 +538,7 @@ impl VoidRegistry {
 
     /// Return every registered void's full [`VoidRegistration`], sorted by
     /// `type_id` for deterministic UI ordering. Callers read whatever fields
-    /// they need off the registration — a new field is free here.
+    /// they need off the registration; a new field is free here.
     pub fn types(&self) -> Vec<&VoidRegistration> {
         let mut types: Vec<&VoidRegistration> = self.entries.values().map(|e| &e.reg).collect();
         types.sort_by_key(|reg| reg.type_id);
@@ -586,7 +586,7 @@ impl VoidRegistry {
         self.entries.get_key_value(type_id).map(|(k, _)| *k)
     }
 
-    /// Whether the named void kind exposes a live, user-editable transform.
+    /// Whether the named void kind exposes a live, artist-editable transform.
     /// Consumed by [`crate::layer::Layer::transform_capability`]. Unknown
     /// types return false.
     pub fn supports_live_transform(&self, type_id: &str) -> bool {
@@ -744,7 +744,7 @@ impl<'a> PreviewSession for VoidSession<'a> {
 }
 
 /// The one place a void's cache is built against a preview target, so the two
-/// callers — the first build and a `preview_at` that invalidated its cache —
+/// callers (the first build and a `preview_at` that invalidated its cache)
 /// cannot disagree about what it is built from. A void writes straight into the
 /// output view, so that is what its bind groups target.
 fn build_cache(

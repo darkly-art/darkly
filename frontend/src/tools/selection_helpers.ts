@@ -1,5 +1,5 @@
 /**
- * Shared helpers for selection tools — overlay constants, primitive builder,
+ * Shared helpers for selection tools: overlay constants, primitive builder,
  * and modifier-key → selection mode mapping.
  */
 

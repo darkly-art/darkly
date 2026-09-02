@@ -25,7 +25,7 @@ impl KritaInspector {
     }
 
     /// Serialized parsed preset as a JSON string. Resource bytes are not
-    /// included — call [`Self::resource_bytes`] for those.
+    /// included; call [`Self::resource_bytes`] for those.
     pub fn metadata(&self) -> Result<String, JsError> {
         serde_json::to_string(&self.preset).map_err(|e| JsError::new(&e.to_string()))
     }

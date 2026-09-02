@@ -8,25 +8,25 @@
     interface Props {
         /** Display dimensions, in CSS pixels. The PNG itself is rendered
          *  at a fixed engine-side size (`BRUSH_THUMBNAIL_SIZE`) and scaled
-         *  by the browser to fit — same shape as `BrushDabView`. */
+         *  by the browser to fit (same shape as `BrushDabView`). */
         width: number;
         height: number;
     }
     let { width, height }: Props = $props();
 
-    /** Throttle window — matches Krita's 100ms FIRST_ACTIVE compressor for
+    /** Throttle window: matches Krita's 100ms FIRST_ACTIVE compressor for
      *  its live brush preview (kis_preset_live_preview_view.cpp:24). */
     const REFRESH_MS = 100;
 
     let dataUrl = $state('');
-    /** Byte length that produced `dataUrl` — skips redundant Blob/URL
+    /** Byte length that produced `dataUrl`: skips redundant Blob/URL
      *  churn when WASM hands back the same PNG (cache hit). */
     let lastLen = 0;
 
     /**
      * Budget of animation frames during which we actively poll WASM for
-     * the async readback result. 30 frames ≈ 500ms on a 60Hz display —
-     * far longer than a typical editor-preview render (~10-30ms) so the
+     * the async readback result. 30 frames ≈ 500ms on a 60Hz display,
+     * far longer than a typical editor-preview render (~10-30ms), so the
      * pixels always arrive before we stop.
      */
     const POLL_FRAMES_PER_REQUEST = 30;
@@ -68,7 +68,7 @@
         // Kick the engine's render loop so `poll_pending` processes the
         // in-flight readback. During UI interactions (slider drags),
         // `app._interactionCount` suppresses the continuous self-scheduling
-        // render loop — discrete requests still run, so this keeps
+        // render loop; discrete requests still run, so this keeps
         // readbacks advancing without competing for the main thread.
         app.requestFrame();
         void refresh();
@@ -78,7 +78,7 @@
     // Reactive trigger: graph snapshot, brush, or theme changes invalidate
     // the preview. The compressor debounces bursts (slider drags) into at
     // most one fire per REFRESH_MS. Display dimensions (`width`/`height`)
-    // are intentionally NOT tracked — the engine renders at a fixed
+    // are intentionally NOT tracked: the engine renders at a fixed
     // canonical size and CSS scales, so resizing the dock should not
     // retrigger a render.
     $effect(() => {
@@ -109,11 +109,11 @@
         position: relative;
         width: var(--preview-w);
         height: var(--preview-h);
-        /* Docked against the bottom-right corner — round only the
+        /* Docked against the bottom-right corner: round only the
          * inward-facing top-left corner for a clean edge. */
         border-radius: 4px 0 0 0;
         /* 80% opacity so the node graph behind the preview stays faintly
-         * visible — matches the `preview-dock` overlay treatment. */
+         * visible: matches the `preview-dock` overlay treatment. */
         background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
         overflow: hidden;
         flex-shrink: 0;

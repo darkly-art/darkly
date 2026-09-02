@@ -18,7 +18,7 @@ use crate::undo::{EntityAddAction, GpuRegionAction};
 #[handlers]
 impl DarklyEngine {
     /// Copy the active layer's content (masked by selection) into the internal
-    /// clipboard. Kicks off an async GPU readback — the result is available via
+    /// clipboard. Kicks off an async GPU readback; the result is available via
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     #[handler]
     pub fn copy(&mut self, id: LayerId) -> Option<ClipboardExport> {
@@ -31,7 +31,7 @@ impl DarklyEngine {
         }
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
-            // Selection cache not ready — defer until SelectionReadback completes.
+            // Selection cache not ready: defer until SelectionReadback completes.
             self.pending_copy = Some(PendingCopy {
                 layer_id: id,
                 is_cut: false,
@@ -64,7 +64,7 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // Determine format from the unified node-texture pool — both raster
+        // Determine format from the unified node-texture pool: both raster
         // (RGBA8) and mask filter (R8) targets resolve through the same
         // call. Caller's id alone selects the surface; format follows.
         let format = match self.compositor.node_texture(layer_id) {
@@ -76,7 +76,7 @@ impl DarklyEngine {
         let region = match self.copy_region_from_selection(canvas_w, canvas_h) {
             Some(r) => r,
             None => {
-                // Selection bounds unknown — defer.
+                // Selection bounds unknown: defer.
                 self.pending_copy = Some(PendingCopy { layer_id, is_cut });
                 return;
             }
@@ -148,7 +148,7 @@ impl DarklyEngine {
                 | wgpu::TextureUsages::COPY_DST,
         );
 
-        // Crop the live selection to the copy region (nearest — pixel-exact).
+        // Crop the live selection to the copy region (nearest, pixel-exact).
         let region_window = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh);
         let sel_crop_bg = self
             .selection_region_bind_group(region_window, wgpu::FilterMode::Nearest)
@@ -206,7 +206,7 @@ impl DarklyEngine {
         });
 
         // 2. Multiply staging alpha by cropped selection: staging.a *= sel.
-        //    RGB stays unchanged — straight-alpha convention (see
+        //    RGB stays unchanged: straight-alpha convention (see
         //    docs/lessons-learned/compositing-lessons-learned.md §1).
         let staging_target = GpuPaintTarget::from_canvas_texture(
             &staging_tex,
@@ -362,7 +362,7 @@ impl DarklyEngine {
     ) {
         let [rx, ry, rw, rh] = region;
 
-        // Build RGBA bytes from the readback data — format dispatch is now
+        // Build RGBA bytes from the readback data; format dispatch is now
         // driven by the source node's texture format, not a sidecar boolean.
         let is_r8 = self
             .compositor
@@ -383,7 +383,7 @@ impl DarklyEngine {
             }
             rgba
         } else {
-            // RGBA readback — already masked by GPU if selection was active.
+            // RGBA readback, already masked by GPU if selection was active.
             pixels
         };
 
@@ -446,7 +446,7 @@ impl DarklyEngine {
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     #[handler]
     pub fn cut(&mut self, id: LayerId) -> Option<ClipboardExport> {
-        // Accept a filter id (mask edit target) as well as a layer — see
+        // Accept a filter id (mask edit target) as well as a layer; see
         // `copy`. The actual texture gate lives in `start_copy_readback`.
         if self.doc.layer(id).is_none() && !self.doc.is_filter(id) {
             return None;
@@ -493,17 +493,17 @@ impl DarklyEngine {
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, layer_bounds);
 
         // Single helper writes the bytes AND marks the node's pixels
-        // dirty so the next render queues a thumbnail readback —
+        // dirty so the next render queues a thumbnail readback;
         // forgetting the dirty mark was the bug that left
         // `open_document`-loaded layers without thumbnails until the
-        // user's first edit.
+        // artist's first edit.
         self.compositor
             .upload_node_pixels(&self.gpu.queue, id, rgba);
 
         // Position relative to the active node. `resolve_anchor_target` maps a
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
-        // it — the same anchor resolution the document's `add_*` helpers use.
+        // it, the same anchor resolution the document's `add_*` helpers use.
         let target = self.doc.resolve_anchor_target(active_layer_id);
         self.doc.move_layer(id, target);
 
@@ -515,7 +515,7 @@ impl DarklyEngine {
     }
 
     /// Paste the internal clipboard INTO the active target (layer or mask) at
-    /// the source's original position, committed immediately — no transform
+    /// the source's original position, committed immediately with no transform
     /// session. This is the committed counterpart of `paste_in_place_floating`
     /// (used when "activate transform after paste" is off); both float the clip
     /// onto the active node and share the single `commit_floating` path, which
@@ -531,7 +531,7 @@ impl DarklyEngine {
     }
 
     // -----------------------------------------------------------------------
-    // Rich (layer-with-metadata) copy/paste — cross-tab interop
+    // Rich (layer-with-metadata) copy/paste: cross-tab interop
     // -----------------------------------------------------------------------
 
     /// Like `copy`, but also captures CPU-side layer metadata (blend mode,
@@ -540,24 +540,24 @@ impl DarklyEngine {
     /// the metadata is stitched in when `complete_copy` runs.
     ///
     /// Returns `None` immediately. The result is available via
-    /// `poll_copy_rich_result()` once the readback lands (next frame) — so the
+    /// `poll_copy_rich_result()` once the readback lands (next frame), so the
     /// wire verb is fire-and-forget despite the non-`()` return.
     #[handler(post)]
     pub fn copy_layer_rich(&mut self, id: LayerId) -> Option<()> {
         // Snapshot metadata up-front. Layers can mutate while the readback
-        // is in flight; pinning at copy time matches user intent and keeps
+        // is in flight; pinning at copy time matches artist intent and keeps
         // the snapshot independent of whatever happens before completion.
         //
         // Rich metadata (blend mode, opacity, …) only exists for raster
         // layers. The active paint target when editing a mask is the mask
-        // *filter* id, which has no layer metadata — fall through to a plain
+        // *filter* id, which has no layer metadata, so fall through to a plain
         // pixel copy (`pending_rich_metadata` left `None` → `complete_copy`
         // builds an image clip). Voids regenerate from params, so there's
         // nothing to read back; cross-tab clipboard for voids would need its
         // own JSON path (out of scope for this change).
         //
         // A region copy (selection active) captures flat composited pixels and
-        // must NOT carry the mask — a mask belongs only to a whole-layer copy
+        // must NOT carry the mask: a mask belongs only to a whole-layer copy
         // (which is a layer duplication in spirit). Gate the mask capture on
         // provenance.
         let is_region_copy = self.has_selection();
@@ -621,7 +621,7 @@ impl DarklyEngine {
     /// Paste a `LayerClipboard` JSON envelope as a new layer. Restores the
     /// source's name, blend mode, opacity, visibility, and pixel data. If
     /// the source had a mask, an empty (fully opaque) mask is attached at
-    /// the recorded bounds — v1 doesn't carry mask pixels yet (see
+    /// the recorded bounds (v1 doesn't carry mask pixels yet, see
     /// [`crate::clipboard::LayerClipboard`]).
     ///
     /// Returns the new layer's id, or `None` if the JSON failed to parse
@@ -658,7 +658,7 @@ impl DarklyEngine {
             }
         }
 
-        // Restore mask presence (without pixels — v1). Use the unseeded attach:
+        // Restore mask presence (without pixels, v1). Use the unseeded attach:
         // the pasted layer's `EntityAddAction` already covers the mask in its
         // subtree, and seeding from the receiving document's active selection
         // would wrongly turn that selection into the mask.

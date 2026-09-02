@@ -24,11 +24,11 @@ hotkeys:
   # GIMP has no native Preferences hotkey. Fall through to Darkly's pick.
   openSettings: $mod+Comma
   # mirrorViewH: intentionally unbound. GIMP has no native mirror-view
-  # hotkey, and Krita's M would set no established GIMP-user expectation
-  # — leave it for explicit user binding rather than invent a default.
+  # hotkey, and Krita's M would set no established expectation for GIMP artists;
+  # leave it for explicit user binding rather than invent a default.
   # View framing. GIMP binds View > "Fit Image in Window" to
   # <primary><shift>J and "Center Image in Window" to <shift>J (see
-  # gimp/app/actions/view-actions.c — `view-fit-in-window` /
+  # gimp/app/actions/view-actions.c: `view-fit-in-window` /
   # `view-center`). Per-overlay because the editors disagree: Photoshop
   # puts fit-on-screen on Ctrl+0 and has no center action; Krita's
   # zoom_to_fit ships no default key.
@@ -44,7 +44,7 @@ hotkeys:
   magicWandTool: KeyU
   transformTool: KeyT
   toggleEraseMode: Shift+KeyE
-  # GIMP's "Free Select" tool is the closest analog to Lasso — it handles
+  # GIMP's "Free Select" tool is the closest analog to Lasso: it handles
   # both free-form and polygonal segments via mode within one tool.
   # Registered with `F` in gimp/app/tools/gimpfreeselecttool.c
   # (`gimp_free_select_tool_register`). polygonSelectTool is left unbound
@@ -65,7 +65,7 @@ hotkeys:
   # doesn't collide with any GIMP-side binding.
   newGroup: $mod+KeyG
   # GIMP's `layers-merge-down` has no global accelerator either; GIMP's
-  # only layer-merge default is Ctrl+M for "Merge Visible Layers" — a
+  # only layer-merge default is Ctrl+M for "Merge Visible Layers", a
   # different op. Fall through to PS+Krita's Ctrl+E.
   mergeDown: $mod+KeyE
   # Selection.
@@ -78,11 +78,11 @@ hotkeys:
 
 mouse_clicks:
   # GIMP's "Sample colour into the foreground swatch" (temporary Color Picker)
-  # is Ctrl+click on paint tools — Cmd+click on macOS, via GTK's `<primary>`
+  # is Ctrl+click on paint tools (Cmd+click on macOS), via GTK's `<primary>`
   # modifier role. Darkly uses drag (continuous sample while held) instead of
   # click; `$mod` carries the platform swap.
   sampleColor: canvas@paint:$mod+drag
-  # Clone tool set-source — GIMP sets the clone origin with Ctrl+click,
+  # Clone tool set-source: GIMP sets the clone origin with Ctrl+click,
   # the same `<primary>` modifier as its colour picker. Brush-scoped so it
   # out-ranks `sampleColor` only while the Clone brush is active.
   setCloneSource: canvas@paint@clone:$mod+drag
@@ -94,7 +94,7 @@ mouse_clicks:
   # gimp_modifiers_to_channel_op), but Darkly's alt+click thumbnail slot is
   # isolate's. GIMP itself ships no keyboard accelerator for either
   # (layers-actions.c: NULL accel on layers-mask-selection-* and
-  # layers-alpha-selection-*), so both are intentionally unbound here —
+  # layers-alpha-selection-*), so both are intentionally unbound here,
   # reachable via the layer/mask context menus and the command palette,
   # faithful to GIMP's menu-only surface.
 

@@ -2,7 +2,7 @@
 //!
 //! Used by the curve node to map scalar inputs through an adjustable
 //! transfer function.  Natural cubic splines minimize total curvature
-//! and have zero second derivative at endpoints — endpoints only set
+//! and have zero second derivative at endpoints, so endpoints only set
 //! the y-intercept without distorting the interior curve shape.
 //!
 //! Prior art: Krita's `KisLegacyCubicSpline` in `kis_cubic_curve_spline.h`
@@ -261,7 +261,7 @@ mod tests {
             (v_low - v_high).abs() < 0.05,
             "symmetry: {v_low} vs {v_high}"
         );
-        // Should be smooth — intermediate values between 0 and 1.
+        // Should be smooth: intermediate values between 0 and 1.
         assert!(
             v_low > 0.3 && v_low < 0.8,
             "smooth rise at 0.25: got {v_low}"

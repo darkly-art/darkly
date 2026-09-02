@@ -2,7 +2,7 @@
 //!
 //! [`WgslType`] is the restricted set of scalar / vector types a brush
 //! node may declare for its per-dab fields and uniform fields. The size
-//! / alignment values here are the std430 numbers — the compiler relies
+//! / alignment values here are the std430 numbers: the compiler relies
 //! on them to lay out the generated `DabRecord` and `Uniforms` structs
 //! without runtime padding surprises.
 //!
@@ -17,7 +17,7 @@ use crate::brush::wire::ScalarValue;
 
 /// WGSL scalar/vector types a node may declare for its dab fields and
 /// uniform fields. Restricted to types that have natural std430 alignment
-/// (no vec3 — its 16-byte alignment trips up adjacent f32 packing).
+/// (no vec3: its 16-byte alignment trips up adjacent f32 packing).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WgslType {
     F32,
@@ -58,7 +58,7 @@ impl WgslType {
 }
 
 /// Closure that serializes one value into a byte buffer. Used for
-/// both per-dab record fields and stroke-constant uniform fields —
+/// both per-dab record fields and stroke-constant uniform fields:
 /// the input is a name→value map the terminal builds from the
 /// runner's slot table (keyed by
 /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`] /
@@ -75,7 +75,7 @@ pub type UniformPacker = ValuePacker;
 #[derive(Clone)]
 pub struct DabField {
     /// Field name inside the generated `DabRecord` struct. Must be
-    /// unique across the graph — the compiler suffixes by node id when
+    /// unique across the graph: the compiler suffixes by node id when
     /// nodes use the helper
     /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`].
     pub name: String,

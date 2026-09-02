@@ -3,7 +3,7 @@ import { flattenOffer, smartObjectOffer } from '../menu_offers';
 
 // Regression: the Rasterize entry appeared on a smart object's context menu but
 // its click handler still early-returned unless the layer had a mask, so the
-// entry did nothing — no error, no change, nothing in the console. The entry
+// entry did nothing: no error, no change, nothing in the console. The entry
 // and the handler now read the same answer.
 
 describe('flattenOffer', () => {

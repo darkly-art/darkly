@@ -1,4 +1,4 @@
-//! Floating content — paste-in-place and interactive transforms.
+//! Floating content: paste-in-place and interactive transforms.
 
 use darkly_macros::handlers;
 
@@ -88,7 +88,7 @@ impl TransformTarget {
     /// Whether the hole this lift cuts provably empties the target.
     ///
     /// A rect clear spans the extraction, and the extraction is the target's
-    /// whole content — nothing can survive it. A selection-shaped clear takes
+    /// whole content, so nothing can survive it. A selection-shaped clear takes
     /// an arbitrary sub-shape; proving it happened to cover every pixel would
     /// mean reading the mask back, so it counts as leaving something behind.
     ///
@@ -155,7 +155,7 @@ impl DarklyEngine {
     /// (source_origin_x, source_origin_y, source_width, source_height,
     /// transform). The transform carries its own mode tag, so the gizmo's
     /// current mode is **derived from the document** (the stored `Transform`),
-    /// not session-local — a re-`adopt()` can't desync it.
+    /// not session-local, so a re-`adopt()` can't desync it.
     /// Returns None if no floating content is active.
     pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Transform)> {
         if let Some(session) = self.transform_session.as_ref() {
@@ -181,9 +181,9 @@ impl DarklyEngine {
     }
 
     /// Return the layer the active floating content will commit to.
-    /// Used by the frontend to distinguish "user switched away from the
-    /// floating's layer" (dismiss) from "user activated the floating's
-    /// own target layer" (keep — paste-as-floating sets active to its
+    /// Used by the frontend to distinguish "artist switched away from the
+    /// floating's layer" (dismiss) from "artist activated the floating's
+    /// own target layer" (keep: paste-as-floating sets active to its
     /// auto-created target).
     #[handler]
     pub fn floating_target_layer(&self) -> Option<LayerId> {
@@ -203,7 +203,7 @@ impl DarklyEngine {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
-        // Pull pixels from either clipboard variant — a normal copy produces a
+        // Pull pixels from either clipboard variant; a normal copy produces a
         // rich `Layer` clip, so reading only flat image clips here made
         // paste-in-place silently no-op after any copy.
         let (rgba, source_width, source_height, offset_x, offset_y) =
@@ -215,7 +215,7 @@ impl DarklyEngine {
 
         // Upload flat RGBA data to GPU for preview. The target node's format
         // is read off `compositor.node_texture(id).format` inside the
-        // compositor — the engine never speaks the word "mask" here, so this
+        // compositor; the engine never speaks the word "mask" here, so this
         // floats onto a raster layer or an R8 mask alike.
         self.compositor.set_floating_content(
             &self.gpu.device,
@@ -241,7 +241,7 @@ impl DarklyEngine {
         // Build the preview now so the paste is visible on the first frame.
         // Without this, `set_floating_content` allocates an empty preview
         // texture and the host's blend pass samples uninitialized pixels
-        // until the user drags (which triggers `update_floating_matrix` →
+        // until the artist drags (which triggers `update_floating_matrix` →
         // `update_floating_preview`). The paste appeared invisible until
         // the first move.
         self.update_floating_preview();
@@ -271,7 +271,7 @@ impl DarklyEngine {
         // preserved when the floating commits.
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
-        // Create the target layer (no undo entry yet — pushed at commit).
+        // Create the target layer (no undo entry yet, pushed at commit).
         let new_id = self.doc.add_raster_layer(None);
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
             r.common.name = "Pasted Layer".to_string();
@@ -287,7 +287,7 @@ impl DarklyEngine {
         // Position relative to the active node. `resolve_anchor_target` maps a
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
-        // it — the same anchor resolution the document's `add_*` helpers use.
+        // it, the same anchor resolution the document's `add_*` helpers use.
         let target = self.doc.resolve_anchor_target(active_layer_id);
         self.doc.move_layer(new_id, target);
 
@@ -683,7 +683,7 @@ impl DarklyEngine {
     /// actions that describe it.
     ///
     /// The actions are returned rather than pushed so the caller can fold them
-    /// into a larger step — conversion adds the smart object to this same list,
+    /// into a larger step: conversion adds the smart object to this same list,
     /// which is what keeps "convert" one undo away from where the user started.
     #[allow(clippy::result_large_err)]
     fn finish_transform_commit(
@@ -950,7 +950,7 @@ impl DarklyEngine {
         };
 
         let layer_id = fc.target_layer;
-        // The target can become locked after `begin_transform` / paste — fall
+        // The target can become locked after `begin_transform` / paste; fall
         // back to cancel-equivalent behavior (drop float state, no write to
         // the layer). The float is already taken out of `self.floating` above.
         if !self.doc.is_node_editable(layer_id) {
@@ -968,7 +968,7 @@ impl DarklyEngine {
 
         // Compute tight affected rect = union(source bounds, transformed
         // bounds), in CANVAS coordinates. Intentionally NOT clamped to
-        // canvas — layer textures may extend past the canvas, and content
+        // canvas; layer textures may extend past the canvas, and content
         // dragged past the canvas edge must survive on the layer so it
         // reappears when moved back. We grow the target below to fit.
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
@@ -986,14 +986,14 @@ impl DarklyEngine {
 
         // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
-        // outside its current bounds — including pixels past the canvas
+        // outside its current bounds, including pixels past the canvas
         // edge. Best-effort: if growth is refused (cap, or target is
         // neither raster nor filter with a raster host), commit falls
         // back to the pre-grow extent and the texture-side clip below
         // still keeps the commit consistent.
         let grew = self.grow_node_to_fit(layer_id, affected_canvas).is_some();
 
-        // Path A — paste onto a layer auto-created for this paste.
+        // Path A: paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single EntityAddAction
         // captures the whole paste as one undo step (no GpuRegionAction).
         let FloatingMode::Paste { created_layer_id } = fc.mode;
@@ -1043,7 +1043,7 @@ impl DarklyEngine {
         };
 
         // The live target was never destructively touched during the
-        // floating session — `setup_transform` only copied source pixels
+        // floating session; `setup_transform` only copied source pixels
         // out, and the per-frame preview ran into a dedicated preview
         // texture. So `save_region` here captures the genuine pre-
         // transform state for undo, no un-clear dance required. The
@@ -1194,8 +1194,8 @@ impl DarklyEngine {
     pub fn can_convert_floating_to_smart_object(&self) -> bool {
         match &self.transform_session {
             // A selection does not enter into it. It changes what the
-            // conversion owes the source layer — a hole rather than being
-            // consumed outright — and `convert_transform_session_to_smart_object`
+            // conversion owes the source layer (a hole rather than being
+            // consumed outright), and `convert_transform_session_to_smart_object`
             // pays either debt. A second target does gate: a mask riding along
             // with its host gives no single source for the smart object to
             // hold, which is a different question than this one.
@@ -1223,12 +1223,12 @@ impl DarklyEngine {
     /// The floating source is already what a smart object needs: a trimmed
     /// texture at native resolution, in the premultiplied convention the void
     /// aux texture uses, plus a plane-space origin. So this is a blit and a
-    /// transform composition — the target layer is never written, which is the
+    /// transform composition: the target layer is never written, which is the
     /// whole point. Commit resamples the source into the target and throws the
     /// original away; this keeps it and makes the transform re-editable.
     ///
     /// One undo step: the layer is added, and undoing removes it, leaving the
-    /// document as it was before the paste — the same end state as undoing a
+    /// document as it was before the paste: the same end state as undoing a
     /// committed paste.
     #[handler]
     pub fn convert_floating_to_smart_object(&mut self) -> Result<LayerId, String> {
@@ -1262,7 +1262,7 @@ impl DarklyEngine {
         let transform =
             fc_transform.then_translated(source_origin.0 as f32, source_origin.1 as f32);
 
-        // Cloned out of the pass before the `&mut self` ingress call — both
+        // Cloned out of the pass before the `&mut self` ingress call, because both
         // borrow the compositor. A wgpu texture handle is refcounted, so this
         // costs nothing. Read before anything is created, so a missing source
         // leaves no orphan layer to unwind.
@@ -1298,7 +1298,7 @@ impl DarklyEngine {
     ///
     /// - **The lift took everything** (no selection). The hole would empty the
     ///   layer, so the layer is consumed instead and the smart object takes its
-    ///   tree slot, name and blend properties — the same end state, reached
+    ///   tree slot, name and blend properties: the same end state, reached
     ///   without a region-level undo capture, and without leaving an emptied
     ///   husk in the panel.
     /// - **The lift took part of it** (through a selection). The remainder has
@@ -1362,7 +1362,7 @@ impl DarklyEngine {
             );
         }
 
-        // Part of the source survives, so the hole is committed for real —
+        // Part of the source survives, so the hole is committed for real,
         // through the same path an ordinary commit takes, which is what carries
         // the region undo, the selection undo and the bounds update. Only the
         // last step differs: the content goes to a new layer instead of back

@@ -1,4 +1,4 @@
-//! Laplacian relaxation stabilizer — iterative smoothing with zero lag.
+//! Laplacian relaxation stabilizer: iterative smoothing with zero lag.
 //!
 //! Maintains a polyline of all raw input positions.  On each new input:
 //! 1. Append to polyline
@@ -8,7 +8,7 @@
 //! 5. Diff against previous frame's polyline → find divergence point
 //!
 //! The tip is always pinned at the cursor (zero lag).  The stroke behind
-//! the pen continuously reshapes as direction changes — the "taffy" feel.
+//! the pen continuously reshapes as direction changes: the "taffy" feel.
 
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::stabilizer::{
@@ -78,7 +78,7 @@ impl LaplacianStabilizer {
                 cur.pos[0] += (avg[0] - cur.pos[0]) * s;
                 cur.pos[1] += (avg[1] - cur.pos[1]) * s;
 
-                // Sensor smoothing — same treatment for all continuous values.
+                // Sensor smoothing: same treatment for all continuous values.
                 let prev = self.stabilized[i - 1];
                 let next = self.stabilized[i + 1];
                 let cur = &mut self.stabilized[i];
@@ -107,12 +107,12 @@ impl LaplacianStabilizer {
     /// `DIVERGENCE_EPSILON`, or we hit the earliest index the influence model
     /// admits a perturbation could reach.
     ///
-    /// The walk is bounded by [`Self::max_divergence_window`] — both methods
+    /// The walk is bounded by [`Self::max_divergence_window`]: both methods
     /// share the same Laplacian-relaxation influence model, so the bound is
     /// enforced by construction rather than by clamping a wider scan. See
     /// `max_divergence_window` for the derivation.
     ///
-    /// The diff itself is the shared [`find_divergence`] free function — the
+    /// The diff itself is the shared [`find_divergence`] free function: the
     /// same detector the [`PredictingStabilizer`](crate::brush::stabilizer::PredictingStabilizer)
     /// runs over its combined real+predicted polyline.
     fn find_divergence(&self) -> Option<usize> {
@@ -230,7 +230,7 @@ mod tests {
 
         // The corner point (40, 0) should be pulled inward by smoothing.
         let corner = &stab.stabilized()[4];
-        // It should have moved — either x decreased or y increased.
+        // It should have moved: either x decreased or y increased.
         let moved = corner.pos[0] < 40.0 - 0.1 || corner.pos[1] > 0.1;
         assert!(
             moved,
@@ -298,7 +298,7 @@ mod tests {
             stab.push(make_point(i as f32 * 10.0, 0.0));
         }
 
-        // Add a sharp turn — this should cause divergence near the end, not at the beginning.
+        // Add a sharp turn, which should cause divergence near the end, not at the beginning.
         let result = stab.push(make_point(90.0, 30.0));
         if let Some(div) = result.divergence_index {
             assert!(

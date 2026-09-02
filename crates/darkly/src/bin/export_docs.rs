@@ -2,9 +2,9 @@
 //!
 //! The file is self-describing: a consumer needs no Darkly source, no shared
 //! helpers, no knowledge of Darkly's hotkey resolution, and no particular
-//! renderer. Everything requiring Darkly knowledge to compute — layered preset
+//! renderer. Everything requiring Darkly knowledge to compute (layered preset
 //! resolution, chord rendering for both platform conventions, unit-suffixed
-//! display strings — is computed here.
+//! display strings) is computed here.
 //!
 //! Needs no GPU: every registry constructor is pure, so the catalogs build from
 //! `&'static` registration data alone.
@@ -20,13 +20,13 @@ use std::process::ExitCode;
 use darkly::catalog::{catalogs, settings_catalogs, Catalog};
 use darkly::config::{preset_bindings, Binding, OVERLAYS};
 
-/// The whole artifact. `schema` is the shape's own version — bumped when a
+/// The whole artifact. `schema` is the shape's own version: bumped when a
 /// consumer would need to change to keep reading it.
 #[derive(serde::Serialize)]
 struct DocsManifest {
     schema: u32,
     /// `git describe` of the build that wrote this, which is also what
-    /// `render-docs` stamps — the pairing key between the two artifacts.
+    /// `render-docs` stamps: the pairing key between the two artifacts.
     version: &'static str,
     catalogs: Vec<Catalog>,
     /// Preset name → action id → the chords it resolves to. Keyed by the
@@ -37,7 +37,7 @@ struct DocsManifest {
 const SCHEMA_VERSION: u32 = 1;
 
 const HELP: &str = "\
-export-docs — write Darkly's registry metadata to a JSON file
+export-docs - write Darkly's registry metadata to a JSON file
 
 USAGE:
     export-docs --out <path>
@@ -114,7 +114,7 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "{} — {} catalogs, {} entries, {} presets, {} KB",
+        "{} - {} catalogs, {} entries, {} presets, {} KB",
         out.display(),
         manifest.catalogs.len(),
         entries,

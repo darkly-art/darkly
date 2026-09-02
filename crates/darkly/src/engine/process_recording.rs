@@ -1,4 +1,4 @@
-//! Passive process recording (timelapse) — session-side capture state.
+//! Passive process recording (timelapse): session-side capture state.
 //!
 //! The recorder samples [`crate::document::Document::revision`] each frame
 //! and, when the document changed, downscales the composited canvas into a
@@ -9,12 +9,12 @@
 //!
 //! Frame dimensions match the aspect ratio of the canvas the frontend
 //! negotiated against (`base_w`/`base_h`). When the canvas aspect ratio
-//! diverges — resize, crop, undo — capture holds (without consuming the
+//! diverges (resize, crop, undo), capture holds (without consuming the
 //! pending revision) until the frontend notices via the canvas dims in
 //! every `poll_recording_frame` response and re-negotiates a new segment
 //! at the new aspect ratio. The aspect-fit viewport in the capture pass
 //! therefore only absorbs same-aspect rescales and encoder alignment
-//! (width to whole 16×16 macroblocks, height to even) — at most a ≤15 px
+//! (width to whole 16×16 macroblocks, height to even), at most a ≤15 px
 //! horizontal hairline, never real letterbox bars.
 //!
 //! All state here is **session** state per the document-authority taxonomy:
@@ -28,7 +28,7 @@ use crate::gpu::effect::{self, EffectPipeline};
 use crate::gpu::readback;
 
 /// Ceiling on frames waiting for the frontend to drain. When full, captures
-/// are skipped *without* consuming the pending revision — a stalled poller
+/// are skipped *without* consuming the pending revision: a stalled poller
 /// must never eat a burst's final frame; the tick retries next frame.
 const MAX_COMPLETED_FRAMES: usize = 4;
 
@@ -66,7 +66,7 @@ pub struct ProcessRecorder {
     downscale: Option<EffectPipeline>,
     sampler: Option<wgpu::Sampler>,
     /// Document revision consumed by the most recent capture. Only advanced
-    /// when a capture is actually encoded — skipped captures retry.
+    /// when a capture is actually encoded: skipped captures retry.
     last_seen_revision: u64,
     /// `render(time_secs)` clock of the most recent capture.
     last_capture_time: Option<f32>,
@@ -75,7 +75,7 @@ pub struct ProcessRecorder {
     /// is always recorded.
     trailing_due: Option<f32>,
     /// Set by [`ProcessRecorder::request_capture`] to force a capture whose
-    /// trigger is invisible to [`crate::document::Document::revision`] — live
+    /// trigger is invisible to [`crate::document::Document::revision`]: live
     /// void milestones (first streamed frame, feed disconnect) and the final
     /// state on recording stop. Consumed only when a capture is actually
     /// emitted, so a backpressure-held request retries like a pending revision.
@@ -135,8 +135,8 @@ impl ProcessRecorder {
     }
 
     /// Force the next tick to capture even when the document revision hasn't
-    /// changed. The trigger source — a live void's first streamed frame, a
-    /// feed disconnect, or the final state on recording stop — mutates
+    /// changed. The trigger source (a live void's first streamed frame, a
+    /// feed disconnect, or the final state on recording stop) mutates
     /// GPU-authoritative pixels without touching the document, so it's
     /// otherwise invisible to the revision-driven capture path.
     pub fn request_capture(&mut self) {
@@ -218,15 +218,15 @@ impl DarklyEngine {
 
         let fire = if rec.forced_pending {
             // A forced (milestone) capture bypasses the throttle: it's an
-            // explicit, rare request — a live void's first frame, a feed
-            // disconnect, the final state on stop — not the revision churn the
+            // explicit, rare request (a live void's first frame, a feed
+            // disconnect, the final state on stop), not the revision churn the
             // interval exists to thin. It still yields to the backpressure
             // gates below.
             true
         } else if revision_changed && interval_elapsed {
             true
         } else if revision_changed {
-            // Inside the throttle window — arm (or keep) the trailing
+            // Inside the throttle window: arm (or keep) the trailing
             // capture so the burst's final state lands once the window
             // closes. Idempotent across frames: the due time is fixed by
             // the last capture, not by when the change was observed.
@@ -244,7 +244,7 @@ impl DarklyEngine {
         // the negotiated base (the frontend rolls a new segment once it sees
         // the new dims in a poll response), at most one readback in flight,
         // and never overwrite a full completed queue. No skip consumes the
-        // revision or disarms the trailing capture — the tick retries next
+        // revision or disarms the trailing capture: the tick retries next
         // frame. (Trailing stays armed so `needs_frames()` keeps the demand-
         // driven frame loop, and thus frontend polling, alive.)
         let (cw, ch) = (self.doc.width, self.doc.height);
@@ -268,7 +268,7 @@ impl DarklyEngine {
     /// it into the recording target (aspect-fit letterboxed on opaque
     /// black), and submit the async readback.
     fn capture_recording_frame(&mut self, time_secs: f32) {
-        // Composite cache is rebuilt on demand — same forcing the export
+        // Composite cache is rebuilt on demand, same forcing the export
         // readback does, so the capture sees the current document state
         // even when no surface present has happened (headless / tests).
         self.compositor
@@ -338,8 +338,8 @@ impl DarklyEngine {
         // Aspect-fit the canvas into the fixed frame; any uncovered edge
         // keeps the clear color (opaque black). The tick's aspect gate
         // means this only absorbs same-aspect rescales and encoder
-        // alignment (width floored to a 16×16 macroblock, height to even)
-        // — at most a ≤15 px horizontal hairline, never real letterbox
+        // alignment (width floored to a 16×16 macroblock, height to even),
+        // at most a ≤15 px horizontal hairline, never real letterbox
         // bars.
         let (cw, ch) = (
             self.compositor.canvas_width() as f32,

@@ -15,7 +15,7 @@ const field = (block: string, name: string): string | undefined =>
     new RegExp(`\\b${name}:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(block)?.[1];
 
 /**
- * The `actions` catalog as the Rust tables declare it — every action id mapped
+ * The `actions` catalog as the Rust tables declare it: every action id mapped
  * to its documentation, keyed exactly as `actions.setDocs` wants it.
  *
  * The catalog normally reaches the editor over the WASM bridge, which a node

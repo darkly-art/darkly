@@ -1,5 +1,5 @@
 // Rainy glass post-processing veil.
-// Ported from "Heartfelt" by Martijn Steinrucken (BigWings) — Shadertoy.
+// Ported from "Heartfelt" by Martijn Steinrucken (BigWings) on Shadertoy.
 //   https://www.shadertoy.com/view/ltffzl
 // License: Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported.
 // Stripped to core rain effect: drops, trails, fog distortion.
@@ -149,7 +149,7 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
 
 // 13-tap poisson-disk blur approximating the LOD-based fog from the
 // original Shadertoy "Heartfelt" shader. When radius is 0 all samples
-// collapse to the same texel — effectively a no-op.
+// collapse to the same texel, effectively a no-op.
 //
 // `radius` is the disc radius as a fraction of sqrt(area). The per-axis
 // UV offsets are derived so the sampling disc is circular in screen pixels.
@@ -183,7 +183,7 @@ fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec3f {
     let resolution = vec2f(params.resolution_x, params.resolution_y);
     // Reference size: 1 unit in pattern space = sqrt(area) pixels.
     // This makes the pattern scale uniformly with screen area instead of
-    // height — shrinking either dimension grows the drops, not their count.
+    // height: shrinking either dimension grows the drops, not their count.
     let ref_size = sqrt(resolution.x * resolution.y);
     let dir = params.direction;
 

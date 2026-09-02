@@ -1,5 +1,5 @@
 /// Clear a texture view to fully-transparent black via an empty render
-/// pass. WebGPU has no standalone "clear texture" command — clears are
+/// pass. WebGPU has no standalone "clear texture" command; clears are
 /// expressed as the load op of a render pass. This wraps the empty-pass
 /// boilerplate so callers that just need a clear can do it in one call.
 pub fn clear_view_transparent(
@@ -183,7 +183,7 @@ mod premultiply_tests {
         premultiply_rgba8_in_place(&mut clear);
         assert_eq!(clear, [0, 0, 0, 0]);
 
-        // Opaque is the identity — no rounding drift.
+        // Opaque is the identity: no rounding drift.
         let mut opaque = [200u8, 100, 50, 255];
         premultiply_rgba8_in_place(&mut opaque);
         assert_eq!(opaque, [200, 100, 50, 255]);

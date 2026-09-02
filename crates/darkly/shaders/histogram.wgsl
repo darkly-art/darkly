@@ -1,4 +1,4 @@
-// Compute shader: bin a texture into eight 256-bin histograms — one per virtual
+// Compute shader: bin a texture into eight 256-bin histograms, one per virtual
 // channel, matching the LUT filter's channel order:
 //
 //   0 rgb (composite), 1 red, 2 green, 3 blue, 4 alpha,
@@ -7,8 +7,8 @@
 // Each thread bins one pixel with atomic adds into an 8×256 u32 storage buffer.
 //
 // Prior art (Krita `KisLevelsConfigWidget` / `KoBasicHistogramProducers`):
-//   - R/G/B/A bin the raw gamma-encoded 8-bit value directly (no linearization)
-//     — `KoGenericRGBHistogramProducer::addRegionToBin` bins `c.red()` etc.
+//   - R/G/B/A bin the raw gamma-encoded 8-bit value directly (no linearization),
+//     per `KoGenericRGBHistogramProducer::addRegionToBin`, which bins `c.red()` etc.
 //   - The composite/default and Lightness channels both bin CIELAB L*
 //     (`KoGenericLabHistogramProducer`, D65, channel 0, L*/100 → 0..255).
 // Hue/Saturation use the same HSV conversion the filter applies. `rgb_to_hsv`

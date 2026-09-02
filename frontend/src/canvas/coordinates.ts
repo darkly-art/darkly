@@ -5,7 +5,7 @@
  * Canvas/plane space = document pixels (window-local + `canvas_origin`).
  * Screen space = CSS pixels relative to the canvas element's bounding rect.
  *
- * These are pure matrix-vector products over `app.viewMatrices` — the screen↔
+ * These are pure matrix-vector products over `app.viewMatrices`: the screen↔
  * plane affines built by the single Rust source of truth (`compute_view_matrices`)
  * and cached reactively on `app`. The transform math lives only in Rust; this
  * file just applies the cached matrices and handles the DOM boundary (DPR +

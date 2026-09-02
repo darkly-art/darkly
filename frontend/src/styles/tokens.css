@@ -4,9 +4,200 @@
     --radius-sm: 4px;
     --radius-md: 6px;
     --transition-fast: 0.1s;
+
+    /* Full coverage, for a mask.
+
+       A mask reads alpha and nothing else, so a mask stop is a coverage value
+       wearing a colour's syntax: this one means "covered", as `transparent`
+       means "not". Its hue is arbitrary and never reaches a pixel; it is spelled
+       out here so that a mask stop in a stylesheet cannot be read as a black
+       fill, which is exactly what it looks like written inline. */
+    --mask-opaque: #000;
 }
 
-/* Icon button reset — used by toolbar, panel actions, layer controls, etc. */
+/* A brush pack's palette, as everything drawn from it.
+
+   The three absolutes (`--pack-chroma`, `--pack-refraction`, `--pack-surface`)
+   arrive from `use:packPalette`, which also adds this class.
+   Declared on the same element as the absolutes on purpose: a custom property
+   containing `var()` is substituted where it is declared, so a copy of this on
+   `:root` would freeze at the neutral palette and never follow an override. */
+.pack-palette {
+    /* The prism. Three knobs, all meant to be played with.
+
+       `--pack-prism-x` is where the apex sits, as a fraction of the explorer's
+       width; negative puts it off the left edge, which is what leaves the beam
+       already open by the time it reaches the cards. The further left it goes
+       the *less* the beam expands, because expansion is a ratio of distances:
+       an apex just off-screen fans hard, one far away barely spreads at all.
+
+       Which makes this the knob for the two ends *against each other*, and why
+       it sits this far out. The beam's width grows with the distance from the
+       apex, so pushing the apex left adds the same absolute width everywhere,
+       which is a large fraction of a narrow left end and a small one of an
+       already-wide right end. An apex on the edge left the wheel lit barely two
+       cards deep while the list was lit across most of its height; out here the
+       cards get a band several deep and the list is hardly wider than it was.
+
+       `--pack-beam-spread` is the fan's half-angle, and so both how wide the
+       beam is and how fast it opens. Reach for it to scale both ends together,
+       and for the prism to trade one against the other. `--pack-beam-tilt`
+       rakes the whole thing off horizontal; at zero the beam runs level and the
+       fan is symmetric about the focus line, which is also where the wheel's
+       own attention already is.
+
+       `--pack-body-ramp` is how much of the beam reaches a pack's *body*,
+       as against the full strength it always keeps along the rim (an image
+       rather than a number, so it can say something different at each end).
+       Black is lit and transparent is not, so this leaves the left end an
+       outline and opens into a full wash on the right: a pack arrives at the
+       wheel as an edge and is a surface by the time it reaches the brushes.
+       Which is the journey the beam itself makes, for the same reason: cards
+       are small and dense, where an edge is the whole of what can be read, and
+       sections are large and open, where a wash is.
+
+       A flat colour makes it a constant again: `#000` washes every column
+       evenly, `transparent` holds the whole pack to an outline. Sampled in
+       field coordinates like everything else, so the three columns share one
+       ramp rather than each restarting it at its own left edge. */
+    --pack-prism-x: -18%;
+    --pack-beam-spread: 16deg;
+    --pack-beam-tilt: 0deg;
+    --pack-body-ramp: linear-gradient(90deg, transparent, var(--mask-opaque));
+
+    /* The pack's light, as one field.
+
+       A pack is drawn across three columns (its card in the wheel, its ribbon
+       across the gutter, its section in the list), and this is the single
+       declaration all three paint. They differ only in where they sample it:
+       each offsets the image by its own position inside the explorer, so the
+       field resolves to the same place on screen everywhere and the three
+       columns are windows onto one continuous thing rather than three surfaces
+       that have to be kept looking alike. There is no seam to hide because
+       there is no join being faked.
+
+       Conic rather than linear, which is the whole of the prism: a linear beam
+       is one width everywhere, because its stops are distances across a fixed
+       axis. Conic stops are *angles* from a point, so the same angular slice
+       covers more pixels the further it gets from the apex: the beam leaves
+       the cards narrow and opens across the brushes on its own, with nothing
+       per-column telling it to.
+
+       Sized to the explorer in both axes, so the apex lands in the same place
+       for every surface sampling it. That is what an angled or fanned field
+       needs and a purely vertical one did not.
+
+       Light *only*: the beam is carried alone, over `--pack-surface` painted
+       flat beneath it, rather than as a gradient that fades back into the
+       surface at either end. Two layers is what lets the rim be carved from the
+       light without also carving a hole in the pack's body: an element's mask
+       takes its background colour with it, so a single field could not be
+       masked at all without the surface going with it.
+
+       So the stops mix the vivid pair with *nothing*, never with the surface,
+       and the surface arrives once, by being underneath. Compositing 34% of
+       chroma over a surface is the same arithmetic as painting 34% of chroma
+       mixed into it, so an opaque pack is unchanged either way; a pack whose
+       surface carries alpha is only correct this way. Mixing into the surface
+       here would count it twice, at whatever fraction it happened to be
+       transparent, and the light would darken exactly where the pack meant to
+       let the theme through.
+
+       Gradients interpolate in premultiplied alpha, which is why the ends can
+       be plain `transparent` without the beam graduating through black on its
+       way out, and why it fades to the surface simply by ceasing to exist. */
+    --pack-beam: conic-gradient(
+        from calc(90deg + var(--pack-beam-tilt) - var(--pack-beam-spread))
+            at var(--pack-prism-x) 50%,
+        transparent 0deg,
+        color-mix(in srgb, var(--pack-chroma) 34%, transparent)
+            calc(var(--pack-beam-spread) * 0.55),
+        color-mix(in srgb, var(--pack-refraction) 80%, transparent)
+            var(--pack-beam-spread),
+        color-mix(in srgb, var(--pack-chroma) 34%, transparent)
+            calc(var(--pack-beam-spread) * 1.45),
+        transparent calc(var(--pack-beam-spread) * 2),
+        transparent 360deg);
+}
+
+/* A surface the pack's light falls on, one of the three columns.
+
+   The body is the pack's own surface, painted flat; the beam rides above it on
+   a layer of its own, at whatever offset the column samples the field at. The
+   column supplies only that offset, which is the one thing about the field that
+   differs between the three.
+
+   `position` is here to be the beam layer's containing block, so `inset: 0`
+   resolves to the column's own box; a column already positioned for its own
+   reasons keeps what it has. `isolation` is what makes the layer's negative
+   z-index mean "above this surface, beneath its contents" rather than sending it
+   behind the surface it belongs to. */
+.pack-lit {
+    position: relative;
+    isolation: isolate;
+    background-color: var(--pack-surface);
+}
+/* The light itself. `::before` is the layer every column carries; `::after` is a
+   second one that exists only for a column whose rim cannot be a border, and
+   which therefore only that column calls into being by giving it a `content`. */
+.pack-lit::before,
+.pack-lit::after {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: var(--pack-beam);
+    background-repeat: no-repeat;
+    background-size: var(--field-w) var(--field-h);
+    /* The rim is a border, and a border must not shift where the field is
+       sampled from; the whole point is that all three columns sample one
+       image. */
+    background-origin: border-box;
+}
+.pack-lit::before {
+    content: '';
+}
+
+/* The rim: the light at full strength in a border's width around the edge, and
+   at `--pack-body-ramp`'s pleasure everywhere inside it.
+
+   Read the layers bottom up. The last fills the border box, and the middle
+   excludes the padding box from it: an XOR against an opaque backdrop, leaving
+   the ring. The ring therefore traces whatever shape the surface already is,
+   rounded corners and all, and nothing here has to know the column's geometry.
+   Which is what gives the joins their property: an edge that is *interior* to
+   the pack carries no border, and so no rim, and the card, the band and the
+   section run into one another with nothing drawn across the seam. Each column
+   zeroes its own facing edge.
+
+   The first layer then adds the ramp back inside the padding box. Adding is
+   safe because the two regions are disjoint by construction: the ring is
+   exactly what the padding box is not, so the ramp reaches the body at its own
+   strength without touching the rim. Which is why the ramp is carried as the
+   body's share rather than as the mask that suppresses it: the band states the
+   same thing with one mask and no arithmetic, and a token that had to be
+   written once each way would be a token to keep in step.
+
+   Only the ramp is a field: the other two are flat, and sizing them to anything
+   but their own box would slide them off it and mask the column away entirely.
+   Hence the per-layer size and position, and `--pack-field-offset`, which each
+   column sets to wherever it sits in the field.
+
+   `--pack-rim-width` is `PACK_RIM` in `wheel.ts`, published on the explorer.
+   It is defined there because the band's rim is not a border at all but a
+   clip-path computed in that file, and the two have to be the same number. */
+.pack-rim::before {
+    border: var(--pack-rim-width) solid transparent;
+    border-radius: inherit;
+    mask-image: var(--pack-body-ramp), linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-clip: padding-box, padding-box, border-box;
+    mask-composite: add, exclude, add;
+    mask-size: var(--field-w) var(--field-h), auto, auto;
+    mask-position: var(--pack-field-offset, 0 0), 0 0, 0 0;
+    mask-repeat: no-repeat;
+}
+
+/* Icon button reset: used by toolbar, panel actions, layer controls, etc. */
 .icon-btn {
     display: flex;
     align-items: center;
@@ -24,7 +215,7 @@
     color: var(--text);
 }
 
-/* Slider thumb — shared across tool options, layer controls, params */
+/* Slider thumb: shared across tool options, layer controls, params */
 input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
@@ -53,7 +244,7 @@ input[type="range"]::-moz-range-thumb {
     cursor: pointer;
 }
 
-/* Tool-options bar control — the black rounded button shared by the scrubs
+/* Tool-options bar control: the black rounded button shared by the scrubs
    (Scrub.svelte) and the brush picker (BrushOptions.svelte), and available to
    any tool that embeds a custom control in its options bar. Consumers layer on
    their own behavior (cursor, active/selected state, value formatting). */

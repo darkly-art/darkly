@@ -1,7 +1,7 @@
 /**
  * Magic-byte file-type detection for the unified Open flow.
  *
- * The picker filter narrows by extension, but extensions lie — a
+ * The picker filter narrows by extension, but extensions lie: a
  * `.darkly` zip might have been renamed; a screenshot saved with the
  * wrong suffix; a drag-drop carry no extension at all. Sniffing the
  * first 12 bytes is cheap and definitive: a real zip can't masquerade
@@ -15,7 +15,7 @@
 export type FileKind = 'darkly' | 'png' | 'jpeg' | 'webp' | 'unknown';
 
 /** Inspect the first few bytes of `bytes` and return the file kind.
- *  `.darkly` is the zip signature `50 4B 03 04` — Phase 3's
+ *  `.darkly` is the zip signature `50 4B 03 04`; Phase 3's
  *  `format::zip_io` writes a stock deflate zip, no funny prefix.
  *  PNG / JPEG / WebP follow their respective format signatures. */
 export function detectKind(bytes: Uint8Array): FileKind {

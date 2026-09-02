@@ -10,7 +10,7 @@
 //! It also carries a **tool-accuracy suite** that mirrors `canvas_resize.rs`:
 //! every tool (paint, rect select + marquee mask, marching ants, flood fill,
 //! magic wand, transform-from-selection, color pick, view transform) is checked
-//! both **after a rescale** and **after undoing the rescale** — the coordinate
+//! both **after a rescale** and **after undoing the rescale**: the coordinate
 //! frames that the rescale-undo bug corrupted. See `image-rescale-undo-handoff.md`.
 //!
 //! Run with: `cargo test -p darkly --test image_rescale --features testing -- --test-threads=1`
@@ -120,7 +120,7 @@ fn rescale_downscale_025x() {
 }
 
 /// MULTI-REGION regression: a rescale snapshots one GPU region per node. Undo
-/// must restore EVERY node's pixels, not just the first — the bug the
+/// must restore EVERY node's pixels, not just the first: the bug the
 /// `gpu_region_entries_mut` loop fixes (the old single-`if let` restored one).
 #[test]
 fn two_layers_undo_restores_all_pixels() {
@@ -152,7 +152,7 @@ fn two_layers_undo_restores_all_pixels() {
 
 /// EXTENT-CHANGE regression: the undo restore captures the current (opposite-
 /// direction) pixels, reallocs the node texture to the entry's extent, then
-/// uploads — so undo AND redo both round-trip across the size change.
+/// uploads, so undo AND redo both round-trip across the size change.
 #[test]
 fn rescale_undo_then_redo_pixels() {
     let (w, h) = (32u32, 32u32);
@@ -186,7 +186,7 @@ fn rescale_undo_then_redo_pixels() {
     );
 }
 
-/// A layer mask is a pixel-bearing filter — it must scale in lockstep with
+/// A layer mask is a pixel-bearing filter: it must scale in lockstep with
 /// its host layer.
 #[test]
 fn mask_scales_with_layer() {
@@ -252,14 +252,14 @@ fn rescale_noop_when_unchanged() {
 }
 
 // =========================================================================
-// Tool-accuracy suite — every tool, after a rescale AND after undoing it.
+// Tool-accuracy suite: every tool, after a rescale AND after undoing it.
 //
 // These guard the coordinate frames that the rescale-undo bug corrupted:
 // after `rescale_image` (and after `undo()` back to the original dims), a
 // tool driven at a known plane coordinate must land exactly there. The
 // engine math is the source of truth here; the frontend's borrow-free
 // `viewMatrices` mirror is exercised by the vitest suite (the engine test
-// at the default origin can pass while the app is broken — see
+// at the default origin can pass while the app is broken; see
 // docs/coordinate-systems.md).
 // =========================================================================
 
@@ -378,7 +378,7 @@ fn paint_lands_at_plane_coords_after_rescale() {
     );
 }
 
-/// Paint lands at the intended plane coordinate AFTER undoing a rescale — the
+/// Paint lands at the intended plane coordinate AFTER undoing a rescale: the
 /// engine-level analogue of the reported "coords don't match the tool" bug.
 /// Uses a 64px base (the default brush floods a 32px canvas, masking position).
 #[test]
@@ -436,7 +436,7 @@ fn marquee_masks_same_plane_pixels_after_rescale() {
 }
 
 /// A selection made AFTER undoing a rescale masks paint to the selected plane
-/// pixels — the reported bug, at engine level.
+/// pixels: the reported bug, at engine level.
 #[test]
 fn marquee_masks_same_plane_pixels_after_rescale_undo() {
     let (w, h) = (64u32, 64u32);

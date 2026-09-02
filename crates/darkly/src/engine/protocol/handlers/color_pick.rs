@@ -10,7 +10,7 @@ use crate::engine::protocol::{decode, RequestRegistration, Response};
 use crate::engine::PickSource;
 use crate::layer::LayerId;
 
-/// `{ x, y, id }` — the canvas point to sample and the layer to sample from
+/// `{ x, y, id }`: the canvas point to sample and the layer to sample from
 /// (`id < 0` → the merged composite).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]

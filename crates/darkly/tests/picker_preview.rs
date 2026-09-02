@@ -2,12 +2,13 @@
 //!
 //! The engine half: that a request enqueues, that generation is paced across
 //! ticks, that the frames move, that polling hands the job over, and that none
-//! of it touches the document. Plus the property the whole design rests on —
+//! of it touches the document. Plus the property the whole design rests on:
 //! `preview_at` is absolute, so a sequence reaches the same state at `t`
 //! however it got there.
 //!
-//! Uses the blocking readback flush (`test_flush_readbacks`) — native-only; the
-//! wasm path drains the same `ReadbackScheduler` from the rAF render loop.
+//! Uses the blocking readback flush (`test_flush_readbacks`), which is
+//! native-only; the wasm path drains the same `ReadbackScheduler` from the
+//! rAF render loop.
 //!
 //! Run with: `cargo test -p darkly --features testing --test picker_preview -- --test-threads=1`
 
@@ -22,7 +23,7 @@ use darkly::gpu::preview::{
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
 /// A `w × h` RGBA gradient. Deliberately not a flat fill: an effect that
-/// redistributes colour — a refraction, a blur, a pixelation — leaves a solid
+/// redistributes colour (a refraction, a blur, a pixelation) leaves a solid
 /// canvas exactly as it found it, so a flat subject would make every motion
 /// assertion below vacuous.
 fn gradient(w: u32, h: u32) -> Vec<u8> {
@@ -71,7 +72,7 @@ fn drain(
     panic!("{variant:?} preview for {catalog}/{type_id} never completed");
 }
 
-/// Request one variant and drain it — the shape every engine-level test uses.
+/// Request one variant and drain it: the shape every engine-level test uses.
 fn preview(
     engine: &mut DarklyEngine,
     catalog: &str,
@@ -83,7 +84,7 @@ fn preview(
 }
 
 /// One preview target loaded with a flat source, plus the registries a session
-/// opens against — the pieces both the engine and the documentation binary
+/// opens against: the pieces both the engine and the documentation binary
 /// assemble, here without either.
 struct Offscreen {
     gpu: (wgpu::Device, wgpu::Queue),
@@ -148,7 +149,7 @@ impl Offscreen {
         self.render_range(catalog, type_id, PreviewVariant::Animated, 0)
     }
 
-    /// The frames a consumer actually holds — [`render`](Self::render) closed
+    /// The frames a consumer actually holds: [`render`](Self::render) closed
     /// the way both of them close it.
     ///
     /// The distinction is the whole reason `close_loop` exists in one place: a
@@ -165,7 +166,7 @@ impl Offscreen {
         self.render_range(catalog, type_id, PreviewVariant::Still, 0)
     }
 
-    /// The source an effect reading one was handed — the downscaled subject, at
+    /// The source an effect reading one was handed: the downscaled subject, at
     /// the same size as the frames it produces.
     fn source(&self) -> Vec<u8> {
         let (w, h) = self.target.size();
@@ -281,7 +282,7 @@ fn offscreen_entries() -> Vec<(&'static str, &'static str)> {
 /// preview needs: because `preview_at(t)` puts an instance into a state that
 /// depends on `t` and nothing else, the engine can drop a sequence at the end of
 /// a tick and re-open it on the next one without replaying a single frame. Every
-/// previewable entry is held to it — including the two that rebuild their cache
+/// previewable entry is held to it, including the two that rebuild their cache
 /// mid-sweep, where the property is least obvious.
 #[test]
 fn preview_at_is_absolute() {
@@ -310,13 +311,13 @@ fn preview_at_is_absolute() {
     }
 }
 
-/// An entry's still *is* its animation's frame at the declared still point —
+/// An entry's still *is* its animation's frame at the declared still point,
 /// byte for byte, for every previewable entry.
 ///
 /// This is what makes the hover hand-off invisible: a card shows the still, the
 /// pointer arrives, the sequence starts playing, and the frame it starts from is
 /// the frame already on screen. It is also why a still costs one frame rather
-/// than forty-eight — `preview_at` is absolute, so the sequence can be sampled
+/// than forty-eight: `preview_at` is absolute, so the sequence can be sampled
 /// at one point without running the rest.
 #[test]
 fn a_still_is_the_animations_frame_at_its_still_point() {
@@ -346,7 +347,7 @@ fn a_still_is_the_animations_frame_at_its_still_point() {
 
 /// Every still shows the effect actually doing something to the image.
 ///
-/// The one thing a card at rest must not be is the untouched canvas — a still
+/// The one thing a card at rest must not be is the untouched canvas: a still
 /// that matched its own source would read as the effect being off, which is
 /// what `still_at` exists to steer away from. Stated against the *source*
 /// rather than against frame 0 on purpose: `black_and_white` is fully applied at
@@ -382,8 +383,8 @@ fn a_still_shows_the_effect_doing_something() {
 ///
 /// Determinism is what lets the engine hand a half-finished job across ticks and
 /// what lets the documentation renderer reuse one device for thirty-four assets.
-/// A session that left state behind — in its instance, its cache, or the shared
-/// target — shows up here.
+/// A session that left state behind (in its instance, its cache, or the shared
+/// target) shows up here.
 #[test]
 fn rendering_an_entry_twice_produces_the_same_frames() {
     let mut off = Offscreen::new();
@@ -426,8 +427,8 @@ fn every_animated_entry_actually_moves() {
 ///
 /// The test that says there is one system: the two consumers differ in how they
 /// *capture*, and in nothing else. Comparing two consumers over two
-/// differently-loaded subjects would be asserting something else — the engine
-/// loads the user's composite and the binary loads its own field.
+/// differently-loaded subjects would be asserting something else: the engine
+/// loads the artist's composite and the binary loads its own field.
 #[test]
 fn the_driver_is_sink_agnostic() {
     let mut off = Offscreen::new();
@@ -495,8 +496,8 @@ fn the_driver_is_sink_agnostic() {
 // The live consumer
 // ---------------------------------------------------------------------------
 
-/// `frozen` yields its full declared frame count with visible motion — the exact
-/// defect of the shipped path, which showed one still at `strength = 0.04`.
+/// `frozen` yields its full declared frame count with visible motion, not the
+/// exact defect of the shipped path, which showed one still at `strength = 0.04`.
 #[test]
 fn picker_preview_runs_the_animation_not_the_defaults() {
     let mut engine = headless_engine(256, 256);
@@ -522,7 +523,7 @@ fn picker_preview_runs_the_animation_not_the_defaults() {
     );
 }
 
-/// A filter previews through the same offscreen path as a veil — a capability
+/// A filter previews through the same offscreen path as a veil, a capability
 /// the picker did not have at all before, and the second invocation contract
 /// the mechanism trait has to satisfy.
 #[test]
@@ -555,7 +556,7 @@ fn a_void_previews_from_scratch_at_the_canvas_aspect() {
 
     assert_eq!((w, h), fit_preview_dims(800, 400));
     assert!(w > h, "a wide canvas yields a wide preview");
-    // Real content, not a blank buffer — and not a flat colour either.
+    // Real content, not a blank buffer, and not a flat colour either.
     let first: &[u8] = &frames[0][..4];
     assert!(frames[0].as_chunks::<4>().0.iter().any(|px| px != first));
 }
@@ -607,7 +608,7 @@ fn the_two_variants_are_separate_jobs() {
 
     // What a picker card costs on mount: one frame.
     engine.start_preview("veils", "frozen", PreviewVariant::Still);
-    // And what hovering it costs, requested while the still is still in flight —
+    // And what hovering it costs, requested while the still is still in flight:
     // the order a real card produces.
     engine.start_preview("veils", "frozen", PreviewVariant::Animated);
 
@@ -642,7 +643,7 @@ fn polling_a_completed_preview_releases_it() {
     assert_eq!(preview(&mut engine, "filters", "invert", v).3.len(), 1);
 }
 
-/// A request naming a catalog or a type the binary does not ship is a no-op —
+/// A request naming a catalog or a type the binary does not ship is a no-op:
 /// the wire carries arbitrary strings, and there is nothing to render.
 #[test]
 fn an_unknown_catalog_or_type_is_a_no_op() {

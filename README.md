@@ -1,7 +1,7 @@
 <a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
-[![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
+[![Patreon](https://img.shields.io/badge/Patreon-Hidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
 [![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://darkly.art/blog)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Embrace the chaos, and release your hidden masterpiece. Madness isn't a bug, it's a feature.
 
 Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
@@ -43,18 +43,35 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Veils
 
-https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that shrouds your canvas in a mysterious way, inviting you to see something that maybe wasn't there before.
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
 
-Veils have practical uses too:
+Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
+
+<!-- darkly:catalog-table catalog=veils -->
+|  | Name | What it does |
+| :-: | --- | --- |
+| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white: six grayscale formulas or custom channel weights, with an optional color tint. |
+| <img src="docs/images/previews/veils/chromatic_aberration.jpg" width="200" alt="Chromatic Aberration"> | **Chromatic Aberration** | Split the color channels apart along their hue axes, like a misaligned lens. |
+| <img src="docs/images/previews/veils/frozen.jpg" width="200" alt="Frozen"> | **Frozen** | Frost the view behind a pane of refracting ice. |
+| <img src="docs/images/previews/veils/grain.jpg" width="200" alt="Grain"> | **Grain** | Film grain noise over the view, optionally animated. |
+| <img src="docs/images/previews/veils/lens_blur.jpg" width="200" alt="Lens Blur"> | **Lens Blur** | Defocus the view with a soft camera-lens blur. |
+| <img src="docs/images/previews/veils/painting.jpg" width="200" alt="Painting"> | **Painting** | Smooth the view into painterly, brush-like daubs. |
+| <img src="docs/images/previews/veils/pixelate.jpg" width="200" alt="Pixelate"> | **Pixelate** | Downsample the view into a blocky pixel mosaic. |
+| <img src="docs/images/previews/veils/rainy_glass.jpg" width="200" alt="Rainy Glass"> | **Rainy Glass** | Raindrops run down a pane of glass over the view. |
+| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts: scanlines, noise, and color bleed. |
+| <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
+<!-- /darkly:catalog-table -->
+
+Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you view it through a fresh lens.
+- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you see it through a fresh lens.
 
 > [!NOTE]
-> Veils live in their own group, but within it you can stack and order them however you like. Remember that adding too many can drain your battery, due to the heavy load on your GPU.
+> Adding too many veils can drain your battery due to the heavy load on your GPU.
 
 ### Voids
 
@@ -109,7 +126,7 @@ For a feature to count, it must be:
 - [x] Clipboard copy / cut / paste
 - [ ] Documentation
 
-### Important — expected for serious work
+### Important: expected for serious work
 - [x] Generic transform tool
 - [x] Perspective transform
 - [x] Merge down
@@ -155,7 +172,7 @@ For a feature to count, it must be:
 - [x] Hotkey system + searchable cheatsheet
 - [x] Floating layers
 
-### Advanced & specialized — power-user, niche, and polish
+### Advanced & specialized: power-user, niche, and polish
 - [x] Veils
 - [x] Veil picker
 - [x] Void layers
@@ -232,7 +249,7 @@ See the [crate README](crates/darkly/README.md) for a runnable example, and the 
 
 ## Contribution
 
-We love hackers as much as we love artists. Contributions are welcome! Please see [AGENTS.md](./AGENTS.md) for details on how to contribute and rules of thumb for the repo.
+We love hackers as much as we love artists. Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for details on how to contribute and rules of thumb for the repo.
 
 ### Use of AI
 
@@ -240,7 +257,7 @@ It's acceptable to use AI for this codebase, but careless vibe coding is **stric
 
 I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The [danger](https://www.reddit.com/r/vibecoding/comments/1su03dk/vibe_coded_for_6_months_my_codebase_is_a_disaster/) of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
-Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [CONTRIBUTING.md](CONTRIBUTING.md) for how we avoid AI slop.
 
 Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will likely be rejected.
 

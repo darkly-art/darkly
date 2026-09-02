@@ -111,7 +111,7 @@ describe('copy/cut send the layer id under the `id` field (not `layer_id`)', () 
 
 // Regression: paste-in-place special-cased a mask target onto the committed
 // verb, so pasting into a mask entered no transform session and overwrote the
-// mask the instant the key was pressed — no preview, no reposition, no cancel.
+// mask the instant the key was pressed: no preview, no reposition, no cancel.
 // The target's kind must not divert the routing: with transform-after-paste on,
 // every target floats, and the transform tool is what commits it.
 describe('paste-in-place routing', () => {
@@ -138,7 +138,7 @@ describe('paste-in-place routing', () => {
 });
 
 // Regression: the brush builder is the brush tool's `panelComponent`, so it
-// only mounts while that tool is active — but `isOpen` survives a tool switch.
+// only mounts while that tool is active, but `isOpen` survives a tool switch.
 // Paste gated on `isOpen`, so expanding the builder once and then switching
 // tools left an *invisible* node editor swallowing every paste: the image
 // never reached the canvas, and the engine's rejection ("stamp accepts
@@ -184,7 +184,7 @@ describe('paste is not intercepted by an invisible brush builder', () => {
         fakeApp.activeToolId = 'brush';
         fakeBrushGraph.uploadImageToNode.mockRejectedValue({
             kind: 'engine_error',
-            message: 'image-stamp brushes are unsupported — stamp accepts AlphaMask only',
+            message: 'image-stamp brushes are unsupported; stamp accepts AlphaMask only',
         });
         registerClipboardActions();
 
@@ -194,7 +194,7 @@ describe('paste is not intercepted by an invisible brush builder', () => {
         await expect(actions.get('paste')!.handler({})).resolves.toBeUndefined();
         expect(fakeToast.show).toHaveBeenCalledWith(
             'error',
-            'image-stamp brushes are unsupported — stamp accepts AlphaMask only',
+            'image-stamp brushes are unsupported; stamp accepts AlphaMask only',
         );
     });
 });

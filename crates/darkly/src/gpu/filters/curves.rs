@@ -1,4 +1,4 @@
-//! Curves filter — per-channel tone mapping, modeled on Krita's "Color
+//! Curves filter: per-channel tone mapping, modeled on Krita's "Color
 //! Adjustment Curves" (`plugins/filters/colorsfilters`, `KisMultiChannelFilter`).
 //!
 //! For an RGBA image Krita 5.1+ exposes eight virtual channels, in this order
@@ -13,7 +13,7 @@
 //!
 //! Curves is a thin provider over the shared [`lut_param_filter`] scaffold: it
 //! hands [`bake_lut`] eight per-channel spline evaluators and the shared code owns the
-//! rest — the composite-over-channel fold, the HSV/Lab round trips gated by
+//! rest: the composite-over-channel fold, the HSV/Lab round trips gated by
 //! `_active` flags, and the whole GPU pipeline (see
 //! [`gpu::lut_filter`](crate::gpu::lut_filter) and `curves.wgsl`). Levels reuses
 //! the identical scaffold with a different evaluator.
@@ -26,10 +26,10 @@ use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Bake
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::preview::{swing_signed, PreviewAnim};
 
-/// Identity curve — a straight line through the two endpoints.
+/// Identity curve, a straight line through the two endpoints.
 const IDENTITY: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 
-/// Parameter schema — Krita's channel order for an RGBA image. Load-bearing:
+/// Parameter schema (Krita's channel order for an RGBA image). Load-bearing:
 /// [`build_lut`] indexes these positionally (matching [`Channel`]) and the
 /// shader reads baked components in the same order.
 pub const PARAMS: &[ParamDef] = &[
@@ -143,7 +143,7 @@ mod tests {
         lut[LUT_LEN * 4 + i * 4 + c]
     }
 
-    /// Positional indices into [`PARAMS`] — mirror [`Channel`] for readable tests.
+    /// Positional indices into [`PARAMS`], mirroring [`Channel`] for readable tests.
     const RGB: usize = Channel::Rgb as usize;
     const RED: usize = Channel::Red as usize;
     const SATURATION: usize = Channel::Saturation as usize;
@@ -182,7 +182,7 @@ mod tests {
         );
     }
 
-    /// Fold order matches Krita: the color channels are `rgb(channel(i))` — the
+    /// Fold order matches Krita: the color channels are `rgb(channel(i))`, the
     /// per-channel curve first, then the composite "RGB" curve on top. Both
     /// curves are two-point (exact linear in `CurveLut`) so the arithmetic is
     /// unambiguous.
@@ -227,7 +227,7 @@ mod tests {
     }
 
     /// A non-identity Hue or Saturation curve arms the HSV pass; a non-identity
-    /// Lightness curve arms the Lab pass — independently.
+    /// Lightness curve arms the Lab pass, independently.
     #[test]
     fn hsl_curves_arm_their_stages() {
         let mut p = PARAMS.iter().map(|d| d.default_value()).collect::<Vec<_>>();

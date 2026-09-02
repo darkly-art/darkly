@@ -7,12 +7,12 @@
  * the **parent** → nothing, scoped to the dead row's own sibling list and
  * computed against the tree as it was *before* the removal.
  *
- * - GIMP: `gimp_item_tree_remove_item`, `app/core/gimpitemtree.c` — captures the
+ * - GIMP: `gimp_item_tree_remove_item`, `app/core/gimpitemtree.c`: captures the
  *   index before removal, re-reads that index in the shrunk container (= the
  *   sibling below), `CLAMP`s to the last child (= the sibling above, when the
  *   removed row was bottom-most), else selects the parent.
  * - Krita: `LayerBox::slotAboutToRemoveRows`,
- *   `plugins/dockers/layerdocker/LayerBox.cpp` — row `end + 1`, else row
+ *   `plugins/dockers/layerdocker/LayerBox.cpp`: row `end + 1`, else row
  *   `start - 1`, else an invalid index, which `KisNodeModel::setData` resolves
  *   to the captured parent.
  *
@@ -29,7 +29,7 @@
 /**
  * A row's position: its parent and that parent's ordered child list. Modifiers
  * fold in as children of their host, which is what makes the reselection rule
- * uniform across layers, groups and masks — a mask's siblings are the host's
+ * uniform across layers, groups and masks: a mask's siblings are the host's
  * other modifiers, and its parent is the host.
  */
 interface Slot {
@@ -38,11 +38,11 @@ interface Slot {
 }
 
 export interface LayerTreeIndex {
-    /** Every selectable id — nodes at any depth plus their modifiers. */
+    /** Every selectable id: nodes at any depth plus their modifiers. */
     ids: Set<number>;
     /**
      * Panel order, top to bottom, each host immediately followed by its
-     * modifiers. Descends into collapsed groups: a row the user can't currently
+     * modifiers. Descends into collapsed groups: a row the artist can't currently
      * see is still a live, selectable node.
      */
     order: number[];
@@ -54,8 +54,8 @@ export interface LayerTreeIndex {
 }
 
 /**
- * The single walk over a layer tree. Every structural question — liveness,
- * panel order, visibility, parentage — is answered from the one traversal, so
+ * The single walk over a layer tree. Every structural question (liveness,
+ * panel order, visibility, parentage) is answered from the one traversal, so
  * callers never hand-roll another.
  */
 export function indexLayerTree(tree: any[]): LayerTreeIndex {
@@ -103,8 +103,8 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
 
 /**
  * The row that takes `deadId`'s place: nearest surviving sibling below, else
- * nearest surviving sibling above, else the parent — the enclosing group for a
- * node, the host for a modifier — escalating to the parent's own sibling level
+ * nearest surviving sibling above, else the parent (the enclosing group for a
+ * node, the host for a modifier), escalating to the parent's own sibling level
  * when the parent died in the same batch. `null` when nothing qualifies.
  *
  * `prev` describes the tree as it was before the removal; `alive` is the set of
@@ -137,8 +137,8 @@ export function nextActiveAfterRemoval(
 }
 
 /**
- * The collapsed groups between `id` and the root, outermost first — the set that
- * must be expanded for `id` to be a row the user can see. Empty when `id` is
+ * The collapsed groups between `id` and the root, outermost first: the set that
+ * must be expanded for `id` to be a row the artist can see. Empty when `id` is
  * already visible, absent, or hidden by nothing.
  */
 export function collapsedAncestorsOf(index: LayerTreeIndex, id: number): number[] {
@@ -158,7 +158,7 @@ export function collapsedAncestorsOf(index: LayerTreeIndex, id: number): number[
  * Ids present in `next` but not in `prev`, keeping only the **topmost** of each
  * restored subtree. Undo of a layer removal reattaches the subtree root, but the
  * tree re-serializes every descendant and modifier under it, so the raw
- * difference would select a group *and* everything inside it — a selection the
+ * difference would select a group *and* everything inside it, a selection the
  * rest of the codebase treats as malformed (batch ops drop any id whose ancestor
  * is also selected). Both reference editors produce single-scope selections
  * here: GIMP a single item, Krita the source layers without their children.

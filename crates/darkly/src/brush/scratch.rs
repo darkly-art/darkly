@@ -1,9 +1,9 @@
-//! Scratch — the writable stroke scratch and its read-mirror sibling.
+//! Scratch: the writable stroke scratch and its read-mirror sibling.
 //!
 //! WebGPU forbids reading and writing the same texture in a single render
 //! pass.  Brush composite shaders need both: they read existing pixels at
 //! the dab's footprint (to source-over blend the new dab on top) and write
-//! the blended result.  Same texture, both directions, in one pass — illegal.
+//! the blended result.  Same texture, both directions, in one pass: illegal.
 //!
 //! `Scratch` works around this by owning two textures:
 //!
@@ -17,11 +17,11 @@
 //!   write side under the dab's footprint.  Sized to the largest dab
 //!   footprint seen this stroke; grown lazily inside [`Scratch::sync_read_mirror`]
 //!   when a footprint exceeds the current size.  Never preserved across
-//!   grow — overwritten by the very next sync.  Per-dab origin tracked so
+//!   grow; overwritten by the very next sync.  Per-dab origin tracked so
 //!   multiple GPU nodes per dab (color_output + watercolor pickup, etc.)
 //!   share one copy.
 //!
-//! The two sides are managed atomically by this type — there is no public
+//! The two sides are managed atomically by this type: there is no public
 //! API by which a caller can resize one without going through `Scratch`.
 //!
 //! There are two ways to read the in-flight scratch, and which one applies
@@ -32,7 +32,7 @@
 //!   Sampling the write side from such a pass is the R/W alias WebGPU
 //!   forbids; the mirror is what makes it legal.
 //! - A pass that **does not** target the scratch may sample the write side
-//!   directly via [`Scratch::live_canvas_bind_group`] — no alias, no copy.
+//!   directly via [`Scratch::live_canvas_bind_group`]: no alias, no copy.
 //!   Watercolor's pickup atlas pass does this: it renders to the atlas and
 //!   reads the scratch to see the wet paint under each dab.
 //!
@@ -52,7 +52,7 @@ pub struct Scratch {
     // --- Write side (layer-sized) ---
     write_texture: wgpu::Texture,
     write_view: wgpu::TextureView,
-    /// Bind group over `write_texture` using the canvas-copy BGL —
+    /// Bind group over `write_texture` using the canvas-copy BGL:
     /// paint terminals' `commit_brush_dab` bind this as the composite
     /// foreground (the in-flight stroke pixels) when blitting the
     /// stroke onto the layer.
@@ -63,7 +63,7 @@ pub struct Scratch {
     // --- Read mirror (footprint-sized, lazy-grown) ---
     read_mirror_texture: wgpu::Texture,
     read_mirror_view: wgpu::TextureView,
-    /// Bind group over `read_mirror_texture` using the canvas-copy BGL —
+    /// Bind group over `read_mirror_texture` using the canvas-copy BGL:
     /// the per-dab composite shaders (`composite.wgsl`, smudge,
     /// liquify) bind this to sample the write side without an
     /// R/W hazard.
@@ -79,13 +79,13 @@ pub struct Scratch {
     /// either side.
     read_origin_cache: Option<[u32; 2]>,
 
-    // --- Bind-group rebuild handles (cheap clones — wgpu types are Arc'd internally) ---
+    // --- Bind-group rebuild handles (cheap clones since wgpu types are Arc'd internally) ---
     canvas_copy_bgl: wgpu::BindGroupLayout,
     /// Linear sampler for the read mirror.  Stored so grow rebuilds can
     /// reuse it instead of allocating per grow.  Liquify reads at
     /// displaced sub-pixel UVs and needs bilinear interpolation.
     read_mirror_sampler: wgpu::Sampler,
-    /// Sampler for the write-side bind group.  Nearest filter — no sub-
+    /// Sampler for the write-side bind group.  Nearest filter: no sub-
     /// pixel reads in the consumers (commit blit is integer-aligned).
     write_sampler: wgpu::Sampler,
     /// Texel format of both sides.  Color terminals use `Rgba8Unorm`;
@@ -103,14 +103,14 @@ pub struct Scratch {
 
 /// One extra per-pixel quantity a terminal accumulates over a stroke.
 ///
-/// The write side carries coverage and nothing else — premultiplied
+/// The write side carries coverage and nothing else: premultiplied
 /// source-over saturating at 1.  A terminal that needs to *remember*
 /// something per pixel across the stroke declares a channel: it becomes
 /// another color attachment on the terminal's existing draw, so the
 /// blend unit accumulates it under `blend` for free, with no extra pass.
 ///
 /// The framework has no opinion on what a channel means.  `name` is the
-/// terminal's own vocabulary — watercolor's is `"deposit"` — and appears
+/// terminal's own vocabulary (watercolor's is `"deposit"`) and appears
 /// in the generated `FsOut` struct as the field the terminal's body
 /// writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,14 +132,14 @@ pub struct StrokeChannel {
 /// one without the other.
 ///
 /// A channel is written as a color attachment and read from a pass that
-/// does *not* target it — watercolor's per-dab probe reads the deposit
+/// does *not* target it: watercolor's per-dab probe reads the deposit
 /// while rendering to its atlas. That is an ordinary pass-to-pass
 /// dependency, not the read/write alias WebGPU forbids, so a channel needs
 /// no mirror.
 struct StrokeChannels {
     declared: Vec<StrokeChannel>,
     textures: Vec<wgpu::Texture>,
-    /// Attachment views, in declaration order — what the terminal hangs
+    /// Attachment views, in declaration order: what the terminal hangs
     /// off its render pass after [`Scratch::write_view`].
     views: Vec<wgpu::TextureView>,
 }
@@ -159,8 +159,8 @@ impl Scratch {
     /// `format` is the terminal's declared scratch format.  For anything
     /// other than `Rgba8Unorm` the caller must pass the matching
     /// non-filtering BGL and sampler from
-    /// [`BrushPipelines::canvas_copy_layout_for`](crate::brush::pipeline::BrushPipelines::canvas_copy_layout_for)
-    /// — float32 formats are not filterable in core WebGPU.
+    /// [`BrushPipelines::canvas_copy_layout_for`](crate::brush::pipeline::BrushPipelines::canvas_copy_layout_for),
+    /// since float32 formats are not filterable in core WebGPU.
     pub fn new(
         device: &wgpu::Device,
         layer_w: u32,
@@ -217,7 +217,7 @@ impl Scratch {
     /// Allocate the terminal's declared channels if they aren't already,
     /// clearing each to zero at the moment of allocation.
     ///
-    /// Idempotent — safe to call every flush; only a first call, or one
+    /// Idempotent: safe to call every flush; only a first call, or one
     /// whose declaration differs from what is allocated, does work.
     ///
     /// Clearing here rather than relying on the stroke prologue matters:
@@ -249,7 +249,7 @@ impl Scratch {
         self.channels = Some(channels);
     }
 
-    /// Attachment views for the declared channels, in declaration order —
+    /// Attachment views for the declared channels, in declaration order:
     /// what a terminal hangs off its render pass after
     /// [`Scratch::write_view`].  Empty when none are declared.
     pub fn channel_views(&self) -> &[wgpu::TextureView] {
@@ -283,7 +283,7 @@ impl Scratch {
 
     /// Stroke-prologue helper: clear the write side to fully transparent
     /// in a single attachment-clear render pass. Used by terminals whose
-    /// composite accumulates from zero (paint, watercolor) — see
+    /// composite accumulates from zero (paint, watercolor); see
     /// [`crate::brush::node::Lifecycle::ClearScratchToTransparent`]. The
     /// framework calls this during `BrushGraphRunner::begin_stroke` based
     /// on the terminal's declared lifecycle, so the four terminals no
@@ -315,7 +315,7 @@ impl Scratch {
     /// Stroke-prologue helper: copy a full-canvas pre-stroke snapshot
     /// into the write side so the eventual scratch→layer commit
     /// reproduces unchanged pixels verbatim. Used by terminals whose
-    /// commit blits the entire scratch (smudge, liquify) — see
+    /// commit blits the entire scratch (smudge, liquify); see
     /// [`crate::brush::node::Lifecycle::SeedScratchFromPreStroke`].
     ///
     /// Caller is responsible for confirming the source matches the
@@ -355,7 +355,7 @@ impl Scratch {
         &self.read_mirror_bind_group
     }
     /// The write side bound for sampling, for passes that read the
-    /// in-flight stroke pixels **without** targeting the scratch — see the
+    /// in-flight stroke pixels **without** targeting the scratch; see the
     /// module docs for which of the two read paths applies. Callers whose
     /// render target *is* the scratch must use
     /// [`Scratch::sync_read_mirror`] instead; sampling here from such a
@@ -500,8 +500,8 @@ impl Scratch {
             &self.write_sampler,
         );
 
-        // Channels rebase identically — same target size, same canvas-
-        // anchored offset — so they stay addressable at the write side's
+        // Channels rebase identically: same target size, same canvas-
+        // anchored offset, so they stay addressable at the write side's
         // layer-local coordinates. An in-flight stroke's accumulated
         // quantities are as unrecoverable as its pixels, so contents are
         // preserved rather than recreated.
@@ -527,7 +527,7 @@ impl Scratch {
         self.write_w = target_w;
         self.write_h = target_h;
         // The cache origin was in the OLD write-side frame.  After the
-        // rebase, the same origin value points at different pixels — drop it.
+        // rebase, the same origin value points at different pixels; drop it.
         self.read_origin_cache = None;
     }
 
@@ -622,7 +622,7 @@ fn clear_channel_views(encoder: &mut wgpu::CommandEncoder, views: &[wgpu::Textur
     });
 }
 
-/// Copy all of `src` into `dst` at a canvas-anchored destination offset —
+/// Copy all of `src` into `dst` at a canvas-anchored destination offset:
 /// the growth rebase, matching [`Scratch::grow_write`]'s own blit.
 fn copy_region_offset(
     encoder: &mut wgpu::CommandEncoder,

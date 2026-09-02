@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // Regression for the frozen-dab / stomped-cursor bug: `pushHoverOverlay` is
 // the choke point every hover entry path funnels through (CanvasView's hover
 // dispatch, the shift+drag size scrub, the `[` / `]` hotkey refresh), and the
-// size scrub calls it directly — bypassing CanvasView's suppression check.
+// size scrub calls it directly, bypassing CanvasView's suppression check.
 // While a modifier cursor was engaged (picker dropper, clone crosshair), such
 // a call rendered a dab that nothing could later clear (the suppressed hover
 // dispatch never refreshes it) and wrote `app.toolCursor = 'none'` over the
@@ -22,7 +22,7 @@ const { fakeApp } = vi.hoisted(() => ({
         requestFrame: vi.fn(),
     },
 }));
-// No focused instance in these unit tests — the modifier-cursor machinery
+// No focused instance in these unit tests: the modifier-cursor machinery
 // (real) treats a null focus as "no tool to suspend/restore".
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp, getActiveInstance: () => null }));
 vi.mock('../../state/brush_graph.svelte', () => ({

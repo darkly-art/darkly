@@ -1,17 +1,17 @@
-//! Integration tests for the Rough Ink brush — the first 100%-
-//! compiled brush. Exercises the full `paint` pipeline
+//! Integration tests for the Rough Ink brush (the first 100%-compiled brush).
+//! Exercises the full `paint` pipeline
 //! end-to-end on a real GPU device:
 //!
-//! 1. **Single dab renders** — one dab through the compiled pipeline
+//! 1. **Single dab renders**: one dab through the compiled pipeline
 //!    deposits color where it should. Smoke test that the pipeline
 //!    builds and the dab buffer round-trips through the storage
 //!    binding.
-//! 2. **Two dabs in the same flush produce distinct silhouettes** —
+//! 2. **Two dabs in the same flush produce distinct silhouettes**:
 //!    two dabs queued in the same phase get independent per-dab
 //!    random seeds (the runner's `dab_index` increments) and the
 //!    compiled shader reads them per-instance. Catches accidentally
 //!    indexing all instances into slot 0 of the dab buffer.
-//! 3. **Zero amplitude collapses to a disc** — with all three random
+//! 3. **Zero amplitude collapses to a disc**: with all three random
 //!    nodes forced to 0 and the perlin amplitude defaulted via wire
 //!    remap, the rendered shape is a disc within blend tolerance.
 //!    Validates the compiled `shape_r_theta` parity with the existing
@@ -101,7 +101,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     graph.set_port_default(&terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(&terminal, "flow", 1.0).unwrap();
 
-    // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
+    // No `pen.pressure → terminal.flow` wire, so tests that scale alpha by
     // flow rely on the per-test `set_port_default(terminal, "flow", …)`
     // override, which a wire would shadow.
     let wires = [
@@ -302,7 +302,7 @@ fn single_dab_deposits_color_at_center() {
 #[test]
 fn two_dabs_same_flush_both_deposit() {
     // Two dabs at distinct positions in one flush. Both must reach
-    // the layer — catches accidentally indexing all instances to dab
+    // the layer. This catches accidentally indexing all instances to dab
     // 0 in the storage buffer.
     let graph = build_test_graph(0, 0.0, 0.1);
     let mut h = harness(&black_canvas(), graph);
@@ -341,7 +341,7 @@ fn two_dabs_same_flush_both_deposit() {
 
 #[test]
 fn builtin_rough_ink_brush_renders_within_declared_bbox() {
-    // Render the actual Rough Ink builtin — exercises `random →
+    // Render the actual Rough Ink builtin: exercises `random →
     // shape` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
     // for the case where the shape evaluator's body was emitted as a
@@ -352,7 +352,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // rendered footprint must fall inside the brush's declared
     // bbox (effective_radius × `brush_extent_factor`). If the shader
     // writes outside the bbox, the save-point system on rewind
-    // truncates previous dabs to the un-inflated square — the bug
+    // truncates previous dabs to the un-inflated square, the bug
     // the protocol was introduced to fix.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
@@ -386,7 +386,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     queue.submit([enc.finish()]);
 
     // Override the brush's size port so the dab fits in the test
-    // canvas — the builtin's exposed size is small by default.
+    // canvas, since the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
     let _term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph
@@ -425,7 +425,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     h.dab_and_flush(&info, [1.0, 0.5, 0.0, 1.0], 0);
 
     let rgba = h.readback_canvas();
-    // Perlin shape varies per random seed — the centre may be inside
+    // Perlin shape varies per random seed, so the centre may be inside
     // or outside, but *some* deposition has to land within the dab
     // footprint (radius ~38px around (64, 64)) if the shader
     // compiled.
@@ -464,14 +464,14 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         compiled.brush_extent_factor,
     );
     // Sanity: shape must extend at least to the unmodulated disc
-    // boundary somewhere — confirms perlin is actually drawing past
+    // boundary somewhere, confirming perlin is actually drawing past
     // the un-inflated radius, which is the half of the bug we're
     // defending against (bbox too small → clipping inside the bbox
     // is the "bug not present" check).
     assert!(
         max_dist >= effective_radius * 0.5,
         "rendered footprint suspiciously small (max_dist {max_dist}, \
-         effective_radius {effective_radius}) — shader may be \
+         effective_radius {effective_radius}): shader may be \
          clipping inside the declared bbox",
     );
 }
@@ -557,12 +557,12 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
             }
         }
     }
-    // Both dabs must have actually deposited something — catches the
+    // Both dabs must have actually deposited something: catches the
     // case where a per-instance buffer index bug aliases all draws
     // to dab 0 (or one dab gets entirely clipped).
     assert!(
         dab_a_pixels > 20 && dab_b_pixels > 20,
-        "both dabs must render — got A={dab_a_pixels}, B={dab_b_pixels}",
+        "both dabs must render, got A={dab_a_pixels}, B={dab_b_pixels}",
     );
 }
 
@@ -596,8 +596,8 @@ fn terminal_flow_scales_dab_alpha() {
     let full = deposit_red_at_center(1.0);
     let third = deposit_red_at_center(0.3);
     // Both render red (no green/blue), opaque (canvas is opaque
-    // black underneath). Difference is the per-pixel red intensity
-    // — at flow=0.3 the source RGB only deposits ~30% over the
+    // black underneath). Difference is the per-pixel red intensity:
+    // at flow=0.3 the source RGB only deposits ~30% over the
     // underlying black.
     assert!(
         full[0] > 200,

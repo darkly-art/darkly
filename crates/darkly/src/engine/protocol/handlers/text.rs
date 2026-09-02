@@ -1,4 +1,4 @@
-//! Text / vector-layer protocol handlers — create a text layer, hit-test and
+//! Text / vector-layer protocol handlers: create a text layer, hit-test and
 //! edit its objects (content / style / transform), and list available fonts.
 //! Auto-discovered by `build.rs`.
 //!
@@ -128,7 +128,7 @@ pub struct AddTextReq {
     style: StyleWire,
     x: f64,
     y: f64,
-    /// RGBA 0–255. Defaults to opaque black.
+    /// RGBA 0-255. Defaults to opaque black.
     #[serde(default)]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     color: Option<[u8; 4]>,
@@ -146,7 +146,7 @@ pub struct AddTextObjectReq {
     style: StyleWire,
     x: f64,
     y: f64,
-    /// RGBA 0–255. Defaults to opaque black.
+    /// RGBA 0-255. Defaults to opaque black.
     #[serde(default)]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     color: Option<[u8; 4]>,
@@ -271,7 +271,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
         .req::<AddTextReq>()
         .resp_literal("{ id: number, object: number }"),
         RequestRegistration::new("add_text_object", |engine, payload, _b| {
-            // Add another text object to an existing vector layer — the
+            // Add another text object to an existing vector layer: the
             // multi-object case (placing text while a text layer is active).
             let r: AddTextObjectReq = decode(payload)?;
             let text = build_text_props(r.content, r.style);
@@ -438,7 +438,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
             "{ italic: boolean, axes: Array<{ tag: string, min: number, default: number, max: number }> }",
         ),
         RequestRegistration::new("register_font", |engine, _payload, bytes| {
-            // Raw SFNT (`.ttf`/`.otf`) bytes arrive alongside the payload —
+            // Raw SFNT (`.ttf`/`.otf`) bytes arrive alongside the payload:
             // the same binary-in pattern as `brush_upload_image`. Returns
             // the family names the blob contributed so the frontend library
             // can index them.

@@ -6,8 +6,8 @@
     import FilterPickerModal from '../filters/FilterPickerModal.svelte';
 
     // The pickers add layers/veils by type, so the panel's view of both has to
-    // be re-read once one closes. They're mounted at the app root — reachable
-    // from the palette and menu bar, not just the layer panel — so the refresh
+    // be re-read once one closes. They're mounted at the app root (reachable
+    // from the palette and menu bar, not just the layer panel), so the refresh
     // is theirs to do rather than the panel's.
     function close() {
         layerPicker.kind = null;

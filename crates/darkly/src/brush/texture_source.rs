@@ -5,24 +5,24 @@
 //! [`crate::brush::wgsl::sample_graph_texture`]. Two kinds of node produce
 //! those slots, and they differ only in *how the texture is obtained*:
 //!
-//! - [`ResolvedSource::Named`] — a texture already in the
+//! - [`ResolvedSource::Named`]: a texture already in the
 //!   [`crate::gpu::texture_registry::TextureRegistry`], looked up by name
 //!   (the `image` node).
-//! - [`ResolvedSource::Baked`] — a procedural tile baked once by running the
+//! - [`ResolvedSource::Baked`]: a procedural tile baked once by running the
 //!   existing fBm shader into a texture and cached by its field-defining
 //!   parameters (the `noise` node, when its field is static). Baking turns an
-//!   ~80-hash per-fragment fBm kernel — re-run per canvas pixel per
-//!   overlapping dab — into a single `textureSample`.
-//! - [`ResolvedSource::Live`] — a texture the requesting node republishes
+//!   ~80-hash per-fragment fBm kernel (re-run per canvas pixel per
+//!   overlapping dab) into a single `textureSample`.
+//! - [`ResolvedSource::Live`]: a texture the requesting node republishes
 //!   every flush (`clone_source`'s stroke snapshot, `pickup`'s per-dab
 //!   atlas). Resolved at bind time from the live table, so the slot
 //!   survives the texture being reallocated mid-stroke, and falls back to
-//!   `_fallback` when nothing has been published — which is what makes the
+//!   `_fallback` when nothing has been published, which is what makes the
 //!   cursor preview neutral without a special case.
 //!
 //! All three converge on the identical emission; the only divergence is a
 //! three-arm match at the single bind point (`make_bind_group`). This is data
-//! only — no trait, no registry. When a *third* bakeable field lands (e.g. a
+//! only: no trait, no registry. When a *third* bakeable field lands (e.g. a
 //! procedural paper/hatch source), promote [`BakeKind`] to a `Bakeable` trait
 //! with per-variant files, mirroring `gpu/veils/*`; the arms here are one
 //! expression each and are not yet a subsystem.
@@ -66,14 +66,14 @@ impl ResolvedSource {
 /// Each producer publishes its view through
 /// [`crate::brush::gpu_context::BrushGpuContext::publish_live_texture`]
 /// during its own `flush_dabs`, which the runner dispatches in topological
-/// order — so a producer upstream of the terminal has always published by
+/// order, so a producer upstream of the terminal has always published by
 /// the time the terminal binds. A slot with nothing published falls back to
 /// the registry's `_fallback` tile, which is what makes the cursor preview
 /// (no stroke, no dabs, nothing published) render neutrally with no
 /// special-casing in the preview pipeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LiveSource {
-    /// The stroke's frozen source snapshot — the cross-layer / merged
+    /// The stroke's frozen source snapshot: the cross-layer / merged
     /// snapshot when one was captured, else the pre-stroke snapshot
     /// (same-layer clone). Published by `clone_source`.
     StrokeSnapshot,
@@ -102,7 +102,7 @@ pub enum BakeChannels {
 
 /// A fully-specified, hashable recipe for one baked procedural tile.
 ///
-/// Holds **field-defining** parameters only — the things that change the tile
+/// Holds **field-defining** parameters only: the things that change the tile
 /// *content*. Sample-time parameters (`scale`, `variation`, `rotation`) are
 /// deliberately absent: they are applied by the sampling frame at read time
 /// (they move *where* the tile is sampled, not *what it contains*), so one
@@ -120,7 +120,7 @@ pub struct BakeSpec {
 }
 
 impl BakeSpec {
-    /// How many field units the baked tile spans on each axis — equivalently,
+    /// How many field units the baked tile spans on each axis: equivalently,
     /// the field's **repeat period**: sampled through the Repeat sampler the
     /// tile wraps once per `FIELD_SPAN` field units. Made large so the field
     /// does not visibly repeat within a normal view. The bake shader maps a
@@ -128,12 +128,12 @@ impl BakeSpec {
     ///
     /// Independent of [`resolution_for_octaves`](Self::resolution_for_octaves):
     /// the period sets how far the fixed texel budget is stretched across the
-    /// plane, not how many texels the tile holds. Enlarging it costs no memory
-    /// — it softens fine detail instead (the texels cover more field units).
+    /// plane, not how many texels the tile holds. Enlarging it costs no memory:
+    /// it softens fine detail instead (the texels cover more field units).
     pub const FIELD_SPAN: f32 = 128.0;
 
     /// Reference detail window (field units) the tile is sized to resolve at
-    /// Nyquist — the detail axis, held **separate** from [`FIELD_SPAN`] (the
+    /// Nyquist: the detail axis, held **separate** from [`FIELD_SPAN`] (the
     /// period axis) so neither constant is overloaded. The tile holds enough
     /// texels to resolve the finest octave across *this* window; the larger
     /// real [`FIELD_SPAN`] stretches those texels further, so fine octaves
@@ -146,9 +146,9 @@ impl BakeSpec {
     /// With a base cell of 1 field unit and octaves doubling frequency, the
     /// finest feature is `DETAIL_SPAN / 2^(octaves-1)` field units; at ~2
     /// texels per finest half-feature that is `DETAIL_SPAN * 2^(octaves-1) *
-    /// 2` texels. Clamped to `[512, 2048]` (1–16 MiB RGBA8; ¼ that for R8),
+    /// 2` texels. Clamped to `[512, 2048]` (1-16 MiB RGBA8; ¼ that for R8),
     /// trading fine detail at high octaves for bounded memory. Deliberately
-    /// does not scale with [`FIELD_SPAN`] — see there.
+    /// does not scale with [`FIELD_SPAN`]; see there.
     pub fn resolution_for_octaves(octaves: i32) -> u32 {
         let finest = 1u32 << (octaves.clamp(1, 8) - 1) as u32;
         (Self::DETAIL_SPAN * finest * 2).clamp(512, 2048)
@@ -158,18 +158,18 @@ impl BakeSpec {
 /// The procedural field a [`ResolvedSource::Baked`] tile bakes.
 ///
 /// A single-variant enum today. A future procedural paper/hatch/gradient
-/// source adds a variant here and a match arm in the bake function —
+/// source adds a variant here and a match arm in the bake function:
 /// additive, no consumer edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BakeKind {
-    /// Domain-warped, per-octave-rotated fBm — the `noise` node's field.
+    /// Domain-warped, per-octave-rotated fBm: the `noise` node's field.
     ///
     /// `warp`/`roughness` are `f32` at the node but must key a `Hash + Eq`
     /// spec, so they are quantized (see [`BakeKind::quantize`]) before
     /// entering here. A bake is a visual approximation, so sub-quantum
     /// parameter deltas sharing a tile is correct, not a bug. `octaves`,
     /// `warp_q`, `roughness_q`, and `seed` here are the **already-clamped**
-    /// values the node's live path would use — the bake must not re-clamp.
+    /// values the node's live path would use; the bake must not re-clamp.
     Noise {
         seed: u32,
         octaves: i32,
@@ -180,7 +180,7 @@ pub enum BakeKind {
 
 impl BakeKind {
     /// Quantum for turning an `f32` parameter into a hashable `u32` key.
-    /// 1e-4 resolution — finer than any visible difference in a baked tile.
+    /// 1e-4 resolution: finer than any visible difference in a baked tile.
     pub const QUANTUM: f32 = 1.0e4;
 
     /// Quantize an `f32` field parameter (assumed already clamped to its
@@ -189,7 +189,7 @@ impl BakeKind {
         (v * Self::QUANTUM).round().max(0.0) as u32
     }
 
-    /// Recover the `f32` a quantized parameter stands for — the value fed to
+    /// Recover the `f32` a quantized parameter stands for: the value fed to
     /// the bake shader's uniform, so the tile matches the node's live path.
     pub fn dequantize(q: u32) -> f32 {
         q as f32 / Self::QUANTUM

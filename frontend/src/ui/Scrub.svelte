@@ -14,9 +14,9 @@
         default: number;
         formatValue?: (v: number) => string;
         /** Apply the value under the pointer. Fires on every move, so it must
-         *  be cheap — local or session state, not an engine round-trip. */
+         *  be cheap: local or session state, not an engine round-trip. */
         onChange: (v: number) => void;
-        /** The value the user settled on, once per gesture. For consumers
+        /** The value the artist settled on, once per gesture. For consumers
          *  whose real work is too expensive to repeat mid-drag; omit it when
          *  `onChange` is already the whole story. */
         onCommit?: (v: number) => void;
@@ -76,7 +76,7 @@
         el.addEventListener('lostpointercapture', onEnd);
     }
 
-    /** Double-click restores the default — one discrete change, so it previews
+    /** Double-click restores the default: one discrete change, so it previews
      *  and commits in the same step. */
     function resetDefault() {
         if (props.mode !== 'drag') return;
@@ -150,7 +150,7 @@
         color: var(--text-muted);
     }
 
-    /* Values are numeric — keep digits from shifting width while scrubbing. */
+    /* Values are numeric; keep digits from shifting width while scrubbing. */
     .scrub .bar-control-value {
         font-variant-numeric: tabular-nums;
     }

@@ -21,7 +21,7 @@ const H: u32 = 4;
 const FG_RGBA: [u8; 4] = [200, 80, 160, 255];
 const BG_RGBA: [u8; 4] = [100, 180, 90, 255];
 
-// ±2 byte tolerance — accommodates u8↔f32↔u8 round-trip and minor float
+// ±2 byte tolerance accommodates u8↔f32↔u8 round-trip and minor float
 // rounding between WGSL and Rust.
 const EPSILON: f32 = 2.0 / 255.0;
 

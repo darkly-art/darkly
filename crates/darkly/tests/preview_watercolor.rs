@@ -135,7 +135,7 @@ fn smooth_watercolor_preview_shows_color() {
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Smooth Watercolor: pressure=1 → flow ~ 1 → centre is brush color
-    // (premultiplied). Don't assert near-opaque alpha — the preview
+    // (premultiplied). Don't assert near-opaque alpha: the preview
     // body folds mask × flow × color.a into the alpha and edge
     // softness brings the centre down slightly from full.
     assert!(
@@ -157,28 +157,28 @@ fn rough_watercolor_preview_shows_color_and_silhouette_variance() {
     );
 
     // Rough Watercolor's perlin shape (amplitude 0.4, frequency 12)
-    // should produce visible boundary variance at intermediate radii
-    // — sample ~75% of `radius` (= `bbox_half / brush_extent_factor *
+    // should produce visible boundary variance at intermediate radii;
+    // sample ~75% of `radius` (= `bbox_half / brush_extent_factor *
     // 0.75`). At amplitude 0.4 the shape boundary swings [0.6, 1.4]
     // × radius, so 0.75 × radius is inside at some thetas, outside
     // at others.
     //
     // `brush_extent_factor` for amplitude_max=0.5 is 1.5, so the
     // factor here is 1.4 (saved on the brush via `port_max_value`).
-    // Sampling at 0.5 × bbox_half puts us at ~0.71 × radius — safely
+    // Sampling at 0.5 × bbox_half puts us at ~0.71 × radius, safely
     // inside the average shape, with the perlin dips visible.
     // Sweep multiple radii. The exact boundary radius isn't known a
     // priori (perlin sampling varies per dab/seed); at *some* radius
     // we straddle the shape's wavy boundary and see opaque-and-
     // transparent neighbours along theta. Pick the widest variance
-    // across the sweep — if the cursor were a perfect disc, every
+    // across the sweep: if the cursor were a perfect disc, every
     // sample at one radius would be either all opaque or all
     // transparent.
     //
     // Sample in *target-pixel* space: the preview dab fills the
     // test mask's inscribed disc (`half_extent_target_px = PREVIEW_SIDE/2`),
     // not the canvas-px value `out.info.half_extent_canvas_px` (which
-    // is what the overlay's displayed quad consumes — a different
+    // is what the overlay's displayed quad consumes, a different
     // frame). Pre-fix this read `half_extent_canvas_px` and worked
     // only because canvas px happened to match target px for the
     // 256² test mask × this brush size; post-fix the dab is scaled

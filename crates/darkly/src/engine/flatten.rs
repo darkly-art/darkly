@@ -1,5 +1,5 @@
 //! Flatten Image: composite every visible top-level layer into one raster,
-//! discarding the rest. Photoshop-style — hidden layers are lost; visible
+//! discarding the rest. Photoshop-style: hidden layers are lost; visible
 //! ones are baked into a single "Background" layer at the root.
 
 use darkly_macros::handlers;
@@ -20,7 +20,7 @@ impl DarklyEngine {
             return Err("Document has no layers to flatten".into());
         }
 
-        // Visible top-level nodes — these get composited into the result.
+        // Visible top-level nodes; these get composited into the result.
         // The walk respects only direct-child visibility; descendants of a
         // visible group whose own visible flag is false are filtered by
         // the compositor.
@@ -52,7 +52,7 @@ impl DarklyEngine {
 
         // Bake the composite of every visible top-level node into the
         // result. If `visible_ids` is empty (everything hidden), the bake
-        // produces a transparent result — that's the right semantic.
+        // produces a transparent result; that's the right semantic.
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
@@ -62,7 +62,7 @@ impl DarklyEngine {
         );
 
         // Record each source's slot before anything detaches. Flatten takes
-        // every top-level node except the result, hidden ones included — they
+        // every top-level node except the result, hidden ones included; they
         // are discarded from the document but still tombstoned, so undo brings
         // them back with their pixels.
         let sources: Vec<BakeSourceSlot> = top_level
@@ -96,9 +96,9 @@ impl DarklyEngine {
     /// - For a **paintable layer with filters** (a raster carrying a mask):
     ///   bakes the filters into the layer's RGBA and removes them. The layer
     ///   keeps its id, blend props, and tree position. Implemented as a re-use
-    ///   of [`Self::apply_mask`] — same semantics, just a different entry name
-    ///   so the UI can call "Flatten" uniformly across node kinds.
-    /// - For a **layer whose pixels are generated** (a void — smart object,
+    ///   of [`Self::apply_mask`] (same semantics, just a different entry name
+    ///   so the UI can call "Flatten" uniformly across node kinds).
+    /// - For a **layer whose pixels are generated** (a void: smart object,
     ///   camera; a filter layer; a vector layer): rasterizes it, replacing the
     ///   node with a raster holding what it currently renders. This is the
     ///   "make it paintable" path: the source layer keeps existing only inside
@@ -108,7 +108,7 @@ impl DarklyEngine {
     ///   opacity, visible, and locked, and takes the group's tree slot.
     ///   The group's children and the group itself are tombstoned for undo.
     ///
-    /// Errors when flattening would be a no-op — a raster with no filters
+    /// Errors when flattening would be a no-op: a raster with no filters
     /// already *is* plain pixels.
     #[handler]
     pub fn flatten_node(&mut self, node_id: LayerId) -> Result<LayerId, String> {

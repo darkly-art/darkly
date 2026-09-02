@@ -7,7 +7,7 @@ export type DeployMode = 'demo' | 'app';
 
 export const deployMode: DeployMode = __DARKLY_APP_MODE__;
 
-/** The starter content of a fresh document — everything that differs between the
+/** The starter content of a fresh document: everything that differs between the
  *  decorative `demo.darkly.art` build and the clean `app` build. Consumers call
  *  the two hooks without knowing which flavor they got; a new mode is a purely
  *  additive entry in {@link RECIPES}. */
@@ -17,7 +17,7 @@ interface FreshDocumentRecipe {
     defaultBrushName: string;
     /** The initial foreground paint color for this build. */
     foreground: Color;
-    /** The initial background swatch color for this build — the other half of
+    /** The initial background swatch color for this build: the other half of
      *  the foreground/background pair "reset colors" returns to and "swap"
      *  toggles into. */
     background: Color;
@@ -30,7 +30,7 @@ interface FreshDocumentRecipe {
 /** Per-flavor starter-content recipes. Exported for tests; consumers use
  *  {@link freshDocument}, the entry for this build's flavor. */
 export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
-    // Demo: the night-sky background image plus the four hidden veils new users
+    // Demo: the night-sky background image plus the four hidden veils new artists
     // discover the feature through.
     demo: {
         defaultBrushName: 'Rough Watercolor',
@@ -50,7 +50,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             instance.addVeil('vhs', { visible: false });
         },
     },
-    // App: a clean editor — an opaque black layer painted with a white ink pen,
+    // App: a clean editor, an opaque black layer painted with a white ink pen,
     // and no pre-seeded veils. The veil feature still exists; it is simply not
     // pre-populated.
     app: {

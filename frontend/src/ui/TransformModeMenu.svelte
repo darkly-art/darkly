@@ -9,7 +9,7 @@
     let menu = $derived(app.transformModeMenu);
 
     // Whether the thing under the gizmo is floating content that could become a
-    // smart object. Only the engine knows — a destructive transform session and
+    // smart object. Only the engine knows: a destructive transform session and
     // a mask float both look like "the gizmo is up" from here, and neither
     // qualifies.
     //
@@ -48,7 +48,7 @@
     // and freeze. Reading the reactive `menu` ties it to each menu open,
     // re-resolving the active mode (the checkmark) every time.
     //
-    // Mode switches first, then the flips — the same grouping Krita's transform
+    // Mode switches first, then the flips: the same grouping Krita's transform
     // tool uses (`kis_tool_transform.cc::popupActionsMenu`).
     let items = $derived.by<ContextMenuItem[]>(() => {
         void menu;

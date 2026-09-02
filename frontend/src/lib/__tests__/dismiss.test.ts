@@ -3,7 +3,7 @@ import { watchDismiss } from '../dismiss';
 
 // jsdom isn't available in this project, so we exercise the helper against a
 // stubbed `window` and fake event targets. That's enough to pin the behaviour
-// that matters: it dismisses on `pointerdown` (not click — the canvas
+// that matters: it dismisses on `pointerdown` (not click; the canvas
 // suppresses that) for any target outside the popup's own scope.
 
 let listeners: Record<string, (e: { target: unknown }) => void>;
@@ -49,7 +49,7 @@ describe('watchDismiss', () => {
         expect(cb).toHaveBeenCalledTimes(1);
     });
 
-    it('ignores other popups\' controls — a different scope still dismisses this one', () => {
+    it('ignores other popups\' controls: a different scope still dismisses this one', () => {
         const cb = vi.fn();
         watchDismiss('menu', cb);
         listeners.pointerdown({ target: target('brush-picker') });

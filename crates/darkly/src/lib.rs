@@ -5,8 +5,13 @@ pub mod catalog;
 pub mod clipboard;
 pub mod config;
 pub mod coord;
+/// Fills the marked regions of the repository's own markdown from the
+/// registries. Repository tooling that walks a source tree, so it is native-only:
+/// a browser has no checkout to sync.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod docs_md;
 /// Renders the documentation preview assets. Performs blocking GPU readbacks,
-/// so it lives behind the same gate as `gpu::test_utils` — engine, compositor
+/// so it lives behind the same gate as `gpu::test_utils`: engine, compositor
 /// and WASM-bridge code cannot name it in a production build.
 #[cfg(any(test, feature = "testing"))]
 pub mod docs_render;
@@ -26,7 +31,7 @@ pub mod transform;
 pub mod undo;
 pub mod units;
 
-/// Darkly's version — the latest git tag plus the commit height since it
+/// Darkly's version: the latest git tag plus the commit height since it
 /// (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`), baked in by
 /// build.rs as `DARKLY_VERSION`. The single crate-side home for the version;
 /// consumers read this, never `env!("CARGO_PKG_VERSION")` (which is the stale
@@ -58,7 +63,7 @@ mod version_tests {
     /// vacuously on the fallback in a shallow/git-less CI checkout.
     ///
     /// (Build-time vs. test-time describe could differ if the repo mutates
-    /// mid-run — negligible within a single `cargo test`.)
+    /// mid-run, though that's negligible within a single `cargo test`.)
     #[test]
     fn version_matches_live_git_describe() {
         let live = Command::new("git")

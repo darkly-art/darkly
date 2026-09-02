@@ -1,4 +1,4 @@
-//! Invert-colors filter — `1 - rgb`, alpha preserved.
+//! Invert-colors filter: `1 - rgb`, alpha preserved.
 //!
 //! A thin registration over the shared infrastructure: the `invert_color` atom
 //! (`shaders/lib/color.wgsl`) supplies the math, the `MaskedFilterPipeline`
@@ -13,7 +13,7 @@ use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::preview::PreviewAnim;
 
 /// Prepend the shared color atom to the invert shader so `fs_invert` /
-/// `fs_invert_masked` can call `invert_color` — the same `include_str!`
+/// `fs_invert_masked` can call `invert_color`, the same `include_str!`
 /// concatenation `voids/noise.rs` uses for `lib/fbm.wgsl`.
 fn shader_source() -> String {
     let color = include_str!("../../../shaders/lib/color.wgsl");

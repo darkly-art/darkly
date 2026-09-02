@@ -1,9 +1,9 @@
-//! Screenshare void — a live `getDisplayMedia()` capture as a layer.
+//! Screenshare void: a live `getDisplayMedia()` capture as a layer.
 //!
 //! Sibling of the camera void: a thin config over the shared
 //! [`crate::gpu::textured_void`] machinery. The only differences from the
 //! camera are metadata (name, icon), the capture API ([`CaptureKind::Display`]
-//! → `getDisplayMedia`), and the seeded transform (identity — a shared screen
+//! → `getDisplayMedia`), and the seeded transform (identity: a shared screen
 //! has no natural "selfie" orientation to flip).
 
 use crate::gpu::textured_void::ContentFit;
@@ -12,11 +12,11 @@ use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "screenshare";
 
-// Identical schema to the camera — the shared machinery looks these up by name,
+// Identical schema to the camera: the shared machinery looks these up by name,
 // so the two stay decoupled even though they happen to match today.
 const PARAMS: &[ParamDef] = &[
     // Freeze on the last received frame; suppresses uploads (GPU holds the
-    // last frame) while keeping the share open — stopping a getDisplayMedia
+    // last frame) while keeping the share open: stopping a getDisplayMedia
     // track would end the share permanently, so freeze must not close it.
     ParamDef::boolean("freeze", false)
         .with_label("Freeze")
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn default_params_round_trip() {
-        // freeze off, divisor 4 — the schema's declared defaults, which is what
+        // freeze off, divisor 4: the schema's declared defaults, which is what
         // the picker sends and what `param_values` must echo back.
         let reg = register();
         let defaults: Vec<ParamValue> = reg.params.iter().map(|d| d.default_value()).collect();

@@ -9,7 +9,7 @@ import ColorPickerOptions from '../ui/ColorPickerOptions.svelte';
 
 class ColorPickerTool extends ToolBase {
     onActivate(): void {
-        // Take ownership of `app.toolCursor` immediately — the tool-transition
+        // Take ownership of `app.toolCursor` immediately: the tool-transition
         // effect resets it to null right before calling us, so we push the
         // picker cursor now rather than waiting for the next frame's
         // `tickColorPickerCursor`.
@@ -43,7 +43,7 @@ class ColorPickerTool extends ToolBase {
     onPointerLeave(): void {
         setColorPickerPressed(false);
     }
-    // No `onFrame` — `pollPick` runs unconditionally from the frame loop in
+    // No `onFrame`: `pollPick` runs unconditionally from the frame loop in
     // app.svelte.ts, and `tickColorPickerCursor` next to it keeps the cursor
     // in sync with foreground updates regardless of which tool is active.
 }

@@ -1,16 +1,16 @@
 /**
- * Leading-edge debouncer — fire immediately, then suppress further fires
+ * Leading-edge debouncer: fire immediately, then suppress further fires
  * for `delayMs`. If any requests arrive during the suppression window, one
  * final fire is scheduled at the end of it so the caller never misses the
  * latest state.
  *
  * Mirrors Krita's `KisSignalCompressor` in FIRST_ACTIVE mode
- * (`krita/libs/global/kis_signal_compressor.h`) — the same pattern that
+ * (`krita/libs/global/kis_signal_compressor.h`), the same pattern that
  * drives its live brush preview at a ~100ms cadence.
  *
  * Typical use: slider drags fire dozens of times per second; the WASM
  * preview render takes ~10-30ms each. Without throttling, updates pile up
- * and fall behind the user's input. With leading-edge throttling, the user
+ * and fall behind the artist's input. With leading-edge throttling, the artist
  * sees an immediate response and the final value always wins.
  */
 export class SignalCompressor {
@@ -27,7 +27,7 @@ export class SignalCompressor {
     /** Request a fire. Fires immediately if not in the suppression window. */
     request() {
         if (this.timer !== null) {
-            // Already firing / within the suppression window — mark a trailing fire.
+            // Already firing / within the suppression window: mark a trailing fire.
             this.trailingPending = true;
             return;
         }

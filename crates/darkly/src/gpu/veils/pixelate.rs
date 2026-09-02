@@ -21,7 +21,7 @@ pub fn register() -> VeilRegistration {
         description: "Downsample the view into a blocky pixel mosaic.",
         params: PARAMS,
         // Half-way rather than at the peak: `swing(0.25)` is exactly 0.5, so the
-        // still lands mid-band — blocks big enough to read as a mosaic without
+        // still lands mid-band: blocks big enough to read as a mosaic without
         // the coarsest setting's near-total loss of the image.
         preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
         create_pipeline: create_pixelate_pipeline,
@@ -47,7 +47,7 @@ pub struct Pixelate {
     /// When false, uses nearest-neighbor (hard pixel edges).
     pub soft: bool,
     /// The `scale` the current [`EffectCache`] was built for. Pixelate's cache
-    /// *is* its parameters — one aux texture and bind group per halving — so
+    /// *is* its parameters (one aux texture and bind group per halving), so
     /// this is what lets [`preview_at`](Veil::preview_at) say when the cache it
     /// was handed no longer describes the instance.
     built_scale: Option<u32>,
@@ -92,7 +92,7 @@ impl Veil for Pixelate {
     }
 
     /// Blocks grow from a single pixel to the coarsest the control allows and
-    /// back, one visible quantised step at a time — which is what shows what
+    /// back, one visible quantised step at a time, which is what shows what
     /// the control does in a way no single block size can.
     ///
     /// Every step changes the cache's *shape*, so this answers `false` whenever
@@ -226,7 +226,7 @@ impl Veil for Pixelate {
             });
             [bg.clone(), bg]
         } else {
-            // scale ~1.0, no downscaling — just blit through with chosen sampler.
+            // scale ~1.0, no downscaling; just blit through with chosen sampler.
             std::array::from_fn(|i| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(&format!("pixelate-up-{i}")),
@@ -313,7 +313,7 @@ impl Veil for Pixelate {
 }
 
 fn create_pixelate_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
-    // Pixelate uses the shared blit shader — the effect comes from
+    // Pixelate uses the shared blit shader; the effect comes from
     // iteratively halving to a small texture (proper 2x2 averaging),
     // then upscaling with linear or nearest filtering.
     create_blit_pipeline(device, format, "pixelate")

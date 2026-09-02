@@ -1,11 +1,11 @@
-//! Destructive color filters — apply a `MaskedFilterPipeline` to a node's
+//! Destructive color filters: apply a `MaskedFilterPipeline` to a node's
 //! pixels in place, respecting an active selection.
 //!
 //! Mirrors [`layer_flip`](super::super::layer_flip)'s structure: the region machinery
 //! is node-generic (layers and masks both live in `node_textures` keyed by
 //! `LayerId`, RGBA8 vs R8 driven by format), so a single `apply_filter`
 //! inverts a raster layer or a mask with no per-kind branching. With an active
-//! selection only the selected region changes — clipped to the selection
+//! selection only the selected region changes, clipped to the selection
 //! *shape* via the uploaded mask; with none, the whole node is filtered. The
 //! pixel extent never changes, so undo is a single [`GpuRegionAction`].
 
@@ -26,7 +26,7 @@ use crate::undo::GpuRegionAction;
 pub(crate) enum FilterRegion {
     /// Filter this region, masked to the selection shape when `Some`.
     Ready(CanvasRect, Option<wgpu::Texture>),
-    /// The selection resolved but is degenerate — nothing to filter.
+    /// The selection resolved but is degenerate: nothing to filter.
     Empty,
     /// The selection bbox isn't cached yet; the caller kicks a readback.
     NeedsSelection,
@@ -34,7 +34,7 @@ pub(crate) enum FilterRegion {
 
 #[handlers]
 impl DarklyEngine {
-    /// Wire entry for `apply_filter` — coerces `params` against the filter
+    /// Wire entry for `apply_filter`: coerces `params` against the filter
     /// type's schema (defaults fill any omitted values), then
     /// [`Self::apply_filter_typed`]. Parameter-free filters (invert) carry an
     /// empty `params`; parametric ones (curves/levels/hsv) carry the values the
@@ -146,10 +146,10 @@ impl DarklyEngine {
         true
     }
 
-    /// Wire entry for `preview_filter` — coerces `params`, then
+    /// Wire entry for `preview_filter`: coerces `params`, then
     /// [`Self::preview_filter_typed`]. Drives the destructive modal's live
     /// preview: the effect is shown on the canvas non-destructively until the
-    /// user commits or cancels.
+    /// artist commits or cancels.
     #[handler]
     pub fn preview_filter(
         &mut self,
@@ -261,7 +261,7 @@ impl DarklyEngine {
     }
 
     /// Discard a live preview, restoring the node's pristine pixels. A no-op
-    /// when no preview is active (e.g. the user never edited a param).
+    /// when no preview is active (e.g. the artist never edited a param).
     #[handler]
     pub fn cancel_filter_preview(&mut self) {
         if let Some(preview) = self.filter_preview.take() {
@@ -277,7 +277,7 @@ impl DarklyEngine {
 
     /// Commit a destructive filter from the modal: restore the pristine pixels
     /// (so the authoritative apply snapshots the true "before" and clips the
-    /// selection itself), then [`Self::apply_filter_typed`] once — one undo
+    /// selection itself), then [`Self::apply_filter_typed`] once for one undo
     /// entry. Works whether or not a live preview was ever established.
     #[handler]
     pub fn commit_filter_preview(
@@ -313,7 +313,7 @@ impl DarklyEngine {
     /// Resolve the region a node filter should touch (canvas coords), plus the
     /// cropped R8 selection mask when a selection is active. With no selection
     /// the whole node extent is returned unmasked. `NeedsSelection` means the
-    /// selection bbox readback hasn't landed — the caller decides whether to
+    /// selection bbox readback hasn't landed; the caller decides whether to
     /// defer (destructive apply) or fall back (live preview).
     pub(crate) fn resolve_filter_region(&mut self, node_id: LayerId) -> FilterRegion {
         let node_extent = match self.compositor.node_texture(node_id) {
@@ -323,7 +323,7 @@ impl DarklyEngine {
         if !self.has_selection() {
             return FilterRegion::Ready(node_extent, None);
         }
-        // Selection bbox (window-local) — recomputed from the cpu cache if the
+        // Selection bbox (window-local), recomputed from the cpu cache if the
         // readback hasn't populated bounds yet, else NeedsSelection.
         let bounds = match self.selection_pixel_bounds() {
             Some(b) => b,

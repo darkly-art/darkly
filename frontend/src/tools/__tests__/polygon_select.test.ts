@@ -5,7 +5,7 @@ import { withApi } from '../../engine/testApi';
 // `import { app } from '../state/app.svelte'` resolves to our fake.
 // Avoids pulling in the Svelte runtime ($state runes) for unit tests.
 //
-// `vi.mock` is hoisted above any top-level `const` — `vi.hoisted` is the
+// `vi.mock` is hoisted above any top-level `const`: `vi.hoisted` is the
 // supported escape hatch to declare spies that the mock factory and the
 // tests can both reference.
 const { engine, fakeApp } = vi.hoisted(() => {
@@ -19,7 +19,7 @@ const { engine, fakeApp } = vi.hoisted(() => {
 });
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
-// Module under test — imported after the mock is registered.
+// Module under test: imported after the mock is registered.
 import { polygonSelectTool } from '../polygon_select.svelte';
 
 const tool = polygonSelectTool.create(fakeApp as never) as unknown as {
@@ -28,11 +28,11 @@ const tool = polygonSelectTool.create(fakeApp as never) as unknown as {
     onKeyDown(e: KeyboardEvent): boolean;
 };
 
-// Plain-object event fakes — vitest's default node env has no DOM globals
+// Plain-object event fakes: vitest's default node env has no DOM globals
 // (`PointerEvent` / `KeyboardEvent`), and we only read a handful of fields.
 let clock = 0;
 function pointerDown(_x: number, _y: number, dtMs = 1000): PointerEvent {
-    // Manual timestamp control — the tool detects double-click via
+    // Manual timestamp control: the tool detects double-click via
     // `e.timeStamp` deltas, not `e.detail` (which the canvas's
     // preventDefault suppresses).
     clock += dtMs;
@@ -50,8 +50,8 @@ function postCalls(kind: string) {
 function reset() {
     engine.post.mockClear();
     engine.send.mockClear();
-    // Escape clears any in-progress polygon without committing — guarantees
-    // each test starts with an empty module-level vertex buffer.
+    // Escape clears any in-progress polygon without committing, which
+    // guarantees each test starts with an empty module-level vertex buffer.
     tool.onKeyDown(keyEvent('Escape'));
     // Then run an explicit Escape again to clear the now-empty buffer state
     // (the first Escape may have committed to clear_selection if the buffer
@@ -95,7 +95,7 @@ describe('polygonSelectTool', () => {
         tool.onPointerDown(pointerDown(0, 0), 0, 0);
         tool.onPointerDown(pointerDown(10, 0), 10, 0);
         tool.onPointerDown(pointerDown(10, 10), 10, 10);
-        // Second click of a double-click — small dt, same position.
+        // Second click of a double-click: small dt, same position.
         tool.onPointerDown(pointerDown(10, 10, 50), 10, 10);
         const calls = postCalls('select_lasso');
         expect(calls).toHaveLength(1);
@@ -132,7 +132,7 @@ describe('polygonSelectTool', () => {
         tool.onKeyDown(keyEvent('Escape'));
         expect(postCalls('select_lasso')).toHaveLength(0);
         // No in-progress polygon was committed AND the existing doc selection
-        // was not touched — Escape only cancels the WIP polygon here.
+        // was not touched; Escape only cancels the WIP polygon here.
         expect(postCalls('clear_selection')).toHaveLength(0);
     });
 

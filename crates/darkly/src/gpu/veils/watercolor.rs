@@ -9,7 +9,7 @@ const PARAMS: &[ParamDef] = &[
         .with_description("How many times the pigment is allowed to bleed; more softens further."),
     ParamDef::float("wetness", 0.0, 2.0, 0.5)
         .with_label("Wetness")
-        .with_description("How freely pigment runs — dry holds its edge, wet pools outward."),
+        .with_description("How freely pigment runs: dry holds its edge, wet pools outward."),
 ];
 
 /// Size of the generated RGBA noise texture used as a flow map.
@@ -22,7 +22,7 @@ pub fn register() -> VeilRegistration {
         description: "Bleed the view outward into soft watercolor washes.",
         params: PARAMS,
         // Half-way rather than at the peak: `swing(0.25)` is exactly 0.5, so the
-        // still lands mid-band — a visible bleed rather than the fully-dissolved
+        // still lands mid-band: a visible bleed rather than the fully-dissolved
         // wash the sweep's far end reaches.
         preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
         create_pipeline: create_watercolor_pipeline,
@@ -174,8 +174,8 @@ impl Veil for Watercolor {
         ]
     }
 
-    /// The wash bleeds outward and dries back. `iterations` is a *pass count* —
-    /// each one is a fullscreen blur — so its sweep is bounded well below the
+    /// The wash bleeds outward and dries back. `iterations` is a *pass count*
+    /// (each one is a fullscreen blur), so its sweep is bounded well below the
     /// slider's maximum: `1 → 10 → 1` averages 5.5 passes per frame, comparable
     /// to the shipped default of 5, where the full `1 → 50` band would average
     /// 25. The visible bleed still ramps from barely-there to twice the
@@ -322,7 +322,7 @@ impl Veil for Watercolor {
         let pipeline = &self.shared.pipeline;
         let n = self.iterations as usize;
 
-        // Pass 0: RGB → CMYK — ping_pong[src] → aux[0]
+        // Pass 0: RGB → CMYK (ping_pong[src] → aux[0])
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("watercolor-init"),
@@ -342,7 +342,7 @@ impl Veil for Watercolor {
             rpass.draw(0..3, 0..1);
         }
 
-        // Passes 1..N: blur iterations — aux[src] → aux[dst], ping-ponging.
+        // Passes 1..N: blur iterations (aux[src] → aux[dst], ping-ponging).
         // Iteration i reads aux[i%2], writes to aux[(i+1)%2].
         for i in 0..n {
             let read_idx = i % 2;
@@ -365,7 +365,7 @@ impl Veil for Watercolor {
             rpass.draw(0..3, 0..1);
         }
 
-        // Final pass: CMYK → RGB — aux[last_written] → dst
+        // Final pass: CMYK → RGB (aux[last_written] → dst)
         let last_written = n % 2;
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

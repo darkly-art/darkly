@@ -1,15 +1,15 @@
 //! Shared scaffold for parametric tone filters that realize as a 256×2 LUT.
 //!
 //! Curves and Levels are the same GPU pipeline: each bakes eight per-channel
-//! transfer functions — in Krita's RGBA virtual-channel order
+//! transfer functions, in Krita's RGBA virtual-channel order:
 //!
 //!   RGB (composite), Red, Green, Blue, Alpha, Hue, Saturation, Lightness
 //!
-//! — into one 256×2 RGBA8 LUT read by [`shaders/filters/curves.wgsl`], then runs
+//! into one 256×2 RGBA8 LUT read by [`shaders/filters/curves.wgsl`], then runs
 //! that one fragment shader. Only the *evaluator* differs: Curves reads a
 //! natural-cubic spline, Levels a black/gamma/white/output transfer. Everything
-//! shared lives here — the LUT layout, the composite-over-channel fold, the
-//! HSV/Lab stage gate flags, the pipeline, and the `ensure`/`render` contract —
+//! shared lives here: the LUT layout, the composite-over-channel fold, the
+//! HSV/Lab stage gate flags, the pipeline, and the `ensure`/`render` contract,
 //! so each filter is a thin "give me eight per-channel evaluators" provider.
 
 use crate::gpu::effect::EffectCache;
@@ -118,7 +118,7 @@ pub fn bake_lut(eval: impl Fn(Channel, f32) -> f32) -> Baked {
     }
 }
 
-/// Allocate (once) and refresh the LUT texture + gate uniform for a LUT filter —
+/// Allocate (once) and refresh the LUT texture + gate uniform for a LUT filter:
 /// the [`ParamFilter`] `prepare` half for the aux-carrying Curves/Levels family.
 /// `bake` turns the layer's params into the baked LUT + stage-gate flags.
 fn lut_prepare(

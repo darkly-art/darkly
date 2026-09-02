@@ -1,4 +1,4 @@
-//! Black and White filter — the layer/destructive surface of the shared
+//! Black and White filter: the layer/destructive surface of the shared
 //! black-and-white core ([`crate::gpu::black_and_white`]). The identity,
 //! param schema, uniform packing, and WGSL transform all live in the shared
 //! module; like HSV this is the no-aux [`ParamFilter`] specialization
@@ -13,7 +13,7 @@ use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::ParamValue;
 
-/// Allocate (once) and refresh the params uniform — the [`ParamFilter`]
+/// Allocate (once) and refresh the params uniform: the [`ParamFilter`]
 /// `prepare` half.
 fn prepare(
     device: &wgpu::Device,
@@ -49,7 +49,7 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         ),
         "fs_black_and_white",
         "fs_black_and_white_masked",
-        false, // no aux texture — packed uniform only
+        false, // no aux texture, packed uniform only
         SrcSampling::Load,
         prepare,
     ))

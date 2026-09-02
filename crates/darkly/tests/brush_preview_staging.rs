@@ -1,7 +1,7 @@
 //! A brush whose output depends on canvas content it did not write must still
 //! show a stroke in its preview.
 //!
-//! Four shipped brushes — Liquify, Smudge, Blur, Clone — transport the
+//! Four shipped brushes (Liquify, Smudge, Blur, Clone) transport the
 //! destination rather than writing to it. Over the flat preview background they
 //! transported a constant and their baked stroke thumbnails were, pixel for
 //! pixel, that same constant. The fix is a field declared by the node and
@@ -68,7 +68,7 @@ const VISIBLE: f32 = 12.0;
 /// What the stroke did, isolated from what it was staged over.
 ///
 /// The **raw** render canvas, before the framer crops it, compared pixel by
-/// pixel against a CPU evaluation of the backdrop the render was staged over —
+/// pixel against a CPU evaluation of the backdrop the render was staged over:
 /// the same `sample()` the framer itself compares against, at the same
 /// tolerance. Every texel the stroke did not touch round-trips through
 /// `write_texture` → `save_pre_stroke` → `color_output::commit` bit-identically,
@@ -85,7 +85,7 @@ struct Stroke {
 }
 
 fn measure_stroke(engine: &mut DarklyEngine, backdrop: PreviewBackdrop) -> Stroke {
-    /// The framer's own tolerance — accommodates premultiplied-alpha rounding.
+    /// The framer's own tolerance: accommodates premultiplied-alpha rounding.
     const TOLERANCE: i32 = 12;
     let (pixels, w, h) = engine.test_render_stroke_preview_canvas();
     let mut changed = 0usize;
@@ -120,8 +120,8 @@ fn measure_stroke(engine: &mut DarklyEngine, backdrop: PreviewBackdrop) -> Strok
 
 /// Floor on how much of the render canvas the stroke must change.
 ///
-/// Measured over the shipped backdrop: Blur — the weakest of the four, and the
-/// one this floor exists for — changes 0.121 %, clearing it by 2.4×, and
+/// Measured over the shipped backdrop: Blur (the weakest of the four, and the
+/// one this floor exists for) changes 0.121 %, clearing it by 2.4×, and
 /// Liquify, Smudge and Clone clear it by 8.8× / 15.9× / 29.6×. Blur *without*
 /// its preview pin changes 0.022 %, less than half the floor.
 ///
@@ -136,7 +136,7 @@ const MIN_CHANGED_FRACTION: f32 = 0.0005;
 /// The framer crops to this box, so it is the only machine check left on what
 /// the thumbnail is a picture *of*: a stroke that only registers in patches
 /// crops to a fragment blown up to fill the tile, which is how the original bug
-/// looked once it stopped being invisible — unpinned Blur's 194 × 35 becomes a
+/// looked once it stopped being invisible: unpinned Blur's 194 × 35 becomes a
 /// tile showing two stripes and no stroke. Unlike the fraction above it cannot
 /// carry a large margin: the S-curve's own extent is the ceiling, and the
 /// weakest brush measures 323 × 49 against Liquify's 397 × 97.
@@ -157,7 +157,7 @@ fn content_dependent_brushes_render_a_visible_stroke() {
         let stroke = measure_stroke(&mut engine, backdrop);
         assert!(
             stroke.fraction > MIN_CHANGED_FRACTION,
-            "'{name}' changed {:.4}% of its preview canvas — its stroke is its \
+            "'{name}' changed {:.4}% of its preview canvas: its stroke is its \
              own backdrop showing through",
             stroke.fraction * 100.0,
         );
@@ -200,13 +200,13 @@ fn the_preview_pin_is_what_makes_blur_read() {
     let stroke = measure_stroke(&mut engine, PreviewBackdrop::Stripes);
     assert!(
         stroke.fraction > 2.0 * MIN_CHANGED_FRACTION,
-        "Blur's pinned preview changed {:.4}% of the canvas — the pin is \
+        "Blur's pinned preview changed {:.4}% of the canvas: the pin is \
          supposed to leave the floor twice as much headroom as it needs",
         stroke.fraction * 100.0,
     );
     assert!(
         stroke.bbox.0 >= 320 && stroke.bbox.1 >= 45,
-        "Blur's pinned preview marks a {}x{} box — the pin exists to grow it \
+        "Blur's pinned preview marks a {}x{} box: the pin exists to grow it \
          past the point where the framer crops a fragment, which the strength \
          sweep puts at ~0.15",
         stroke.bbox.0,
@@ -241,7 +241,7 @@ fn depositing_brushes_stage_nothing() {
     assert_eq!(flat, 9, "nine shipped brushes deposit pigment");
 }
 
-/// A `Flat` backdrop is the theme background at every position — which is what
+/// A `Flat` backdrop is the theme background at every position, which is what
 /// makes the fast path bit-identical to the clear it replaced, and what lets the
 /// framer evaluate `sample()` unconditionally instead of branching.
 #[test]
@@ -256,7 +256,7 @@ fn flat_is_the_background_everywhere() {
 
 /// The dab slot is the glyph. A single stationary sample has no motion for a
 /// displacement to reveal, so these four brushes show their declared icon there
-/// rather than a bake — and the icon is what `BrushInfo` projects to the picker.
+/// rather than a bake, and the icon is what `BrushInfo` projects to the picker.
 #[test]
 fn the_dab_slot_belongs_to_the_icon() {
     let brushes = builtin_brushes::all();
@@ -270,7 +270,7 @@ fn the_dab_slot_belongs_to_the_icon() {
             Some(icon),
         );
         assert_eq!(
-            darkly::brush::library::BrushInfo::from(&brush.metadata).icon,
+            darkly::brush::library::BrushInfo::from(brush).icon,
             Some(icon),
             "'{name}' projects its glyph to the picker"
         );
@@ -278,7 +278,7 @@ fn the_dab_slot_belongs_to_the_icon() {
 }
 
 /// The backdrop is a function of the theme poles, not of hard-coded greys.
-/// Inverting the theme must invert the staging with it — `set_preview_theme`
+/// Inverting the theme must invert the staging with it; `set_preview_theme`
 /// already drops every cached thumbnail, so nothing else has to invalidate.
 #[test]
 fn the_backdrop_follows_the_theme() {
@@ -303,7 +303,7 @@ fn the_backdrop_follows_the_theme() {
 /// from that, and there is no vertical component because the field has no
 /// vertical structure to escape.
 ///
-/// A pure unit test, deliberately — this is the property that a GPU render
+/// A pure unit test, deliberately: this is the property that a GPU render
 /// cannot distinguish from a working clone until someone looks at the PNG.
 #[test]
 fn the_clone_offset_escapes_the_stripes() {
@@ -332,7 +332,7 @@ fn the_clone_offset_escapes_the_stripes() {
 }
 
 /// A node that needs staging needs both halves of it. Nearly tautological now
-/// that they are one struct — which is the point: it records why they are one,
+/// that they are one struct, which is the point: it records why they are one,
 /// and it is the check that would have been load-bearing had they stayed two
 /// fields that could drift apart.
 #[test]
@@ -357,7 +357,7 @@ fn every_declaring_node_declares_both_halves() {
 
 /// A preview is a picture of a brush, not of one stroke of it. Five shipped
 /// brushes contain `random`/`noise` nodes, and until the stroke seed became the
-/// caller's to choose they rendered differently every time — which would have
+/// caller's to choose they rendered differently every time, which would have
 /// made a cached thumbnail differ from its own re-bake and a documentation asset
 /// churn on every rebuild.
 #[test]

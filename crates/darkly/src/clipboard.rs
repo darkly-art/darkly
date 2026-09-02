@@ -1,40 +1,40 @@
-//! Clipboard system — typed internal clipboard with extensible content types.
+//! Clipboard system: typed internal clipboard with extensible content types.
 //!
 //! Two flavours of clipboard payload:
-//! - [`ImageClip`] — flat RGBA pixel buffer. The cross-application interop
+//! - [`ImageClip`]: flat RGBA pixel buffer. The cross-application interop
 //!   path: a copied layer round-trips through a PNG on the system clipboard.
-//! - [`LayerClipboard`] — full layer with blend mode, opacity, name, and
+//! - [`LayerClipboard`]: full layer with blend mode, opacity, name, and
 //!   pixel data. The cross-tab interop path: the multi-tab editor writes
 //!   this alongside the PNG via a `web application/x-darkly-layer` custom
 //!   MIME type so paste into another Darkly tab restores blend mode +
 //!   opacity that PNG can't carry.
 //!
 //! Both go through the same async GPU readback pipeline. Mask pixel data
-//! (R8) is not yet captured in `LayerClipboard` v1 — it requires a second
+//! (R8) is not yet captured in `LayerClipboard` v1; it requires a second
 //! readback in parallel and lands in v2. The schema-version field exists
 //! so the deserializer can warn loudly when it sees a future version.
 
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Clipboard enum — extensible content container
+// Clipboard enum: extensible content container
 // ---------------------------------------------------------------------------
 
 /// Typed clipboard content. New variants can be added for future content types
 /// (e.g. layer groups) without refactoring the clipboard system.
 pub enum Clipboard {
-    /// Flattened RGBA pixel region — used for canvas copy/paste and external interop.
+    /// Flattened RGBA pixel region, used for canvas copy/paste and external interop.
     ImageData(ImageClip),
-    /// Layer-with-metadata — used for cross-tab paste in the multi-tab
+    /// Layer-with-metadata, used for cross-tab paste in the multi-tab
     /// editor. Carries blend mode + opacity + name + pixels so the
     /// receiving tab can recreate the source layer faithfully.
     Layer(LayerClipboard),
     // Future variants (not implemented):
-    // LayerGroup(GroupClip),   — group with children
+    // LayerGroup(GroupClip): group with children
 }
 
 impl Clipboard {
-    /// Extract an `ImageClip` reference. Returns `None` for richer variants —
+    /// Extract an `ImageClip` reference. Returns `None` for richer variants;
     /// callers that want pixels-only fall back to the system PNG path.
     pub fn as_image(&self) -> Option<&ImageClip> {
         match self {
@@ -56,8 +56,8 @@ impl Clipboard {
     /// paste-in-place floating path so it works for the `Layer` clip a normal
     /// copy produces, not just flat image clips.
     ///
-    /// Trimmed to the pasted object — see [`trim_to_content`]. What was copied
-    /// is the region the user swept, but what is *pasted* is the thing inside
+    /// Trimmed to the pasted object (see [`trim_to_content`]). What was copied
+    /// is the region the artist swept, but what is *pasted* is the thing inside
     /// it, and the floating session draws its bounding box from these
     /// dimensions: untrimmed, a select-all copy hands the transform gizmo a
     /// canvas-sized box around a small stroke.
@@ -134,7 +134,7 @@ pub fn trim_to_content(
 }
 
 // ---------------------------------------------------------------------------
-// ImageClip — flattened RGBA pixel region
+// ImageClip: flattened RGBA pixel region
 // ---------------------------------------------------------------------------
 
 /// A rectangular region of RGBA pixels stored as a flat buffer.
@@ -181,11 +181,11 @@ impl ImageClip {
 }
 
 // ---------------------------------------------------------------------------
-// LayerClipboard — layer with blend mode, opacity, name, and pixels
+// LayerClipboard: layer with blend mode, opacity, name, and pixels
 // ---------------------------------------------------------------------------
 
 /// Bumped on any breaking change to the on-the-wire representation. Cross-tab
-/// paste between mismatched Darkly versions is best-effort — pre-release we
+/// paste between mismatched Darkly versions is best-effort: pre-release we
 /// just accept that and refuse anything we don't understand.
 pub const LAYER_CLIPBOARD_SCHEMA_VERSION: u32 = 1;
 
@@ -197,7 +197,7 @@ pub const LAYER_CLIPBOARD_SCHEMA_VERSION: u32 = 1;
 /// Pixel data is base64-encoded inline. That inflates payload size by ~33%
 /// vs. raw bytes, but keeps the JSON envelope self-contained and trivially
 /// pumpable through `navigator.clipboard.write`/`read`. A 1024×1024 RGBA
-/// layer is ~5.5 MiB after base64 — acceptable for clipboards.
+/// layer is ~5.5 MiB after base64, acceptable for clipboards.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LayerClipboard {
     pub schema_version: u32,
@@ -209,11 +209,11 @@ pub struct LayerClipboard {
     pub blend_mode: String,
     pub bounds: ClipboardRect,
     /// Base64-encoded raw RGBA8 pixels, row-major, `width * height * 4`
-    /// bytes after decode. Straight alpha (Darkly never premultiplies — see
+    /// bytes after decode. Straight alpha (Darkly never premultiplies; see
     /// `docs/lessons-learned/compositing-lessons-learned.md §1`).
     pub pixels_b64: String,
     /// Mask metadata if the source had one. Pixel data is **not** captured
-    /// in v1 — restoring rebuilds an empty (fully opaque) mask with the
+    /// in v1: restoring rebuilds an empty (fully opaque) mask with the
     /// recorded bounds. v2 will add R8 pixels via a parallel readback.
     pub mask: Option<MaskClipboard>,
 }
@@ -249,7 +249,7 @@ impl LayerClipboard {
     }
 
     /// Parse a JSON envelope produced by [`Self::to_json`]. Rejects payloads
-    /// from a future schema version — pre-release we don't carry forward
+    /// from a future schema version: pre-release we don't carry forward
     /// shims for formats we haven't shipped yet.
     pub fn from_json(s: &str) -> Result<Self, String> {
         let parsed: LayerClipboard = serde_json::from_str(s).map_err(|e| e.to_string())?;
@@ -271,8 +271,8 @@ impl LayerClipboard {
 mod tests {
     use super::*;
 
-    /// What a paste puts down is the object, not the region the user swept to
-    /// copy it — a select-all copy of one small dab must not paste a
+    /// What a paste puts down is the object, not the region the artist swept to
+    /// copy it: a select-all copy of one small dab must not paste a
     /// canvas-sized rect, because the floating session takes its bounding box
     /// from these dimensions.
     #[test]
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(out.len(), rgba.len());
     }
 
-    /// Nothing opaque means nothing to paste — the caller treats `None` as "no
+    /// Nothing opaque means nothing to paste: the caller treats `None` as "no
     /// paste happened" rather than floating an empty rect.
     #[test]
     fn trim_to_content_rejects_a_fully_transparent_clip() {

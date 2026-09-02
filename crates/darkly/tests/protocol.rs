@@ -2,7 +2,7 @@
 //!
 //! These run native (headless `GpuContext`) and prove the registry routes,
 //! handlers decode/encode, and the binary side-channel round-trips. They
-//! cannot reproduce the *browser* event-pump re-entrancy panic — that is the
+//! cannot reproduce the *browser* event-pump re-entrancy panic; that is the
 //! manual browser repro's job (see plan Verification).
 //!
 //! Run with: `cargo test -p darkly --test protocol --features testing`
@@ -27,7 +27,7 @@ fn registry_routes_every_kind_and_rejects_unknown() {
     assert!(kinds.contains(&"add_void"));
     assert!(kinds.contains(&"layer_tree"));
     // `add_group` comes from a `#[handler]`-tagged engine method, aggregated by
-    // build.rs — proves the macro registration path is wired into the registry.
+    // build.rs, which proves the macro registration path is wired into the registry.
     assert!(kinds.contains(&"add_group"));
 
     let mut engine = test_engine(64, 64);
@@ -140,11 +140,11 @@ fn protocol_gen_ts_is_in_sync() {
     let actual = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
         actual, ts,
-        "protocol_gen.ts is stale — run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing,ts-export"
+        "protocol_gen.ts is stale: run DARKLY_REGEN_TS=1 cargo test -p darkly --test protocol --features testing,ts-export"
     );
 }
 
-/// Every registered kind must appear as an `EngineApi` method — no untyped gap.
+/// Every registered kind must appear as an `EngineApi` method: no untyped gap.
 #[cfg(feature = "ts-export")]
 #[test]
 fn every_kind_has_an_engine_api_method() {
@@ -226,8 +226,8 @@ fn ortho_xform_deserializes_from_snake_case() {
 
 /// End-to-end through the registry for a `#[handler]`-generated handler: the
 /// `move_layer` registration (emitted by the macro, aggregated by build.rs)
-/// decodes `{ id, target: { target_type, target_id } }` — `LayerId` plus a
-/// nested `MoveTarget` param — and reorders without a protocol error. The `()`
+/// decodes `{ id, target: { target_type, target_id } }` (`LayerId` plus a
+/// nested `MoveTarget` param) and reorders without a protocol error. The `()`
 /// return serializes to `null`.
 #[test]
 fn macro_move_layer_dispatch_reorders_via_nested_target() {
@@ -259,7 +259,7 @@ fn macro_move_layer_dispatch_reorders_via_nested_target() {
 }
 
 /// The macro's autoref response conversion produces the engine's *natural*
-/// return shapes — no `{ id }`/`{ skipped }` envelope. `add_group` (`-> LayerId`)
+/// return shapes: no `{ id }`/`{ skipped }` envelope. `add_group` (`-> LayerId`)
 /// is a bare number; `group_layers`'s `Err` (`Result<_, String>`) rejects as a
 /// [`ProtocolError::Engine`], not a resolved `{ error }` value.
 #[test]
@@ -302,7 +302,7 @@ fn poll_recording_frame_reports_canvas_dims_when_empty() {
         .dispatch(&mut engine, "poll_recording_frame", json!(null), &[])
         .expect("poll_recording_frame dispatch");
     // No frame pending, but the envelope still carries the live canvas
-    // dimensions — the poll doubles as the frontend's resize signal.
+    // dimensions; the poll doubles as the frontend's resize signal.
     assert_eq!(resp.value["canvasWidth"], json!(64));
     assert_eq!(resp.value["canvasHeight"], json!(64));
     assert!(resp.value["frame"].is_null());

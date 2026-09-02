@@ -1,15 +1,15 @@
-//! Levels filter — parametric black-point / gamma / white-point / output-range
+//! Levels filter: parametric black-point / gamma / white-point / output-range
 //! tone mapping, modeled on Krita's `KisLevelsFilter`.
 //!
 //! A Levels adjustment is mathematically a parametric curve, so it shares the
 //! entire GPU realization with [Curves](super::curves): the same eight virtual
 //! channels (RGB composite, Red, Green, Blue, Alpha, Hue, Saturation, Lightness),
 //! the same 256×2 LUT, the same `curves.wgsl` shader. Levels is a thin provider
-//! over the shared [`lut_param_filter`] scaffold — it hands [`bake_lut`] eight
+//! over the shared [`lut_param_filter`] scaffold: it hands [`bake_lut`] eight
 //! per-channel [`levels_transfer`] evaluators and the shared code owns the composite fold,
 //! the HSV/Lab round trips, and the pipeline.
 //!
-//! Transfer function — Krita `libs/image/KisLevelsCurve.cpp:58`:
+//! Transfer function (Krita `libs/image/KisLevelsCurve.cpp:58`):
 //!   `out = outBlack + (outWhite − outBlack) · clamp((x−inBlack)/(inWhite−inBlack), 0, 1)^(1/gamma)`
 //! clamped to `outBlack` for `x ≤ inBlack` and `outWhite` for `x ≥ inWhite`.
 //! Config order `[inBlack, inWhite, gamma, outBlack, outWhite]` matches
@@ -22,11 +22,11 @@ use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Bake
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::preview::{swing_signed, PreviewAnim};
 
-/// Identity levels — `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
+/// Identity levels: `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
 /// full `[0,1]` input range linearly onto `[0,1]` output: a no-op transfer.
 const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
 
-/// Parameter schema — Krita's channel order for an RGBA image, identical to
+/// Parameter schema: Krita's channel order for an RGBA image, identical to
 /// [Curves](super::curves::PARAMS). Load-bearing: [`build_lut`] indexes these
 /// positionally (matching [`Channel`](crate::gpu::lut_filter::Channel)).
 pub const PARAMS: &[ParamDef] = &[
@@ -67,7 +67,7 @@ fn levels_params(params: &[ParamValue], idx: usize) -> [f32; 5] {
 }
 
 /// Krita's `KisLevelsCurve` transfer (see module docs). `x` and the result are
-/// normalized `[0,1]`; `gamma` is the raw exponent (`0.1–10`, `1.0` = linear).
+/// normalized `[0,1]`; `gamma` is the raw exponent (`0.1-10`, `1.0` = linear).
 fn levels_transfer(p: &[f32; 5], x: f32) -> f32 {
     let [in_black, in_white, gamma, out_black, out_white] = *p;
     if x <= in_black {
@@ -104,7 +104,7 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
 }
 
 /// The input range pinches inward against a brightening gamma, then opens back
-/// out against a darkening one, and returns — the two halves of what the
+/// out against a darkening one, and returns: the two halves of what the
 /// control does, in one pass.
 ///
 /// `gamma` is a raw exponent rather than a perceptual scale, so it sweeps as a
@@ -167,7 +167,7 @@ mod tests {
     const LIGHTNESS: usize = Channel::Lightness as usize;
 
     /// Default (identity) levels ⇒ identity LUT on every channel (both rows),
-    /// and neither gated stage armed — an all-default Levels layer is a no-op.
+    /// and neither gated stage armed: an all-default Levels layer is a no-op.
     #[test]
     fn identity_levels_yield_identity_lut() {
         let params: Vec<ParamValue> = PARAMS.iter().map(|d| d.default_value()).collect();
@@ -228,7 +228,7 @@ mod tests {
     }
 
     /// Inverted output (`outBlack > outWhite`) is permitted and produces a
-    /// descending transfer — the Krita formula falls out of it unchanged.
+    /// descending transfer, and the Krita formula falls out of it unchanged.
     #[test]
     fn inverted_output_descends() {
         let p = [0.0, 1.0, 1.0, 1.0, 0.0];
@@ -237,7 +237,7 @@ mod tests {
         assert!((levels_transfer(&p, 0.25) - 0.75).abs() < 1e-6);
     }
 
-    /// Fold order matches Krita: the color channels are `rgb(channel(i))` — the
+    /// Fold order matches Krita: the color channels are `rgb(channel(i))`, the
     /// per-channel transfer first, then the composite "RGB" transfer on top.
     #[test]
     fn composite_composes_over_channel() {
@@ -264,7 +264,7 @@ mod tests {
     }
 
     /// A non-identity Hue or Saturation transfer arms the HSV pass; a
-    /// non-identity Lightness transfer arms the Lab pass — independently.
+    /// non-identity Lightness transfer arms the Lab pass, independently.
     #[test]
     fn hsl_levels_arm_their_stages() {
         let mut p = PARAMS.iter().map(|d| d.default_value()).collect::<Vec<_>>();

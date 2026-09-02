@@ -2,7 +2,7 @@
 //!
 //! WGSL has no `#include`, so the shared canvas-coordinate helpers in
 //! `shaders/lib/canvas.wgsl` are concatenated ahead of every shader that
-//! needs them at module-creation time. One definition, many call sites —
+//! needs them at module-creation time. One definition, many call sites;
 //! see the module doc in `shaders/lib/canvas.wgsl`.
 
 /// Source of the shared canvas-window helper functions.

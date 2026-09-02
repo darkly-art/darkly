@@ -314,7 +314,7 @@ fn gpu_flood_fill_respects_selection() {
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
 
-    // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
+    // CPU flood fill from (16, 32) on the transparent canvas: should fill everything.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let fill_mask = darkly::gpu::flood_fill::flood_fill_rgba(&pixels, w, h, 16, 32, 0);
     assert_eq!(
@@ -360,7 +360,7 @@ fn gpu_flood_fill_respects_selection() {
 
     let result = readback_texture(&device, &queue, &tex, fmt, w, h);
 
-    // Inside selection (left half) — should be blue.
+    // Inside selection (left half): should be blue.
     let inside = pixel_at(&result, w, 16, 32, 4);
     assert!(
         inside[2] > 200,
@@ -373,7 +373,7 @@ fn gpu_flood_fill_respects_selection() {
         inside[3]
     );
 
-    // Outside selection (right half) — should still be transparent.
+    // Outside selection (right half): should still be transparent.
     let outside = pixel_at(&result, w, 48, 32, 4);
     assert_eq!(
         outside[3], 0,
@@ -511,18 +511,18 @@ fn selection_intersect_mode() {
 
     let pixels = engine.test_readback_layer(layer_id);
 
-    // Top-left (16, 32) — in intersection.
+    // Top-left (16, 32): in intersection.
     assert!(
         alpha_at(&pixels, w, 16, 32) > 0,
         "top-left (intersection) should have paint"
     );
-    // Top-right (112, 32) — right half, outside intersection.
+    // Top-right (112, 32), right half, outside intersection.
     assert_eq!(
         alpha_at(&pixels, w, 112, 32),
         0,
         "top-right should be transparent"
     );
-    // Bottom-left (16, 96) — bottom half, outside intersection.
+    // Bottom-left (16, 96), bottom half, outside intersection.
     assert_eq!(
         alpha_at(&pixels, w, 16, 96),
         0,
@@ -590,7 +590,7 @@ fn selection_clear() {
     engine.clear_selection();
     assert!(!engine.has_selection());
 
-    // Paint at right side — should work (no selection masking).
+    // Paint at right side: should work (no selection masking).
     engine.begin_stroke(layer_id).unwrap();
     for step in 0..5 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -633,21 +633,21 @@ fn selection_undo_redo() {
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
     assert!(engine.has_selection());
 
-    // Undo the selection — should go back to no selection.
+    // Undo the selection: should go back to no selection.
     engine.undo();
     assert!(
         !engine.has_selection(),
         "selection should be gone after undo"
     );
 
-    // Redo — selection returns.
+    // Redo: selection returns.
     engine.redo();
     assert!(
         engine.has_selection(),
         "selection should be back after redo"
     );
 
-    // Paint with the selection active — only left half gets paint.
+    // Paint with the selection active: only left half gets paint.
     paint_full_stroke(&mut engine, layer_id, w, h);
     let px = engine.test_readback_layer(layer_id);
     assert!(alpha_at(&px, w, 16, h / 2) > 0, "left should have paint");
@@ -676,7 +676,7 @@ fn selection_undo_redo() {
 /// The R8 scratch used for selection undo is reused across ops. A prior
 /// full-canvas `save_region` would leave 1s in scratch outside the current
 /// selection bounds. A subsequent Add operation would then save a tight
-/// old-bounds rect into scratch but commit a full-canvas rect — picking up
+/// old-bounds rect into scratch but commit a full-canvas rect, picking up
 /// those stale 1s and restoring them to the texture on undo.
 #[test]
 fn selection_add_undo_does_not_restore_stale_pixels() {
@@ -692,7 +692,7 @@ fn selection_add_undo_does_not_restore_stale_pixels() {
     // Add a disjoint right band (shift-filter path).
     engine.select_rect(96.0, 0.0, 32.0, h as f32, SelectionMode::Add, false, 0.0);
 
-    // Undo the Add — selection must revert to just the left band.
+    // Undo the Add: selection must revert to just the left band.
     engine.undo();
 
     paint_full_stroke(&mut engine, layer_id, w, h);
@@ -705,12 +705,12 @@ fn selection_add_undo_does_not_restore_stale_pixels() {
     assert_eq!(
         alpha_at(&px, w, 64, h / 2),
         0,
-        "middle was never selected — must stay unpainted after undo"
+        "middle was never selected, so it must stay unpainted after undo"
     );
     assert_eq!(
         alpha_at(&px, w, 112, h / 2),
         0,
-        "right band was added then undone — must stay unpainted"
+        "right band was added then undone, so it must stay unpainted"
     );
 }
 
@@ -724,7 +724,7 @@ fn clear_selection_contents() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    // Paint at center — default brush (scale=0.1, size=0.5) at pressure=1.0
+    // Paint at center: default brush (scale=0.1, size=0.5) at pressure=1.0
     // produces ~26px diameter dab, centered at (64,64).
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
@@ -762,7 +762,7 @@ fn clear_selection_contents() {
 
 /// REGRESSION: select-all + delete erases only alpha (straight-alpha storage
 /// keeps ghost RGB under erased pixels), and the flood fill's similarity test
-/// used to compare that invisible RGB — a fill on the emptied layer stayed
+/// used to compare that invisible RGB; a fill on the emptied layer stayed
 /// bounded by the old content's edges. Fully transparent pixels must compare
 /// by alpha alone, so the fill floods the whole canvas.
 #[test]
@@ -771,7 +771,7 @@ fn flood_fill_floods_layer_emptied_by_clear_selection_contents() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    // Paint content, then Ctrl+A + Delete — the canvas is now visually empty
+    // Paint content, then Ctrl+A + Delete: the canvas is now visually empty
     // but the texture still holds the stroke's RGB with alpha = 0.
     paint_full_stroke(&mut engine, layer_id, w, h);
     engine.render(0.0); // flush pending diff undo

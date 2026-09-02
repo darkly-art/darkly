@@ -1,7 +1,7 @@
 //! Regression tests for removing a **modifier** (mask) by id through the
 //! generic layer-removal entry points.
 //!
-//! A mask is a `Filter` on a host's `filters` list, not a tree node — but it is
+//! A mask is a `Filter` on a host's `filters` list, not a tree node, but it is
 //! a selectable row in the layer panel, so the Delete hotkey forwards its id to
 //! `remove_layer` just like a layer's. These pin that every generic entry point
 //! (`remove_layer`, `remove_layers`, `merge_down`) recognises a modifier id and
@@ -24,7 +24,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// True when `id` is a top-level row of the serializable tree. Note that a
 /// *filter* id can never appear here even if the document has wrongly parked it
-/// in a children list — `node_to_layer_info` resolves nodes only — so absence is
+/// in a children list (`node_to_layer_info` resolves nodes only), so absence is
 /// not evidence about filters. The document-level inline tests cover that.
 fn has_top_level_row(e: &DarklyEngine, id: LayerId) -> bool {
     let want = id.to_ffi() as f64;
@@ -40,7 +40,7 @@ fn has_top_level_row(e: &DarklyEngine, id: LayerId) -> bool {
         .unwrap_or(false)
 }
 
-/// B1 — `remove_layer` on a mask id must actually detach the mask.
+/// B1: `remove_layer` on a mask id must actually detach the mask.
 #[test]
 fn remove_layer_on_a_mask_id_detaches_the_mask() {
     let mut e = test_engine(32, 32);
@@ -62,7 +62,7 @@ fn remove_layer_on_a_mask_id_detaches_the_mask() {
     );
 }
 
-/// B2 — undo restores the mask onto its host, not into the root's children.
+/// B2: undo restores the mask onto its host, not into the root's children.
 #[test]
 fn undoing_a_mask_removal_restores_it_on_its_host() {
     let mut e = test_engine(32, 32);
@@ -86,11 +86,11 @@ fn undoing_a_mask_removal_restores_it_on_its_host() {
     assert_eq!(
         e.layer_tree().len(),
         2,
-        "undo must not add a row — the mask belongs to its host, not the root"
+        "undo must not add a row: the mask belongs to its host, not the root"
     );
 }
 
-/// B3 — the batch path must not silently drop modifier ids.
+/// B3: the batch path must not silently drop modifier ids.
 #[test]
 fn remove_layers_handles_a_modifier_id_in_the_batch() {
     let mut e = test_engine(32, 32);
@@ -111,7 +111,7 @@ fn remove_layers_handles_a_modifier_id_in_the_batch() {
     assert!(!has_top_level_row(&e, victim));
 }
 
-/// B6 — a mask and a layer removed together undo as one step.
+/// B6: a mask and a layer removed together undo as one step.
 #[test]
 fn a_single_undo_restores_both_a_batched_mask_and_layer() {
     let mut e = test_engine(32, 32);
@@ -139,7 +139,7 @@ fn a_single_undo_restores_both_a_batched_mask_and_layer() {
     );
 }
 
-/// B5 — a mask is not a layer, so deleting the only mask of the only layer
+/// B5: a mask is not a layer, so deleting the only mask of the only layer
 /// must not trip the "cannot delete the last layer" guard.
 #[test]
 fn removing_the_only_mask_of_the_only_layer_is_allowed() {
@@ -149,13 +149,13 @@ fn removing_the_only_mask_of_the_only_layer_is_allowed() {
     let mask = e.host_mask_id(host).expect("mask present");
 
     e.remove_layer(mask)
-        .expect("a mask is not the last layer — removal must be allowed");
+        .expect("a mask is not the last layer: removal must be allowed");
 
     assert!(e.host_mask_id(host).is_none());
     assert!(has_top_level_row(&e, host), "the host layer must survive");
 }
 
-/// B5 (companion) — the guard still fires for the genuine last layer.
+/// B5 (companion): the guard still fires for the genuine last layer.
 #[test]
 fn removing_the_last_layer_is_still_refused() {
     let mut e = test_engine(32, 32);
@@ -166,7 +166,7 @@ fn removing_the_last_layer_is_still_refused() {
     );
 }
 
-/// B7 — `merge_down` must reject a modifier id before it reaches the
+/// B7: `merge_down` must reject a modifier id before it reaches the
 /// sibling-index arithmetic, which reads the host's `children` list using a
 /// position taken from its `filters` list.
 #[test]

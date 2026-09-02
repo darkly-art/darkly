@@ -1,6 +1,6 @@
 //! Merge Down: bake the active node + the sibling immediately below it
 //! into a single raster layer at the lower sibling's tree slot. Photoshop-
-//! style — if either side is a group, it gets flattened during the bake.
+//! style: if either side is a group, it gets flattened during the bake.
 //!
 //! The undo system tombstones the consumed sources so undo restores
 //! everything intact; on redo, the engine recomposes the result from the
@@ -22,7 +22,7 @@ impl DarklyEngine {
     /// flattened into the result.
     #[handler]
     pub fn merge_down(&mut self, source_id: LayerId) -> Result<LayerId, String> {
-        // Source itself is consumed (tombstoned) by the merge — locking it
+        // Source itself is consumed (tombstoned) by the merge: locking it
         // protects it from being destroyed. Target is overwritten with the
         // merged pixels; locking it protects its content. Both ends checked
         // before any tree resolution so the error message is precise.
@@ -136,7 +136,7 @@ impl DarklyEngine {
 
     /// Bake every layer in `ids` (≥2, any parent) into one raster placed at
     /// the panel-topmost selected layer's slot. The result inherits the
-    /// topmost's name / blend mode / visibility — but not its opacity, which
+    /// topmost's name / blend mode / visibility, but not its opacity, which
     /// the bake has already applied to the pixels; sources from
     /// other parents are detached and tombstoned. Groups in the selection
     /// are flattened during the bake. Returns the id of the result.
@@ -146,7 +146,7 @@ impl DarklyEngine {
     /// id isn't in the tree.
     #[handler]
     pub fn merge_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
-        // De-dup while preserving caller order — important for the error
+        // De-dup while preserving caller order, important for the error
         // path that names the input set in messages.
         let mut unique: Vec<LayerId> = Vec::with_capacity(ids.len());
         for id in ids {
@@ -167,7 +167,7 @@ impl DarklyEngine {
         }
 
         // Sort by panel display order so the bake walks bottom-to-top and
-        // the LAST entry is the topmost selected layer in the panel — that
+        // the LAST entry is the topmost selected layer in the panel: that
         // one anchors the result's slot and provides the inherited props.
         let order = self.doc.all_node_ids_in_order();
         let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
@@ -175,7 +175,7 @@ impl DarklyEngine {
         let topmost_id = *unique.last().expect("len >= 2");
 
         // Snapshot the topmost's properties + slot now, before any detach.
-        // Opacity is deliberately not among them — see `merge_down`, which
+        // Opacity is deliberately not among them; see `merge_down`, which
         // carries the full reasoning: every source is baked through its own
         // blend uniforms, so its opacity is already in the result's pixels.
         let (top_name, top_visible, top_locked, top_blend_mode) = {

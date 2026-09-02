@@ -7,7 +7,7 @@ pub fn register() -> BlendModeRegistration {
         description: "Darkens the base by increasing its contrast toward the blend color.",
         category: "Darken",
         gpu_value: 3,
-        // pd_color_burn: Krita KoCompositeOpFunctions.h:329–361.
+        // pd_color_burn: Krita KoCompositeOpFunctions.h:329-361.
         // Helper lives in the composite shader prelude.
         wgsl_math: "Cs = pd_color_burn(fg.rgb, bg.rgb);",
     }

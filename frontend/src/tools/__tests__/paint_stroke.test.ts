@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // A paint target the engine refuses (a smart object, a locked layer) used to
 // fail silently: `begin_stroke` was fire-and-forget, so the refusal reached
-// `reportEngineError`'s console log and the user saw a brush that did nothing.
+// `reportEngineError`'s console log and the artist saw a brush that did nothing.
 // The reason has to reach a toast.
 
 const { show } = vi.hoisted(() => ({ show: vi.fn() }));
@@ -26,7 +26,7 @@ describe('beginPaintStroke', () => {
     it("toasts the engine's reason when the target refuses paint", async () => {
         show.mockClear();
         const refusal = Promise.reject({
-            message: '"Smart Object" can\'t be painted on — right-click it and choose Rasterize',
+            message: '"Smart Object" can\'t be painted on; right-click it and choose Rasterize',
         });
         beginPaintStroke(engineWith(refusal as never), 7);
         await new Promise((r) => setTimeout(r, 0));

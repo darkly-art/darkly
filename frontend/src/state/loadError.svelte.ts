@@ -1,12 +1,12 @@
 /**
  * Persistent "this file failed to load" banner state. Backs
- * `ui/LoadErrorToast.svelte` — separate from the auto-dismissing
- * `Toast` system because load errors warrant a stickier UI: the user
+ * `ui/LoadErrorToast.svelte` (separate from the auto-dismissing
+ * `Toast` system) because load errors warrant a stickier UI: the artist
  * needs time to read the missing-features list and decide whether to
  * update.
  *
  * Payload shape matches `LoadError::to_json()` in the Rust core. Only
- * one banner shows at a time — a second `show()` replaces the first.
+ * one banner shows at a time: a second `show()` replaces the first.
  */
 
 /** Mirror of `crates/darkly/src/format/error.rs::LoadError::to_json()`. */
@@ -37,7 +37,7 @@ export type LoadErrorPayload =
           kind: 'io' | 'zip' | 'json';
           message: string;
       }
-    // Catch-all for any future variant the UI doesn't know about yet —
+    // Catch-all for any future variant the UI doesn't know about yet:
     // the toast falls back to `message` rather than crashing.
     | {
           kind: string;
@@ -69,7 +69,7 @@ export function parseLoadErrorMessage(e: unknown): LoadErrorPayload {
             return parsed;
         }
     } catch {
-        // Not structured — fall through.
+        // Not structured, fall through.
     }
     return { kind: 'json', message: raw };
 }

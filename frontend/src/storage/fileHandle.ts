@@ -1,17 +1,17 @@
 /**
- * User-facing file save/open via the File System Access API, with a
+ * Artist-facing file save/open via the File System Access API, with a
  * hidden-input fallback for browsers that don't ship it.
  *
- * Distinct from `./index.ts`'s `DarklyStorage` — that's the *internal*
+ * Distinct from `./index.ts`'s `DarklyStorage`: that's the *internal*
  * config directory (presets, settings, brushes). This module is the
- * *user-facing* file picker for `.darkly` documents the user opens or
+ * *artist-facing* file picker for `.darkly` documents the artist opens or
  * saves through Ctrl+S, Ctrl+O, the hamburger menu, etc.
  *
  * Three backends, picked per-call:
  *  - **FS Access API** (Chromium only): real handle, persists for the
- *    session — Ctrl+S after a Save As writes back to the same file with
+ *    session; Ctrl+S after a Save As writes back to the same file with
  *    no prompt, and the picker remembers the last-used directory per `id`.
- *  - **Electron**: deferred — when the desktop bundle needs file
+ *  - **Electron**: deferred; when the desktop bundle needs file
  *    save/open, extend `ElectronStorageBridge` with `saveAs/open`
  *    methods returning paths-as-handles and add a branch here.
  *  - **Download fallback** (Firefox, Safari, older browsers): no picker
@@ -20,26 +20,26 @@
  */
 
 /** Whether this browser can show a native save picker (FS Access API
- *  present). Chromium only — Firefox and Safari implement the
+ *  present). Chromium only. Firefox and Safari implement the
  *  Origin-Private File System but not `showSaveFilePicker`, so they use
  *  the download fallback. */
 export const hasFilePicker: boolean =
     typeof globalThis !== 'undefined' &&
     typeof (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker === 'function';
 
-/** A file-type filter for the save/open pickers — mirrors the FS Access
+/** A file-type filter for the save/open pickers: mirrors the FS Access
  *  API's `FilePickerAcceptType`. */
 export interface SaveAccept {
     description: string;
     accept: Record<string, string[]>;
 }
 
-/** Open picker filter — accepts any file the unified Open flow knows
+/** Open picker filter: accepts any file the unified Open flow knows
  *  how to ingest. Documents and raster images share one picker; the
  *  caller's `detectKind(bytes)` routes by magic-byte sniff (see
  *  `actions/index.ts::openFlow`). The first entry is the picker's
  *  default-selected filter, so it's a combined "Supported Files" that
- *  shows documents and images at once — the user can still narrow to a
+ *  shows documents and images at once; the artist can still narrow to a
  *  single type via the dropdown's later entries. */
 const OPEN_TYPES = [
     {
@@ -71,7 +71,7 @@ const OPEN_ACCEPT =
     '.darkly,.png,.jpg,.jpeg,.webp,' +
     'application/x-darkly,image/png,image/jpeg,image/webp';
 
-/** Result of a successful open — bytes always; handle only when the
+/** Result of a successful open: bytes always; handle only when the
  *  browser supports the FS Access API (so subsequent Ctrl+S can write
  *  back to the same file). */
 export interface OpenedFile {
@@ -81,7 +81,7 @@ export interface OpenedFile {
 }
 
 /** Show the native Save picker. Returns the chosen handle, or `null` if
- *  the user cancelled. Throws on permission denial / API errors so the
+ *  the artist cancelled. Throws on permission denial / API errors so the
  *  caller can surface a toast.
  *
  *  `accepts` populates the picker's "Save as type" dropdown (first entry
@@ -99,7 +99,7 @@ export async function pickFileHandle(
     pickerId: string,
 ): Promise<FileSystemFileHandle | null> {
     // The File System Access API isn't in the standard lib.dom types, so go
-    // through `unknown` — TS 5.7+ rejects direct casts where neither type
+    // through `unknown`: TS 5.7+ rejects direct casts where neither type
     // sufficiently overlaps.
     const api = (
         globalThis as unknown as {
@@ -137,7 +137,7 @@ export async function writeToHandle(
 /** Show the Open picker. Tries the FS Access API first so the
  *  returned handle can be cached for subsequent saves; falls back to
  *  a transient hidden `<input type="file">` for browsers without it.
- *  Returns `null` if the user cancelled or no file was chosen.
+ *  Returns `null` if the artist cancelled or no file was chosen.
  *
  *  Must be called from a user-activation context (same as Save). */
 export async function pickOpenFile(): Promise<OpenedFile | null> {
@@ -166,7 +166,7 @@ export async function pickOpenFile(): Promise<OpenedFile | null> {
 
 /** Fallback: build a transient `<input type="file">` on demand, click
  *  it, and resolve with the chosen file. No handle is returned because
- *  Firefox doesn't expose one — a later Save on this document routes
+ *  Firefox doesn't expose one, so a later Save on this document routes
  *  through the download fallback (`saveDocument` consults `hasFilePicker`). */
 async function pickViaHiddenInput(): Promise<OpenedFile | null> {
     return await new Promise(resolve => {
@@ -195,7 +195,7 @@ async function pickViaHiddenInput(): Promise<OpenedFile | null> {
         };
         // Modern browsers (Chrome 113+, Firefox 91+, Safari 16.4+) fire
         // `cancel` when the picker is dismissed; older ones leak the
-        // input until GC. Both paths are exception-flow only — the
+        // input until GC. Both paths are exception-flow only: the
         // primary path is FS Access API which has its own cancel
         // semantics.
         input.oncancel = () => {

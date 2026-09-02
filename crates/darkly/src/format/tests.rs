@@ -3,7 +3,7 @@
 //! These tests are the contract that protects modular extensions: adding a
 //! new veil / stabilizer / brush node / blend mode / layer kind / filter
 //! kind lights up testing automatically here, with no edits. The shape
-//! check is the same in every test — `(type_id, params)` (or just
+//! check is the same in every test: `(type_id, params)` (or just
 //! `type_id` for closed-set kinds) must survive a JSON round-trip and
 //! still resolve through the registry on the other side.
 
@@ -31,7 +31,7 @@ fn defaults_of(params: &[ParamDef]) -> Vec<ParamValue> {
 
 /// Headless `DarklyEngine` plus the per-test viewport bookkeeping. The
 /// veil chain sizes off the viewport, which is 0×0 in headless mode by
-/// default — kitchen-sink populates a chain, so we seed the size
+/// default; kitchen-sink populates a chain, so we seed the size
 /// manually like the engine/save inline tests do.
 fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
     let (device, queue) = test_device();
@@ -45,7 +45,7 @@ fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
 }
 
 // ----------------------------------------------------------------------------
-// 1. Veils — round-trip (type_id, param_values) for every registered veil.
+// 1. Veils - round-trip (type_id, param_values) for every registered veil.
 //
 // Veils carry both `type_id()` and `param_values()` on the trait, so we
 // can serialize the instance, parse it back, reconstruct via the registry,
@@ -151,13 +151,13 @@ fn chromatic_aberration_veil_round_trips_non_default_list() {
 }
 
 // ----------------------------------------------------------------------------
-// 2. Stabilizers — round-trip (type_id, defaults) for every registered
+// 2. Stabilizers - round-trip (type_id, defaults) for every registered
 //    algorithm.
 //
 // `StabilizerAlgorithm` doesn't expose `param_values()` (the trait is
 // runtime-focused), so we round-trip via the registration's defaults and
 // verify the registry can rehydrate from the parsed payload. The shape
-// check is what matters here — `(type_id, params)` JSON contract holds.
+// check is what matters here: `(type_id, params)` JSON contract holds.
 // ----------------------------------------------------------------------------
 
 #[test]
@@ -179,7 +179,7 @@ fn round_trip_every_stabilizer() {
         assert_eq!(payload.type_id, type_id);
         assert_eq!(payload.params.len(), defaults.len());
 
-        // The registry can rebuild from the parsed payload — the
+        // The registry can rebuild from the parsed payload: the
         // happy-path equivalent of what `start_save` → reload will run
         // through in Phase 3+.
         let _stab = registry
@@ -189,7 +189,7 @@ fn round_trip_every_stabilizer() {
 }
 
 // ----------------------------------------------------------------------------
-// 3. Brush nodes — round-trip `NodeInstance<BrushWireType>` for every
+// 3. Brush nodes - round-trip `NodeInstance<BrushWireType>` for every
 //    registered node type via a real `Graph` add+serialize+parse cycle.
 //
 // Brush nodes already serialize through `NodeInstance` (graph.rs), so the
@@ -233,7 +233,7 @@ fn round_trip_every_brush_node() {
 }
 
 // ----------------------------------------------------------------------------
-// 4. Blend modes — round-trip the type_id string for every registered mode.
+// 4. Blend modes - round-trip the type_id string for every registered mode.
 //
 // Closed set, but exposed via a registry rather than an enum (per
 // `gpu/blend_mode.rs`). Iterate `BlendModeRegistry::all()` and verify the
@@ -262,7 +262,7 @@ fn round_trip_every_blend_mode() {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Filter kinds — round-trip the type_id string AND the body envelope
+// 5. Filter kinds - round-trip the type_id string AND the body envelope
 //    for every registered filter kind (mask, selection, future
 //    filter/transform/...).
 // ----------------------------------------------------------------------------
@@ -289,7 +289,7 @@ fn round_trip_every_modifier_kind() {
 }
 
 // ----------------------------------------------------------------------------
-// 6. Layer kinds — round-trip the type_id string for every registered
+// 6. Layer kinds - round-trip the type_id string for every registered
 //    layer kind (raster, group, future text/filter/...).
 // ----------------------------------------------------------------------------
 
@@ -315,7 +315,7 @@ fn round_trip_every_layer_kind() {
 }
 
 // ----------------------------------------------------------------------------
-// 7. ParamValue variants — round-trip each variant explicitly.
+// 7. ParamValue variants - round-trip each variant explicitly.
 //
 // The companion test in `gpu/params.rs` (`paramvalue_round_trips_preserve_variant`)
 // guards `Bool`/`Int`/`Float`/`String`/`Curve` from the regression where the
@@ -355,7 +355,7 @@ fn round_trip_param_value_variants() {
 
 /// Variant-preserving equality for `ParamValue`. The `#[serde(untagged)]`
 /// representation means we must check variant identity, not just numeric
-/// equality — the regression in `gpu/params.rs` was exactly an
+/// equality: the regression in `gpu/params.rs` was exactly an
 /// `Int(1) == Float(1.0)` false-positive after coercion.
 fn assert_param_eq(a: &ParamValue, b: &ParamValue, context: &str) {
     // `ParamValue` derives `PartialEq`, so equality covers every variant
@@ -365,7 +365,7 @@ fn assert_param_eq(a: &ParamValue, b: &ParamValue, context: &str) {
 
 // ----------------------------------------------------------------------------
 // Sanity: the canonical `InstancePayload` wire shape is reachable from
-// the seven tests above — emit-and-parse a small fixture so regressions
+// the seven tests above; emit-and-parse a small fixture so regressions
 // in serde's representation surface here as well as in the helpers' own
 // tests.
 // ----------------------------------------------------------------------------
@@ -385,7 +385,7 @@ fn instance_payload_shape_is_type_id_plus_params() {
 }
 
 // ----------------------------------------------------------------------------
-// Kitchen-sink — end-to-end save → zip → load with every closed-set
+// Kitchen-sink: end-to-end save → zip → load with every closed-set
 // variant exercised. The cross-version safety net for the wire format:
 // any future serde / id-remap / texture-format regression surfaces
 // here as a doc-mismatch or composite-byte difference.
@@ -394,14 +394,15 @@ fn instance_payload_shape_is_type_id_plus_params() {
 use crate::document::Document;
 use crate::engine::DarklyEngine;
 use crate::format::manifest::SaveBundle;
-use crate::format::zip_io::{assemble_zip, extract_zip};
+use crate::format::unzip::unzip_entries;
+use crate::format::zip_io::assemble_zip;
 use crate::layer::LayerId;
 
 /// Populate the engine with at least one of every closed-set variant
 /// the save format needs to cover:
-///   - every layer kind (`raster`, `group`) — at least one each.
-///   - every filter kind (`mask`, `selection`) — at least one each.
-///   - every blend mode in `BlendModeRegistry::all()` — at least one
+///   - every layer kind (`raster`, `group`): at least one each.
+///   - every filter kind (`mask`, `selection`): at least one each.
+///   - every blend mode in `BlendModeRegistry::all()`: at least one
 ///     layer with each.
 ///   - one of every registered veil.
 ///
@@ -412,7 +413,7 @@ use crate::layer::LayerId;
 ///
 /// When a new closed-set variant is added (new blend mode, new layer
 /// kind, new filter kind), `kitchen_sink_covers_every_closed_set_variant`
-/// fires immediately — this function must be extended to instantiate
+/// fires immediately: this function must be extended to instantiate
 /// the new variant.
 fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     engine.set_document_name("Kitchen Sink".to_string());
@@ -432,7 +433,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         raster_ids.push(id);
     }
 
-    // A group at root, with a child raster moved into it — exercises
+    // A group at root, with a child raster moved into it, exercising
     // both Group structure and parent/children id rewiring on load.
     let group = engine.add_group(None);
     if let Some(first_layer) = raster_ids.first() {
@@ -442,18 +443,18 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         );
     }
 
-    // Mask filter on one of the rasters — exercises mask kind +
+    // Mask filter on one of the rasters, exercising mask kind +
     // its parent-host wiring.
     if let Some(target) = raster_ids.get(1).copied() {
         engine.add_mask(target);
     }
 
-    // Selection mask — `select_all` flips selection.active and
+    // Selection mask: `select_all` flips selection.active and
     // populates the R8 texture; the filter itself was allocated
     // eagerly at engine init.
     engine.select_all();
 
-    // One of every veil — keep params at default, leave visibility on.
+    // One of every veil: keep params at default, leave visibility on.
     let veil_types: Vec<(&'static str, &'static [ParamDef])> = engine
         .compositor
         .veil_chain()
@@ -467,7 +468,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         engine.add_veil_layer(type_id, &defaults);
     }
 
-    // One of every void type — adds a void layer at root for each
+    // One of every void type: adds a void layer at root for each
     // registered void kind, with schema defaults. Closes the kitchen-sink
     // assertion that every layer_kind has a representative in the saved
     // doc; without this, `layer_kind/void` would never participate in the
@@ -484,7 +485,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         engine.add_void_layer(type_id, defaults, None);
     }
 
-    // One of every filter type — adds a filter layer at root for each
+    // One of every filter type: adds a filter layer at root for each
     // registered filter pipeline (filters carry no params today), so
     // `layer_kind/filter` participates in the save round-trip test.
     let filter_types: Vec<String> = engine
@@ -499,7 +500,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     }
 
     // A vector (text) layer so `layer_kind/vector` participates in the save
-    // round-trip — its objects round-trip through the manifest body (no pixels).
+    // round-trip; its objects round-trip through the manifest body (no pixels).
     engine.add_text_layer(
         crate::layer::TextProps::new("kitchen sink".to_string()),
         4.0,
@@ -528,7 +529,7 @@ fn drive_save_to_completion(engine: &mut DarklyEngine) -> SaveBundle {
 /// Coarse structural comparison: same canvas size, same number of
 /// raster layers, same number of groups, same number of filters,
 /// same document name, same veil count, same selection presence.
-/// Strict per-id mapping is intentionally NOT checked — slotmap keys
+/// Strict per-id mapping is intentionally NOT checked: slotmap keys
 /// are document-local and won't match across documents.
 fn assert_documents_equivalent(a: &Document, b: &Document) {
     assert_eq!(a.width, b.width);
@@ -564,13 +565,13 @@ fn round_trip_kitchen_sink_document() {
 
     let bundle = drive_save_to_completion(&mut original);
     let zip_bytes = assemble_zip(&bundle);
-    let entries = extract_zip(&zip_bytes);
+    let entries = unzip_entries(&zip_bytes).expect("kitchen-sink zip must be readable");
     assert!(
-        entries.get("manifest.json").is_some(),
+        entries.contains_key("manifest.json"),
         "kitchen-sink zip must contain manifest.json"
     );
     assert!(
-        entries.get("composite.png").is_some(),
+        entries.contains_key("composite.png"),
         "kitchen-sink zip must contain composite.png"
     );
 
@@ -581,7 +582,7 @@ fn round_trip_kitchen_sink_document() {
 
     assert_documents_equivalent(&original.doc, &reloaded.doc);
 
-    // Composite parity — read both engines' composited textures and
+    // Composite parity: read both engines' composited textures and
     // compare. Both run headless so `test_readback_canvas` is the
     // synchronous path; production never blocks like this.
     let composite_a = original.test_readback_canvas();
@@ -599,7 +600,7 @@ fn round_trip_kitchen_sink_document() {
 
 /// Reproducibility: a non-fallback font applied to a text object embeds in the
 /// saved `.darkly` and re-registers when the file is opened in a **fresh**
-/// engine that never saw the upload — the document is self-contained without the
+/// engine that never saw the upload; the document is self-contained without the
 /// personal library. Uses Cantarell-VF (a real variable font) as the fixture.
 #[test]
 fn embedded_font_round_trips() {
@@ -651,12 +652,12 @@ fn embedded_font_round_trips() {
 }
 
 /// The stronger embedding guarantee: an embedded font doesn't just round-trip by
-/// *name* — its glyphs **rasterize identically** after save/reload. Renders the
+/// *name*: its glyphs **rasterize identically** after save/reload. Renders the
 /// same string with the embedded font and asserts (a) it differs from the
 /// fallback face (proving the real font is used, not a silent Noto fallback that
 /// would make a name-only test pass regardless), and (b) a fresh engine that
 /// only has the embedded bytes reproduces the exact same pixels. Uses
-/// Cantarell-VF — a variable CFF2 (`OTTO`) font, an outline format distinct from
+/// Cantarell-VF, a variable CFF2 (`OTTO`) font, an outline format distinct from
 /// the bundled glyf TTF, so this also exercises a "weird" font kind end to end.
 #[test]
 fn embedded_font_renders_identically_after_reload() {
@@ -693,8 +694,8 @@ fn embedded_font_renders_identically_after_reload() {
 
     assert_ne!(
         cantarell_px, fallback_px,
-        "the embedded font must rasterize differently from the fallback — else a \
-         name-only round-trip would pass even if the font never registered"
+        "the embedded font must rasterize differently from the fallback: a \
+         name-only round-trip would otherwise pass even if the font never registered"
     );
 
     // Round-trip into a fresh engine that has only the embedded bytes.
@@ -710,7 +711,7 @@ fn embedded_font_renders_identically_after_reload() {
 
     assert_eq!(
         cantarell_px, reloaded_px,
-        "text must rasterize pixel-identically after embedding + reload — proving \
+        "text must rasterize pixel-identically after embedding + reload, proving \
          the embedded bytes reproduce the glyph outlines, not a fallback"
     );
 }
@@ -799,7 +800,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
     );
 
     // The mask's R8 pixels round-trip byte-for-byte (its bulk-pixel authority
-    // serialized independently of the host) — the precise claim of this test.
+    // serialized independently of the host), which is the precise claim of this test.
     let mask_a = original.test_readback_mask(host);
     let mask_b = reloaded.test_readback_mask(r_host);
     assert_eq!(
@@ -816,14 +817,14 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
 }
 
 /// Regression: after `open_document`, the layer panel must show
-/// thumbnails immediately — not wait until the user's first edit.
+/// thumbnails immediately, not wait until the artist's first edit.
 ///
 /// The bug was that `engine/load.rs::upload_pixels` wrote bytes via
 /// `queue.write_texture` but never called `mark_node_pixels_dirty`, so
 /// the per-frame `drain_dirty_thumbnail_readbacks` saw an empty set
 /// and no thumbnail readbacks queued. Every paint path marks dirty
 /// after writing; the load path was the one outlier. Fix lives in
-/// `Compositor::upload_node_pixels` — a single helper that writes
+/// `Compositor::upload_node_pixels`: a single helper that writes
 /// AND marks dirty in one step, so the next call site that uploads
 /// pixels can't forget.
 #[test]
@@ -855,7 +856,7 @@ fn loaded_thumbnails_populate_without_a_first_edit() {
     }
 
     // The reloaded doc's raster layers should each have a non-zero
-    // thumbnail cached. We check at least one — the kitchen-sink + the
+    // thumbnail cached. We check at least one: the kitchen-sink + the
     // pasted red layer together guarantee one filled raster, while
     // empty-pixel layers stay zero (correctly).
     let raster_ids: Vec<crate::layer::LayerId> = reloaded
@@ -875,12 +876,12 @@ fn loaded_thumbnails_populate_without_a_first_edit() {
     });
     assert!(
         any_non_zero,
-        "no loaded raster has a non-zero thumbnail — \
+        "no loaded raster has a non-zero thumbnail: \
          load path forgot to mark_node_pixels_dirty after upload"
     );
 }
 
-/// Loading a `.darkly` into a dirty engine clears the dirty flag — the
+/// Loading a `.darkly` into a dirty engine clears the dirty flag: the
 /// loaded contents are the new "matches disk" baseline. The fresh
 /// staging doc constructed in `build_staging_document` starts with
 /// `dirty: false`, and the atomic swap installs it as-is.
@@ -917,7 +918,7 @@ fn kitchen_sink_covers_every_closed_set_variant() {
     let mut engine = kitchen_sink_engine(8, 8);
     populate_kitchen_sink(&mut engine);
 
-    // Blend modes — every registered mode must appear on at least one
+    // Blend modes: every registered mode must appear on at least one
     // raster layer.
     let used_blend_modes: std::collections::HashSet<&'static str> = engine
         .doc
@@ -928,12 +929,12 @@ fn kitchen_sink_covers_every_closed_set_variant() {
     for reg in blend_mode::registry().all() {
         assert!(
             used_blend_modes.contains(reg.type_id),
-            "kitchen-sink missing blend_mode/{} — extend populate_kitchen_sink",
+            "kitchen-sink missing blend_mode/{}: extend populate_kitchen_sink",
             reg.type_id
         );
     }
 
-    // Layer kinds — every registered kind must appear at least once in
+    // Layer kinds: every registered kind must appear at least once in
     // the doc.
     let mut used_layer_kinds = std::collections::HashSet::new();
     for entity in engine.doc.entities.values() {
@@ -944,12 +945,12 @@ fn kitchen_sink_covers_every_closed_set_variant() {
     for reg in layer_kind::registry().all() {
         assert!(
             used_layer_kinds.contains(reg.type_id),
-            "kitchen-sink missing layer_kind/{} — extend populate_kitchen_sink",
+            "kitchen-sink missing layer_kind/{}: extend populate_kitchen_sink",
             reg.type_id
         );
     }
 
-    // Filter kinds — every registered kind must appear at least once.
+    // Filter kinds: every registered kind must appear at least once.
     let mut used_modifier_kinds = std::collections::HashSet::new();
     for entity in engine.doc.entities.values() {
         if let crate::document::Entity::Filter(m) = entity {
@@ -959,7 +960,7 @@ fn kitchen_sink_covers_every_closed_set_variant() {
     for reg in filter::registry().all() {
         assert!(
             used_modifier_kinds.contains(reg.type_id),
-            "kitchen-sink missing filter/{} — extend populate_kitchen_sink",
+            "kitchen-sink missing filter/{}: extend populate_kitchen_sink",
             reg.type_id
         );
     }
@@ -1014,8 +1015,8 @@ fn root_group_body() -> serde_json::Value {
 }
 
 /// Build a `Manifest` with the canonical fields the load path expects
-/// — `format = "darkly"`, current container version, present
-/// `requires` block — but with an empty tree. Callers mutate the
+/// (`format = "darkly"`, current container version, present
+/// `requires` block) but with an empty tree. Callers mutate the
 /// returned struct in place to plant the test's specific failure mode.
 fn synth_minimal_manifest() -> Manifest {
     Manifest {
@@ -1049,7 +1050,7 @@ fn synth_minimal_manifest() -> Manifest {
 }
 
 /// Reusable assertion: a refused load must leave the engine's document
-/// untouched. The pointer check is enough — `mem::replace` would
+/// untouched. The pointer check is enough: `mem::replace` would
 /// move the SlotMap (and its heap allocations) and the pointer would
 /// differ. If we ever in-place mutate the doc during load, this test
 /// would still catch the structural change because every refusal path
@@ -1086,7 +1087,7 @@ fn refuse_missing_requires() {
     let mut engine = kitchen_sink_engine(4, 4);
     let prior = engine.document_ptr_for_test();
 
-    // Build the manifest JSON, then strip the `requires` field — we
+    // Build the manifest JSON, then strip the `requires` field; we
     // control the writer so absence is malformed, not "older format."
     let manifest = synth_minimal_manifest();
     let mut raw: serde_json::Value = serde_json::to_value(&manifest).unwrap();
@@ -1202,7 +1203,7 @@ fn refuse_unknown_modifier_kind() {
 fn refuse_corrupt_manifest_when_requires_lies() {
     // The `requires` block claims only `normal` (truthful as far as
     // pre-check is concerned), but the body has a raster layer using
-    // `divide_v2` — a blend mode the binary doesn't know. The
+    // `divide_v2`, a blend mode the binary doesn't know. The
     // per-variant safety net in `build_staging_document` catches this
     // as `CorruptManifest`.
     let mut engine = kitchen_sink_engine(4, 4);
@@ -1243,7 +1244,7 @@ fn refuse_corrupt_manifest_when_requires_lies() {
 
 #[test]
 fn open_document_leaves_engine_untouched_on_refuse() {
-    // Belt-and-suspenders for the most consequential refusal — load a
+    // Belt-and-suspenders for the most consequential refusal: load a
     // file that's been edited to need a feature the binary doesn't
     // ship and assert *more* than the doc-ptr invariant: the
     // pre-refusal state (layer count, doc name) is also recoverable.
@@ -1267,7 +1268,7 @@ fn open_document_leaves_engine_untouched_on_refuse() {
 #[test]
 fn legacy_type_id_migration() {
     // The `register() -> Vec<Registration>` legacy-reader pattern
-    // isn't wired yet — no module has bumped its `type_id`, so no
+    // isn't wired yet; no module has bumped its `type_id`, so no
     // legacy entries exist. This test holds the slot so the first
     // real bump has a place to land its fixture (and surfaces if
     // someone accidentally drops the registry interface). The shape
@@ -1282,14 +1283,14 @@ fn legacy_type_id_migration() {
     //      would produce.
     //
     // Today: assert every registered veil resolves to itself in its
-    // registry — confirms the registry interface is the dispatch
+    // registry: confirms the registry interface is the dispatch
     // surface the migration will plug into.
     let registry = VeilRegistry::new();
     for reg in registry.types() {
         assert!(
             registry.has(reg.type_id),
             "legacy migration scaffold: registry must resolve every registered \
-             type_id back through itself — drift suggests the dispatch surface \
+             type_id back through itself; drift suggests the dispatch surface \
              a future migration would plug into has changed"
         );
     }
@@ -1305,8 +1306,8 @@ fn legacy_type_id_migration() {
 // hand-built manifest body and asserts that the central code:
 //   (a) dispatches based purely on type_id strings,
 //   (b) consults the registry for every entity (proven by the
-//       CorruptManifest miss on an unknown type_id under requires-lying
-//       — already covered by `refuse_corrupt_manifest_when_requires_lies`),
+//       CorruptManifest miss on an unknown type_id under requires-lying,
+//       already covered by `refuse_corrupt_manifest_when_requires_lies`),
 //   (c) routes opaque bodies through registered deserialize without any
 //       central branch (proven by the round-trip body check below).
 //
@@ -1321,7 +1322,7 @@ fn legacy_type_id_migration() {
 #[test]
 fn manifest_entry_bodies_are_opaque_to_central_code() {
     // Take a registered raster layer body, drop an unknown JSON key
-    // alongside its real fields, and re-parse — the body should still
+    // alongside its real fields, and re-parse; the body should still
     // round-trip the unknown key. This proves the central code reads
     // `body: serde_json::Value` rather than coercing to a closed-set
     // typed enum, and that adding a new field inside a kind's body
@@ -1338,7 +1339,7 @@ fn manifest_entry_bodies_are_opaque_to_central_code() {
         .expect("at least one raster in kitchen sink");
 
     // Add an unknown field to the body and re-serialize the whole
-    // manifest. The load path's central code must not reject this — it
+    // manifest. The load path's central code must not reject this: it
     // only knows that body is `Value`, and only the raster kind itself
     // (which ignores unknown fields via serde's default behaviour) reads
     // it.

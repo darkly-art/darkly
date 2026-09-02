@@ -93,7 +93,7 @@ describe('text editor logic', () => {
             'add_text_object',
             expect.objectContaining({ id: 42, content: 'Hi', x: 100, y: 60 }),
         );
-        // The target layer is already selected — adding an object must not
+        // The target layer is already selected, so adding an object must not
         // re-select (nor create) a layer.
         expect(host.selectLayer).not.toHaveBeenCalled();
         expect(r).toEqual({ layerId: 42, objectId: 9, latest: 'Hi' });

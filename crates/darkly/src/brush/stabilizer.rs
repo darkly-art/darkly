@@ -1,4 +1,4 @@
-//! Stroke stabilizer — retroactive stroke reshaping with zero lag.
+//! Stroke stabilizer: retroactive stroke reshaping with zero lag.
 //!
 //! The stabilizer processes the full stroke history before dabs are placed.
 //! It operates outside the per-dab node graph: brushes configure which
@@ -9,7 +9,7 @@
 //! `gpu/veils/*.rs`): each algorithm is a self-contained module that
 //! declares its own params and factory.  A registry maps type_id →
 //! registration.  New algorithms are added by dropping a `.rs` file in
-//! `brush/stabilizers/` — no other files touched.
+//! `brush/stabilizers/`: no other files touched.
 
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ use crate::gpu::params::{ParamDef, ParamValue};
 /// Result of pushing a new point through the stabilizer.
 pub struct StabilizeResult {
     /// Earliest dab index that needs re-rendering (everything from here
-    /// to the tip has changed).  `None` means nothing diverged — only
+    /// to the tip has changed).  `None` means nothing diverged: only
     /// new points were appended.
     pub divergence_index: Option<usize>,
 }
@@ -36,7 +36,7 @@ const DIVERGENCE_EPSILON: f32 = 0.5;
 ///
 /// `current` is this frame's stabilized polyline, `prev_positions` the
 /// previous frame's positions. The walk is bounded to `max_window` indices
-/// behind the tip — the caller's model of how far a perturbation can reach —
+/// behind the tip (the caller's model of how far a perturbation can reach),
 /// so it never reports divergence at indices the model says cannot have moved.
 ///
 /// Shared by [`LaplacianStabilizer`](crate::brush::stabilizers::laplacian::LaplacianStabilizer)
@@ -68,7 +68,7 @@ pub fn find_divergence(
     };
 
     if prev_positions.len() == len {
-        // Same length — walk backward from tip to `earliest`.
+        // Same length: walk backward from tip to `earliest`.
         for i in (earliest..len).rev() {
             if delta2(i) < eps2 {
                 return if i + 1 < len { Some(i + 1) } else { None };
@@ -78,7 +78,7 @@ pub fn find_divergence(
     } else {
         // Polyline grew. New indices `[prev_positions.len(), len-1]` are by
         // definition new and cannot be compared. Existing indices that
-        // overlap with `prev_positions` are in `[0, overlap_end)` — walk
+        // overlap with `prev_positions` are in `[0, overlap_end)`: walk
         // those, descending, bounded below by `earliest`.
         let overlap_end = prev_positions.len().min(len);
         if earliest >= overlap_end {
@@ -125,7 +125,7 @@ pub trait StabilizerAlgorithm: Send {
     fn clear(&mut self);
 }
 
-/// A pass-through "stabilizer" that does nothing — output equals input.
+/// A pass-through "stabilizer" that does nothing: output equals input.
 /// Used when no stabilization is configured (empty algorithm string).
 pub struct PassThrough {
     points: Vec<PaintInformation>,
@@ -162,7 +162,7 @@ impl StabilizerAlgorithm for PassThrough {
     }
 }
 
-/// Minimum real samples before prediction engages — enough for a stable
+/// Minimum real samples before prediction engages: enough for a stable
 /// heading and a measured inter-sample Δt. Below this the decorator is a
 /// pass-through of the inner stabilizer's result.
 const MIN_REAL_FOR_PREDICTION: usize = 3;
@@ -172,7 +172,7 @@ const MIN_REAL_FOR_PREDICTION: usize = 3;
 const MAX_PREDICTED_POINTS: usize = 32;
 
 /// Number of recent real segments the heading, per-sample step, and Δt are
-/// averaged over — smooths raw last-two-frame jitter.
+/// averaged over: smooths raw last-two-frame jitter.
 const HEADING_WINDOW: usize = 3;
 
 /// Prediction decorator: wraps a real stabilizer and appends a short
@@ -181,7 +181,7 @@ const HEADING_WINDOW: usize = 3;
 ///
 /// The predicted points live in `stabilized()` **and** in the buffer
 /// [`find_divergence`] diffs, so the engine's existing rewind rewrites them
-/// every frame — no separate render target, no parallel path. The predicted
+/// every frame: no separate render target, no parallel path. The predicted
 /// count is held constant once established, so the combined polyline only ever
 /// grows-by-one + reshapes: the cases `find_divergence` already handles.
 ///
@@ -190,7 +190,7 @@ const HEADING_WINDOW: usize = 3;
 /// and `docs/plans/stroke-prediction-stabilizer.md`.
 pub struct PredictingStabilizer {
     inner: Box<dyn StabilizerAlgorithm>,
-    /// Real + predicted polyline — what `stabilized()` returns.
+    /// Real + predicted polyline: what `stabilized()` returns.
     combined: Vec<PaintInformation>,
     /// `combined` positions from the previous push (divergence diff input).
     prev_positions: Vec<[f32; 2]>,
@@ -236,7 +236,7 @@ impl PredictingStabilizer {
             return 0;
         }
         // N predicted samples span the configured *time* horizon at the
-        // current sample cadence — a time horizon, not a fixed dab count, so
+        // current sample cadence: a time horizon, not a fixed dab count, so
         // the predicted distance auto-scales with pen speed.
         let n = (self.horizon_secs / mean_dt).round() as usize;
         let n = n.clamp(1, MAX_PREDICTED_POINTS);
@@ -264,7 +264,7 @@ impl PredictingStabilizer {
         let dy = tip.pos[1] - base.pos[1];
         let dist = (dx * dx + dy * dy).sqrt();
         if dist < 1.0e-4 {
-            // Stationary — no meaningful heading; collapse onto the tip.
+            // Stationary: no meaningful heading; collapse onto the tip.
             for _ in 0..n {
                 self.combined.push(tip);
             }
@@ -277,7 +277,7 @@ impl PredictingStabilizer {
         let step = dist / k as f32;
 
         // Curvature/reversal damping pulls the tail toward the tip rather
-        // than removing points — kills the reversal "whisker" and keeps the
+        // than removing points: kills the reversal "whisker" and keeps the
         // point count constant.
         let damp = self.reversal_damp(real_len, heading, k);
 
@@ -331,7 +331,7 @@ impl StabilizerAlgorithm for PredictingStabilizer {
         }
 
         // Divergence over the FULL combined polyline (not the inner's
-        // real-only result), with the widened window — this is what makes the
+        // real-only result), with the widened window, which is what makes the
         // existing rewind rewrite the predicted tail every frame.
         let divergence_index = find_divergence(
             &self.combined,
@@ -433,7 +433,7 @@ impl StabilizerRegistry {
     }
 }
 
-/// Per-brush stabilizer configuration — stored in `BrushMetadata`.
+/// Per-brush stabilizer configuration: stored in `BrushMetadata`.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct StabilizerConfig {
     /// Algorithm type_id.  Empty string or "none" = pass-through.
@@ -660,7 +660,7 @@ mod tests {
         );
     }
 
-    /// T-E: horizon 0 ⇒ the decorator is transparent — `stabilized()` and the
+    /// T-E: horizon 0 ⇒ the decorator is transparent: `stabilized()` and the
     /// divergence result match a bare inner stabilizer, frame for frame.
     #[test]
     fn horizon_zero_is_transparent() {
@@ -681,10 +681,10 @@ mod tests {
 
     /// T-H: with several real samples per frame (a high-Hz burst), the
     /// per-point predicted step tracks the measured per-sample displacement,
-    /// not a fixed per-frame step — the guard against "one sample = one frame".
+    /// not a fixed per-frame step: the guard against "one sample = one frame".
     #[test]
     fn predicted_step_tracks_per_sample_displacement() {
-        // 240Hz-ish burst: 5px apart, ~4–5ms apart (unequal Δt), 40ms horizon.
+        // 240Hz-ish burst: 5px apart, ~4-5ms apart (unequal Δt), 40ms horizon.
         let mut stab = PredictingStabilizer::new(laplacian_inner(0.5), 40.0);
         let times = [0.0, 0.004, 0.009, 0.013, 0.018, 0.022, 0.027];
         for (i, &t) in times.iter().enumerate() {

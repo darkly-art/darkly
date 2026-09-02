@@ -1,4 +1,4 @@
-//! Destructive chromatic-aberration integration tests — the CA filter over the
+//! Destructive chromatic-aberration integration tests: the CA filter over the
 //! shared `filter_node_region` substrate, exercising the new `SrcSampling::
 //! Bilinear` source mode and the List/Color/Vec2 param kinds end to end.
 //!
@@ -92,7 +92,7 @@ fn single_offset_aberration_shifts_pixels() {
 }
 
 /// R/G/B entries with zero offset, unit scale, no blur are a bit-exact
-/// passthrough — every displaced sample equals the base, so all content deltas
+/// passthrough: every displaced sample equals the base, so all content deltas
 /// are zero and no entry contributes anything.
 #[test]
 fn identity_params_preserve_pixels_exactly() {
@@ -131,7 +131,7 @@ fn radial_scale_moves_edges_not_center() {
     assert_eq!(
         px(&after, w, 7, 7),
         px(&before, w, 7, 7),
-        "the center pixel is the scale pivot — unchanged"
+        "the center pixel is the scale pivot, unchanged"
     );
     // A far-from-center pixel is resampled and differs.
     assert_ne!(
@@ -170,7 +170,7 @@ fn selection_clips_aberration() {
 }
 
 /// Veil smoke test: the CA veil, driven through its own GPU path (registry →
-/// `create_cache` → `encode`), produces non-identity output — a white entry
+/// `create_cache` → `encode`), produces non-identity output: a white entry
 /// offset 4 px right shifts the whole-canvas result.
 #[test]
 fn veil_produces_non_identity_output() {
@@ -398,7 +398,7 @@ fn hue_120_entry_is_exact_green_channel_shift() {
 
 /// When a channel is shifted off an alpha edge, the surviving content stays
 /// visible: shifting the red out of opaque yellow (across a transparent
-/// boundary) leaves an *opaque* green — the representability floor keeps alpha
+/// boundary) leaves an *opaque* green: the representability floor keeps alpha
 /// from collapsing while a channel remains.
 #[test]
 fn shifted_away_channel_keeps_remaining_content_visible() {

@@ -1,7 +1,7 @@
 //! The metadata export is a *faithful projection* of the registries.
 //!
 //! The gap this file exists to close: nothing previously asserted that the
-//! export described what the registries actually hold — only that it matched
+//! export described what the registries actually hold, only that it matched
 //! its own generator, which proves nothing about a registry silently dropped or
 //! a field silently mis-copied.
 //!
@@ -276,7 +276,9 @@ fn export_is_a_faithful_projection() {
                     info.name.as_str(),
                     info.icon,
                     some(info.description.as_str()),
-                    some(info.category.as_str()),
+                    // Grouping is derived from shipped pack membership, the
+                    // same way the catalog derives it.
+                    darkly::brush::packs::pack_of(stem).map(|p| p.name.as_str()),
                     None,
                 )
             })
@@ -294,7 +296,7 @@ fn export_is_a_faithful_projection() {
                     r.node.type_id,
                     r.node.display_name,
                     // Ports are not parameters and a preview-fallback glyph is
-                    // not a palette icon — both deliberately absent.
+                    // not a palette icon, both deliberately absent.
                     None,
                     some(r.node.description),
                     some(r.node.category),
@@ -363,8 +365,8 @@ fn export_is_a_faithful_projection() {
          preview recipe"
     );
 
-    // Brushes carry no `preview` field of their own — the recipe lives on the
-    // catalog — so the exported flag must be the same question put to the same
+    // Brushes carry no `preview` field of their own; the recipe lives on the
+    // catalog, so the exported flag must be the same question put to the same
     // authority the catalog itself asks, per entry rather than a blanket claim.
     for e in catalog(&json, darkly::brush::builtin_brushes::CATALOG_ID)["entries"]
         .as_array()
@@ -378,22 +380,20 @@ fn export_is_a_faithful_projection() {
         );
     }
 
-    // Settings ride on the same footing, against the section schema minus the
-    // prefs the UI does not treat as settings.
+    // Settings ride on the same footing, against the section schema. Every
+    // declared pref is exported, including those marked `Hidden`; the export
+    // is also the schema stored prefs are validated against, so a pref missing
+    // from it would be erased from the user's settings file on reload.
     for section in darkly::config::sections::registrations() {
         let cat = catalog(&json, &format!("settings.{}", section.id));
         assert_eq!(cat["title"].as_str(), Some(section.display_name));
         assert_eq!(cat["order"].as_i64(), Some(section.order as i64));
         let params = cat["entries"][0]["params"].as_array().unwrap();
-        let want: Vec<_> = section
-            .prefs
-            .iter()
-            .filter(|p| !matches!(p.widget, darkly::config::schema::WidgetHint::Hidden))
-            .collect();
+        let want: Vec<_> = section.prefs.iter().collect();
         assert_eq!(
             params.len(),
             want.len(),
-            "settings.{} exports {} prefs, the section declares {} visible",
+            "settings.{} exports {} prefs, the section declares {}",
             section.id,
             params.len(),
             want.len()
@@ -407,13 +407,23 @@ fn export_is_a_faithful_projection() {
             );
             assert_eq!(got["label"].as_str(), Some(pref.display_name));
             assert_eq!(got["description"].as_str(), pref.description);
-            assert_ne!(got["widget"].as_str(), Some("hidden"));
+            // A `Hidden` pref is exported carrying that fact, so consumers
+            // know not to render it. It is the renderer that hides.
+            if matches!(pref.widget, darkly::config::schema::WidgetHint::Hidden) {
+                assert_eq!(
+                    got["widget"].as_str(),
+                    Some("hidden"),
+                    "settings.{} pref `{}` must carry its hidden widget",
+                    section.id,
+                    pref.key
+                );
+            }
         }
     }
 }
 
 /// Every entry's exported `params` equals `ParamInfo` over the registration's
-/// own `&'static [ParamDef]`, in order — so a parameter cannot be dropped,
+/// own `&'static [ParamDef]`, in order, so a parameter cannot be dropped,
 /// reordered, or re-derived at the exporter.
 #[test]
 fn params_match_the_registration_slice() {
@@ -483,13 +493,13 @@ fn manifest_carries_no_binary_payload() {
             Value::String(s) => {
                 assert!(
                     !s.starts_with("data:"),
-                    "{path} carries a data: URI — the artifact must not embed bytes"
+                    "{path} carries a data: URI; the artifact must not embed bytes"
                 );
                 // Anything this long in a metadata field is a payload, not a
                 // label or a sentence.
                 assert!(
                     s.len() < 4096,
-                    "{path} carries a {}-byte string — too long to be metadata",
+                    "{path} carries a {}-byte string: too long to be metadata",
                     s.len()
                 );
             }

@@ -49,7 +49,7 @@ describe('freshDocument recipes', () => {
             expect(RECIPES.app.defaultBrushName).toBe('Ink Pen');
             expect(RECIPES.app.foreground).toEqual({ r: 255, g: 255, b: 255, a: 255 });
             // Regression: the background swatch was hardcoded to white in app
-            // state, so the `app` build shipped white-on-white — an invisible
+            // state, so the `app` build shipped white-on-white, an invisible
             // foreground/background pair.
             expect(RECIPES.app.background).toEqual({ r: 0, g: 0, b: 0, a: 255 });
             expect(RECIPES.app.background).not.toEqual(RECIPES.app.foreground);

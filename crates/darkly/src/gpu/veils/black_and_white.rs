@@ -1,4 +1,4 @@
-//! Black and White veil — the viewport surface of the shared black-and-white
+//! Black and White veil: the viewport surface of the shared black-and-white
 //! core ([`crate::gpu::black_and_white`]): a sampler-based fullscreen pass
 //! over the veil chain's ping-pong textures. The identity, param schema,
 //! uniform packing, and WGSL transform all live in the shared module; this

@@ -3,12 +3,12 @@
 //!
 //! Both nodes sample a field (`fbm_tile` / `textureSample`) at a `vec2<f32>`
 //! coordinate. Historically that coordinate was always `target_pos / scale`
-//! — canvas-global pixels — so the pattern stayed pinned to the canvas and
+//! (canvas-global pixels), so the pattern stayed pinned to the canvas and
 //! the grain "swam" under a rotating stamp. This module folds a `space`
 //! selector into the emitted coordinate so a node can instead sample in the
 //! dab's own oriented frame, locking the grain to the stamp.
 //!
-//! The frame is chosen at compile time — the emitter produces only the
+//! The frame is chosen at compile time: the emitter produces only the
 //! selected arm, never a runtime `switch`. The emitted WGSL references only
 //! skeleton-provided locals (`target_pos`, `local_uv`, `d`) and the caller's
 //! own `rotation`/`variation` input expressions, so it composes into both the
@@ -17,10 +17,10 @@
 /// Coordinate frame a spatial node samples in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleFrame {
-    /// Canvas-global pixel space — grain pinned to the canvas; overlapping
+    /// Canvas-global pixel space: grain pinned to the canvas; overlapping
     /// strokes share one coherent sheet. `rotation`/`variation` are ignored.
     Canvas,
-    /// The dab's oriented unit frame — grain rotates and translates rigidly
+    /// The dab's oriented unit frame: grain rotates and translates rigidly
     /// with each stamp.
     Dab,
 }
@@ -51,7 +51,7 @@ impl SampleFrame {
 /// *with* the brush instead, drive `scale` from `brush_settings.size` (also in
 /// canvas pixels): the dab radius and the scale then grow together and cancel.
 ///
-/// `scale_expr` is the caller's `scale` **input expression** — a `{:.6}`
+/// `scale_expr` is the caller's `scale` **input expression**: a `{:.6}`
 /// literal when the scale input is unwired, or an upstream WGSL expression
 /// when it's driven per-dab. It is interpolated parenthesized so a wired
 /// expression composes correctly inside the divide.
@@ -166,7 +166,7 @@ mod tests {
             "noise_3",
         );
         // Defects 1+2: the offset is a 2D hash of `variation` bounded to the
-        // caller's field period (16) — not the same scalar on both axes, and
+        // caller's field period (16), not the same scalar on both axes, and
         // not a `* 64.0` stride that resonates with period 16. `fbm_offset2`
         // (fbm2d.wgsl) draws x and y from two different PCG inputs by
         // construction, so referencing it *is* the 2D guarantee.

@@ -118,14 +118,14 @@ fn paint_target_composite_circle() {
     // Corner (0, 0) should be transparent.
     assert_eq!(pixels[3], 0, "corner alpha={}, expected 0", pixels[3]);
 
-    // Pixel inside circle (64, 57) — 7px from center, radius 10.
+    // Pixel inside circle (64, 57): 7px from center, radius 10.
     let inside = ((57 * w + 64) * 4) as usize;
     assert!(
         pixels[inside + 3] > 0,
         "inside circle should be non-transparent"
     );
 
-    // Pixel outside circle (64, 50) — 14px from center, radius 10.
+    // Pixel outside circle (64, 50): 14px from center, radius 10.
     let outside = ((50 * w + 64) * 4) as usize;
     assert_eq!(
         pixels[outside + 3],
@@ -292,7 +292,7 @@ fn paint_target_selection_masking() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
-    // Left side, within circle (48, 64) — 16px from center, well within r=30.
+    // Left side, within circle (48, 64): 16px from center, well within r=30.
     let left = ((64 * w + 48) * 4) as usize;
     assert!(
         pixels[left + 3] > 0,
@@ -300,7 +300,7 @@ fn paint_target_selection_masking() {
         pixels[left + 3]
     );
 
-    // Right side, within circle (80, 64) — 16px from center, within r=30 but unselected.
+    // Right side, within circle (80, 64): 16px from center, within r=30 but unselected.
     let right = ((64 * w + 80) * 4) as usize;
     assert_eq!(
         pixels[right + 3],
@@ -449,7 +449,7 @@ fn paint_target_composite_circle_on_offset_layer() {
     assert_eq!(pixels[c + 3], 255);
 
     // The OLD buggy mapping would have painted at canvas (50,50) interpreted
-    // as layer-local — i.e. at layer-local (50, 50). That position must be
+    // as layer-local, i.e. at layer-local (50, 50). That position must be
     // empty.
     let bug = ((50u32 * lw + 50) * 4) as usize;
     assert_eq!(
@@ -500,7 +500,7 @@ fn paint_target_fill_rect_canvas_space_on_offset_layer() {
     enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
-    // Layer-local (65, 65) — interior of the rect.
+    // Layer-local (65, 65): interior of the rect.
     let lx = (15 - off_x) as u32;
     let ly = (15 - off_y) as u32;
     let c = ((ly * lw + lx) * 4) as usize;
@@ -510,7 +510,7 @@ fn paint_target_fill_rect_canvas_space_on_offset_layer() {
         "rect interior should be blue at layer-local ({lx},{ly})"
     );
     assert_eq!(pixels[c + 3], 255);
-    // Layer-local (50, 50) — would be the OLD (target-local) interpretation;
+    // Layer-local (50, 50) would be the OLD (target-local) interpretation;
     // must be transparent under the canvas-space contract.
     let outside = ((50u32 * lw + 50) * 4) as usize;
     assert_eq!(
@@ -559,7 +559,7 @@ fn paint_target_fill_rect_canvas_negative_origin_on_offset_layer() {
     enc.submit();
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
-    // Layer-local (25, 65) — interior.
+    // Layer-local (25, 65): interior.
     let lx = (-25 - off_x) as u32;
     let ly = (15 - off_y) as u32;
     let c = ((ly * lw + lx) * 4) as usize;
