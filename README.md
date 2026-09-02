@@ -45,24 +45,13 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that shrouds your canvas in a mysterious way, inviting you to see something that maybe wasn't there before.
 
-![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
+![veil-demo](https://github.com/user-attachments/assets/d30a72e2-a613-4f57-bcb0-671feea08b8d)
 
 Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
 
-<!-- darkly:catalog-table catalog=veils -->
-|  | Name | What it does |
-| :-: | --- | --- |
-| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white: six grayscale formulas or custom channel weights, with an optional color tint. |
-| <img src="docs/images/previews/veils/chromatic_aberration.jpg" width="200" alt="Chromatic Aberration"> | **Chromatic Aberration** | Split the color channels apart along their hue axes, like a misaligned lens. |
-| <img src="docs/images/previews/veils/frozen.jpg" width="200" alt="Frozen"> | **Frozen** | Frost the view behind a pane of refracting ice. |
-| <img src="docs/images/previews/veils/grain.jpg" width="200" alt="Grain"> | **Grain** | Film grain noise over the view, optionally animated. |
-| <img src="docs/images/previews/veils/lens_blur.jpg" width="200" alt="Lens Blur"> | **Lens Blur** | Defocus the view with a soft camera-lens blur. |
-| <img src="docs/images/previews/veils/painting.jpg" width="200" alt="Painting"> | **Painting** | Smooth the view into painterly, brush-like daubs. |
-| <img src="docs/images/previews/veils/pixelate.jpg" width="200" alt="Pixelate"> | **Pixelate** | Downsample the view into a blocky pixel mosaic. |
-| <img src="docs/images/previews/veils/rainy_glass.jpg" width="200" alt="Rainy Glass"> | **Rainy Glass** | Raindrops run down a pane of glass over the view. |
-| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts: scanlines, noise, and color bleed. |
-| <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
-<!-- /darkly:catalog-table -->
+<!-- darkly:catalog-graphic catalog=veils -->
+<img src="docs/images/graphics/veils.jpg" alt="Veils: Black and White, Chromatic Aberration, Frozen, Grain, Lens Blur, Painting, Pixelate, Rainy Glass, VHS, Watercolor">
+<!-- /darkly:catalog-graphic -->
 
 Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:
 
