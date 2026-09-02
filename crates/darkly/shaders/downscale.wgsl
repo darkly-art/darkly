@@ -27,23 +27,48 @@ struct VertexOutput {
 @group(0) @binding(0) var t_input: texture_2d<f32>;
 @group(0) @binding(1) var t_sampler: sampler;
 
+// Alpha-weighted mean of four texels. Canvas accumulators hold *straight*
+// (non-premultiplied) alpha — composite.wgsl divides its result by `out_a` —
+// so a fully transparent texel carries RGB 0 and an unweighted average across
+// an alpha edge drags colour toward black: opaque red averaged with empty
+// gives half-alpha *dark* red rather than half-alpha red. Weighting colour by
+// coverage and carrying alpha as its own plain mean is the fix, and it is a
+// no-op wherever alpha is already 1 everywhere. Same idiom as the disc blur in
+// lib/aberration.wgsl, which weights its taps for the same reason.
+fn weighted_mean(s0: vec4f, s1: vec4f, s2: vec4f, s3: vec4f) -> vec4f {
+    let acc_rgb = s0.rgb * s0.a + s1.rgb * s1.a + s2.rgb * s2.a + s3.rgb * s3.a;
+    let acc_a = s0.a + s1.a + s2.a + s3.a;
+    return vec4f(acc_rgb / max(acc_a, 1.0e-4), acc_a * 0.25);
+}
+
 @fragment fn fs_downscale(in: VertexOutput) -> @location(0) vec4f {
     // Output pixel size in input-UV space. We take its absolute value
     // because the vertex shader flips V, so dpdy may be negative.
     let footprint = vec2f(abs(dpdx(in.uv.x)), abs(dpdy(in.uv.y)));
 
-    // 4 bilinear taps at the centers of the 4 quadrants of the output
-    // pixel's input footprint — i.e. ±¼ of the footprint from center
-    // along each axis. At exactly 2× downscale this lands each tap at a
-    // half-texel position so bilinear filtering averages 2 input texels
-    // and the 4 taps tile the 2×2 input area exactly. At lighter
-    // downscales (e.g. 1.4× for scale=0.7) the taps fall closer
-    // together and we still get a clean weighted box.
+    // 4 taps at the centers of the 4 quadrants of the output pixel's input
+    // footprint — i.e. ±¼ of the footprint from center along each axis. At
+    // exactly 2× downscale that tiles the 2×2 input area; at lighter ratios
+    // (1.41× at the default scale) the taps fall closer together and still
+    // give a clean box.
+    //
+    // `textureLoad`, not `textureSample`: a bilinear tap would have the
+    // hardware average up to four straight-alpha texels *inside* each tap,
+    // before this shader can weight anything, which is the same colour error
+    // the weighting exists to remove.
+    let dims = vec2f(textureDimensions(t_input));
     let tap = footprint * 0.25;
+    let hi = vec2i(dims) - vec2i(1, 1);
 
-    let s00 = textureSample(t_input, t_sampler, in.uv + vec2f(-tap.x, -tap.y));
-    let s10 = textureSample(t_input, t_sampler, in.uv + vec2f( tap.x, -tap.y));
-    let s01 = textureSample(t_input, t_sampler, in.uv + vec2f(-tap.x,  tap.y));
-    let s11 = textureSample(t_input, t_sampler, in.uv + vec2f( tap.x,  tap.y));
-    return 0.25 * (s00 + s10 + s01 + s11);
+    let p00 = clamp(vec2i((in.uv + vec2f(-tap.x, -tap.y)) * dims), vec2i(0), hi);
+    let p10 = clamp(vec2i((in.uv + vec2f( tap.x, -tap.y)) * dims), vec2i(0), hi);
+    let p01 = clamp(vec2i((in.uv + vec2f(-tap.x,  tap.y)) * dims), vec2i(0), hi);
+    let p11 = clamp(vec2i((in.uv + vec2f( tap.x,  tap.y)) * dims), vec2i(0), hi);
+
+    return weighted_mean(
+        textureLoad(t_input, p00, 0),
+        textureLoad(t_input, p10, 0),
+        textureLoad(t_input, p01, 0),
+        textureLoad(t_input, p11, 0),
+    );
 }

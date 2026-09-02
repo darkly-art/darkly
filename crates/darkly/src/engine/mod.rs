@@ -1098,6 +1098,15 @@ impl DarklyEngine {
         )
     }
 
+    /// Force an offscreen composite and report whether it did any work. `false`
+    /// means the compositor was already clean — the signal a test needs to
+    /// assert that a steady frame stays quiescent.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_offscreen(&mut self) -> bool {
+        self.compositor
+            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc)
+    }
+
     /// Blocking readback of the root composited canvas. For test assertions
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the
@@ -1168,6 +1177,13 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_effect_rebuilds(&self) -> u64 {
         self.compositor.effect_rebuilds()
+    }
+
+    /// The resolution an effect layer renders at — see
+    /// [`crate::gpu::compositor::Compositor::effect_reduced_size`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_effect_reduced_size(&self, id: LayerId) -> Option<(u32, u32)> {
+        self.compositor.effect_reduced_size(id)
     }
 
     /// Test-only animation tick. Headless `render()` returns early without

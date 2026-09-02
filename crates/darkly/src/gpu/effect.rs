@@ -157,6 +157,26 @@ pub fn create_downscale_pipeline(
     )
 }
 
+/// Build a render pipeline for the alpha-weighted magnification shader — the
+/// return leg of a reduced-resolution effect. A plain bilinear blit mixes the
+/// black held by transparent texels into everything it interpolates across an
+/// alpha edge, because accumulators carry straight alpha; this does the bilerp
+/// by hand with colour weighted by coverage.
+pub fn create_upscale_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+) -> EffectPipeline {
+    create_effect_pipeline(
+        device,
+        format,
+        label,
+        &[Binding::Texture, Binding::Sampler],
+        include_str!("../../shaders/upscale.wgsl"),
+        "fs_upscale",
+    )
+}
+
 /// Build a fullscreen-triangle post-process pipeline: `vs_main` +
 /// `fragment_entry`, one color target of `format`, no blend/depth/stencil. The
 /// bind-group layout is `bindings` in order, numbered 0..n. The single home for

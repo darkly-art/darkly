@@ -561,6 +561,11 @@ struct EffectInstance {
     /// The [`Compositor::target_generation`] the bind groups were built under.
     /// Any bump means the textures behind them may have been freed.
     target_generation: u64,
+    /// The effective scale this instance's scaffolding was built for. The
+    /// instance is the only record of the scale in force — nothing caches a
+    /// second copy — so a configuration change is detected by comparing against
+    /// this rather than by watching the config from somewhere else.
+    applied_scale: f32,
     /// This layer's uniform for the shared in-place apply pass. Per instance
     /// rather than one reused buffer, because several effect layers encode into
     /// the same command encoder and a shared buffer would hand every one of
@@ -3558,6 +3563,50 @@ impl Compositor {
         self.effect_rebuilds
     }
 
+    /// Wake the pipeline when the configured effect scale has drifted from what
+    /// the realized instances were built at. The instances are the record of
+    /// the scale in force, so nothing here caches a second copy;
+    /// `sync_effect_instances` does the rebuilding once a frame is running.
+    ///
+    /// Only instances that sync can actually reach are consulted. One whose
+    /// space currently has no resources — a zero-sized viewport drops the screen
+    /// run's textures while its entries survive — would never be rebuilt, and
+    /// counting it as drifted would mark the compositor dirty on every frame
+    /// forever. Skipping it is what makes this terminate.
+    ///
+    /// Called from both frame entry points, since each gates on a dirty flag the
+    /// other does not reach; polling twice in one frame is harmless, because the
+    /// second call sees zero drift.
+    fn sync_effect_scale(&mut self) {
+        let base = crate::gpu::effect_scaling::effect_scale();
+        let drifted = self.effect_instances.iter().any(|(_, inst)| {
+            let reachable = match inst.space {
+                EffectSpace::Canvas { parent } => self.group_state.contains_key(&parent),
+                EffectSpace::Screen => self.screen_run.views().is_some(),
+            };
+            reachable
+                && (inst.applied_scale
+                    - crate::gpu::effect_scaling::effective_scale(
+                        base,
+                        inst.effect.perf_scale_factor(),
+                    ))
+                .abs()
+                    >= crate::gpu::effect_scaling::SCALE_EPSILON
+        });
+        if drifted {
+            self.mark_dirty();
+            self.screen_run.mark_needs_present();
+        }
+    }
+
+    /// The resolution an effect layer's realized instance renders at, or `None`
+    /// when it runs at full scale on its space's own pair. `None` also covers
+    /// "no instance realized yet".
+    #[cfg(any(test, feature = "testing"))]
+    pub fn effect_reduced_size(&self, id: LayerId) -> Option<(u32, u32)> {
+        self.effect_instances.get(&id)?.scaled.reduced_size()
+    }
+
     pub fn screen_run(&self) -> &ScreenRun {
         &self.screen_run
     }
@@ -3913,6 +3962,11 @@ impl Compositor {
         queue: &wgpu::Queue,
         doc: &mut Document,
     ) -> bool {
+        // Ahead of the dirty gate: a scale change is the one input that arrives
+        // without anything marking the composite dirty, and this is the entry
+        // point export, save, the recorder and the headless paths come through.
+        self.sync_effect_scale();
+
         if !self.needs_composite {
             return false;
         }
@@ -4689,11 +4743,13 @@ impl Compositor {
         let ids: HashSet<LayerId> = live.iter().map(|(id, ..)| *id).collect();
         self.effect_instances.retain(|id, _| ids.contains(id));
 
+        let scale = crate::gpu::effect_scaling::effect_scale();
+
         for (id, space, pipeline_id, params) in live {
-            // The size the instance renders at and the scale it runs under.
-            // Canvas-space output is document content, so it defaults to full
-            // resolution; the viewport's is transient and does not.
-            let (size, scale) = match space {
+            // The native size the instance renders against. The scale it runs
+            // under is global — one knob for both spaces — so only the pair's
+            // dimensions differ here.
+            let size = match space {
                 EffectSpace::Canvas { parent } => {
                     let Some(gs) = self.group_state.get(&parent) else {
                         // The parent's accumulator does not exist yet; the next
@@ -4701,17 +4757,14 @@ impl Compositor {
                         // we build then.
                         continue;
                     };
-                    (
-                        (gs.accum.textures[0].width(), gs.accum.textures[0].height()),
-                        crate::gpu::effect_scaling::canvas_scale(),
-                    )
+                    (gs.accum.textures[0].width(), gs.accum.textures[0].height())
                 }
                 EffectSpace::Screen => {
                     if self.screen_run.views().is_none() {
                         // No viewport size yet.
                         continue;
                     }
-                    (self.screen_run.viewport_size(), self.screen_run.scale())
+                    self.screen_run.viewport_size()
                 }
             };
             if size.0 == 0 || size.1 == 0 {
@@ -4719,12 +4772,21 @@ impl Compositor {
             }
 
             // Everything except the parameters is structural: a change means
-            // the bind groups no longer describe reality.
+            // the bind groups no longer describe reality. The scale belongs
+            // here because it sizes the scaffolding without moving
+            // `render_size`, which is the native pair either way.
             let structural_match = self.effect_instances.get(&id).is_some_and(|inst| {
                 inst.pipeline_id == pipeline_id
                     && inst.space == space
                     && inst.render_size == size
                     && inst.target_generation == self.target_generation
+                    && (inst.applied_scale
+                        - crate::gpu::effect_scaling::effective_scale(
+                            scale,
+                            inst.effect.perf_scale_factor(),
+                        ))
+                    .abs()
+                        < crate::gpu::effect_scaling::SCALE_EPSILON
             });
 
             if structural_match {
@@ -4741,12 +4803,28 @@ impl Compositor {
             }
 
             self.effect_rebuilds += 1;
-            let Some(mut effect) = self.effect_registry.instance(
-                &pipeline_id,
-                &params,
-                device,
-                wgpu::TextureFormat::Rgba8Unorm,
-            ) else {
+            // An instance of the same effect type is cloned rather than rebuilt
+            // from the registry, so a rebuild triggered by resources moving
+            // under it — a resize, a scale change — keeps whatever the effect
+            // was carrying. Animation clocks live on the effect itself, so
+            // going back to the registry would silently rewind every animated
+            // veil to zero.
+            // Same type and same parameters only: the fall-through from a
+            // refused `set_params` needs a fresh instance built from the new
+            // values, and a clone would carry the old ones into its cache.
+            let reusable = self
+                .effect_instances
+                .get(&id)
+                .filter(|inst| inst.pipeline_id == pipeline_id && inst.params == params)
+                .map(|inst| inst.effect.clone_boxed());
+            let Some(mut effect) = reusable.or_else(|| {
+                self.effect_registry.instance(
+                    &pipeline_id,
+                    &params,
+                    device,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            }) else {
                 // An unknown effect id (a save naming one this binary does not
                 // ship) simply has no instance, and composes as a no-op.
                 self.effect_instances.remove(&id);
@@ -4769,6 +4847,7 @@ impl Compositor {
                     (views, pipelines)
                 }
             };
+            let effect_scale_factor = effect.perf_scale_factor();
             let (scaled, cache) = crate::gpu::effect_scaling::ScaledEffect::prepare(
                 device,
                 queue,
@@ -4798,6 +4877,10 @@ impl Compositor {
                     space,
                     render_size: size,
                     target_generation: self.target_generation,
+                    applied_scale: crate::gpu::effect_scaling::effective_scale(
+                        scale,
+                        effect_scale_factor,
+                    ),
                     apply_uniform,
                 },
             );
@@ -5602,12 +5685,10 @@ impl Compositor {
     ) {
         perf::time("render-total");
 
-        // Re-read the screen-space resolution scale. A change invalidates the
-        // instances built for the old one and sets needs_present, so a config
-        // edit wakes up an otherwise-idle app.
-        if self.screen_run.sync_resolution_scale() {
-            self.target_generation += 1;
-        }
+        // Re-read the effect resolution scale. Needed here as well as in
+        // `render_offscreen`, because this path returns below on
+        // `!has_pending_work` without ever reaching it.
+        self.sync_effect_scale();
 
         if !self.has_pending_work(doc) {
             perf::time_end("render-total");

@@ -7,14 +7,20 @@
 //! one caller: downscale the source, run the effect at the reduced size,
 //! upscale the result into the destination.
 //!
-//! Two scales feed it, because the two spaces are different things. The
-//! screen-space chain treats the viewport as a viewing surface and defaults
-//! below 1.0; canvas space is document content and defaults to 1.0, since
-//! shipping a layer's pixels through a reduced-resolution round trip would bake
-//! the loss into what the user exports.
+//! One scale feeds it, for both spaces. An effect layer is the same object
+//! wherever it sits, and the resolution it runs at is a global quality/speed
+//! preference rather than a property of the side of the divider it happens to be
+//! on. Canvas-space output is document content, so the trade ships into the
+//! export — that is the deliberate consequence of having one knob, and the way
+//! out is to raise the knob or apply the effect destructively, which never comes
+//! through here.
 //!
 //! Effects are resolution-agnostic and never learn any of this: an effect sees
-//! the pair it was handed and its size, and nothing about why.
+//! the pair it was handed and its size, and nothing about why. An effect's own
+//! [`Effect::perf_scale_factor`] composes with the global scale as a declaration
+//! of relative cost — it is not a veto, and no effect opts out.
+//!
+//! [`Effect::perf_scale_factor`]: crate::gpu::effect::Effect::perf_scale_factor
 
 use crate::gpu::effect::{self, Effect, EffectCache, EffectPipeline};
 
@@ -26,25 +32,34 @@ const FULL_SCALE_EPSILON: f32 = 1.0e-3;
 /// produce anything recognizable, and a zero would be a zero-sized texture.
 const MIN_SCALE: f32 = 0.05;
 
-/// Fraction of native viewport resolution to render screen-space effects at.
-pub fn screen_scale() -> f32 {
-    (crate::config::get_f64("rendering.screen_effect_scale") as f32).clamp(MIN_SCALE, 1.0)
+/// Below this, two scales are the same scale — the threshold for deciding that
+/// a realized instance still matches the configuration.
+pub const SCALE_EPSILON: f32 = 1.0e-3;
+
+/// Fraction of native resolution to render effects at, in either space.
+pub fn effect_scale() -> f32 {
+    (crate::config::get_f64("rendering.effect_scale") as f32).clamp(MIN_SCALE, 1.0)
 }
 
-/// Fraction of canvas resolution to render canvas-space effects at. Defaults to
-/// 1.0 — this is document content, and the result is what gets exported.
-pub fn canvas_scale() -> f32 {
-    (crate::config::get_f64("rendering.canvas_effect_scale") as f32).clamp(MIN_SCALE, 1.0)
+/// The scale an effect actually renders at: the configured scale composed with
+/// the effect's own declared cost, floored so it always has texels to work with.
+///
+/// The one place the two combine, so an instance's recorded scale and the value
+/// it is later compared against cannot be computed differently.
+pub fn effective_scale(base: f32, perf_scale_factor: f32) -> f32 {
+    (base * perf_scale_factor).clamp(MIN_SCALE, 1.0)
 }
 
 /// The two shared pipelines the reduced-resolution path needs, built once by
 /// whoever owns a set of scaled effects.
 ///
-/// The downscale is a multi-tap soft filter rather than a blit: single-tap
-/// bilinear is a fixed 2×2 box regardless of ratio, so it aliases hard below
-/// about 0.7 on any effect sensitive to small input differences (Painting
-/// especially). Upscaling has no such problem — each output texel reads a
-/// sub-texel position — so that direction is a plain blit.
+/// Neither direction is a plain blit. The downscale is a multi-tap soft filter
+/// because single-tap bilinear is a fixed 2×2 box regardless of ratio, so it
+/// aliases hard below about 0.7 on any effect sensitive to small input
+/// differences (Painting especially). Both directions weight colour by coverage
+/// rather than letting hardware filtering average raw texels: accumulators hold
+/// straight alpha, so anything that mixes a transparent texel's RGB into a
+/// visible one darkens the result at every silhouette edge.
 pub struct ScalingPipelines {
     downscale: EffectPipeline,
     upscale: EffectPipeline,
@@ -58,7 +73,7 @@ impl ScalingPipelines {
                 format,
                 &format!("{label}-downscale"),
             ),
-            upscale: effect::create_blit_pipeline(device, format, &format!("{label}-upscale")),
+            upscale: effect::create_upscale_pipeline(device, format, &format!("{label}-upscale")),
         }
     }
 
@@ -117,7 +132,7 @@ impl ScaledEffect {
         native_height: u32,
         scale: f32,
     ) -> (Self, EffectCache) {
-        let effective = (scale * effect.perf_scale_factor()).clamp(MIN_SCALE, 1.0);
+        let effective = effective_scale(scale, effect.perf_scale_factor());
         if effective >= 1.0 - FULL_SCALE_EPSILON {
             let cache = effect.create_cache(
                 device,
@@ -135,6 +150,21 @@ impl ScaledEffect {
         let reduced = Reduced::new(device, sampler, pipelines, format, rw, rh, native_views);
         let cache = effect.create_cache(device, queue, &reduced.views, sampler, rw, rh);
         (ScaledEffect::Reduced(Box::new(reduced)), cache)
+    }
+
+    /// The dimensions the effect actually renders at, or `None` when it runs on
+    /// the caller's own pair at full scale. Read from the texture rather than
+    /// recomputed, so a test asserting on the scale cannot agree with a broken
+    /// rounding formula by sharing it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn reduced_size(&self) -> Option<(u32, u32)> {
+        match self {
+            ScaledEffect::Full => None,
+            ScaledEffect::Reduced(r) => {
+                let t = &r._textures[0];
+                Some((t.width(), t.height()))
+            }
+        }
     }
 
     /// Encode the effect, reading `native_views[src_idx]` and writing

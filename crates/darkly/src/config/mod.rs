@@ -22,7 +22,10 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// Forward-compatible changes don't need a bump: new prefs get default
 /// values, removed pref keys are dropped by `validateOverrides`, and
-/// numeric range changes are clamped.
+/// numeric range changes are clamped. A rename is only a bump when the old
+/// value has to be *carried across* — a rename with no migration is a removal
+/// plus an addition, which validation already cleans, and bumping would throw
+/// away every unrelated override (hotkeys included) to reclaim one stale key.
 pub const CONFIG_VERSION: u32 = 1;
 
 /// A configuration value.

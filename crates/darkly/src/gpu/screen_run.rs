@@ -13,10 +13,7 @@
 //! [`Document::screen_space_run`]: crate::document::Document::screen_space_run
 
 use crate::gpu::effect::{self, EffectPipeline};
-use crate::gpu::effect_scaling::{screen_scale, ScalingPipelines};
-
-/// Below this a scale change is not worth rebuilding for.
-const SCALE_EPSILON: f32 = 1.0e-3;
+use crate::gpu::effect_scaling::ScalingPipelines;
 
 pub struct ScreenRun {
     /// Ping-pong textures at native viewport resolution, plus the scratch the
@@ -36,9 +33,6 @@ pub struct ScreenRun {
     viewport_height: u32,
     accum_format: wgpu::TextureFormat,
     surface_format: wgpu::TextureFormat,
-    /// The scale the current resources were built for. `sync_resolution_scale`
-    /// rebuilds them when it drifts from the config value.
-    applied_scale: f32,
     /// Set when the run's own resources changed under it — a resize or a scale
     /// change — so the frame scheduler presents again.
     needs_present: bool,
@@ -63,7 +57,6 @@ impl ScreenRun {
             viewport_height: 0,
             accum_format,
             surface_format,
-            applied_scale: screen_scale(),
             needs_present: false,
         }
     }
@@ -99,10 +92,6 @@ impl ScreenRun {
         (self.viewport_width, self.viewport_height)
     }
 
-    pub fn scale(&self) -> f32 {
-        self.applied_scale
-    }
-
     /// The ping-pong pair an instance in this space is prepared against.
     pub fn views(&self) -> Option<&[wgpu::TextureView; 2]> {
         self.views.as_ref()
@@ -119,19 +108,6 @@ impl ScreenRun {
     }
 
     // --- Resources ---
-
-    /// Re-read the configured scale and, if it changed, drop the resources
-    /// built for the old one. Returns whether anything was invalidated, so the
-    /// caller can bump the generation that rebuilds the instances.
-    pub fn sync_resolution_scale(&mut self) -> bool {
-        let desired = screen_scale();
-        if (self.applied_scale - desired).abs() < SCALE_EPSILON {
-            return false;
-        }
-        self.applied_scale = desired;
-        self.needs_present = true;
-        true
-    }
 
     /// Update viewport dimensions. Returns whether the textures were replaced,
     /// which invalidates every bind group pointing at them.

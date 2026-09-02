@@ -127,9 +127,9 @@ settings:
   animation.screen_divisor: 2
   animation.overlay_divisor: 4
   animation.canvas_divisor: 2
-  # Rendering - default scale = sqrt(.5) = 0.7071 = roughly half the processing power compared to 1.0
-  rendering.screen_effect_scale: 0.7071
-  rendering.canvas_effect_scale: 1.0
+  # Rendering - one effect scale for both spaces. Default = sqrt(.5) = 0.7071 =
+  # half the texels, so roughly half the processing power compared to 1.0.
+  rendering.effect_scale: 0.7071
   # Display.
   display.pixelFilter: auto
   # Navigation.
