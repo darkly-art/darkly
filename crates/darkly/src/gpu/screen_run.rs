@@ -33,9 +33,6 @@ pub struct ScreenRun {
     viewport_height: u32,
     accum_format: wgpu::TextureFormat,
     surface_format: wgpu::TextureFormat,
-    /// Set when the run's own resources changed under it — a resize or a scale
-    /// change — so the frame scheduler presents again.
-    needs_present: bool,
 }
 
 impl ScreenRun {
@@ -57,22 +54,7 @@ impl ScreenRun {
             viewport_height: 0,
             accum_format,
             surface_format,
-            needs_present: false,
         }
-    }
-
-    // --- Dirty flag ---
-
-    pub fn needs_present(&self) -> bool {
-        self.needs_present
-    }
-
-    pub fn clear_needs_present(&mut self) {
-        self.needs_present = false;
-    }
-
-    pub fn mark_needs_present(&mut self) {
-        self.needs_present = true;
     }
 
     // --- Queries ---
@@ -110,7 +92,8 @@ impl ScreenRun {
     // --- Resources ---
 
     /// Update viewport dimensions. Returns whether the textures were replaced,
-    /// which invalidates every bind group pointing at them.
+    /// which invalidates every bind group pointing at them — the caller bumps
+    /// the revisions that fact implies.
     pub fn resize(&mut self, width: u32, height: u32) -> bool {
         if self.viewport_width == width && self.viewport_height == height {
             return false;
@@ -118,7 +101,6 @@ impl ScreenRun {
         self.viewport_width = width;
         self.viewport_height = height;
         self.drop_textures();
-        self.needs_present = true;
         true
     }
 

@@ -1028,6 +1028,7 @@ fn diff_rect_returns_exact_changed_rect() {
 #[test]
 fn content_bounds_returns_exact_content_rect() {
     use darkly::gpu::content_bounds::ContentBoundsPass;
+    use darkly::gpu::revisions::Revisions;
     use darkly::layer::LayerId;
 
     let (device, queue) = test_device();
@@ -1037,11 +1038,12 @@ fn content_bounds_returns_exact_content_rect() {
     let buf = rgba_with_rect(w, h, 8, 12, 6, 9, [10, 20, 30, 255]);
     let (_tex, view) = create_test_texture(&device, &queue, w, h, &buf);
 
+    let revisions = Revisions::new();
     let mut pass = ContentBoundsPass::new(&device);
     let lid = LayerId::from_ffi(1);
-    pass.request(&device, &queue, &view, w, h, false, lid);
+    pass.request(&device, &queue, &revisions, &view, w, h, false, lid);
     loop {
-        if pass.poll(&device).contains(&lid) {
+        if pass.poll(&device, &revisions).contains(&lid) {
             break;
         }
         let _ = device.poll(wgpu::PollType::Wait {
@@ -1050,7 +1052,7 @@ fn content_bounds_returns_exact_content_rect() {
         });
     }
     assert_eq!(
-        pass.get(lid),
+        pass.get(&revisions, lid),
         Some([8, 12, 6, 9]),
         "content bounds must be the exact non-transparent rect"
     );
@@ -1060,9 +1062,9 @@ fn content_bounds_returns_exact_content_rect() {
     let (_t2, v2) = create_test_texture(&device, &queue, w, h, &blank);
     let mut pass_empty = ContentBoundsPass::new(&device);
     let lid2 = LayerId::from_ffi(2);
-    pass_empty.request(&device, &queue, &v2, w, h, false, lid2);
+    pass_empty.request(&device, &queue, &revisions, &v2, w, h, false, lid2);
     loop {
-        if pass_empty.poll(&device).contains(&lid2) {
+        if pass_empty.poll(&device, &revisions).contains(&lid2) {
             break;
         }
         let _ = device.poll(wgpu::PollType::Wait {
@@ -1071,7 +1073,7 @@ fn content_bounds_returns_exact_content_rect() {
         });
     }
     assert_eq!(
-        pass_empty.get(lid2),
+        pass_empty.get(&revisions, lid2),
         None,
         "a fully-transparent texture must yield no cached bounds (empty convention)"
     );

@@ -653,6 +653,14 @@ pub struct DarklyEngine {
     /// boundary; wraparound is irrelevant since the JS comparison is
     /// `!==`, not `>`.
     pub(crate) thumbnail_version: u32,
+    /// Per-node cursor into the compositor's pixel revisions: the tick each
+    /// node's thumbnail readback was last queued for.
+    ///
+    /// The queue semantics the compositor's old drain-once dirty set provided,
+    /// now owned by the consumer that needs them — the write path no longer
+    /// knows thumbnails exist, and a second consumer would keep its own cursor
+    /// rather than contend for the same drain.
+    pub(crate) thumbnails_queued: std::collections::HashMap<LayerId, crate::gpu::revisions::Tick>,
 
     /// Set once a layer-grow request has been refused for hitting
     /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
@@ -802,6 +810,7 @@ impl DarklyEngine {
             active_save_job: None,
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
+            thumbnails_queued: std::collections::HashMap::new(),
             layer_growth_capped: false,
             brush_perf: BrushPerfCounters::default(),
             brush_full_rerender_events: 0,
@@ -1170,6 +1179,31 @@ impl DarklyEngine {
             viewport_w,
             viewport_h,
         )
+    }
+
+    /// Blocking readback of the root canvas composited from scratch: every
+    /// revision source is bumped first, so no derived artifact can be reused.
+    ///
+    /// The reference the incremental composite is checked against — if the two
+    /// differ, some mutation failed to bump a source the composite depends on.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_canvas_from_scratch(&mut self) -> Vec<u8> {
+        self.compositor.test_invalidate_all();
+        self.test_readback_canvas()
+    }
+
+    /// Composites actually encoded — see
+    /// [`crate::gpu::compositor::Compositor::composite_runs`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_composite_runs(&self) -> u64 {
+        self.compositor.composite_runs()
+    }
+
+    /// Bump the compositor's `targets` revision alone — see
+    /// [`crate::gpu::compositor::Compositor::test_bump_targets`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_bump_targets(&mut self) {
+        self.compositor.test_bump_targets();
     }
 
     /// Cumulative count of from-scratch effect-instance builds — see

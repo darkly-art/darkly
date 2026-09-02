@@ -5,24 +5,45 @@
 //! (4× u32) read back asynchronously — no full-texture readback required.
 //!
 //! The compositor owns a [`ContentBoundsPass`] and exposes cached per-layer
-//! bounds. Bounds are invalidated on [`mark_dirty`](super::compositor::Compositor::mark_dirty)
-//! and recomputed lazily when a consumer requests them.
+//! bounds. A cached result records the [`Stamp`] it was computed under and is
+//! compared against the live [`Revisions`] whenever it is read, so nothing has
+//! to push an invalidation when the inputs move.
 
 use super::bbox::{BboxReduction, PendingBbox};
+use super::revisions::{Revisions, Tick};
 use crate::layer::LayerId;
 use std::collections::HashMap;
+
+/// What a bounds result was computed from: the document state (which decides
+/// the layer's extent) and that layer's own pixels.
+///
+/// The document half reproduces the coarse invalidation the pass had when
+/// `mark_dirty` cleared every entry; narrowing it to the pixel tick alone is a
+/// one-line change here and nowhere else.
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct Stamp {
+    document: Tick,
+    node_pixels: Tick,
+}
+
+impl Stamp {
+    fn current(revisions: &Revisions, layer_id: LayerId) -> Self {
+        Stamp {
+            document: revisions.document(),
+            node_pixels: revisions.node_pixels(layer_id),
+        }
+    }
+}
 
 /// GPU compute pipeline + per-layer cache for content bounds.
 pub struct ContentBoundsPass {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 
-    /// Cached content bounds per layer: `[x, y, w, h]`.
-    cached: HashMap<LayerId, Option<[u32; 4]>>,
-
-    /// Generation counter per layer — incremented on invalidation.
-    /// Pending results whose generation doesn't match are discarded.
-    generation: HashMap<LayerId, u64>,
+    /// Cached content bounds per layer: `[x, y, w, h]`, with the stamp they
+    /// were computed under. `None` bounds is a resolved *empty* result, not a
+    /// miss.
+    cached: HashMap<LayerId, (Stamp, Option<[u32; 4]>)>,
 
     /// In-flight compute dispatches awaiting buffer mapping.
     pending: Vec<PendingBounds>,
@@ -30,7 +51,7 @@ pub struct ContentBoundsPass {
 
 struct PendingBounds {
     layer_id: LayerId,
-    gen: u64,
+    stamp: Stamp,
     bbox: PendingBbox,
 }
 
@@ -111,48 +132,44 @@ impl ContentBoundsPass {
             pipeline,
             bind_group_layout,
             cached: HashMap::new(),
-            generation: HashMap::new(),
             pending: Vec::new(),
         }
     }
 
-    /// Return cached content bounds for a layer, if available.
-    /// Returns `[x, y, w, h]` or `None` if not yet computed or invalidated.
-    pub fn get(&self, layer_id: LayerId) -> Option<[u32; 4]> {
-        self.cached.get(&layer_id).copied().flatten()
+    /// The entry for a layer, if one was computed under the current stamp.
+    /// The comparison happens here, so no consumer can read a stale result by
+    /// forgetting to check one.
+    fn current_entry(&self, revisions: &Revisions, layer_id: LayerId) -> Option<&Option<[u32; 4]>> {
+        let (stamp, bounds) = self.cached.get(&layer_id)?;
+        (*stamp == Stamp::current(revisions, layer_id)).then_some(bounds)
     }
 
-    /// True once this generation has resolved, including an empty result.
-    pub fn is_resolved(&self, layer_id: LayerId) -> bool {
-        self.cached.contains_key(&layer_id)
+    /// Return current content bounds for a layer: `[x, y, w, h]`. `None` if
+    /// not yet computed, stale, or resolved empty.
+    pub fn get(&self, revisions: &Revisions, layer_id: LayerId) -> Option<[u32; 4]> {
+        self.current_entry(revisions, layer_id).copied().flatten()
     }
 
-    /// True if a bounds computation is in flight for this layer.
-    pub fn is_pending(&self, layer_id: LayerId) -> bool {
-        let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
+    /// True once the current stamp has resolved, including an empty result.
+    /// Distinguishes "no content" from "not computed yet", so a caller does
+    /// not requeue a terminal computation forever.
+    pub fn is_resolved(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
+        self.current_entry(revisions, layer_id).is_some()
+    }
+
+    /// True if a bounds computation for the layer's current stamp is in
+    /// flight. A dispatch for a superseded stamp does not count — its result
+    /// will be discarded, so a fresh one is still warranted.
+    pub fn is_pending(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
+        let stamp = Stamp::current(revisions, layer_id);
         self.pending
             .iter()
-            .any(|p| p.layer_id == layer_id && p.gen == gen)
-    }
-
-    /// Invalidate cached bounds for a specific layer.
-    pub fn invalidate(&mut self, layer_id: LayerId) {
-        self.cached.remove(&layer_id);
-        *self.generation.entry(layer_id).or_insert(0) += 1;
-    }
-
-    /// Invalidate cached bounds for all layers.
-    pub fn invalidate_all(&mut self) {
-        self.cached.clear();
-        for gen in self.generation.values_mut() {
-            *gen += 1;
-        }
+            .any(|p| p.layer_id == layer_id && p.stamp == stamp)
     }
 
     /// Remove all state for a layer (when it's deleted).
     pub fn remove_layer(&mut self, layer_id: LayerId) {
         self.cached.remove(&layer_id);
-        self.generation.remove(&layer_id);
     }
 
     /// True if any results are pending.
@@ -168,23 +185,25 @@ impl ContentBoundsPass {
     /// not by node kind.
     ///
     /// Results arrive asynchronously — call [`poll`] each frame.
+    #[allow(clippy::too_many_arguments)]
     pub fn request(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        revisions: &Revisions,
         texture_view: &wgpu::TextureView,
         width: u32,
         height: u32,
         r_channel: bool,
         layer_id: LayerId,
     ) {
-        let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
+        let stamp = Stamp::current(revisions, layer_id);
 
-        // Don't queue duplicate requests for the same generation.
+        // Don't queue duplicate requests for the same stamp.
         if self
             .pending
             .iter()
-            .any(|p| p.layer_id == layer_id && p.gen == gen)
+            .any(|p| p.layer_id == layer_id && p.stamp == stamp)
         {
             return;
         }
@@ -238,7 +257,7 @@ impl ContentBoundsPass {
 
         self.pending.push(PendingBounds {
             layer_id,
-            gen,
+            stamp,
             bbox,
         });
     }
@@ -246,21 +265,20 @@ impl ContentBoundsPass {
     /// Poll pending computations. Call once per frame.
     ///
     /// Returns the list of layer IDs whose bounds just became available.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
+    pub fn poll(&mut self, device: &wgpu::Device, revisions: &Revisions) -> Vec<LayerId> {
         let mut completed = Vec::new();
         let mut i = 0;
         while i < self.pending.len() {
             match self.pending[i].bbox.poll(device) {
                 Some(result) => {
                     let p = self.pending.swap_remove(i);
-                    let current_gen = self.generation.get(&p.layer_id).copied().unwrap_or(0);
-                    if p.gen == current_gen {
-                        // Preserve a resolved empty result so callers do not
+                    if p.stamp == Stamp::current(revisions, p.layer_id) {
+                        // Store even an empty result, so callers do not
                         // requeue the same terminal computation indefinitely.
-                        self.cached.insert(p.layer_id, result);
+                        self.cached.insert(p.layer_id, (p.stamp, result));
                         completed.push(p.layer_id);
                     }
-                    // Stale result (generation changed since dispatch) → drop it.
+                    // Stale result (its inputs moved since dispatch) → drop it.
                     // Don't increment i — swap_remove moved the last element here.
                 }
                 None => {

@@ -7,6 +7,7 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::histogram::HistogramPass;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::params::ParamValue;
+use crate::gpu::revisions::{Revisions, Tick};
 use crate::gpu::screen_run::ScreenRun;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::{Void, VoidRegistry};
@@ -285,9 +286,6 @@ struct GroupState {
     /// Cached final composite result of this group's children.
     composite_cache: wgpu::Texture,
     composite_cache_view: wgpu::TextureView,
-    /// Child index through which the cache is valid.
-    /// None = cache is empty, must composite from scratch.
-    cache_valid_through: Option<usize>,
     /// Uniform buffer holding opacity, blend_mode, isolated for blending
     /// this group's result into its parent.
     uniform_buf: wgpu::Buffer,
@@ -558,9 +556,9 @@ struct EffectInstance {
     space: EffectSpace,
     /// Dimensions of that pair.
     render_size: (u32, u32),
-    /// The [`Compositor::target_generation`] the bind groups were built under.
-    /// Any bump means the textures behind them may have been freed.
-    target_generation: u64,
+    /// The `targets` revision the bind groups were built under. Any bump
+    /// means the textures behind them may have been freed.
+    built_targets: Tick,
     /// The effective scale this instance's scaffolding was built for. The
     /// instance is the only record of the scale in force — nothing caches a
     /// second copy — so a configuration change is detected by comparing against
@@ -701,20 +699,22 @@ pub struct Compositor {
 
     pub(super) sampler: wgpu::Sampler,
 
-    /// Dirty gate — false means nothing changed, skip compositing.
-    needs_composite: bool,
-    /// When only the view transform changes, skip compositing and only re-present.
-    needs_present: bool,
-
-    /// Layers whose pixel content was modified since the last drain.
-    /// Drained by the engine each frame to auto-queue thumbnail readbacks
-    /// — anything in here had its layer texture written, so the panel's
-    /// thumbnail is stale until a fresh readback lands.
-    /// Node ids whose textures were modified since the last drain. Single
-    /// pool keyed by node id; raster layers and mask filters go in the
-    /// same set, and the engine's drain pumps thumbnail readbacks for both
-    /// uniformly.
-    dirty_node_pixels: HashSet<LayerId>,
+    /// Every source of truth the compositor's derived state can go stale
+    /// against. Mutations bump a source; consumers compare their own stamp
+    /// on read.
+    revisions: Revisions,
+    /// The clock value the composite in `group_state`'s caches was built at.
+    /// Compared against [`Revisions::latest_composite_input`] to decide
+    /// whether a frame has anything to do.
+    composite_built: Tick,
+    /// The clock value the last frame that actually reached the surface
+    /// reflected. Compared against [`Revisions::latest_visual`].
+    presented: Tick,
+    /// Composites actually encoded. Lets a test distinguish "produced the
+    /// right pixels" from "produced them by recompositing when it should
+    /// have skipped", which a pixel assertion alone cannot see.
+    #[cfg(any(test, feature = "testing"))]
+    composite_runs: u64,
 
     pub(super) canvas_width: u32,
     pub(super) canvas_height: u32,
@@ -756,12 +756,6 @@ pub struct Compositor {
     /// that grows with the frame count means an instance is being rebuilt
     /// rather than reused, which is invisible except as lag.
     effect_rebuilds: u64,
-
-    /// Bumped whenever any accumulator is recreated, so an effect instance
-    /// holding bind groups over a freed texture is detected and rebuilt rather
-    /// than encoded. `set_canvas_rect` recreates every `GroupState`, so one
-    /// counter covers canvas resize, crop and group creation alike.
-    target_generation: u64,
 
     /// Where a canvas-space effect writes its result, so the apply pass can
     /// read both the image before the effect and the image after it and still
@@ -930,7 +924,6 @@ impl Compositor {
             current_accum: 0,
             composite_cache: cache,
             composite_cache_view: cache_view,
-            cache_valid_through: None,
             uniform_buf,
         }
     }
@@ -1269,7 +1262,7 @@ impl Compositor {
         let content_bounds = ContentBoundsPass::new(device);
         let histogram = HistogramPass::new(device);
 
-        Compositor {
+        let mut compositor = Compositor {
             group_state,
             root_id,
             node_textures: HashMap::new(),
@@ -1291,9 +1284,11 @@ impl Compositor {
             canvas_uniform_buf,
             canvas_bind_group,
             sampler,
-            needs_composite: true,
-            needs_present: false,
-            dirty_node_pixels: HashSet::new(),
+            revisions: Revisions::new(),
+            composite_built: 0,
+            presented: 0,
+            #[cfg(any(test, feature = "testing"))]
+            composite_runs: 0,
             canvas_width: width,
             canvas_height: height,
             canvas_origin: crate::coord::CanvasPoint::new(0, 0),
@@ -1304,7 +1299,6 @@ impl Compositor {
             effect_registry: crate::gpu::effect::EffectRegistry::new(),
             effect_instances: HashMap::new(),
             effect_rebuilds: 0,
-            target_generation: 0,
             canvas_apply_scratch: None,
             canvas_scaling_pipelines: crate::gpu::effect_scaling::ScalingPipelines::new(
                 device,
@@ -1330,7 +1324,12 @@ impl Compositor {
             dirty_procedural_scratch: Vec::new(),
             vector_renderer: None,
             vector_scenes: HashMap::new(),
-        }
+        };
+        // Nothing has been composited yet, and the frame gate deliberately
+        // ignores the target bumps construction performs — without this the
+        // first frame would compare clean and present a blank canvas.
+        compositor.revisions.bump_document();
+        compositor
     }
 
     /// Ensure GPU state exists for a content layer (raster or void),
@@ -2021,7 +2020,7 @@ impl Compositor {
         if self.group_state.contains_key(&group_id) {
             return;
         }
-        self.target_generation += 1;
+        self.revisions.bump_targets();
         let gs = Self::create_group_state(
             device,
             queue,
@@ -2082,7 +2081,7 @@ impl Compositor {
         // Recreate every group's accumulators + cache at the new size.
         let group_ids: Vec<LayerId> = self.group_state.keys().copied().collect();
         for gid in group_ids {
-            self.target_generation += 1;
+            self.revisions.bump_targets();
             let gs = Self::create_group_state(device, queue, width, height, origin, gid);
             self.group_state.insert(gid, gs);
         }
@@ -2114,8 +2113,9 @@ impl Compositor {
             );
         }
 
-        self.needs_composite = true;
-        self.needs_present = true;
+        // Canvas geometry is a document fact; the bump covers both the
+        // recomposite and the re-present, since the present reflects it too.
+        self.revisions.bump_document();
     }
 
     /// Update a group's blend uniforms (opacity, blend_mode).
@@ -2202,20 +2202,19 @@ impl Compositor {
         false
     }
 
-    /// Mark that recompositing is needed.
+    /// Mark that the document changed in a way the composite must reflect.
+    ///
+    /// Coarse by design: this is the "something about the document moved"
+    /// source, and every consumer that depends on it recomposites. Narrowing
+    /// a specific call site means bumping a more specific source, not adding
+    /// an invalidation channel.
     pub fn mark_dirty(&mut self) {
-        self.needs_composite = true;
-        // Invalidate all group caches
-        for gs in self.group_state.values_mut() {
-            gs.cache_valid_through = None;
-        }
-        // Invalidate all layer content bounds — pixels may have changed.
-        self.content_bounds.invalidate_all();
+        self.revisions.bump_document();
     }
 
-    /// Mark that a node's pixels changed. Records the node id in the
-    /// per-frame dirty set the engine drains to auto-queue thumbnail
-    /// readbacks, then implies `mark_dirty()`.
+    /// Mark that a node's pixels changed — a bump of that node's own
+    /// revision, which every consumer of its pixels (thumbnails, content
+    /// bounds, histograms, the composite) compares against on read.
     ///
     /// # Write-site invariant
     ///
@@ -2235,42 +2234,61 @@ impl Compositor {
     /// mark inside the public-facing function that takes the id — the
     /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
-        self.dirty_node_pixels.insert(node_id);
-        // Cached histograms are keyed off a filter's *input* pixels — only an
-        // actual pixel write can change them. Filter param edits (a Levels drag)
-        // call `mark_dirty` but not this, so the histogram stays put mid-drag.
-        self.histogram.invalidate_all();
-        self.mark_dirty();
+        self.revisions.bump_node_pixels(node_id);
     }
 
-    /// Drain and return the set of node ids whose pixels were dirtied since
-    /// the last call. Engine calls this each `render()` to auto-queue
-    /// thumbnail readbacks; resolves layer-vs-filter through the document.
-    pub fn drain_dirty_pixels(&mut self) -> Vec<LayerId> {
-        self.dirty_node_pixels.drain().collect()
+    /// Read-only access to the revision registry, for consumers that keep
+    /// their own per-node cursors (thumbnail readbacks) or compare a cached
+    /// artifact's stamp.
+    pub fn revisions(&self) -> &Revisions {
+        &self.revisions
     }
 
-    /// Mark that only the present pass needs to re-run (view transform changed).
-    /// Skips compositing when there are no dirty tiles or layer changes.
+    /// Mark that something downstream of the composite changed — the view
+    /// transform, the overlay, a screen-space effect's inputs. The composite
+    /// itself stays valid, so only the present is owed.
     pub fn mark_needs_present(&mut self) {
-        self.needs_present = true;
+        self.revisions.bump_present_inputs();
     }
 
-    /// Whether a present is still owed. Set by `mark_needs_present`, cleared by
-    /// `finish_present` after a frame actually reaches the surface. A dropped
-    /// acquire (`Lost`/`Outdated`) reconfigures and returns without presenting,
-    /// leaving this `true` — the frame loop must keep going so the reconfigured
-    /// surface gets a real present on the next frame.
+    /// Whether the presented frame is behind any source it reflects.
+    ///
+    /// Nothing clears this: `finish_present` advances `presented` to the tick
+    /// the frame was built from, and a dropped acquire (`Lost`/`Outdated`)
+    /// returns before that — so a frame that never reached the surface stays
+    /// owed without anyone having to remember to re-set a flag.
     pub fn needs_present(&self) -> bool {
-        self.needs_present
+        self.revisions.latest_visual() > self.presented
     }
 
-    /// Clear the pending-present flag without a real present. Headless tests
-    /// never reach `finish_present` (no surface), so this gives them a
+    /// Treat the current state as presented without a real present. Headless
+    /// tests never reach `finish_present` (no surface), so this gives them a
     /// deterministic starting point.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_clear_needs_present(&mut self) {
-        self.needs_present = false;
+        self.presented = self.revisions.latest_visual();
+    }
+
+    /// Bump the `targets` source alone. Tests use it to pin that a target
+    /// recreation schedules no frame by itself while still forcing effect
+    /// instances to rebuild.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_bump_targets(&mut self) {
+        self.revisions.bump_targets();
+    }
+
+    /// Composites actually encoded since construction.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn composite_runs(&self) -> u64 {
+        self.composite_runs
+    }
+
+    /// Force the next frame to composite and present from scratch, as if
+    /// every source had just changed. The from-scratch half of the
+    /// byte-equality tests.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_invalidate_all(&mut self) {
+        self.revisions.bump_all_for_test();
     }
 
     // --- Content Bounds (GPU compute) ---
@@ -2278,12 +2296,12 @@ impl Compositor {
     /// Return cached content bounds for a layer: `[x, y, w, h]`.
     /// Returns `None` if bounds haven't been computed yet or were invalidated.
     pub fn content_bounds(&self, layer_id: LayerId) -> Option<[u32; 4]> {
-        self.content_bounds.get(layer_id)
+        self.content_bounds.get(&self.revisions, layer_id)
     }
 
-    /// Whether content bounds resolved for this generation, including empty.
+    /// Whether content bounds resolved against current state, including empty.
     pub fn content_bounds_resolved(&self, layer_id: LayerId) -> bool {
-        self.content_bounds.is_resolved(layer_id)
+        self.content_bounds.is_resolved(&self.revisions, layer_id)
     }
 
     /// Request async content bounds computation for a layer.
@@ -2305,6 +2323,7 @@ impl Compositor {
         self.content_bounds.request(
             device,
             queue,
+            &self.revisions,
             tex.view(),
             extent.width,
             extent.height,
@@ -2316,7 +2335,7 @@ impl Compositor {
     /// Poll pending content bounds computations. Call once per frame.
     /// Returns layer IDs whose bounds just became available.
     pub fn poll_content_bounds(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
-        self.content_bounds.poll(device)
+        self.content_bounds.poll(device, &self.revisions)
     }
 
     /// True if any content bounds computations are in flight.
@@ -2326,7 +2345,7 @@ impl Compositor {
 
     /// True if a content bounds computation is in flight for a specific layer.
     pub fn is_content_bounds_pending(&self, layer_id: LayerId) -> bool {
-        self.content_bounds.is_pending(layer_id)
+        self.content_bounds.is_pending(&self.revisions, layer_id)
     }
 
     // --- Histogram (GPU compute) ---
@@ -2370,7 +2389,7 @@ impl Compositor {
         let Some(id) = self.node_histogram_target else {
             return;
         };
-        if !self.histogram.needs(id) {
+        if !self.histogram.needs(&self.revisions, id) {
             return;
         }
         let Some(tex) = self.node_textures.get(&id) else {
@@ -2387,19 +2406,26 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("node-histogram"),
         });
-        self.histogram
-            .dispatch(device, &mut encoder, &view, extent.width, extent.height, id);
+        self.histogram.dispatch(
+            device,
+            &mut encoder,
+            &self.revisions,
+            &view,
+            extent.width,
+            extent.height,
+            id,
+        );
         queue.submit(Some(encoder.finish()));
     }
 
     /// The cached 8×256 histogram (channel-major) for a layer, if available.
     pub fn histogram(&self, layer_id: LayerId) -> Option<&[u32]> {
-        self.histogram.get(layer_id)
+        self.histogram.get(&self.revisions, layer_id)
     }
 
     /// Poll pending histogram computations. Call once per frame.
     pub fn poll_histogram(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
-        self.histogram.poll(device)
+        self.histogram.poll(device, &self.revisions)
     }
 
     /// True if any histogram computation is in flight.
@@ -2841,7 +2867,7 @@ impl Compositor {
         // A deleted host's projection is released immediately; a deleted mask
         // is caught by the next `sync_projection_states` stale sweep.
         self.projection_states.remove(&node_id);
-        self.dirty_node_pixels.remove(&node_id);
+        self.revisions.remove_node(node_id);
         self.mark_dirty();
     }
 
@@ -3429,11 +3455,11 @@ impl Compositor {
             self.tick_animated_effects(queue, dt * canvas_divisor as f32, doc, false);
             // Re-render needed: this side of the divider is document content,
             // so it requires a full composite, not just a re-present.
-            self.needs_composite = true;
+            self.revisions.bump_animation();
         }
 
         if screen_fires || overlay_fires {
-            self.needs_present = true;
+            self.revisions.bump_present_inputs();
         }
     }
 
@@ -3471,7 +3497,7 @@ impl Compositor {
         t.bg = bg;
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
         self.cached_view_transform = t;
-        self.needs_present = true;
+        self.revisions.bump_present_inputs();
     }
 
     /// Set the pixel filter mode used by the present shader: "linear",
@@ -3488,7 +3514,7 @@ impl Compositor {
         t.flags[0] = new_mode;
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
         self.cached_view_transform = t;
-        self.needs_present = true;
+        self.revisions.bump_present_inputs();
     }
 
     /// Update a content layer's uniforms (called when opacity, blend mode,
@@ -3594,8 +3620,8 @@ impl Compositor {
                     >= crate::gpu::effect_scaling::SCALE_EPSILON
         });
         if drifted {
-            self.mark_dirty();
-            self.screen_run.mark_needs_present();
+            self.revisions.bump_document();
+            self.revisions.bump_present_inputs();
         }
     }
 
@@ -3616,23 +3642,14 @@ impl Compositor {
     }
 
     /// Resize the screen-space run's textures. Replacing them invalidates every
-    /// bind group pointing at them, which the generation bump is what rebuilds
-    /// — the same counter a canvas resize bumps, so neither space needs its own
-    /// enumeration of invalidation triggers.
+    /// bind group pointing at them, which the `targets` bump is what rebuilds
+    /// — the same source a canvas resize bumps, so neither space needs its own
+    /// enumeration of invalidation triggers. The run's output is downstream of
+    /// the composite, so a resize owes a present but no recomposite.
     pub fn resize_screen_run(&mut self, width: u32, height: u32) {
         if self.screen_run.resize(width, height) {
-            self.target_generation += 1;
-        }
-    }
-
-    /// Re-present without recompositing the canvas. What a parameter drag on a
-    /// screen-space effect needs: its output is downstream of the composite, so
-    /// the composite it reads is still valid.
-    pub fn mark_effect_dirty(&mut self, doc: &Document, id: LayerId) {
-        if doc.renders_in_screen_space(id) {
-            self.screen_run.mark_needs_present();
-        } else {
-            self.mark_dirty();
+            self.revisions.bump_targets();
+            self.revisions.bump_present_inputs();
         }
     }
 
@@ -3869,7 +3886,7 @@ impl Compositor {
         // minted LayerId, so we can stash a transient GroupState here.
         let bake_parent = LayerId::from_ffi(0);
         if !self.group_state.contains_key(&bake_parent) {
-            self.target_generation += 1;
+            self.revisions.bump_targets();
             let gs = Self::create_group_state(
                 device,
                 queue,
@@ -3891,7 +3908,6 @@ impl Compositor {
         {
             let gs = self.group_state.get_mut(&bake_parent).unwrap();
             gs.current_accum = 0;
-            gs.cache_valid_through = None;
             let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("clear-bake-accum"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3967,7 +3983,12 @@ impl Compositor {
         // point export, save, the recorder and the headless paths come through.
         self.sync_effect_scale();
 
-        if !self.needs_composite {
+        // Captured before the walk and committed after it. Only `targets` may
+        // move in between — it is excluded from the gate precisely so a frame
+        // creating its own group states cannot reschedule itself forever.
+        let built_at = self.revisions.clock();
+        let composite_input_at_capture = self.revisions.latest_composite_input();
+        if composite_input_at_capture <= self.composite_built {
             return false;
         }
 
@@ -3995,7 +4016,16 @@ impl Compositor {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        self.needs_composite = false;
+        debug_assert_eq!(
+            self.revisions.latest_composite_input(),
+            composite_input_at_capture,
+            "a composite must not bump its own inputs — only `targets` may move during the walk"
+        );
+        self.composite_built = built_at;
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.composite_runs += 1;
+        }
         true
     }
 
@@ -4286,7 +4316,6 @@ impl Compositor {
                 .get_mut(&group_id)
                 .expect("GroupState missing");
             gs.current_accum = 0;
-            gs.cache_valid_through = None;
             let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("clear-accum"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4660,7 +4689,7 @@ impl Compositor {
             h,
             "canvas-effect-apply-scratch",
         ));
-        self.target_generation += 1;
+        self.revisions.bump_targets();
     }
 
     /// Build one in-place host's apply uniform: the canvas window, the host
@@ -4753,8 +4782,8 @@ impl Compositor {
                 EffectSpace::Canvas { parent } => {
                     let Some(gs) = self.group_state.get(&parent) else {
                         // The parent's accumulator does not exist yet; the next
-                        // frame that creates it bumps `target_generation` and
-                        // we build then.
+                        // frame that creates it bumps the `targets` revision
+                        // and we build then.
                         continue;
                     };
                     (gs.accum.textures[0].width(), gs.accum.textures[0].height())
@@ -4779,7 +4808,7 @@ impl Compositor {
                 inst.pipeline_id == pipeline_id
                     && inst.space == space
                     && inst.render_size == size
-                    && inst.target_generation == self.target_generation
+                    && inst.built_targets == self.revisions.targets()
                     && (inst.applied_scale
                         - crate::gpu::effect_scaling::effective_scale(
                             scale,
@@ -4876,7 +4905,7 @@ impl Compositor {
                     pipeline_id,
                     space,
                     render_size: size,
-                    target_generation: self.target_generation,
+                    built_targets: self.revisions.targets(),
                     applied_scale: crate::gpu::effect_scaling::effective_scale(
                         scale,
                         effect_scale_factor,
@@ -5291,13 +5320,15 @@ impl Compositor {
         // `src` is only valid mid-composite, so this records into the compose
         // encoder rather than a self-submitted one. Disjoint field borrows keep
         // `group_state` and `histogram` independent.
-        if self.histogram_target == Some(filter.id) && self.histogram.needs(filter.id) {
+        if self.histogram_target == Some(filter.id)
+            && self.histogram.needs(&self.revisions, filter.id)
+        {
             if let Some(gs) = self.group_state.get(&parent_group) {
                 let view = &gs.accum.views[src];
                 let tex = &gs.accum.textures[src];
                 let (w, h) = (tex.width(), tex.height());
                 self.histogram
-                    .dispatch(device, encoder, view, w, h, filter.id);
+                    .dispatch(device, encoder, &self.revisions, view, w, h, filter.id);
             }
         }
 
@@ -5662,15 +5693,16 @@ impl Compositor {
         );
     }
 
-    /// Whether any rendering work is pending (composite, present, effects).
+    /// Whether any rendering work is pending. A pending composite is by
+    /// definition also a pending present, so the visual comparison covers
+    /// both.
     fn has_pending_work(&self, _doc: &Document) -> bool {
-        self.needs_composite || self.needs_present || self.screen_run.needs_present()
+        self.revisions.latest_visual() > self.presented
     }
 
-    /// Clear present-related dirty flags after a frame.
-    fn finish_present(&mut self) {
-        self.needs_present = false;
-        self.screen_run.clear_needs_present();
+    /// Record that a frame reflecting `frame_tick` reached the surface.
+    fn finish_present(&mut self, frame_tick: Tick) {
+        self.presented = frame_tick;
     }
 
     /// Upload dirty tiles, composite changed layers, present to a surface.
@@ -5698,6 +5730,13 @@ impl Compositor {
         perf::time("offscreen");
         self.render_offscreen(device, queue, doc);
         perf::time_end("offscreen");
+
+        // Captured after the composite, not at frame entry: `render_offscreen`
+        // runs `sync_effect_scale` a second time and a scale change is still
+        // drifted there, so an earlier capture would stamp `presented` below
+        // that bump and schedule a spurious extra frame. Only `targets` moves
+        // during the walk, and it is not a visual source.
+        let frame_tick = self.revisions.clock();
 
         // Acquire surface and present composite_cache → veils → surface.
         // wgpu 29 replaced `Result<SurfaceTexture, SurfaceError>` with the
@@ -5759,7 +5798,7 @@ impl Compositor {
         output.present();
         perf::time_end("present");
 
-        self.finish_present();
+        self.finish_present(frame_tick);
         perf::time_end("render-total");
     }
 }

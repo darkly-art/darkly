@@ -643,14 +643,31 @@ impl DarklyEngine {
         self.thumbnail_version
     }
 
-    /// Drain layers whose pixels were modified since the last call and
-    /// queue thumbnail readbacks at the engine's default panel size.
-    /// Run on every `render()` (production *and* headless tests) so the
-    /// layer panel sees fresh thumbnails after paint, fill, undo, paste
-    /// — anything that calls `compositor.mark_layer_pixels_dirty`.
+    /// Queue thumbnail readbacks for nodes whose pixels have changed since
+    /// this engine last queued one, at the default panel size.
+    ///
+    /// Run on every `render()` (production *and* headless tests) so the layer
+    /// panel sees fresh thumbnails after paint, fill, undo, paste — anything
+    /// that bumps a node's pixel revision. Advancing the cursor at queue time
+    /// (not when the readback lands) is what makes this queue-once per change,
+    /// matching the drain it replaces.
+    ///
+    /// Nodes the compositor has disposed drop out of the revision iterator, so
+    /// their cursor entries are pruned here rather than by the disposal path.
+    /// A later id reuse is safe: its first bump lands above any stale cursor.
     fn drain_dirty_thumbnail_readbacks(&mut self) {
-        let nodes = self.compositor.drain_dirty_pixels();
-        for node_id in nodes {
+        self.thumbnails_queued
+            .retain(|id, _| self.compositor.revisions().node_pixels(*id) > 0);
+
+        let stale: Vec<(LayerId, crate::gpu::revisions::Tick)> = self
+            .compositor
+            .revisions()
+            .node_pixels_iter()
+            .filter(|(id, tick)| *tick > self.thumbnails_queued.get(id).copied().unwrap_or(0))
+            .collect();
+
+        for (node_id, tick) in stale {
+            self.thumbnails_queued.insert(node_id, tick);
             self.request_thumbnail_readback(node_id, DEFAULT_THUMB_SIZE, DEFAULT_THUMB_SIZE);
         }
     }

@@ -687,8 +687,12 @@ fn canvas_space_animated_effect_animates() {
     );
 
     // Hiding it silences the loop — the predicate honors effective visibility
-    // like every other animation gate.
+    // like every other animation gate. The hide is itself a document change
+    // that owes one frame; a headless engine has no surface to present on, so
+    // absorb that debt the same way the composite above was absorbed, leaving
+    // the animation predicate as the only thing under test.
     engine.set_layer_visible(fx, false);
+    engine.test_clear_needs_present();
     assert!(
         !engine.test_frame_needs_more(),
         "a hidden canvas-space animated effect must not keep the loop alive"

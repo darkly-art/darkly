@@ -15,6 +15,7 @@
 //!
 //! [`dispatch`]: HistogramPass::dispatch
 
+use super::revisions::{Revisions, Tick};
 use crate::layer::LayerId;
 use std::collections::HashMap;
 
@@ -32,17 +33,26 @@ pub struct HistogramPass {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 
-    /// Cached 8×256 histogram per layer, channel-major.
-    cached: HashMap<LayerId, Vec<u32>>,
-    /// Generation per layer — bumped on invalidation; stale results discarded.
-    generation: HashMap<LayerId, u64>,
+    /// Cached 8×256 histogram per layer, channel-major, with the pixel
+    /// revision it was binned under.
+    cached: HashMap<LayerId, (Tick, Vec<u32>)>,
     /// In-flight dispatches awaiting buffer mapping.
     pending: Vec<PendingHistogram>,
 }
 
+/// The revision a histogram is valid against: any node's pixel write.
+///
+/// Deliberately the aggregate rather than the target's own tick — a filter's
+/// histogram bins its *input* accumulator, which is every node beneath it, and
+/// deliberately not the document, so a Levels drag does not discard the
+/// histogram it is being read against.
+fn stamp(revisions: &Revisions) -> Tick {
+    revisions.node_pixels_any()
+}
+
 struct PendingHistogram {
     layer_id: LayerId,
-    gen: u64,
+    stamp: Tick,
     staging: wgpu::Buffer,
     rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
@@ -126,34 +136,34 @@ impl HistogramPass {
             pipeline,
             bind_group_layout,
             cached: HashMap::new(),
-            generation: HashMap::new(),
             pending: Vec::new(),
         }
     }
 
-    /// The cached 8×256 histogram (channel-major) for a layer, if available.
-    pub fn get(&self, layer_id: LayerId) -> Option<&[u32]> {
-        self.cached.get(&layer_id).map(|v| v.as_slice())
+    /// The current 8×256 histogram (channel-major) for a layer, if one was
+    /// binned under the live pixel revision.
+    pub fn get(&self, revisions: &Revisions, layer_id: LayerId) -> Option<&[u32]> {
+        let (t, hist) = self.cached.get(&layer_id)?;
+        (*t == stamp(revisions)).then_some(hist.as_slice())
     }
 
-    /// True if a histogram result is already cached for this layer.
-    pub fn has_cached(&self, layer_id: LayerId) -> bool {
-        self.cached.contains_key(&layer_id)
+    /// True if a current histogram result is cached for this layer.
+    pub fn has_cached(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
+        self.get(revisions, layer_id).is_some()
     }
 
-    /// True if a histogram dispatch for this layer's current generation is
-    /// in flight.
-    pub fn is_pending(&self, layer_id: LayerId) -> bool {
-        let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
+    /// True if a dispatch against the live pixel revision is in flight.
+    pub fn is_pending(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
+        let stamp = stamp(revisions);
         self.pending
             .iter()
-            .any(|p| p.layer_id == layer_id && p.gen == gen)
+            .any(|p| p.layer_id == layer_id && p.stamp == stamp)
     }
 
-    /// True when a fresh dispatch is warranted: no cached result and none in
-    /// flight for the current generation.
-    pub fn needs(&self, layer_id: LayerId) -> bool {
-        !self.has_cached(layer_id) && !self.is_pending(layer_id)
+    /// True when a fresh dispatch is warranted: nothing current cached and
+    /// nothing current in flight.
+    pub fn needs(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
+        !self.has_cached(revisions, layer_id) && !self.is_pending(revisions, layer_id)
     }
 
     /// True if any results are pending.
@@ -161,18 +171,9 @@ impl HistogramPass {
         !self.pending.is_empty()
     }
 
-    /// Invalidate every cached histogram (pixels may have changed).
-    pub fn invalidate_all(&mut self) {
-        self.cached.clear();
-        for gen in self.generation.values_mut() {
-            *gen += 1;
-        }
-    }
-
     /// Drop all state for a layer (when it's deleted or unfocused).
     pub fn remove_layer(&mut self, layer_id: LayerId) {
         self.cached.remove(&layer_id);
-        self.generation.remove(&layer_id);
     }
 
     /// Record a histogram compute + staging copy into `encoder`, sampling
@@ -181,10 +182,12 @@ impl HistogramPass {
     ///
     /// [`poll`]: HistogramPass::poll
     /// [`get`]: HistogramPass::get
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        revisions: &Revisions,
         texture_view: &wgpu::TextureView,
         width: u32,
         height: u32,
@@ -193,11 +196,11 @@ impl HistogramPass {
         if width == 0 || height == 0 {
             return;
         }
-        let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
+        let stamp = stamp(revisions);
         if self
             .pending
             .iter()
-            .any(|p| p.layer_id == layer_id && p.gen == gen)
+            .any(|p| p.layer_id == layer_id && p.stamp == stamp)
         {
             return;
         }
@@ -272,7 +275,7 @@ impl HistogramPass {
 
         self.pending.push(PendingHistogram {
             layer_id,
-            gen,
+            stamp,
             staging: staging_buf,
             rx: None,
         });
@@ -280,7 +283,7 @@ impl HistogramPass {
 
     /// Poll pending computations. Call once per frame after the compose submit.
     /// Returns the layer IDs whose histograms just became available.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
+    pub fn poll(&mut self, device: &wgpu::Device, revisions: &Revisions) -> Vec<LayerId> {
         for p in &mut self.pending {
             if p.rx.is_none() {
                 let slice = p.staging.slice(..);
@@ -306,8 +309,7 @@ impl HistogramPass {
             match ready {
                 Some(Ok(())) => {
                     let p = self.pending.swap_remove(i);
-                    let current_gen = self.generation.get(&p.layer_id).copied().unwrap_or(0);
-                    if p.gen == current_gen {
+                    if p.stamp == stamp(revisions) {
                         let slice = p.staging.slice(..);
                         let mapped = slice.get_mapped_range();
                         let bins: Vec<u32> =
@@ -315,7 +317,7 @@ impl HistogramPass {
                                 .to_vec();
                         drop(mapped);
                         p.staging.unmap();
-                        self.cached.insert(p.layer_id, bins);
+                        self.cached.insert(p.layer_id, (p.stamp, bins));
                         completed.push(p.layer_id);
                     } else {
                         p.staging.unmap();
@@ -360,7 +362,8 @@ mod tests {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("histogram-test"),
         });
-        pass.dispatch(&device, &mut encoder, &view, w, h, layer);
+        let revisions = Revisions::new();
+        pass.dispatch(&device, &mut encoder, &revisions, &view, w, h, layer);
         queue.submit([encoder.finish()]);
         let _ = device.poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -369,7 +372,7 @@ mod tests {
 
         let mut done = Vec::new();
         for _ in 0..100 {
-            done = pass.poll(&device);
+            done = pass.poll(&device, &revisions);
             if !done.is_empty() {
                 break;
             }
@@ -380,7 +383,7 @@ mod tests {
         }
         assert!(done.contains(&layer), "histogram result never landed");
 
-        let bins = pass.get(layer).expect("cached histogram");
+        let bins = pass.get(&revisions, layer).expect("cached histogram");
         let total = w * h;
         let channel = |c: usize| &bins[c * HIST_BINS..(c + 1) * HIST_BINS];
 

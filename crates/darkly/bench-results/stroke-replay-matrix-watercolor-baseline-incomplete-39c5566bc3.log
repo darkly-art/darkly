@@ -1,0 +1,22 @@
+matrix: 28 cells (7×4) on `Smooth Watercolor` topology=`watercolor` stabilize=1 vs 204 events spanning 3536 ms
+  canvas=1280x720 radius=    1px ... wall= 3551ms (  +15ms, worst-frame +  2.3ms), cpu p50 =  6629 µs, submit p50 =  1716 µs, dabs/ev=286.5 bbox/ev=       0
+  canvas=1280x720 radius=   10px ... wall= 3552ms (  +16ms, worst-frame +  0.6ms), cpu p50 =  4869 µs, submit p50 =  1824 µs, dabs/ev=136.4 bbox/ev=       0
+  canvas=1280x720 radius=  100px ... wall= 3560ms (  +24ms, worst-frame + 23.2ms), cpu p50 =  3298 µs, submit p50 =  1956 µs, dabs/ev=13.7 bbox/ev=       0
+  canvas=1280x720 radius=  250px ... wall= 5652ms (+2116ms, worst-frame + 60.6ms), cpu p50 = 25412 µs, submit p50 = 23260 µs, dabs/ev= 5.5 bbox/ev=       0
+  canvas=1280x720 radius=  500px ... wall= 8372ms (+4836ms, worst-frame +104.3ms), cpu p50 = 42463 µs, submit p50 = 38409 µs, dabs/ev= 2.8 bbox/ev=       0
+  canvas=1280x720 radius= 1000px ... wall= 7443ms (+3907ms, worst-frame +117.5ms), cpu p50 = 34020 µs, submit p50 = 22738 µs, dabs/ev= 1.4 bbox/ev=       0
+  canvas=1280x720 radius= 2000px ... wall= 4521ms ( +985ms, worst-frame + 79.3ms), cpu p50 =  2270 µs, submit p50 =  1003 µs, dabs/ev= 0.7 bbox/ev=       0
+  canvas=1920x1080 radius=    1px ... wall= 3550ms (  +14ms, worst-frame + 29.2ms), cpu p50 =  6709 µs, submit p50 =  1531 µs, dabs/ev=438.5 bbox/ev=       0
+  canvas=1920x1080 radius=   10px ... wall= 3553ms (  +17ms, worst-frame + 30.6ms), cpu p50 =  5440 µs, submit p50 =  1859 µs, dabs/ev=208.9 bbox/ev=       0
+  canvas=1920x1080 radius=  100px ... wall= 4148ms ( +612ms, worst-frame + 37.6ms), cpu p50 = 18591 µs, submit p50 = 16244 µs, dabs/ev=20.9 bbox/ev=       0
+  canvas=1920x1080 radius=  250px ... wall= 8847ms (+5311ms, worst-frame + 95.5ms), cpu p50 = 42280 µs, submit p50 = 36680 µs, dabs/ev= 8.4 bbox/ev=       0
+  canvas=1920x1080 radius=  500px ... wall=16100ms (+12564ms, worst-frame +209.2ms), cpu p50 = 79013 µs, submit p50 = 62956 µs, dabs/ev= 4.2 bbox/ev=       0
+  canvas=1920x1080 radius= 1000px ... wall=21380ms (+17844ms, worst-frame +315.3ms), cpu p50 = 101730 µs, submit p50 = 99454 µs, dabs/ev= 2.2 bbox/ev=       0
+  canvas=1920x1080 radius= 2000px ... wall=13425ms (+9889ms, worst-frame +245.3ms), cpu p50 = 67474 µs, submit p50 = 41338 µs, dabs/ev= 1.0 bbox/ev=       0
+  canvas=2560x1440 radius=    1px ... wall= 3549ms (  +13ms, worst-frame + 12.8ms), cpu p50 =  7258 µs, submit p50 =  1472 µs, dabs/ev=597.0 bbox/ev=       0
+  canvas=2560x1440 radius=   10px ... wall= 3548ms (  +12ms, worst-frame + 22.0ms), cpu p50 =  6471 µs, submit p50 =  1866 µs, dabs/ev=284.2 bbox/ev=       0
+  canvas=2560x1440 radius=  100px ... wall= 5381ms (+1845ms, worst-frame + 46.4ms), cpu p50 = 25705 µs, submit p50 = 22303 µs, dabs/ev=28.5 bbox/ev=       0
+  canvas=2560x1440 radius=  250px ... wall=12106ms (+8570ms, worst-frame +159.9ms), cpu p50 = 55711 µs, submit p50 = 43848 µs, dabs/ev=11.4 bbox/ev=       0
+  canvas=2560x1440 radius=  500px ... wall=22574ms (+19038ms, worst-frame +535.4ms), cpu p50 = 101701 µs, submit p50 = 80434 µs, dabs/ev= 5.7 bbox/ev=       0
+  canvas=2560x1440 radius= 1000px ... wall=33925ms (+30389ms, worst-frame +473.1ms), cpu p50 = 175704 µs, submit p50 = 168200 µs, dabs/ev= 2.9 bbox/ev=       0
+  canvas=2560x1440 radius= 2000px ... 

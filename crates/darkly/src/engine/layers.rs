@@ -1740,7 +1740,7 @@ impl DarklyEngine {
         // Members leaving the run rejoin the canvas composite and members
         // entering it stop being part of the image, so both sides are stale.
         self.compositor.mark_dirty();
-        self.compositor.screen_run_mut().mark_needs_present();
+        self.compositor.mark_needs_present();
     }
 }
 

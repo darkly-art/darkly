@@ -123,6 +123,7 @@ pub mod preview;
 pub mod readback;
 pub mod region_store;
 pub mod rescale;
+pub mod revisions;
 pub mod screen_run;
 pub mod selection;
 pub mod straight_composite;
