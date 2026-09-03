@@ -645,6 +645,12 @@ impl DarklyEngine {
         let topmost = *editable.last().expect("non-empty");
         let topmost_parent = self.doc.parent_of(topmost);
         let topmost_pos = self.doc.position_in_parent(topmost).unwrap_or(0);
+        // The group takes over the topmost source's slot, and that includes its
+        // side of the divider — grouping viewport effects is how the user builds
+        // a viewport effect group, so it must not drop the arrangement into
+        // canvas space. Sampled before the sources are moved, which detaches
+        // them and collapses the run.
+        let topmost_screen_space = self.doc.renders_in_screen_space(topmost);
 
         // Create the group at the top of root — a stable spot that
         // can't accidentally land it inside one of the sources (which
@@ -691,7 +697,7 @@ impl DarklyEngine {
             TreeSlot {
                 parent: topmost_parent,
                 position: clamped_pos,
-                screen_space: false,
+                screen_space: topmost_screen_space,
             },
         );
         let group_final_slot = self.doc.slot_of(group_id).unwrap_or_default();
@@ -1256,14 +1262,47 @@ impl DarklyEngine {
     }
 
     #[handler]
-    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) -> Result<(), String> {
         if !self.resolve_transform_conflict() {
-            return;
+            return Err("Active transform could not be committed".into());
         }
+        self.check_screen_space_move(id, target)?;
         if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
+        Ok(())
+    }
+
+    /// Refuse a move that would land something above the viewport boundary
+    /// that cannot render there, in a sentence the layer panel toasts verbatim.
+    ///
+    /// Only *moves* refuse. A move states an intent about where a node goes, so
+    /// answering "not there" is the honest response; an add or a paste states
+    /// only an intent to have a new layer, and is redirected to the nearest
+    /// legal slot by `Document::link` instead of being failed.
+    fn check_screen_space_move(&self, id: LayerId, target: MoveTarget) -> Result<(), String> {
+        let Some((blocker, reason)) = self.doc.screen_space_move_blocker(id, target) else {
+            return Ok(());
+        };
+        let name = |n: LayerId| {
+            self.doc
+                .find_node(n)
+                .map(|node| node.common().name.clone())
+                .unwrap_or_else(|| "That layer".to_string())
+        };
+        if blocker == id {
+            Err(format!(
+                "\"{}\" can't go in viewport space — it {reason}.",
+                name(id)
+            ))
+        } else {
+            Err(format!(
+                "\"{}\" can't go in viewport space — it contains \"{}\", which {reason}.",
+                name(id),
+                name(blocker)
+            ))
+        }
     }
 
     /// Move a single layer and return the matching undo action without
@@ -1300,6 +1339,13 @@ impl DarklyEngine {
             if id == target_id || self.doc.is_ancestor_of(id, target_id) {
                 return Err("Cannot move a layer into itself".into());
             }
+        }
+        // Checked for the whole batch before anything moves, so a refusal
+        // leaves the document untouched rather than half-applied. Every id
+        // lands in the same region as `target`, so each is asked about `target`
+        // even though the later ones chain off `After(prev)`.
+        for &id in &ids {
+            self.check_screen_space_move(id, target)?;
         }
 
         let mut editable: Vec<LayerId> = Vec::with_capacity(ids.len());

@@ -382,11 +382,11 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type PortDir = "Input" | "Output";
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type NodeRegistration = { 
 /**
@@ -463,9 +463,13 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
-export type CaptureKind = "camera" | "display" | "stream";
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
 
 export type ParamInfo = { kind: string, name: string, 
 /**
@@ -484,13 +488,9 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  */
 options: JsonValue | null, display: ParamDisplay, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
 
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type CatalogEntry = { type: string, displayName: string, 
 /**
@@ -1376,7 +1376,7 @@ export interface EngineApi {
     maskToSelection(req: MaskToSelectionReq): void;
     mergeDown(req: MergeDownReq): Promise<number>;
     mergeLayers(req: MergeLayersReq): Promise<number>;
-    moveLayer(req: MoveLayerReq): void;
+    moveLayer(req: MoveLayerReq): Promise<null>;
     moveLayers(req: MoveLayersReq): Promise<number>;
     nodeThumbnail(req: NodeThumbnailReq): Promise<{ bytes: Uint8Array }>;
     openDocument(bytes: Uint8Array): Promise<void>;
@@ -1563,7 +1563,7 @@ export function makeApi(t: Transport): EngineApi {
         maskToSelection: (req) => t.postFF('mask_to_selection', req),
         mergeDown: (req) => t.request('merge_down', req),
         mergeLayers: (req) => t.request('merge_layers', req),
-        moveLayer: (req) => t.postFF('move_layer', req),
+        moveLayer: (req) => t.request('move_layer', req),
         moveLayers: (req) => t.request('move_layers', req),
         nodeThumbnail: (req) => t.request('node_thumbnail', req),
         openDocument: (bytes) => t.request('open_document', {}, bytes),

@@ -479,7 +479,9 @@ fn merge_layers_cross_parent_lands_at_topmost() {
     // Build [keep, in_group_via_group, group(inner), root_top].
     let group = engine.add_group(None);
     let inner = engine.add_raster_layer(None);
-    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(inner, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
     let root_top = engine.add_raster_layer(None);
     engine.set_layer_name(root_top, "expected-topmost");
 
@@ -522,7 +524,9 @@ fn merge_layers_undo_restores_all_sources() {
     let _keep = engine.add_raster_layer(None);
     let group = engine.add_group(None);
     let inner = engine.add_raster_layer(None);
-    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(inner, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
     let root_top = engine.add_raster_layer(None);
 
     paint_dot(&mut engine, inner, 8.0, 8.0, [1.0, 0.0, 0.0]);

@@ -64,6 +64,19 @@ pub struct LayerKindRegistration {
     /// (or out) here, in its own file, and the UI follows automatically.
     pub can_have_mask: bool,
 
+    /// May a *leaf* of this kind be realized after the view transform, on the
+    /// presented image, rather than inside the canvas-space tree walk? A kind
+    /// qualifies when its output is a function of the image it is handed, so it
+    /// does not care which space that image is in — true for effects, false for
+    /// anything that owns canvas-space pixels or geometry.
+    ///
+    /// Leaf-only, hence the name: groups are not leaves and answer by recursing
+    /// over their children, so a group's registration says `false` here while a
+    /// group may perfectly well sit above the boundary. Consult
+    /// [`crate::layer::LayerNode::supports_screen_space`], never this field, to
+    /// ask the question about a node.
+    pub leaf_renders_after_view_transform: bool,
+
     /// May the user rename instances of this kind? Drives the layer panel's
     /// double-click-to-rename gate.
     pub can_rename: bool,

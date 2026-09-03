@@ -737,24 +737,53 @@ impl LayerNode {
     /// the run holding something that cannot render there. Nothing is a
     /// viewport effect until it contains one.
     pub fn supports_screen_space(&self, doc: &Document) -> bool {
+        self.screen_space_blocker(doc).is_none()
+    }
+
+    /// What stops `self` from sitting above the boundary — the offending node
+    /// (`self`, or the first descendant of it that cannot be there) paired with
+    /// why — or `None` if nothing does.
+    /// [`Self::supports_screen_space`] is this, asked as a yes/no.
+    ///
+    /// One rule with two callers: the boundary machinery wants the bool, and a
+    /// refused move wants something to say. Carrying the reason here rather
+    /// than re-deriving it at the call site is what keeps those two from
+    /// drifting apart, and returning a `&'static str` keeps the per-frame read
+    /// path allocation-free. The phrase completes "…*name* **reason**", so the
+    /// layer that talks to the user owns the sentence, not the wording of the
+    /// rule.
+    ///
+    /// The conditions are the ones documented on
+    /// [`Self::supports_screen_space`]: a mask disqualifies whatever the kind,
+    /// a leaf answers from its kind's registration, and a group must be
+    /// passthrough, non-empty, and hold only nodes that themselves qualify.
+    pub fn screen_space_blocker(&self, doc: &Document) -> Option<(LayerId, &'static str)> {
         if doc.has_mask(self.id()) {
-            return false;
+            return Some((self.id(), "has a mask, which only exists in canvas space"));
         }
         match self {
-            // An effect runs its pipeline over whatever image it is handed,
-            // which is exactly what makes it realizable in both spaces.
-            LayerNode::Layer(Layer::Filter(_)) => true,
-            LayerNode::Layer(_) => false,
+            // Leaves answer from their own kind's registration, so a new kind
+            // that can run after the view transform opts in from its own file.
+            LayerNode::Layer(_) => {
+                if self.kind().leaf_renders_after_view_transform {
+                    None
+                } else {
+                    Some((self.id(), "can only be composited onto the canvas"))
+                }
+            }
             // An isolated group owns a canvas-space accumulator that has no
             // screen-space counterpart. A passthrough group has no image of its
             // own, so it is eligible exactly when everything it inlines is.
             LayerNode::Group(g) => {
-                g.passthrough
-                    && !g.children.is_empty()
-                    && g.children.iter().all(|c| {
-                        doc.find_node(*c)
-                            .is_some_and(|n| n.supports_screen_space(doc))
-                    })
+                if !g.passthrough {
+                    return Some((self.id(), "is an isolated group"));
+                }
+                if g.children.is_empty() {
+                    return Some((self.id(), "is empty"));
+                }
+                g.children
+                    .iter()
+                    .find_map(|c| doc.find_node(*c)?.screen_space_blocker(doc))
             }
         }
     }

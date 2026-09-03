@@ -286,7 +286,9 @@ fn object_id_stable_across_reorder() {
     );
 
     // Reorder the layers; object identity is independent of tree position.
-    engine.move_layer(a, darkly::document::MoveTarget::After(b));
+    engine
+        .move_layer(a, darkly::document::MoveTarget::After(b))
+        .expect("move succeeds");
     assert_eq!(
         engine.hit_test_vector_object(a, 12.0, 18.0),
         Some(obj_a),

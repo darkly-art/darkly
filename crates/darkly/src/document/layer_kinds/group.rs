@@ -35,6 +35,7 @@ pub fn register() -> LayerKindRegistration {
         display_name: "Group",
         description: "A folder of layers composited together and treated as one.",
         can_have_mask: true,
+        leaf_renders_after_view_transform: false,
         can_rename: true,
         has_thumbnail: false,
         icon: "fa6-solid:folder",

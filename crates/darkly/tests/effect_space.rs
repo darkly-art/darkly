@@ -52,13 +52,19 @@ fn px(buf: &[u8], stride: u32, x: u32, y: u32) -> [u8; 4] {
 }
 
 fn effect(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
+    effect_anchored(engine, pipeline, None)
+}
+
+/// [`effect`] placed relative to an existing node, the way the add-layer modal
+/// anchors on the active layer.
+fn effect_anchored(engine: &mut DarklyEngine, pipeline: &str, anchor: Option<LayerId>) -> LayerId {
     let defaults: Vec<_> = engine
         .filter_param_defs(pipeline)
         .iter()
         .map(darkly::gpu::params::ParamDef::default_value)
         .collect();
     engine
-        .add_filter_layer(pipeline, defaults, None)
+        .add_filter_layer(pipeline, defaults, anchor)
         .unwrap_or_else(|| panic!("`{pipeline}` should be addable as an effect layer"))
 }
 
@@ -260,15 +266,18 @@ fn a_raster_can_never_be_placed_above_the_boundary() {
     engine.group_layers(vec![base, added]).expect("group");
     assert_eq!(run_ids(&engine), expected, "group_layers");
 
-    // An explicit move that targets the top of the stack.
-    engine
+    // An explicit move that targets the top of the stack. Unlike every path
+    // above it, a move states an intent about *placement* — so it is refused
+    // outright rather than quietly landed somewhere else.
+    let err = engine
         .move_layers(vec![anchored], MoveTarget::After(e3))
-        .expect("move above the run");
+        .expect_err("an explicit move above the run is refused");
     assert!(
-        !in_run(&engine, anchored),
-        "an explicit move above the run must still clamp"
+        err.contains("viewport space"),
+        "the refusal explains itself: {err}"
     );
     assert_eq!(run_ids(&engine), expected, "move_layers above the run");
+    assert!(!in_run(&engine, anchored));
 }
 
 /// The structural clauses of the eligibility predicate, and the read clamp that
@@ -326,12 +335,25 @@ fn a_group_is_eligible_exactly_when_its_contents_are() {
     );
 
     engine.set_group_passthrough(group, true);
-    engine
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "passthrough again, run again"
+    );
+
+    // A group in the run may only hold what can render there, and a move into
+    // it is refused rather than silently emptying the run.
+    let err = engine
         .move_layers(vec![raster], MoveTarget::IntoGroupTop(group))
-        .expect("move into the group");
+        .expect_err("a raster may not be moved into a run group");
     assert!(
-        run_ids(&engine).is_empty(),
-        "a group holding a raster is not eligible, however passthrough it is"
+        err.contains("viewport space"),
+        "the refusal explains itself: {err}"
+    );
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "and the refused move left the arrangement alone"
     );
 }
 
@@ -755,4 +777,206 @@ fn reordering_inside_the_run_keeps_every_member() {
         vec![c, a, b],
         "reordering inside the run keeps all three above the line"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Groups above the divider
+// ---------------------------------------------------------------------------
+
+/// A group above the divider is passthrough, unmasked and holds only effects,
+/// so it contributes no compositing of its own — the effects inside it are the
+/// run as far as the present chain is concerned. Eligibility already said so
+/// (`a_group_is_eligible_exactly_when_its_contents_are`); this pins that the
+/// pixels agree.
+#[test]
+fn an_effect_inside_a_run_group_still_runs_on_the_presented_image() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+
+    let inv = effect(&mut engine, "invert");
+    let group = engine.group_layers(vec![inv]).expect("group of one effect");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![group], "the group is the run");
+    settle(&mut engine);
+
+    let center = px(&engine.test_readback_screen_run(cw, ch), cw, 8, 8);
+    assert!(
+        center[0] < 64 && center[1] > 190 && center[2] > 190,
+        "an invert nested in a run group must show on the surface: red → cyan, got {center:?}"
+    );
+
+    assert_eq!(
+        px(&engine.test_readback_canvas(), cw, 8, 8),
+        [255, 0, 0, 255],
+        "and the exported image is still red"
+    );
+}
+
+/// The flattened run must interleave a group's effects with its root-level
+/// siblings in document order — a group is a container, not a separate chain.
+/// Two inverts, one nested and one not, cancel; if the nested one were dropped
+/// or run against the wrong pair, the surface would stay inverted.
+#[test]
+fn a_run_group_flattens_into_the_chain_in_document_order() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill_layer(&mut engine, red, 255, 0, 0);
+
+    let nested = effect(&mut engine, "invert");
+    let group = engine
+        .group_layers(vec![nested])
+        .expect("group of one effect");
+    let sibling = effect(&mut engine, "invert");
+    engine.set_screen_space_boundary(2);
+    assert_eq!(
+        run_ids(&engine),
+        vec![group, sibling],
+        "both the group and the bare effect are in the run"
+    );
+    settle(&mut engine);
+
+    let center = px(&engine.test_readback_screen_run(cw, ch), cw, 8, 8);
+    assert!(
+        center[0] > 190 && center[1] < 64 && center[2] < 64,
+        "two inverts across the group boundary cancel: still red, got {center:?}"
+    );
+}
+
+/// Grouping run members is how a viewport effect group gets built, so the new
+/// group has to inherit the topmost source's side of the divider. It used to
+/// hardcode canvas space, which silently dropped the whole arrangement.
+#[test]
+fn grouping_run_members_keeps_the_group_in_the_run() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let a = effect(&mut engine, "invert");
+    let b = effect(&mut engine, "grain");
+    engine.set_screen_space_boundary(2);
+    assert_eq!(
+        run_ids(&engine),
+        vec![a, b],
+        "both effects start in the run"
+    );
+
+    let group = engine.group_layers(vec![a, b]).expect("group both effects");
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "the group inherits the run membership of what it replaced"
+    );
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        vec![a, b],
+        "and the effects it holds are still what the present chain runs"
+    );
+}
+
+/// The two refusals the report asked for, stated as the user states them: a
+/// group carrying something that cannot render in viewport space may not go
+/// there, and nothing that cannot render there may go into a group that has.
+#[test]
+fn moving_a_group_holding_a_raster_into_viewport_space_is_refused() {
+    let mut engine = test_engine(16, 16);
+    let raster = engine.add_raster_layer(None);
+    let e = effect(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![e]);
+
+    // A group of an effect *and* a raster — eligible but for the raster.
+    let group = engine
+        .group_layers(vec![raster])
+        .expect("group the raster alone");
+    let before = tree_json(&engine);
+
+    let err = engine
+        .move_layers(vec![group], MoveTarget::After(e))
+        .expect_err("a group holding a raster may not go above the divider");
+    assert!(
+        err.contains("viewport space") && err.contains("contains"),
+        "the refusal names the offending descendant: {err}"
+    );
+    assert_eq!(run_ids(&engine), vec![e], "the run is untouched");
+    assert_eq!(
+        tree_json(&engine),
+        before,
+        "and a refused move changes nothing at all"
+    );
+}
+
+/// A refusal must not cost the user their undo history — it never got as far as
+/// pushing one, so the stack still holds whatever came before.
+#[test]
+fn a_legal_viewport_arrangement_survives_undo_and_redo() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let a = effect(&mut engine, "invert");
+    let b = effect(&mut engine, "grain");
+    let group = engine.group_layers(vec![a, b]).expect("group both effects");
+    engine.set_screen_space_boundary(1);
+
+    let arranged = run_ids(&engine);
+    let chain = engine.test_screen_space_effects();
+    assert_eq!(arranged, vec![group]);
+    assert_eq!(chain, vec![a, b]);
+
+    // Move the group down and back through undo.
+    engine.set_screen_space_boundary(0);
+    assert!(run_ids(&engine).is_empty());
+    engine.undo();
+    assert_eq!(run_ids(&engine), arranged, "undo restores the run");
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        chain,
+        "including everything the group holds"
+    );
+
+    engine.redo();
+    assert!(run_ids(&engine).is_empty(), "redo takes it back down");
+    engine.undo();
+    assert_eq!(run_ids(&engine), arranged, "and undo brings it back again");
+    assert_eq!(engine.test_screen_space_effects(), chain);
+}
+
+/// An add states no intent about placement, so it is never refused — it lands
+/// at the nearest slot the rules allow. For a raster anchored inside a run
+/// group that is the topmost canvas-space slot; for an effect it is exactly
+/// where it was asked to go.
+#[test]
+fn adding_into_a_run_group_lands_at_the_nearest_legal_slot() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let a = effect(&mut engine, "invert");
+    let group = engine.group_layers(vec![a]).expect("group the effect");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![group]);
+
+    // Anchored on the effect inside the group — the slot asked for is above
+    // the divider, which a raster may not occupy. Had it landed there the
+    // group would have been disqualified and the run would be empty, so the
+    // run surviving intact is what proves the redirect happened.
+    engine.add_raster_layer(Some(a));
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "the raster went somewhere legal and the arrangement is intact"
+    );
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        vec![a],
+        "the group still holds only the effect"
+    );
+
+    // An effect asked for the same slot belongs there, and gets it —
+    // joining the chain is only possible from inside the group.
+    let nested = effect_anchored(&mut engine, "grain", Some(a));
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        vec![a, nested],
+        "an effect lands inside the group, unredirected, and joins the chain"
+    );
+    assert_eq!(run_ids(&engine), vec![group], "the group is still the run");
 }

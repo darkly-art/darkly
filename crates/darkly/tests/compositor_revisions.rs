@@ -141,7 +141,9 @@ fn fixture() -> Fixture {
 
     let group = engine.add_group(None);
     let in_group = engine.add_raster_layer(Some(group));
-    engine.move_layer(in_group, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(in_group, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
     fill_layer(&mut engine, in_group, 20, 180, 90);
 
     let fx = effect(&mut engine, "invert");
@@ -256,7 +258,7 @@ stale_composite_battery! {
     }
 
     reordering, "reorder", |f| {
-        f.engine.move_layer(f.bottom, MoveTarget::After(f.top));
+        f.engine.move_layer(f.bottom, MoveTarget::After(f.top)).expect("move succeeds");
     }
 
     adding_a_layer, "add layer", |f| {
@@ -318,7 +320,7 @@ stale_composite_battery! {
     moving_the_screen_boundary, "screen-boundary move", |f| {
         // Raise the effect to the top so it is eligible for the run, then lift
         // the divider over it — it leaves the canvas composite entirely.
-        f.engine.move_layer(f.fx, MoveTarget::After(f.top));
+        f.engine.move_layer(f.fx, MoveTarget::After(f.top)).expect("move succeeds");
         settle(&mut f.engine);
         f.engine.set_screen_space_boundary(1);
     }

@@ -67,6 +67,7 @@ pub fn register() -> LayerKindRegistration {
         display_name: "Void Layer",
         description: "Pixels generated on demand by a source rather than stored.",
         can_have_mask: true,
+        leaf_renders_after_view_transform: false,
         can_rename: true,
         has_thumbnail: false,
         // Per-subtype icon is supplied by `VoidRegistry::icon`; this is the

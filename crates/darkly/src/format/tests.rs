@@ -442,10 +442,12 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // both Group structure and parent/children id rewiring on load.
     let group = engine.add_group(None);
     if let Some(first_layer) = raster_ids.first() {
-        engine.move_layer(
-            *first_layer,
-            crate::document::MoveTarget::IntoGroupTop(group),
-        );
+        engine
+            .move_layer(
+                *first_layer,
+                crate::document::MoveTarget::IntoGroupTop(group),
+            )
+            .expect("move succeeds");
     }
 
     // Mask filter on one of the rasters — exercises mask kind +

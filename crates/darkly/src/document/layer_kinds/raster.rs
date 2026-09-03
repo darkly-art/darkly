@@ -52,6 +52,7 @@ pub fn register() -> LayerKindRegistration {
         display_name: "Raster Layer",
         description: "A grid of pixels — what a brush stroke paints into.",
         can_have_mask: true,
+        leaf_renders_after_view_transform: false,
         can_rename: true,
         has_thumbnail: true,
         icon: "",

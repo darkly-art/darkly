@@ -46,6 +46,7 @@ pub fn register() -> LayerKindRegistration {
         display_name: "Filter Layer",
         description: "A color adjustment applied to everything composited beneath it.",
         can_have_mask: true,
+        leaf_renders_after_view_transform: true,
         can_rename: true,
         has_thumbnail: false,
         icon: "fa6-solid:circle-half-stroke",

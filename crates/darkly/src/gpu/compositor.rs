@@ -3758,10 +3758,14 @@ impl Compositor {
         // Membership, order and visibility all come from the document; the run
         // owns only the textures. An empty or wholly hidden run presents
         // straight to the surface, which is the common case.
+        //
+        // The run is consumed flattened: a group above the divider composites
+        // nothing of its own, so the chain is its effect descendants in order.
+        // `effective_visible` walks the parent chain, so hiding the group hides
+        // everything it holds without this loop knowing groups exist.
         let run: Vec<LayerId> = doc
-            .screen_space_run()
-            .iter()
-            .copied()
+            .screen_space_effects()
+            .into_iter()
             .filter(|id| doc.effective_visible(*id))
             .collect();
 
@@ -4753,7 +4757,9 @@ impl Compositor {
         // space its position puts it in. Everything downstream — the pair it
         // binds, the scale it runs at, the dirty flag it drives — follows from
         // this tag, so there is no second list to keep in step.
-        let screen_run: Vec<LayerId> = doc.screen_space_run().to_vec();
+        // Flattened, so an effect nested in a run group is tagged by the space
+        // it actually renders in rather than by whether it is a root child.
+        let screen_run: HashSet<LayerId> = doc.screen_space_effects().into_iter().collect();
         let live: Vec<(LayerId, EffectSpace, String, Vec<ParamValue>)> = doc
             .all_filter_layers()
             .iter()

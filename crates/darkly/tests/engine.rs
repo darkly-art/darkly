@@ -2799,7 +2799,9 @@ fn passthrough_sub_canvas_group_mask_samples_own_space() {
     let group_id = engine.add_group(None);
     engine.set_group_passthrough(group_id, true);
     let child_id = engine.add_raster_layer(None);
-    engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
+    engine
+        .move_layer(child_id, MoveTarget::IntoGroupTop(group_id))
+        .expect("move succeeds");
     engine.begin_stroke(child_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
         x: 1.0,
@@ -3274,7 +3276,9 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
     engine.set_group_passthrough(group_id, true);
 
     let child_id = engine.add_raster_layer(None);
-    engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
+    engine
+        .move_layer(child_id, MoveTarget::IntoGroupTop(group_id))
+        .expect("move succeeds");
 
     // Paint the child red across the canvas.
     paint_full_stroke(&mut engine, child_id, cw, ch);
@@ -6059,7 +6063,9 @@ fn delete_dedupes_ancestor_descendant() {
     let _keep = engine.add_raster_layer(None);
     let group = engine.add_group(None);
     let child = engine.add_raster_layer(None);
-    engine.move_layer(child, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(child, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
 
     let group_in_root = |e: &DarklyEngine| -> bool {
         e.layer_tree().layers.iter().any(|n| {
@@ -6152,7 +6158,9 @@ fn move_refuses_self_target() {
     let _keep = engine.add_raster_layer(None);
     let group = engine.add_group(None);
     let child = engine.add_raster_layer(None);
-    engine.move_layer(child, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(child, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
 
     let result = engine.move_layers(vec![group], MoveTarget::Before(child));
     assert!(
@@ -6223,7 +6231,9 @@ fn group_layers_cross_parent() {
     let _keep = engine.add_raster_layer(None);
     let outer = engine.add_group(None);
     let inside = engine.add_raster_layer(None);
-    engine.move_layer(inside, MoveTarget::IntoGroupTop(outer));
+    engine
+        .move_layer(inside, MoveTarget::IntoGroupTop(outer))
+        .expect("move succeeds");
     let root_top = engine.add_raster_layer(None);
 
     let group_id = engine
@@ -6279,7 +6289,9 @@ fn group_layers_dedupes_ancestor_descendant() {
     let _keep = engine.add_raster_layer(None);
     let outer = engine.add_group(None);
     let inside = engine.add_raster_layer(None);
-    engine.move_layer(inside, MoveTarget::IntoGroupTop(outer));
+    engine
+        .move_layer(inside, MoveTarget::IntoGroupTop(outer))
+        .expect("move succeeds");
 
     let new_group = engine.group_layers(vec![outer, inside]).expect("group ok");
 

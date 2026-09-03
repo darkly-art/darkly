@@ -1220,6 +1220,15 @@ impl DarklyEngine {
         self.compositor.effect_reduced_size(id)
     }
 
+    /// The flattened screen-space chain — see
+    /// [`crate::document::Document::screen_space_effects`]. The run itself is
+    /// observable through `layer_tree`; this is the list the present pass
+    /// actually walks, which differs from it whenever a run member is a group.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_screen_space_effects(&self) -> Vec<LayerId> {
+        self.doc.screen_space_effects()
+    }
+
     /// Test-only animation tick. Headless `render()` returns early without
     /// driving `update_animations`, so tests that need to advance the
     /// veil / overlay / void master clock call this directly. Pass a
