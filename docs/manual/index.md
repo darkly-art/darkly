@@ -6,6 +6,8 @@ template: doc
 
 **I hate writing documentation, and you probably hate reading it too. So by design, everything is searchable inside the app.**
 
+If you have any questions or can't find what you're looking for, come talk to us in [Discord](https://discord.gg/kFz2FGhbpu)!
+
 ## `CTRL+F` Global Search
 
 In Darkly, press **`CTRL+F`** to bring up the search bar, and type what you want to do, e.g. 'invert' or 'select'. Press enter to execute.
