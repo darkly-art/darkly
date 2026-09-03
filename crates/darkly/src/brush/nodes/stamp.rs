@@ -5,7 +5,7 @@
 //! from `circle.mask`'s compile output); the emitted `dab` output is
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
-//! Flow lives on the `paint` terminal — that is the single, authoritative
+//! Flow lives on the `paint` terminal: that is the single, authoritative
 //! per-stroke deposit knob. Dab dimensions, rotation, and mirroring are
 //! likewise owned by the terminal (which sizes its quad from
 //! `bbox_target_px`).
@@ -23,6 +23,7 @@ pub fn register() -> BrushNodeRegistration {
         pipelines: vec![],
         evaluator: || Box::new(StampEvaluator),
         lifecycle: crate::brush::node::Lifecycle::None,
+        scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "shape",
@@ -40,7 +41,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
     }
 }

@@ -98,7 +98,7 @@ fn gpu_stroke_paint_undo_redo() {
     enc.submit();
 
     // --- end_stroke: commit the stroke rect ---
-    // Bounding rect: x=45..65, y=45..55 (approx) — use conservative rect.
+    // Bounding rect: x=45..65, y=45..55 (approx), use conservative rect.
     let stroke_rect = cr(43, 43, 24, 14);
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
@@ -228,7 +228,7 @@ fn stroke_rect_tracking() {
         rect[1] + rect[3]
     );
 
-    // Second circle at (200, 200, r=10) — rect should expand.
+    // Second circle at (200, 200, r=10): rect should expand.
     let rect = expand_rect(Some(rect), 200.0, 200.0, 10.0, canvas.0, canvas.1);
     assert!(rect[0] <= 88, "expanded x0 should still cover first circle");
     assert!(
@@ -240,7 +240,7 @@ fn stroke_rect_tracking() {
         "expanded y1 should cover second circle"
     );
 
-    // Circle near edge (0, 0, r=5) — clamped to canvas bounds.
+    // Circle near edge (0, 0, r=5): clamped to canvas bounds.
     let rect = expand_rect(None, 0.0, 0.0, 5.0, canvas.0, canvas.1);
     assert_eq!(rect[0], 0, "clamped x0 should be 0");
     assert_eq!(rect[1], 0, "clamped y0 should be 0");
@@ -712,7 +712,7 @@ fn gpu_cpu_undo_interleaved() {
         r.blend.opacity = 0.5;
     }
 
-    // Undo #1: property change (CPU — no GPU work).
+    // Undo #1: property change (CPU, no GPU work).
     let mut action = undo_stack.pop_for_undo().unwrap();
     let _affected = action.undo(&mut doc);
     assert!(
@@ -781,7 +781,7 @@ fn gpu_cpu_undo_interleaved() {
 
 /// Paint a circle far from the origin, use DiffRectPass to find the changed
 /// region, and verify the diff rect covers the painted pixels. This is the
-/// mechanism that fixes scatter brush undo — the diff finds the actual changed
+/// mechanism that fixes scatter brush undo: the diff finds the actual changed
 /// pixels regardless of where the stroke engine thought they were.
 #[test]
 fn diff_rect_finds_painted_region() {
@@ -794,7 +794,7 @@ fn diff_rect_finds_painted_region() {
     let (_scratch_tex, scratch_view) = create_test_texture(&device, &queue, w, h, &blank);
     let (canvas_tex, canvas_view) = create_test_texture(&device, &queue, w, h, &blank);
 
-    // Paint a circle at (100, 100) on the canvas only — simulating a
+    // Paint a circle at (100, 100) on the canvas only, simulating a
     // scattered dab that landed far from where the stroke engine tracked.
     let pipelines = PaintPipelines::new(
         &device,
@@ -824,7 +824,7 @@ fn diff_rect_finds_painted_region() {
     let mut diff = DiffRectPass::new(&device);
     diff.request(&device, &queue, &scratch_view, &canvas_view, cr(0, 0, w, h));
 
-    // Poll until ready (native/test — blocking poll is fine).
+    // Poll until ready (native/test, blocking poll is fine).
     let rect = loop {
         if let Some(result) = diff.poll(&device) {
             break result;
@@ -839,7 +839,7 @@ fn diff_rect_finds_painted_region() {
     let (rx, ry, rw, rh) = (rect.x0(), rect.y0(), rect.width, rect.height);
 
     // The circle is at (100, 100) with radius 8. The diff rect should
-    // contain the circle — center must be inside the rect.
+    // contain the circle: center must be inside the rect.
     assert!(
         rx <= 100 && 100 < rx + rw as i32,
         "diff rect x range [{}, {}) should contain 100",
@@ -859,7 +859,7 @@ fn diff_rect_finds_painted_region() {
 }
 
 /// Verify that undo fully restores the canvas when the diff rect is used
-/// instead of a hand-tracked stroke rect — the key regression test for
+/// instead of a hand-tracked stroke rect, the key regression test for
 /// the scatter brush undo bug.
 #[test]
 fn diff_rect_undo_restores_offset_paint() {
@@ -881,7 +881,7 @@ fn diff_rect_undo_restores_offset_paint() {
     let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
-    // Paint a circle at (100, 100) — far from origin, simulating scatter.
+    // Paint a circle at (100, 100), far from origin, simulating scatter.
     let target = GpuPaintTarget::from_canvas_texture(
         &tex,
         &view,
@@ -1159,7 +1159,7 @@ fn negative_direction_grow_crosses_zero() {
         },
     );
     // Rebase the region_store scratch alongside the layer: old extent at
-    // canvas (0, 0), new extent at (-256, -256) — the layer grew up-left.
+    // canvas (0, 0), new extent at (-256, -256), the layer grew up-left.
     store.grow_scratch_preserving(
         &device,
         &mut enc,
@@ -1179,7 +1179,7 @@ fn negative_direction_grow_crosses_zero() {
     };
 
     // Paint blue on top of the (previously red) pre-grow pixels at canvas
-    // (50, 50) — translated to new layer-local (306, 306). Then commit a
+    // (50, 50), translated to new layer-local (306, 306). Then commit a
     // sub-rect that *crosses zero*: canvas (-100, -100, 200, 200) covers
     // both new (transparent) area and the original canvas region.
     let pipelines = PaintPipelines::new(
@@ -1232,7 +1232,7 @@ fn negative_direction_grow_crosses_zero() {
 
     // After undo, canvas (50, 50) should be back to red (the pre-stroke
     // state), and canvas (-100, -100) (which was zeroed pre-grow) should
-    // be transparent — both correctly restored.
+    // be transparent, both correctly restored.
     let pixels = readback_texture(&device, &queue, &new_tex, fmt, new_w, new_h);
     // canvas (50, 50) → layer-local (306, 306).
     let p = pixel_at(&pixels, new_w, 306, 306, 4);

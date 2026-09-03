@@ -2,12 +2,12 @@
 //
 // Keyboard hotkeys are handled by `tinykeys`, which expands `$mod` to Ctrl
 // on Linux/Win and Cmd on Mac internally. Mouse chords don't go through
-// tinykeys — they live in `actions/triggers.ts`'s `clickIndex`. These
+// tinykeys; they live in `actions/triggers.ts`'s `clickIndex`. These
 // helpers extend the same `$mod`-as-the-platform-primary-modifier
 // convention to that path.
 //
 // The fixed primitive vocabulary is `{ctrl, meta, alt, shift}`. `metaKey`
-// is reported honestly (it's Cmd on Mac, Super/Windows on Linux/Win) —
+// is reported honestly (it's Cmd on Mac, Super/Windows on Linux/Win);
 // we never fold it into `ctrl`. Per-platform mapping happens once, at
 // chord-index build time, via `substituteMod`.
 
@@ -16,7 +16,7 @@ import { detectPlatform } from '../platform';
 const IS_MAC = detectPlatform().os === 'macos';
 
 /** Canonical modifier order. Used wherever a sorted prefix is compared
- *  against an event-derived chord — both must agree on order. */
+ *  against an event-derived chord; both must agree on order. */
 export const MOD_ORDER: readonly string[] = ['ctrl', 'meta', 'alt', 'shift'];
 
 /** The primitive token `$mod` resolves to on this platform. */
@@ -38,7 +38,7 @@ export function substituteModInBinding(raw: string): string {
 }
 
 /** Canonical modifier list from a keyboard, mouse, or pointer event.
- *  Returns the held primitives in `MOD_ORDER`. No fold — `metaKey` is
+ *  Returns the held primitives in `MOD_ORDER`. No fold: `metaKey` is
  *  `'meta'`, not `'ctrl'`. */
 export function canonicalModsFromEvent(
     e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean },

@@ -5,17 +5,17 @@ use std::process::Command;
 
 /// Bake Darkly's version into the crate as the `DARKLY_VERSION` compile-time
 /// env, read through `crate::VERSION`. The value is the latest git tag plus the
-/// commit height since it (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`)
-/// — the same v* tags the deploy pipeline (darkly-deploy/) releases from.
+/// commit height since it (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`),
+/// the same v* tags the deploy pipeline (darkly-deploy/) releases from.
 ///
 /// CANONICAL TWIN: frontend/vite.config.ts derives the frontend's version with
 /// the identical command and the identical `"0.0.0-0-gunknown"` fallback. The
 /// two build systems (Cargo vs. Vite) share no runtime, so this is a documented
-/// DRY exception — if you change the command or fallback here, change it there.
+/// DRY exception: if you change the command or fallback here, change it there.
 ///
 /// Note: baking the commit SHA makes the crate's output non-deterministic across
 /// commits (as is already true for the frontend bundle). Best-effort and never
-/// panics — a tagless/git-less build just gets the fallback.
+/// panics: a tagless/git-less build just gets the fallback.
 fn emit_darkly_version() {
     // No `--always`: on a tagless/shallow checkout we want this to FAIL so the
     // fallback kicks in, rather than emit a bare SHA that isn't `TAG-N-gSHA`.
@@ -31,7 +31,7 @@ fn emit_darkly_version() {
 
     println!("cargo:rustc-env=DARKLY_VERSION={version}");
 
-    // Re-stamp when git state moves — best-effort and footgun-free: emit a hint
+    // Re-stamp when git state moves (best-effort and footgun-free): emit a hint
     // ONLY for a path that exists, because a hint pointing at a missing file
     // makes cargo treat it as perpetually-changed (rebuild every time). These
     // hints only reduce dev staleness; release correctness comes from the
@@ -68,20 +68,50 @@ fn main() {
 
     generate_handler_registry(&src.join("engine"));
 
-    generate_registry(&src.join("gpu/veils"), "crate::gpu::veil::VeilRegistration");
+    // Registries whose variants are browsable metadata. `catalog_sources` is
+    // what `crate::catalog` is generated from: see `generate_catalog_registry`.
+    let mut catalog_sources: Vec<(String, String)> = Vec::new();
 
-    generate_registry(&src.join("gpu/voids"), "crate::gpu::void::VoidRegistration");
-
-    generate_registry(
-        &src.join("gpu/filters"),
-        "crate::gpu::filter::FilterPipelineRegistration",
+    generate_catalog_registry(
+        &src.join("actions"),
+        "crate::action::ActionCategory",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
+    generate_catalog_registry(
+        &src.join("gpu/veils"),
+        "crate::gpu::veil::VeilRegistration",
+        &src,
+        &mut catalog_sources,
+    );
 
-    generate_registry(
+    generate_catalog_registry(
+        &src.join("gpu/voids"),
+        "crate::gpu::void::VoidRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
+        &src.join("gpu/filters"),
+        "crate::gpu::filter::FilterPipelineRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
+        &src.join("tools"),
+        "crate::tool::ToolRegistration",
+        &src,
+        &mut catalog_sources,
+    );
+
+    generate_catalog_registry(
         &src.join("brush/nodes"),
         "crate::brush::BrushNodeRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
     generate_registry(
@@ -95,29 +125,188 @@ fn main() {
     );
 
     generate_registry(
+        &src.join("docs_md/fragments"),
+        "crate::docs_md::FragmentRegistration",
+    );
+
+    generate_catalog_registry(
         &src.join("document/filters"),
         "crate::document::filter::FilterEntityRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("document/layer_kinds"),
         "crate::document::layer_kind::LayerKindRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_registry(
+    generate_catalog_registry(
         &src.join("gpu/blend_modes"),
         "crate::gpu::blend_mode::BlendModeRegistration",
+        &src,
+        &mut catalog_sources,
     );
 
-    generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
-
+    // Brushes and packs are directories of YAML data rather than of
+    // `register()` modules, so they record their catalog source from inside
+    // their own scan. Must run before `generate_catalog_sources`, which
+    // consumes the vector.
     generate_builtin_brushes(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("brushes"),
+        &mut catalog_sources,
     );
+    generate_builtin_packs(
+        &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("packs"),
+        &mut catalog_sources,
+    );
+
+    generate_catalog_sources(catalog_sources, &src);
+
+    generate_yaml_presets(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("presets"));
 
     generate_texture_registry(
         &PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("resources/textures"),
     );
+}
+
+/// [`generate_registry`], additionally recording the directory as a source of
+/// browsable catalog metadata.
+///
+/// Which function a registry directory is scanned by *is* the decision about
+/// whether its variants are documentation. Both `catalogs()` and
+/// `catalog_sources()` are generated from what this records, so a registry
+/// cannot be projected in one and forgotten in the other, and a directory
+/// scanned by plain [`generate_registry`] (brush nodes, stabilizers, request
+/// handler groups) contributes to neither.
+///
+/// The registry module (the parent module of the registration type) must
+/// export `CATALOG_ID` and `catalog()`, and may export `preview_mechanism()`.
+fn generate_catalog_registry(
+    dir: &Path,
+    registration_type: &str,
+    src: &Path,
+    sources: &mut Vec<(String, String)>,
+) {
+    generate_registry(dir, registration_type);
+    let rel = dir
+        .strip_prefix(src)
+        .unwrap_or(dir)
+        .to_str()
+        .unwrap()
+        .replace('\\', "/");
+    record_catalog_source(
+        &rel,
+        registration_type.rsplit_once("::").unwrap().0,
+        sources,
+    );
+}
+
+/// Record a scanned directory as a source of browsable catalog metadata.
+///
+/// Split out from [`generate_catalog_registry`] for the scans whose directory
+/// holds data rather than `register()` modules: `brushes/` is a directory of
+/// YAML, but its catalog is documentation on the same footing as a registry's.
+/// `module` must export `CATALOG_ID` and `catalog()`, and may export a preview
+/// mechanism.
+fn record_catalog_source(dir: &str, module: &str, sources: &mut Vec<(String, String)>) {
+    sources.push((dir.to_string(), module.to_string()));
+}
+
+/// Resolve a module path (`crate::a::b`) to the file that holds it, trying
+/// `src/a/b.rs` then `src/a/b/mod.rs`. `None` when neither exists.
+fn module_source(module: &str, src: &Path) -> Option<PathBuf> {
+    let rel = module.trim_start_matches("crate::").replace("::", "/");
+    let flat = src.join(format!("{rel}.rs"));
+    if flat.exists() {
+        return Some(flat);
+    }
+    let dir = src.join(&rel).join("mod.rs");
+    dir.exists().then_some(dir)
+}
+
+/// Emit `OUT_DIR/catalog_sources_gen.rs`: the list of scanned catalog-producing
+/// registry directories, the `catalogs()` projection over them, and the
+/// `preview_mechanisms()` projection over the subset that has one. Generated
+/// rather than hand-written so the export and the test that checks the export
+/// is complete both read from what the build actually found on disk.
+fn generate_catalog_sources(mut sources: Vec<(String, String)>, src: &Path) {
+    sources.sort();
+
+    let mut code = String::new();
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
+    code.push_str(
+        "// One entry per registry directory scanned by `generate_catalog_registry`.\n\n",
+    );
+
+    code.push_str("/// A registry directory the build scan found to produce a catalog.\n");
+    code.push_str("pub struct CatalogSource {\n");
+    code.push_str("    /// The directory the build scan walked, as that scan named it:\n");
+    code.push_str("    /// `gpu/veils` and friends relative to `crates/darkly/src`,\n");
+    code.push_str("    /// `brushes` beside it.\n");
+    code.push_str("    pub dir: &'static str,\n");
+    code.push_str("    /// Id of the catalog the registry in that directory produces.\n");
+    code.push_str("    pub id: &'static str,\n");
+    code.push_str("}\n\n");
+
+    code.push_str("/// Every module directory the build scan found that produces a catalog.\n");
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str("pub fn catalog_sources() -> Vec<CatalogSource> {\n");
+    code.push_str("    vec![\n");
+    for (dir, module) in &sources {
+        code.push_str(&format!(
+            "        CatalogSource {{ dir: \"{dir}\", id: {module}::CATALOG_ID }},\n"
+        ));
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n\n");
+
+    code.push_str("/// Every registry, projected. Requires no GPU device.\n");
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str("pub fn catalogs() -> Vec<Catalog> {\n");
+    code.push_str("    vec![\n");
+    for (_, module) in &sources {
+        code.push_str(&format!("        {module}::catalog(),\n"));
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n\n");
+
+    // One row per catalog whose registry module exports a preview mechanism.
+    // A catalog that has none writes nothing, which is what keeps the
+    // document-layer registries free of a `wgpu`-taking trait rather than
+    // making each of them hand-write a negative.
+    code.push_str(
+        "/// Every catalog that can render a preview, keyed by catalog id. A catalog\n\
+         /// whose registry module exports no `preview_mechanism` is absent, which is\n\
+         /// how a non-previewable catalog answers without writing anything.\n",
+    );
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str(
+        "pub fn preview_mechanisms() -> Vec<(&'static str, &'static dyn crate::gpu::preview::PreviewMechanism)> {\n",
+    );
+    code.push_str("    vec![\n");
+    for (_, module) in &sources {
+        let Some(path) = module_source(module, src) else {
+            continue;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.contains("pub fn preview_mechanism") {
+            code.push_str(&format!(
+                "        ({module}::CATALOG_ID, {module}::preview_mechanism()),\n"
+            ));
+        }
+    }
+    code.push_str("    ]\n");
+    code.push_str("}\n");
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let out_path = PathBuf::from(out_dir).join("catalog_sources_gen.rs");
+    fs::write(&out_path, code).unwrap();
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate
@@ -151,7 +340,7 @@ fn generate_registry(dir: &Path, registration_type: &str) {
     let type_name = registration_type.rsplit("::").next().unwrap();
 
     let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
     code.push_str("// To add a new module, create a .rs file in this directory\n");
     code.push_str(&format!(
         "// that exports `pub fn register() -> {registration_type}`.\n\n"
@@ -162,7 +351,7 @@ fn generate_registry(dir: &Path, registration_type: &str) {
     }
 
     code.push_str(&format!("\nuse {registration_type};\n\n"));
-    // Skip rustfmt on the generated body — layout varies across rustfmt
+    // Skip rustfmt on the generated body: layout varies across rustfmt
     // versions (single-element `vec![]` collapses on newer versions),
     // which would otherwise make CI's fmt check depend on the toolchain.
     code.push_str("#[rustfmt::skip]\n");
@@ -190,7 +379,7 @@ fn generate_registry(dir: &Path, registration_type: &str) {
 ///
 /// This is the wasm-safe stand-in for `linkme` (which doesn't compile on
 /// `wasm32-unknown-unknown`): the proc-macro emits the per-method registration
-/// fns, and this scan — keyed off the same method names — aggregates them, the
+/// fns, and this scan (keyed off the same method names) aggregates them, the
 /// same "discover by scanning source" idiom the `register()` directories use.
 fn generate_handler_registry(engine_dir: &Path) {
     let mut method_names: Vec<String> = Vec::new();
@@ -199,7 +388,7 @@ fn generate_handler_registry(engine_dir: &Path) {
     method_names.dedup();
 
     let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
     code.push_str(
         "// Aggregates every `#[handler]`-tagged engine method (scanned from src/engine).\n",
     );
@@ -298,7 +487,7 @@ fn generate_grouped_registry(dir: &Path, registration_type: &str) {
     let type_name = registration_type.rsplit("::").next().unwrap();
 
     let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
     code.push_str("// To add request kinds, create or edit a domain .rs file in this\n");
     code.push_str(&format!(
         "// directory that exports `pub fn registrations() -> Vec<{registration_type}>`.\n\n"
@@ -327,84 +516,135 @@ fn generate_grouped_registry(dir: &Path, registration_type: &str) {
     println!("cargo:rerun-if-changed={}", dir.display());
 }
 
-/// Scan `presets/*.yaml` and emit a generated Rust module to `OUT_DIR` with
-/// one `include_str!` per YAML file plus a `defaults()` constant and an
-/// `overlays()` function returning the editor-flavored overlays in
-/// alphabetical order. `defaults.yaml` is required; the build panics if
-/// it's missing. Every other `.yaml` becomes an equal-status overlay whose
-/// display name is the file stem (Title Case).
-fn generate_yaml_presets(dir: &Path) {
-    let mut defaults_path: Option<PathBuf> = None;
-    let mut overlays: Vec<(String, PathBuf)> = Vec::new();
+/// The Rust constant name holding one YAML file's source: the file stem,
+/// upper-cased, with `-` normalized to `_`.
+fn yaml_const_name(stem: &str) -> String {
+    format!("{}_YAML", stem.to_uppercase().replace('-', "_"))
+}
 
+/// Scan `dir` for `*.yaml`/`*.yml` and append one `pub const <STEM>_YAML: &str
+/// = include_str!(…)` per file to `code`. Returns the `(stem, filename)` pairs
+/// in emission order, sorted by stem so the generated file is deterministic
+/// across builds.
+///
+/// Paths are emitted relative to `CARGO_MANIFEST_DIR` so the generated file
+/// carries no absolute paths and is portable across checkouts: the form
+/// [`generate_texture_registry`] documents and which the YAML scans previously
+/// each got wrong in their own way.
+fn emit_yaml_consts(dir: &Path, code: &mut String) -> Vec<(String, String)> {
+    let dir_name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("yaml directory has a name");
+
+    let mut files: Vec<(String, String)> = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
                 continue;
             }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if stem == "defaults" {
-                defaults_path = Some(path);
-            } else if !stem.is_empty() {
-                overlays.push((stem, path));
+            let (Some(stem), Some(file_name)) = (
+                path.file_stem().and_then(|s| s.to_str()),
+                path.file_name().and_then(|s| s.to_str()),
+            ) else {
+                continue;
+            };
+            if stem.is_empty() {
+                continue;
             }
+            files.push((stem.to_string(), file_name.to_string()));
         }
     }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let defaults_path =
-        defaults_path.unwrap_or_else(|| panic!("presets/defaults.yaml is required"));
-
-    // Display-name comes from the YAML's `name:` field; fall back to a
-    // titlecased file stem if the YAML doesn't set one. Order alphabetically
-    // (by stem) so no editor is privileged.
-    overlays.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut display_names: Vec<(String, String)> = Vec::new();
-    for (stem, path) in &overlays {
-        let yaml = fs::read_to_string(path).unwrap_or_default();
-        let name = parse_yaml_display_name(&yaml).unwrap_or_else(|| titlecase(stem));
-        display_names.push((stem.clone(), name));
-    }
-
-    let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
-    code.push_str(
-        "// To add a new editor overlay, drop `<name>.yaml` in `crates/darkly/presets/`.\n\n",
-    );
-
-    code.push_str(&format!(
-        "pub const DEFAULTS_YAML: &str = include_str!({:?});\n\n",
-        defaults_path.display().to_string()
-    ));
-
-    for (stem, path) in &overlays {
+    for (stem, file_name) in &files {
+        let rel = format!("/{dir_name}/{file_name}");
         code.push_str(&format!(
-            "const {}_YAML: &str = include_str!({:?});\n",
-            stem.to_uppercase().replace('-', "_"),
-            path.display().to_string()
+            "pub const {}: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {rel:?}));\n",
+            yaml_const_name(stem),
         ));
     }
     code.push('\n');
 
+    files
+}
+
+/// Embed every `*.yaml` in `dir` as `<const_name>: &[(filename, source)]`,
+/// written to `OUT_DIR/<out_file>`.
+///
+/// The shape behind "drop a `.yaml` file in the directory and it is loaded":
+/// used for built-in brushes and built-in packs alike, so neither owns a copy
+/// of the scan.
+fn generate_embedded_yaml_dir(dir: &Path, const_name: &str, out_file: &str, header: &str) {
+    let mut code = String::new();
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
+    code.push_str(header);
+    code.push('\n');
+
+    let files = emit_yaml_consts(dir, &mut code);
+
+    code.push_str(&format!("pub const {const_name}: &[(&str, &str)] = &[\n"));
+    for (stem, file_name) in &files {
+        code.push_str(&format!(
+            "    ({:?}, {}),\n",
+            file_name,
+            yaml_const_name(stem)
+        ));
+    }
+    code.push_str("];\n");
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let out_path = PathBuf::from(out_dir).join(out_file);
+    fs::write(&out_path, code).unwrap();
+
+    println!("cargo:rerun-if-changed={}", dir.display());
+}
+
+/// Scan `presets/*.yaml` and emit a generated Rust module to `OUT_DIR` with
+/// one `include_str!` per YAML file plus a `DEFAULTS_YAML` constant and an
+/// `OVERLAYS` list of the editor-flavored overlays in alphabetical order.
+/// `defaults.yaml` is required; the build panics if it's missing. Every other
+/// `.yaml` becomes an equal-status overlay whose display name is its `name:`
+/// field, falling back to a titlecased file stem.
+fn generate_yaml_presets(dir: &Path) {
+    let mut code = String::new();
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
+    code.push_str(
+        "// To add a new editor overlay, drop `<name>.yaml` in `crates/darkly/presets/`.\n\n",
+    );
+
+    // `defaults.yaml`'s stem yields `DEFAULTS_YAML`, which is the name the
+    // config layer already reads: it needs no special emission, only to be
+    // held out of the overlay list below.
+    let files = emit_yaml_consts(dir, &mut code);
+    assert!(
+        files.iter().any(|(stem, _)| stem == "defaults"),
+        "presets/defaults.yaml is required"
+    );
+
+    // Display-name comes from the YAML's `name:` field; fall back to a
+    // titlecased file stem if the YAML doesn't set one.
+    let overlays: Vec<(String, String)> = files
+        .iter()
+        .filter(|(stem, _)| stem != "defaults")
+        .map(|(stem, file_name)| {
+            let yaml = fs::read_to_string(dir.join(file_name)).unwrap_or_default();
+            let name = parse_yaml_display_name(&yaml).unwrap_or_else(|| titlecase(stem));
+            (stem.clone(), name)
+        })
+        .collect();
+
     // Equal-status overlay list: (display_name, yaml_source).
     code.push_str("pub const OVERLAYS: &[(&str, &str)] = &[\n");
-    for (stem, name) in &display_names {
-        code.push_str(&format!(
-            "    ({:?}, {}_YAML),\n",
-            name,
-            stem.to_uppercase().replace('-', "_")
-        ));
+    for (stem, name) in &overlays {
+        code.push_str(&format!("    ({:?}, {}),\n", name, yaml_const_name(stem)));
     }
     code.push_str("];\n\n");
 
     // BASE_SETTINGS_OPTIONS feeds the `app.baseSettings` enum schema.
     code.push_str("pub const BASE_SETTINGS_OPTIONS: &[(&str, &str)] = &[\n");
-    for (_, name) in &display_names {
+    for (_, name) in &overlays {
         code.push_str(&format!("    ({:?}, {:?}),\n", name, name));
     }
     code.push_str("];\n");
@@ -416,7 +656,7 @@ fn generate_yaml_presets(dir: &Path) {
     println!("cargo:rerun-if-changed={}", dir.display());
 }
 
-/// Pull the `name:` field out of a YAML preset file. Lightweight — we don't
+/// Pull the `name:` field out of a YAML preset file. Lightweight: we don't
 /// want a full YAML parser in build.rs, and the field's expected to be a
 /// top-level scalar on its own line.
 fn parse_yaml_display_name(yaml: &str) -> Option<String> {
@@ -446,59 +686,53 @@ fn titlecase(s: &str) -> String {
 /// one `include_str!` per YAML file plus a `BUILTIN_BRUSHES_YAML`
 /// constant listing each `(filename, yaml_source)` pair. Built-in
 /// brushes are loaded by `crate::brush::builtin_brushes::all()` at
-/// engine startup — adding a new one is "drop a `.yaml` file in the
+/// engine startup: adding a new one is "drop a `.yaml` file in the
 /// directory" with no other code touched.
-fn generate_builtin_brushes(dir: &Path) {
-    let mut brushes: Vec<(String, PathBuf)> = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if stem.is_empty() {
-                continue;
-            }
-            brushes.push((stem, path));
-        }
-    }
-    brushes.sort_by(|a, b| a.0.cmp(&b.0));
+///
+/// Also records the directory as a catalog source, from the scan itself
+/// rather than from a second hand-written name, the same "derived from
+/// what is on disk" property [`generate_catalog_registry`] gives the
+/// module directories, and what `every_catalog_source_is_exported` rests on.
+fn generate_builtin_brushes(dir: &Path, catalog_sources: &mut Vec<(String, String)>) {
+    record_catalog_source(
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .expect("brush directory has a name"),
+        "crate::brush::builtin_brushes",
+        catalog_sources,
+    );
 
-    let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
-    code.push_str("// To add a new built-in brush, drop `<name>.yaml` in\n");
-    code.push_str("// `crates/darkly/brushes/`. It is loaded automatically.\n\n");
+    generate_embedded_yaml_dir(
+        dir,
+        "BUILTIN_BRUSHES_YAML",
+        "builtin_brushes_gen.rs",
+        "// To add a new built-in brush, drop `<name>.yaml` in\n\
+         // `crates/darkly/brushes/`. It is loaded automatically.\n",
+    );
+}
 
-    for (stem, path) in &brushes {
-        code.push_str(&format!(
-            "const {}_YAML: &str = include_str!({:?});\n",
-            stem.to_uppercase().replace('-', "_"),
-            path.display().to_string()
-        ));
-    }
-    code.push('\n');
+/// Scan `packs/*.yaml` and emit a generated module to `OUT_DIR` listing each
+/// `(filename, yaml_source)` pair, the same way [`generate_builtin_brushes`]
+/// does for brushes. A pack's id is its file stem.
+///
+/// Also records the directory as a catalog source, so a shipped pack is
+/// published in `metadata.json` alongside the brushes it groups.
+fn generate_builtin_packs(dir: &Path, catalog_sources: &mut Vec<(String, String)>) {
+    record_catalog_source(
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .expect("pack directory has a name"),
+        "crate::brush::packs",
+        catalog_sources,
+    );
 
-    code.push_str("pub const BUILTIN_BRUSHES_YAML: &[(&str, &str)] = &[\n");
-    for (stem, _) in &brushes {
-        let filename = format!("{stem}.yaml");
-        code.push_str(&format!(
-            "    ({:?}, {}_YAML),\n",
-            filename,
-            stem.to_uppercase().replace('-', "_"),
-        ));
-    }
-    code.push_str("];\n");
-
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
-    let out_path = PathBuf::from(out_dir).join("builtin_brushes_gen.rs");
-    fs::write(&out_path, code).unwrap();
-
-    println!("cargo:rerun-if-changed={}", dir.display());
+    generate_embedded_yaml_dir(
+        dir,
+        "BUILTIN_PACKS_YAML",
+        "builtin_packs_gen.rs",
+        "// To add a new built-in brush pack, drop `<name>.yaml` in\n\
+         // `crates/darkly/packs/`. Its file stem is its pack id.\n",
+    );
 }
 
 /// Scan `resources/textures/*.{jpg,jpeg,png,webp}` and emit a generated
@@ -508,7 +742,7 @@ fn generate_builtin_brushes(dir: &Path) {
 /// `generate_registry` provides for code modules and that
 /// `generate_yaml_presets` provides for editor overlays.
 ///
-/// Dotfiles and non-image extensions are skipped — Krita autosaves
+/// Dotfiles and non-image extensions are skipped: Krita autosaves
 /// (`.foo.png-autosave.kra`) won't get registered as textures.
 fn generate_texture_registry(dir: &Path) {
     let mut textures: Vec<(String, PathBuf)> = Vec::new();
@@ -541,12 +775,12 @@ fn generate_texture_registry(dir: &Path) {
     textures.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut code = String::new();
-    code.push_str("// @generated by build.rs — do not edit manually.\n");
+    code.push_str("// @generated by build.rs: do not edit manually.\n");
     code.push_str("// To add a new built-in texture, drop an image into\n");
     code.push_str("// `crates/darkly/resources/textures/`. It is registered\n");
     code.push_str("// under its file basename (sans extension).\n\n");
     // Emit paths relative to `CARGO_MANIFEST_DIR` so the generated
-    // file is portable across checkouts — no local absolute paths
+    // file is portable across checkouts: no local absolute paths
     // baked in. `include_bytes!` resolves `concat!(env!(...), "...")`
     // at compile time against whatever machine is building.
     code.push_str("pub const BUILTIN_TEXTURES: &[(&str, &[u8])] = &[\n");

@@ -1,4 +1,4 @@
-//! Curves filter — per-channel tone mapping, modeled on Krita's "Color
+//! Curves filter: per-channel tone mapping, modeled on Krita's "Color
 //! Adjustment Curves" (`plugins/filters/colorsfilters`, `KisMultiChannelFilter`).
 //!
 //! For an RGBA image Krita 5.1+ exposes eight virtual channels, in this order
@@ -13,7 +13,7 @@
 //!
 //! Curves is a thin provider over the shared [`lut_param_filter`] scaffold: it
 //! hands [`bake_lut`] eight per-channel spline evaluators and the shared code owns the
-//! rest — the composite-over-channel fold, the HSV/Lab round trips gated by
+//! rest: the composite-over-channel fold, the HSV/Lab round trips gated by
 //! `_active` flags, and the whole GPU pipeline (see
 //! [`gpu::lut_filter`](crate::gpu::lut_filter) and `curves.wgsl`). Levels reuses
 //! the identical scaffold with a different evaluator.
@@ -24,46 +24,39 @@ use crate::brush::curve_math::CurveLut;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
-/// Identity curve — a straight line through the two endpoints.
+/// Identity curve, a straight line through the two endpoints.
 const IDENTITY: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 
-/// Parameter schema — Krita's channel order for an RGBA image. Load-bearing:
+/// Parameter schema (Krita's channel order for an RGBA image). Load-bearing:
 /// [`build_lut`] indexes these positionally (matching [`Channel`]) and the
 /// shader reads baked components in the same order.
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Curve {
-        name: "rgb",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "red",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "green",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "blue",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "alpha",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "hue",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "saturation",
-        default: IDENTITY,
-    },
-    ParamDef::Curve {
-        name: "lightness",
-        default: IDENTITY,
-    },
+    ParamDef::curve("rgb", IDENTITY)
+        .with_label("RGB")
+        .with_description("Tone curve applied to all three color channels together."),
+    ParamDef::curve("red", IDENTITY)
+        .with_label("Red")
+        .with_description("Tone curve applied to the red channel alone."),
+    ParamDef::curve("green", IDENTITY)
+        .with_label("Green")
+        .with_description("Tone curve applied to the green channel alone."),
+    ParamDef::curve("blue", IDENTITY)
+        .with_label("Blue")
+        .with_description("Tone curve applied to the blue channel alone."),
+    ParamDef::curve("alpha", IDENTITY)
+        .with_label("Alpha")
+        .with_description("Tone curve applied to opacity."),
+    ParamDef::curve("hue", IDENTITY)
+        .with_label("Hue")
+        .with_description("Remaps hue against itself, shifting colors around the wheel."),
+    ParamDef::curve("saturation", IDENTITY)
+        .with_label("Saturation")
+        .with_description("Remaps saturation, letting muted and vivid areas move apart."),
+    ParamDef::curve("lightness", IDENTITY)
+        .with_label("Lightness")
+        .with_description("Remaps lightness independently of hue and saturation."),
 ];
 
 /// Read a curve param's control points by index, falling back to identity when
@@ -89,13 +82,45 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     Arc::new(lut_param_filter(device, &lut_shader_source(), build_lut))
 }
 
+/// Contrast rises above the identity transfer, falls below it, and returns.
+///
+/// The swept curve carries four control points at fixed `x` coordinates, so
+/// only `y` moves and the points stay ascending for [`CurveLut::from_points`]'
+/// sorted-input precondition. `IDENTITY` is deliberately not the resting curve:
+/// it holds two points, an S-curve needs four, and a preview that changed point
+/// count mid-sweep would step rather than move. The four-point resting curve is
+/// collinear, so the natural-cubic spline reproduces the straight line exactly
+/// and the resting frames match a default-parameter render.
+///
+/// Only the composite `rgb` channel moves; the other seven stay at their
+/// two-point defaults, which keeps the per-channel and HSL rows of the baked LUT
+/// inactive and the result reading as a tone swing rather than a hue mess.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let bend = 0.18 * swing_signed(t);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Curve(vec![
+        // rgb
+        [0.0, 0.0],
+        [0.25, 0.25 - bend],
+        [0.75, 0.75 + bend],
+        [1.0, 1.0],
+    ]);
+    params
+}
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "curves",
         display_name: "Curves",
         icon: "fa6-solid:chart-line",
         description: "Remap tones and colors with editable per-channel curves.",
+        hotkey_action: "filterCurves",
         params: PARAMS,
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }
@@ -118,7 +143,7 @@ mod tests {
         lut[LUT_LEN * 4 + i * 4 + c]
     }
 
-    /// Positional indices into [`PARAMS`] — mirror [`Channel`] for readable tests.
+    /// Positional indices into [`PARAMS`], mirroring [`Channel`] for readable tests.
     const RGB: usize = Channel::Rgb as usize;
     const RED: usize = Channel::Red as usize;
     const SATURATION: usize = Channel::Saturation as usize;
@@ -157,7 +182,7 @@ mod tests {
         );
     }
 
-    /// Fold order matches Krita: the color channels are `rgb(channel(i))` — the
+    /// Fold order matches Krita: the color channels are `rgb(channel(i))`, the
     /// per-channel curve first, then the composite "RGB" curve on top. Both
     /// curves are two-point (exact linear in `CurveLut`) so the arithmetic is
     /// unambiguous.
@@ -202,7 +227,7 @@ mod tests {
     }
 
     /// A non-identity Hue or Saturation curve arms the HSV pass; a non-identity
-    /// Lightness curve arms the Lab pass — independently.
+    /// Lightness curve arms the Lab pass, independently.
     #[test]
     fn hsl_curves_arm_their_stages() {
         let mut p = PARAMS.iter().map(|d| d.default_value()).collect::<Vec<_>>();

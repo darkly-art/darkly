@@ -1,0 +1,103 @@
+name: Sponge
+description: A textured brush useful for laying down big, smooth shapes
+nodes:
+  add:
+    type: add
+  brush_settings:
+    type: brush_settings
+    inputs:
+      size: 0.2
+      spacing: 0.02
+      stabilize: 1.0
+  curve:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.7
+      - - 0.6
+        - 0.36
+      - - 1.0
+        - 0.0
+  curve_2:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.64
+        - 0.36
+      - - 1.0
+        - 1.0
+  curve_3:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 1.0
+        - 0.5
+      input: 0.10
+  levels:
+    type: levels
+  multiply:
+    type: multiply
+  noise:
+    type: noise
+    inputs:
+      scale: 6.0
+      space: 1
+  paint:
+    type: paint
+  paint_color:
+    type: paint_color
+  pen_input:
+    type: pen_input
+  polygon:
+    type: polygon
+    inputs:
+      points: 4
+      rounding: 0.5
+      softness: 0.3
+      squeeze: 0.5
+      squeeze_angle: -0.78
+  random:
+    type: random
+  random_2:
+    type: random
+  stamp:
+    type: stamp
+  subtract:
+    type: subtract
+    inputs:
+      a: 0.11924592405557632
+connections:
+- add.result -> levels.input
+- brush_settings.size -> multiply.a
+- curve.output -> levels.in_low
+- curve_2.output -> paint.flow
+- curve_3.output -> multiply.b
+- levels.output -> stamp.tip
+- multiply.result -> noise.scale
+- noise.value -> subtract.b
+- paint_color.color -> stamp.color
+- pen_input.drawing_angle -> polygon.rotation_input
+- pen_input.position -> paint.position
+- pen_input.pressure -> curve.input
+- pen_input.pressure -> curve_2.input
+- polygon.mask -> add.b
+- random.value -> noise.rotation
+- random_2.value -> noise.variation
+- stamp.dab -> paint.rgba
+- subtract.result -> add.a
+exposed_ports:
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  paint.flow: {}
+  paint.opacity: {}
+  polygon.softness: {}
+  polygon.rounding: {}
+  curve_3.input:
+    label: Texture Size
+    description: Fineness of the brush texture
+    icon: mdi:blur

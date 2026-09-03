@@ -26,7 +26,7 @@ impl DarklyEngine {
 
     /// Duplicate every id in `ids` in document order and return their new
     /// counterparts as a single undo step. Ids whose ancestor is already in
-    /// `ids` are skipped — duplicating the ancestor takes the descendant
+    /// `ids` are skipped: duplicating the ancestor takes the descendant
     /// with it, so a second pass would produce a redundant copy. Cross-
     /// parent selections are supported: each duplicate lands above its own
     /// source, no matter which parent group that source lives in.
@@ -71,8 +71,8 @@ impl DarklyEngine {
         let root_new_id = self.clone_subtree(source_id, None, /* is_root: */ true)?;
         // `clone_subtree(..., None, ...)` lands the new node at the top of
         // root via `add_*(None) → IntoGroupTop(root)`. Move it next to the
-        // source so each duplicate sits directly above its own original —
-        // critical for multi-duplicate, where N "tops" would otherwise
+        // source so each duplicate sits directly above its own original;
+        // this is critical for multi-duplicate, where N "tops" would otherwise
         // stack all duplicates together at the top of the panel.
         //
         // `MoveTarget::After(source)` lands the new node at source's
@@ -205,10 +205,17 @@ impl DarklyEngine {
             LayerNode::Layer(Layer::Void(v)) => {
                 let void_type = v.void_type.clone();
                 let params = v.params.clone();
+                // Kept for the realize-and-copy path below, which runs after
+                // `add_void_layer` has consumed the originals.
+                let (realize_type, realize_params) = (void_type.clone(), params.clone());
                 // Carry the source's gizmo transform onto the copy so a
                 // duplicated camera keeps its flip / framing rather than
                 // resetting to the kind's default seed.
                 let transform = v.transform;
+                // A void that holds an externally-sourced image (a placed photo,
+                // a captured frame) has pixels that exist nowhere else, so the
+                // copy has to declare one too; see the GPU copy below.
+                let frame = v.frame.clone();
                 // The duplicated layer's name is overwritten with the
                 // source's `"… copy"` below; the display_label here only
                 // primes the per-type counter so a later fresh-add picks up
@@ -233,12 +240,32 @@ impl DarklyEngine {
                     nv.common.locked = common_locked;
                     nv.blend.opacity = blend_opacity;
                     nv.blend.blend_mode = blend_mode_reg;
+                    nv.frame = frame.clone();
                 }
-                // The compositor void cache + texture are allocated lazily by
-                // `sync_compositor_layers` (or directly by `add_void_layer`
-                // on the engine side); duplication doesn't need a manual
-                // `ensure_*` call because there are no pixels to copy — the
-                // procedural output is identical from identical params.
+                // A purely procedural void needs no pixel copy: its output is
+                // identical from identical params, and the compositor allocates
+                // its cache lazily. One holding a source image is the opposite:
+                // those texels came from outside the document and cannot be
+                // regenerated, so realize the copy now and clone them across.
+                if frame.is_some() {
+                    let void = self.compositor.create_void_box(
+                        &self.gpu.device,
+                        &realize_type,
+                        &realize_params,
+                    );
+                    self.compositor.ensure_void_layer(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        new_id,
+                        void,
+                    );
+                    self.compositor.copy_void_source(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        source_id,
+                        new_id,
+                    );
+                }
                 self.refresh_blend_uniforms(new_id);
 
                 // Voids can carry mask filters like any other host.
@@ -270,7 +297,7 @@ impl DarklyEngine {
                     nf.blend.opacity = blend_opacity;
                     nf.blend.blend_mode = blend_mode_reg;
                 }
-                // No GPU resource to allocate — the filter pipeline is shared
+                // No GPU resource to allocate: the filter pipeline is shared
                 // and resolved lazily in `compose_filter_arm`. The
                 // `refresh_blend_uniforms` call no-ops (a filter layer has no
                 // `layer_cache` entry), so it's skipped.
@@ -283,7 +310,7 @@ impl DarklyEngine {
             LayerNode::Layer(Layer::Vector(v)) => {
                 // Vector state is fully procedural: copy the object list and
                 // layer transform, then re-realize on the copy. No pixels to
-                // clone — the texture rebuilds from the objects.
+                // clone: the texture rebuilds from the objects.
                 let objects = v.objects.clone();
                 let transform = v.transform;
                 let new_id = self.doc.add_vector_layer(anchor);
@@ -348,32 +375,19 @@ impl DarklyEngine {
     /// supports mask filters; the loop is generic so other future pixel-
     /// bearing filters fall in by the same path.
     ///
-    /// Goes through `Document::add_mask_filter` + compositor allocation
-    /// directly instead of [`Self::add_mask`] so we don't push a spurious
-    /// `FilterAddAction` that the parent [`DuplicateAction`] already
-    /// covers (a single undo step should reverse the whole duplicate).
+    /// Goes through [`Self::add_mask_unseeded`] (not [`Self::add_mask`]) so we
+    /// don't push a spurious `FilterAddAction` that the parent
+    /// [`DuplicateAction`] already covers, and don't seed from the active
+    /// selection: the pixels come from the source mask below.
     fn clone_modifiers(&mut self, src_host: LayerId, dst_host: LayerId) {
         let src_mod_ids = self.doc.filters_of(src_host).to_vec();
         for src_mod_id in src_mod_ids {
             if self.doc.mask_filter_id(src_host) != Some(src_mod_id) {
                 continue; // Non-mask filters don't ship in v1.
             }
-            let Some(new_mod_id) = self.doc.add_mask_filter(dst_host) else {
+            let Some(new_mod_id) = self.add_mask_unseeded(dst_host) else {
                 continue;
             };
-            let bounds = match self.doc.find_filter(new_mod_id).and_then(|m| m.pixels()) {
-                Some(p) => p.bounds,
-                None => continue,
-            };
-            self.compositor.ensure_node_texture(
-                &self.gpu.device,
-                &self.gpu.queue,
-                new_mod_id,
-                wgpu::TextureFormat::R8Unorm,
-                bounds,
-            );
-            self.compositor
-                .ensure_mask_snapshot_state(&self.gpu.device, dst_host);
             // clone_filter_pixels marks `new_mod_id` dirty internally per
             // the write-site invariant.
             self.clone_filter_pixels(src_mod_id, new_mod_id);

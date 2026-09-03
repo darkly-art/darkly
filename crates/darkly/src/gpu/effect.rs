@@ -44,6 +44,57 @@ impl EffectCache {
             aux_pipelines: Vec::new(),
         }
     }
+
+    /// Rewrite the uniform buffer at `index` from freshly-packed bytes, or do
+    /// nothing when this cache holds no such buffer.
+    ///
+    /// An effect's parameter state reaches the GPU through exactly two callers
+    /// (the effect's own `create_cache` and whatever rewrites it afterwards),
+    /// and the two must agree on a layout `bytemuck` will not check for them.
+    /// Routing both through one method is what keeps the packing in one place.
+    pub fn write_uniform(&self, queue: &wgpu::Queue, index: usize, bytes: &[u8]) {
+        if let Some(buf) = self.uniform_bufs.get(index) {
+            queue.write_buffer(buf, 0, bytes);
+        }
+    }
+}
+
+/// A fragment-visible bind-group entry kind. Fullscreen post-process pipelines
+/// (every veil, plus the blit/downscale filters) are built from a short ordered
+/// list of these; the builder assigns each its list position as its binding
+/// index, matching the `@group(0) @binding(i)` numbering the shaders use.
+#[derive(Clone, Copy)]
+pub enum Binding {
+    /// Filterable 2D float texture (hardware-sampled). Input and aux textures.
+    Texture,
+    /// Filtering sampler.
+    Sampler,
+    /// Uniform buffer, no dynamic offset.
+    Uniform,
+}
+
+impl Binding {
+    fn layout_entry(self, binding: u32) -> wgpu::BindGroupLayoutEntry {
+        let ty = match self {
+            Binding::Texture => wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            Binding::Sampler => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            Binding::Uniform => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+        };
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        }
+    }
 }
 
 /// Build a render pipeline from a passthrough blit shader.
@@ -53,10 +104,11 @@ pub fn create_blit_pipeline(
     format: wgpu::TextureFormat,
     label: &str,
 ) -> EffectPipeline {
-    create_filter_pipeline(
+    create_effect_pipeline(
         device,
         format,
         label,
+        &[Binding::Texture, Binding::Sampler],
         include_str!("../../shaders/blit.wgsl"),
         "fs_blit",
     )
@@ -64,7 +116,7 @@ pub fn create_blit_pipeline(
 
 /// Build a render pipeline for the multi-tap soft downscale shader.
 /// Used by the veil chain to feed reduced-resolution veils with a
-/// properly anti-aliased input — single-tap bilinear (blit) aliases
+/// properly anti-aliased input: single-tap bilinear (blit) aliases
 /// hard at any downscale ratio worse than ~0.7 because it's a fixed
 /// 2×2 box filter regardless of the source/destination ratio.
 pub fn create_downscale_pipeline(
@@ -72,44 +124,36 @@ pub fn create_downscale_pipeline(
     format: wgpu::TextureFormat,
     label: &str,
 ) -> EffectPipeline {
-    create_filter_pipeline(
+    create_effect_pipeline(
         device,
         format,
         label,
+        &[Binding::Texture, Binding::Sampler],
         include_str!("../../shaders/downscale.wgsl"),
         "fs_downscale",
     )
 }
 
-/// Shared pipeline builder for texture+sampler shaders that share the
-/// blit bind-group layout (binding 0 = texture, binding 1 = sampler).
-fn create_filter_pipeline(
+/// Build a fullscreen-triangle post-process pipeline: `vs_main` +
+/// `fragment_entry`, one color target of `format`, no blend/depth/stencil. The
+/// bind-group layout is `bindings` in order, numbered 0..n. The single home for
+/// every veil's pipeline construction and the blit/downscale filters.
+pub fn create_effect_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     label: &str,
+    bindings: &[Binding],
     shader_source: &str,
     fragment_entry: &str,
 ) -> EffectPipeline {
+    let entries: Vec<_> = bindings
+        .iter()
+        .enumerate()
+        .map(|(i, b)| b.layout_entry(i as u32))
+        .collect();
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(&format!("{label}-bgl")),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+        entries: &entries,
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -159,7 +203,7 @@ fn create_filter_pipeline(
 }
 
 /// A `textureLoad`-based filter that runs over a node region with an optional
-/// selection mask — the shared home for masked, parameter-free region filters
+/// selection mask: the shared home for masked, parameter-free region filters
 /// (the destructive-filter substrate). One object holds the four pipelines
 /// a node filter needs: plain vs. masked × RGBA8 (layer) vs. R8 (mask), so a
 /// single registration serves layers and masks alike. The compositor drives it
@@ -174,9 +218,9 @@ pub struct MaskedFilterPipeline {
     plain_r8: wgpu::RenderPipeline,
     masked_rgba: wgpu::RenderPipeline,
     masked_r8: wgpu::RenderPipeline,
-    /// `[src texture]` — used by the plain entry point.
+    /// `[src texture]`, used by the plain entry point.
     plain_bgl: wgpu::BindGroupLayout,
-    /// `[src texture, mask texture]` — used by the masked entry point.
+    /// `[src texture, mask texture]`, used by the masked entry point.
     masked_bgl: wgpu::BindGroupLayout,
 }
 
@@ -187,7 +231,7 @@ impl std::fmt::Debug for MaskedFilterPipeline {
     }
 }
 
-/// A `textureLoad` source binding (no sampler / hardware filtering) — the
+/// A `textureLoad` source binding (no sampler / hardware filtering): the
 /// inputs of a parameter-free region filter are read by integer texel index.
 fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {

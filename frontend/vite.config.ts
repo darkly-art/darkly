@@ -1,16 +1,18 @@
 // vite.config runs under esbuild/node at build time and is outside the
 // `tsc --noEmit` scope (tsconfig only includes src/**), so we don't pull
 // @types/node into the project just to type one Node builtin here.
-// @ts-ignore — Node builtin; no @types/node dependency.
+// @ts-ignore: Node builtin; no @types/node dependency.
 import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
-// @ts-ignore — plain .mjs build tooling, outside the tsc src scope.
+// @ts-ignore: plain .mjs build tooling, outside the tsc src scope.
 import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
+// @ts-ignore: plain .mjs build tooling, outside the tsc src scope.
+import { wasmWatchPlugin } from './scripts/wasm-watch.mjs';
 
-// Darkly's version is the latest git tag plus the commit height since it — the
+// Darkly's version is the latest git tag plus the commit height since it, the
 // same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
 // `--long` always emits `TAG-COMMITS-gSHA` (height 0 when HEAD *is* the tag).
 // No `--always`: on a tagless/shallow checkout we want describe to THROW so the
@@ -19,7 +21,7 @@ import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
 //
 // CANONICAL TWIN: crates/darkly/build.rs bakes the Rust crate's version with the
 // identical command and identical "0.0.0-0-gunknown" fallback (a documented DRY
-// exception — Cargo and Vite share no runtime). Change one, change the other.
+// exception: Cargo and Vite share no runtime). Change one, change the other.
 function gitVersion(): string {
     try {
         return execSync('git describe --tags --long', { encoding: 'utf8' }).trim();
@@ -46,8 +48,11 @@ export default defineConfig(({ mode }) => ({
     },
     plugins: [
         // Regenerates src/icons/bundle.generated.ts from the icon names found in
-        // source — on buildStart (dev + prod) and live on file change in dev.
+        // source, on buildStart (dev + prod) and live on file change in dev.
         iconBundlePlugin(),
+        // Rebuilds the WASM bridge and reloads when anything under `crates/`
+        // changes, so a Rust edit needs no second terminal. Dev only.
+        wasmWatchPlugin(),
         svelte(),
         basicSsl(),
         VitePWA({
@@ -85,7 +90,7 @@ export default defineConfig(({ mode }) => ({
             },
             workbox: {
                 // The ~12 MB WASM blob is the whole app (now including Vello +
-                // parley + a bundled font for the text tool) — precache it (and
+                // parley + a bundled font for the text tool): precache it (and
                 // the shell, fonts, icons) so the editor boots fully offline.
                 globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg}'],
                 // Default cap is ~2 MB, which would silently skip the WASM.
@@ -102,6 +107,7 @@ export default defineConfig(({ mode }) => ({
         }),
     ],
     server: {
+        hmr: false, // TEMP: testing Firefox dev freeze to isolate HMR/module-runner transport
         fs: {
             allow: ['..'],
         },

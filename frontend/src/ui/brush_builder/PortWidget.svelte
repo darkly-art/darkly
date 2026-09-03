@@ -1,7 +1,8 @@
 <script lang="ts">
     import { getContext, untrack } from 'svelte';
-    import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
+    import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
     import { unitFor } from '../../lib/units';
+    import { beginScrubDrag, type ScrubDrag } from '../../lib/scrubDrag';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
     import Icon from '../../icons/Icon.svelte';
@@ -17,7 +18,7 @@
 
     /** Canonical port definition from the node type registration.
      *  Display metadata (unit_type, icon, label, description) comes from
-     *  here — not the instance — so it stays current even for old graphs. */
+     *  here (not the instance), so it stays current even for old graphs. */
     let regPort = $derived.by(() => {
         const node = brushGraph.graph?.nodes[nodeId];
         if (!node) return null;
@@ -31,10 +32,11 @@
     let label = $derived(regPort?.label || port.name);
 
     /** A block widget (curve) gets its own standalone header row. When that
-     *  lone label merely repeats the node's title it's pure redundancy — the
-     *  node header already says it — so we suppress it and drop the empty row.
-     *  Inline labels (sliders/enums) are NOT suppressed even when they match
-     *  the title: there they disambiguate one control among sibling ports. */
+     *  lone label merely repeats the node's title it's pure redundancy (the
+     *  node header already says it), so we suppress it and drop the empty
+     *  row. Inline labels (sliders/enums) are NOT suppressed even when they
+     *  match the title: there they disambiguate one control among sibling
+     *  ports. */
     let blockLabelRedundant = $derived.by(() => {
         const node = brushGraph.graph?.nodes[nodeId];
         const title = node ? (brushGraph.getNodeType(node.type_id)?.display_name ?? node.type_id) : '';
@@ -48,6 +50,30 @@
             ? port.value
             : (typeof port.value === 'boolean' ? (port.value ? 1 : 0) : 0)
     );
+
+    /** True for the scalar math nodes (add/subtract/multiply/divide), which
+     *  offer the editor's extended-range unlock. */
+    let isMathNode = $derived.by(() => {
+        const node = brushGraph.graph?.nodes[nodeId];
+        return node ? brushGraph.getNodeType(node.type_id)?.category === 'math' : false;
+    });
+
+    /** Effective slider bounds. Math-node sliders widen from the declared
+     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the artist has unlocked the node's
+     *  extended range, or when the current value already sits outside the base
+     *  range, so a loaded gain like `2.56` shows correctly and isn't clamped on
+     *  first touch. UI-only; the engine never enforces these bounds. */
+    let range = $derived.by(() => {
+        if (
+            isMathNode &&
+            (brushGraph.extendedRangeNodes.has(nodeId) ||
+                numValue > port.max ||
+                numValue < port.min)
+        ) {
+            return { min: port.min, max: EXTENDED_RANGE_MAX };
+        }
+        return { min: port.min, max: port.max };
+    });
 
     /** Wire-type sets driving the widget branch for disconnected inputs. */
     const SLIDER_TYPES = new Set(['Scalar', 'Int', 'Bool']);
@@ -63,7 +89,7 @@
     let showDot = $derived(port.dir === 'Output' || port.wirable);
 
     /** A settable-source input (`port.source`) also offers a right-edge source
-     *  handle to wire *from* — but only while the input itself is undriven. Once
+     *  handle to wire *from*, but only while the input itself is undriven. Once
      *  a wire drives the port its value is the driver's, so the source handle
      *  hides (mirror of `showSlider` hiding the value widget when connected). */
     let showSourceHandle = $derived(port.dir === 'Input' && port.source && !connected);
@@ -82,13 +108,13 @@
 
     // Re-register whenever `port.name` changes. The `{#each inputPorts}` in
     // NodeWidget isn't keyed, so when `visible_when` hides/shows a sibling
-    // port, Svelte rebinds existing instances by index — every reused
+    // port, Svelte rebinds existing instances by index: every reused
     // instance from the hidden port's index downward gets a *different*
     // `port` (and a different DOM row). Tracking `port.name` therefore
     // catches every layout shift: an inserted/removed port always changes
     // `port.name` on at least every index from the change onward.
     $effect(() => {
-        // Tracked reads — re-fire when the port identity changes.
+        // Tracked reads: re-fire when the port identity changes.
         const portName = port.name;
         const portDir = port.dir;
         // The measurement + side-effect are wrapped in `untrack` so the
@@ -142,7 +168,7 @@
     }
 
     function onPointerDown(e: PointerEvent) {
-        // Don't stopPropagation — the container needs to see this event
+        // Don't stopPropagation: the container needs to see this event
         // to set up pointer capture for wire drag mouse tracking.
         e.preventDefault();
 
@@ -195,12 +221,12 @@
     // --- Inline slider for disconnected Scalar/Int/Bool inputs ---
 
     let sliderEl = $state<HTMLDivElement>();
-    let sliding = false;
+    let sliderDrag: ScrubDrag | null = null;
 
-    /** Normalized position (0–1) from a pointer event relative to the slider bar. */
-    function sliderFraction(e: PointerEvent): number {
+    /** Normalized position (0-1) of a client point relative to the slider bar. */
+    function sliderFraction(clientX: number, clientY: number): number {
         if (!sliderEl) return 0;
-        const local = coords.clientToElementLocal(sliderEl, e.clientX, e.clientY);
+        const local = coords.clientToElementLocal(sliderEl, clientX, clientY);
         return Math.max(0, Math.min(1, local.x / sliderEl.clientWidth));
     }
 
@@ -208,12 +234,12 @@
      *  the value unchanged when `step` is zero (continuous port). */
     function snapToStep(value: number): number {
         if (!port.step || port.step <= 0) return value;
-        const stepped = Math.round((value - port.min) / port.step) * port.step + port.min;
-        return Math.max(port.min, Math.min(port.max, stepped));
+        const stepped = Math.round((value - range.min) / port.step) * port.step + range.min;
+        return Math.max(range.min, Math.min(range.max, stepped));
     }
 
     function valueFromFraction(frac: number): number {
-        const raw = port.min + frac * (port.max - port.min);
+        const raw = range.min + frac * (range.max - range.min);
         if (port.wire_type === 'Int') return Math.round(raw);
         if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
         return snapToStep(raw);
@@ -231,29 +257,32 @@
         // Stop propagation so the node doesn't start dragging.
         e.stopPropagation();
         e.preventDefault();
-        sliding = true;
         sliderEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
-        const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setInputLocal(nodeId, port.name, value);
+        sliderDrag = beginScrubDrag({
+            toValue: (clientX, clientY) => valueFromFraction(sliderFraction(clientX, clientY)),
+            onPreview: (v) => brushGraph.setInputLocal(nodeId, port.name, v),
+            onCommit: commitSlider,
+            onFinish: () => {
+                sliderDrag = null;
+                app.endInteraction();
+            },
+        });
+        // Seed from the pointerdown position: clicking the track jumps the
+        // value there, so a click that never moves still commits.
+        sliderDrag.move(e.clientX, e.clientY);
     }
 
     function onSliderMove(e: PointerEvent) {
-        if (!sliding) return;
-        const value = valueFromFraction(sliderFraction(e));
-        brushGraph.setInputLocal(nodeId, port.name, value);
+        sliderDrag?.move(e.clientX, e.clientY);
     }
 
-    function onSliderUp(e: PointerEvent) {
-        if (!sliding || !sliderEl) return;
-        sliding = false;
-        sliderEl.releasePointerCapture(e.pointerId);
-        commitSlider(numValue);
-    }
-
-    function onSliderLostCapture() {
-        sliding = false;
-        app.endInteraction();
+    /** Wired to both `pointerup` and `lostpointercapture`; `end` is idempotent.
+     *  A lost capture commits rather than discarding: the previewed value is
+     *  already on screen, so dropping it would leave the widget showing a value
+     *  the engine never received. */
+    function onSliderEnd() {
+        sliderDrag?.end();
     }
 
     // --- Enum dropdown ---
@@ -279,7 +308,7 @@
 
     /** A disconnected input can be exposed to the brush bar only if its
      *  type has a brush-bar widget (`port.exposable`, computed in Rust from
-     *  `WireKind::is_user_exposable`) — so curves/strings show no eye toggle. */
+     *  `WireKind::is_user_exposable`), so curves/strings show no eye toggle. */
     let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
@@ -293,8 +322,8 @@
     }
 
     let sliderPercent = $derived(
-        port.max > port.min
-            ? ((numValue - port.min) / (port.max - port.min)) * 100
+        range.max > range.min
+            ? ((numValue - range.min) / (range.max - range.min)) * 100
             : 0
     );
 
@@ -332,11 +361,11 @@
         editing = false;
         const parsed = parseFloat(input.value);   // display units (degrees / percent / …)
         if (isNaN(parsed)) return;
-        // Convert display → port space *before* clamping: port.min/max/step are
-        // all port-space, so clamping a display value against them would compare
-        // e.g. degrees to radian bounds.
+        // Convert display → port space *before* clamping: the range bounds/step
+        // are all port-space, so clamping a display value against them would
+        // compare e.g. degrees to radian bounds.
         const portValue = unit.toPort(parsed);
-        const clamped = Math.max(port.min, Math.min(port.max, portValue));
+        const clamped = Math.max(range.min, Math.min(range.max, portValue));
         const value = port.wire_type === 'Int' ? Math.round(clamped) : snapToStep(clamped);
         brushGraph.setInputLocal(nodeId, port.name, value);
         commitSlider(value);
@@ -383,8 +412,8 @@
                 bind:this={sliderEl}
                 onpointerdown={onSliderDown}
                 onpointermove={onSliderMove}
-                onpointerup={onSliderUp}
-                onlostpointercapture={onSliderLostCapture}
+                onpointerup={onSliderEnd}
+                onlostpointercapture={onSliderEnd}
                 ondblclick={onSliderDblClick}
             >
                 <div
@@ -419,7 +448,7 @@
         />
     {:else if showCurve}
         <!-- A curve is a full-height block widget, so it gets its own header
-             row (label + expose) with the editor stacked below — it can't sit
+             row (label + expose) with the editor stacked below; it can't sit
              inside the fixed-height inline row the scalar widgets use. The row
              is dropped entirely when it would hold nothing (a redundant label
              and no expose toggle, as on the Curve node). -->
@@ -481,7 +510,7 @@
         padding-right: 10px;
     }
     /* Block widgets (curve editor) can't live in the fixed-height inline
-       row — stack a header + the editor vertically and let the node grow to
+       row: stack a header + the editor vertically and let the node grow to
        contain it, so it's neither clipped nor mis-measured by auto-layout. */
     .port-block {
         height: auto;

@@ -1,10 +1,10 @@
-//! Filter layer kind — non-destructive procedural-transform node in the layer
+//! Filter layer kind: non-destructive procedural-transform node in the layer
 //! tree.
 //!
 //! A filter layer carries no pixel buffer: its entire state is a `pipeline` id
 //! (which [`crate::gpu::filter::FilterPipelineRegistry`] transform to run) plus
 //! that transform's parameter values, so the whole layer round-trips through
-//! the manifest body — there are no pixel blobs to read back, exactly like a
+//! the manifest body; there are no pixel blobs to read back, exactly like a
 //! procedural [`void`](crate::document::layer_kinds::void).
 //!
 //! The pipeline id and parameter values are validated against the
@@ -30,7 +30,7 @@ struct FilterBody {
     opacity: f32,
     blend_mode: String,
     /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`],
-    /// e.g. `"invert"`. Anchors the param vector — a load that doesn't
+    /// e.g. `"invert"`. Anchors the param vector, and a load that doesn't
     /// recognize this id is rejected by the engine as `CorruptManifest`.
     pipeline: String,
     /// Parameter values in the order the filter pipeline's schema declares
@@ -44,6 +44,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Filter Layer",
+        description: "A color adjustment applied to everything composited beneath it.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,
@@ -125,7 +126,7 @@ mod tests {
 
     /// Round-trip a filter layer through its registered serializer +
     /// deserializer. Like a procedural void, there are NO pixel blobs to fall
-    /// back on — `pipeline` + `params` are the whole document state.
+    /// back on: `pipeline` + `params` are the whole document state.
     #[test]
     fn filter_body_round_trips_through_registration() {
         let mut doc = Document::new(64, 64);
@@ -149,7 +150,7 @@ mod tests {
         assert!(f_after.params.is_empty());
     }
 
-    /// A parametric filter (curves) round-trips its full param vector — the
+    /// A parametric filter (curves) round-trips its full param vector: the
     /// eight per-channel curves are the whole document state, exactly like a
     /// void's params. Regression against dropping/reordering the curves on save.
     #[test]
@@ -158,7 +159,7 @@ mod tests {
 
         let mut doc = Document::new(64, 64);
         // One entry per Krita channel: RGB, R, G, B, A, Hue, Saturation,
-        // Lightness — a mix of identity and non-identity curves.
+        // Lightness, a mix of identity and non-identity curves.
         let params = vec![
             ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]),
             ParamValue::Curve(vec![[0.0, 0.1], [1.0, 0.9]]),
@@ -245,7 +246,7 @@ mod tests {
     }
 
     /// A corrupt blend_mode in the saved body must surface as
-    /// `CorruptManifest`, not a silent fallback — the same contract every
+    /// `CorruptManifest`, not a silent fallback; the same contract every
     /// other layer kind holds.
     #[test]
     fn unknown_blend_mode_in_body_returns_corrupt_manifest() {

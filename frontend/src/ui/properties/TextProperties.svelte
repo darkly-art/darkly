@@ -1,9 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { app } from '../../state/app.svelte';
-    import { textSession, focusedTextTool, type TextPlacement } from '../../tools/text.svelte';
+    import { textSession, focusedTextTool } from '../../tools/text.svelte';
     import {
-        createTextFromPending,
         queueTextContent,
         flushTextContent,
         dispatchStyle,
@@ -12,7 +11,6 @@
         hexToRgb,
         type Rgba,
         type StyleFields,
-        type FullStyle,
     } from '../../tools/text_editor';
     import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
     import ColorInput from '../settings/widgets/ColorInput.svelte';
@@ -22,14 +20,14 @@
     import { fontLibrary } from '../../state/font_library.svelte';
     import { fontCaps, type FontCapabilities } from '../../state/font_caps.svelte';
 
-    // The active vector layer, or null when no vector layer is active (a
-    // placement that will become a fresh layer).
+    // The active vector layer whose selected text object this panel edits, or
+    // null when no vector layer is active.
     let { node }: { node: { id: number; type: string } | null } = $props();
 
     // The focused instance's text tool holds the per-document edit state
-    // (editing / placement / focusObject). Reactive: re-resolves on a tab swap
-    // and tracks each field's `$state`. The creation-default style fields stay
-    // in the app-global `textSession`.
+    // (editing / focusObject). Reactive: re-resolves on a tab swap and tracks
+    // each field's `$state`. The creation-default style fields stay in the
+    // app-global `textSession`.
     let textTool = $derived(focusedTextTool());
 
     const ALIGN_OPTIONS: [string, string][] = [
@@ -53,7 +51,7 @@
 
     const axisLabel = (tag: string): string => AXIS_LABELS[tag] ?? tag;
 
-    /** Content a new text object is seeded with — shown selected so the first
+    /** Content a new text object is seeded with. Shown selected so the first
      *  keystroke replaces it. */
     const SEED_TEXT = 'text';
 
@@ -82,8 +80,8 @@
         onStyle({ font_family: family });
     }
 
-    /** The one text object the panel edits — a vector layer can own many, but
-     *  only the selected one is shown (the user picks it by clicking it on the
+    /** The one text object the panel edits; a vector layer can own many, but
+     *  only the selected one is shown (the artist picks it by clicking it on the
      *  canvas; the text tool tracks it in `textSession.editing`). */
     interface Block {
         objectId: number;
@@ -122,33 +120,11 @@
         };
     });
 
-    // The textarea is uncontrolled — its value is set imperatively. `lastSent`
+    // The textarea is uncontrolled: its value is set imperatively. `lastSent`
     // (by object id) lets us reseed only on an *external* change (undo/redo), not
     // a self-echo, so the caret survives.
     let textareaEl = $state<HTMLTextAreaElement | undefined>(undefined);
     const lastSent = new Map<number, string>();
-    let creating = false;
-    // The next focus should select all (a fresh create, so typing replaces the
-    // seed); otherwise the caret goes to the end.
-    let selectAllOnFocus = false;
-
-    function foregroundTuple(): Rgba {
-        const c = app.foreground;
-        return [c.r, c.g, c.b, c.a];
-    }
-
-    function currentStyle(): FullStyle {
-        return {
-            font_family: textSession.fontFamily,
-            size: textSession.size,
-            variations: { ...textSession.variations },
-            letter_spacing: textSession.letterSpacing,
-            word_spacing: textSession.wordSpacing,
-            line_height: textSession.lineHeight,
-            italic: textSession.italic,
-            align: textSession.align,
-        };
-    }
 
     function toBlock(layerId: number, o: any): Block {
         return {
@@ -168,7 +144,7 @@
     }
 
     /** Which object to show: the selected (`editing`) one on this layer, else the
-     *  topmost — so a freshly-selected layer still shows something to edit. */
+     *  topmost, so a freshly-selected layer still shows something to edit. */
     function selectedObject(objs: any[]): any | null {
         const e = textTool?.editing ?? null;
         if (e && node && e.layerId === node.id) {
@@ -202,49 +178,9 @@
         };
     });
 
-    // A placement (click/drag with the text tool) creates an object immediately,
-    // seeded with "text" and selected — so the word appears on the canvas at
-    // once and the first keystroke replaces it.
-    $effect(() => {
-        const placement = textTool?.placement;
-        if (!placement || creating || !app.engine) return;
-        void createFromPlacement(placement);
-    });
-
-    async function createFromPlacement(placement: TextPlacement) {
-        creating = true;
-        try {
-            // A vector layer already active → add the object to it (many objects
-            // per layer); otherwise a new layer is born.
-            const target = node?.type === 'vector' ? node.id : null;
-            const r = await createTextFromPending(
-                app,
-                placement,
-                SEED_TEXT,
-                currentStyle(),
-                foregroundTuple(),
-                () => SEED_TEXT,
-                target,
-                (layerId, objectId) => {
-                    // Select the new object (drives this panel and the box gizmo).
-                    if (textTool) textTool.editing = { layerId, objectId };
-                },
-            );
-            if (!r) return;
-            lastSent.set(r.objectId, r.latest);
-            selectAllOnFocus = true;
-            if (textTool) {
-                textTool.focusObject = r.objectId;
-                textTool.placement = null;
-            }
-        } finally {
-            creating = false;
-        }
-    }
-
     // Seed the uncontrolled textarea on an *external* change (mount, undo/redo,
     // switching to another object) where the engine content differs from what we
-    // last sent. A self-echo leaves the field — and the caret — untouched.
+    // last sent. A self-echo leaves the field (and the caret) untouched.
     $effect(() => {
         if (!block || !textareaEl) return;
         if (shouldReseed(block.content, lastSent.get(block.objectId))) {
@@ -253,15 +189,17 @@
         }
     });
 
-    // Focus the selected object's editor once it has rendered. Select-all for a
-    // fresh create (typing replaces the seed); caret to end for an existing one.
+    // Focus the selected object's editor once it has rendered. A still-seeded
+    // object (content is the untouched "text" seed of a fresh create) select-alls
+    // so the first keystroke replaces it; any edited object gets caret-to-end.
+    // Derived purely from the bound block, so a create whose panel mounts late
+    // still focuses correctly on first reveal.
     $effect(() => {
         const target = textTool?.focusObject ?? null;
         if (target === null || !block || block.objectId !== target || !textareaEl) return;
         textareaEl.focus();
-        if (selectAllOnFocus) {
+        if (block.content === SEED_TEXT) {
             textareaEl.select();
-            selectAllOnFocus = false;
         } else {
             const len = textareaEl.value.length;
             textareaEl.setSelectionRange(len, len);
@@ -297,7 +235,7 @@
         if (fields.font_family !== undefined) block.font_family = fields.font_family;
         if (fields.size !== undefined) block.size = fields.size;
         // Variations merge (an untouched axis stays as it was), matching the
-        // engine-side merge — editing one slider never resets the others.
+        // engine-side merge; editing one slider never resets the others.
         if (fields.variations !== undefined)
             block.variations = { ...block.variations, ...fields.variations };
         if (fields.letter_spacing !== undefined) block.letter_spacing = fields.letter_spacing;

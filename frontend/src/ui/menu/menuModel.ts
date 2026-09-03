@@ -1,13 +1,13 @@
-import { parseMenuSegment, type ActionRegistration } from '../../actions/registry';
+import { parseMenuSegment, type Action } from '../../actions/registry';
 
 /**
  * A menu is a tree of entries rendered by `MenuItems.svelte`. An entry is one
- * of: an action row, a submenu (with its own entries — rendered as a hover
+ * of: an action row, a submenu (with its own entries, rendered as a hover
  * flyout), a named widget slot (e.g. the theme switcher, which isn't an
  * action), or a separator.
  *
  * `label` / `icon` on an action entry override the action's own displayName /
- * (no) icon for that placement — used to surface the command palette as a
+ * (no) icon for that placement: used to surface the command palette as a
  * prominent "Find" item without renaming the action everywhere else.
  */
 export type MenuEntry =
@@ -27,8 +27,8 @@ export interface TopMenu {
  *  order. */
 const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Colors', 'View', 'Help'];
 
-function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[]> {
-    const m = new Map<string, ActionRegistration[]>();
+function groupByTop(regs: Action[]): Map<string, Action[]> {
+    const m = new Map<string, Action[]>();
     for (const reg of regs) {
         const seg = reg.menuPath?.[0];
         if (!seg) continue;
@@ -46,7 +46,7 @@ function groupByTop(regs: ActionRegistration[]): Map<string, ActionRegistration[
 /** An action's position within its top-level menu, parsed from the order
  *  suffix on `menuPath[0]` (e.g. `'Edit:10'` → 10). Unordered actions sort
  *  to the end. */
-function menuOrder(reg: ActionRegistration): number {
+function menuOrder(reg: Action): number {
     return parseMenuSegment(reg.menuPath?.[0] ?? '').order ?? Infinity;
 }
 
@@ -75,7 +75,7 @@ function orderedTitles(present: Map<string, unknown>): string[] {
  * Used directly by the pinned MenuBar and composed into the hamburger's root
  * list.
  */
-export function buildTopMenus(regs: ActionRegistration[]): TopMenu[] {
+export function buildTopMenus(regs: Action[]): TopMenu[] {
     const grouped = groupByTop(regs);
     const result: TopMenu[] = [];
     for (const title of orderedTitles(grouped)) {
@@ -94,10 +94,10 @@ export function buildTopMenus(regs: ActionRegistration[]): TopMenu[] {
  * The hamburger's root entry list: a prominent "Find" (command palette) item
  * up top, the top-level menus as submenu flyouts, then a courtesy block that
  * duplicates the globally-useful commands at the root for one-click access
- * (deliberate duplication — those live in their submenus too). The theme
+ * (deliberate duplication; those live in their submenus too). The theme
  * switcher is intentionally NOT duplicated here; it lives in the View menu.
  */
-export function buildHamburgerEntries(regs: ActionRegistration[]): MenuEntry[] {
+export function buildHamburgerEntries(regs: Action[]): MenuEntry[] {
     const submenus = buildTopMenus(regs).map(
         (t): MenuEntry => ({ kind: 'submenu', title: t.title, entries: t.entries }),
     );

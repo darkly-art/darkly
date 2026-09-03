@@ -1,8 +1,8 @@
 // Color-math atoms shared across every shader path that needs them.
 //
 // These are format-agnostic helpers operating on the `vec4f` a `textureLoad`
-// yields. Any shader — a destructive adjustment pass, a veil, a void, or a
-// future adjustment-layer composite — `include_str!`-prepends this file (the
+// yields. Any shader (a destructive adjustment pass, a veil, a void, or a
+// future adjustment-layer composite) `include_str!`-prepends this file (the
 // same concatenation trick `shaders/voids/noise.wgsl` uses for `lib/fbm.wgsl`)
 // so the math lives in exactly one place.
 

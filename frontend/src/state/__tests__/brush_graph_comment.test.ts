@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Per-node author comments are ordinary graph state. `setNodeCommentLocal` is
 // the pure, engine-free local-feedback path the node editor calls while the
-// user types; the engine commit is exercised end-to-end by the Rust
+// artist types; the engine commit is exercised end-to-end by the Rust
 // round-trip test. These class-level tests need no DOM and no real engine.
 
 vi.mock('../app.svelte', () => ({ app: { engine: null } }));

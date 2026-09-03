@@ -1,4 +1,4 @@
-// Black and White post-processing veil — the sampler-based wrapper around the
+// Black and White post-processing veil, the sampler-based wrapper around the
 // shared `bw_transform` core (`shaders/lib/black_and_white.wgsl`, prepended
 // at load time by `gpu/veils/black_and_white.rs`). Alpha passes through.
 

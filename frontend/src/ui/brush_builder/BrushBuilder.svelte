@@ -3,9 +3,10 @@
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { config, tooltipForAction } from '../../config/store.svelte';
     import { toast } from '../../state/toast.svelte';
-    import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from '../brush_library/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
+    import SaveBrushModal from '../SaveBrushModal.svelte';
     import Icon from '../../icons/Icon.svelte';
 
     // --- Add-node menu state ---
@@ -79,6 +80,10 @@
         brushGraph.resetToDefault();
     }
 
+    /** The save dialog's open flag. Local: the builder owns the dialog, so
+     *  nothing else needs to reach it. */
+    let saveOpen = $state(false);
+
     async function handleCopy() {
         const yaml = await brushGraph.exportYaml();
         if (!yaml) {
@@ -115,7 +120,7 @@
 
 
     /** Brush preview visibility. Persisted via the unified config store
-     *  (`ui.brushBuilder.previewVisible` — declared as `Hidden` in the Rust
+     *  (`ui.brushBuilder.previewVisible`, declared as `Hidden` in the Rust
      *  schema so it's stored but not exposed in the Settings modal). */
     const previewVisible = $derived((config.get('ui.brushBuilder.previewVisible') as boolean | undefined) ?? true);
     function togglePreview() {
@@ -146,7 +151,7 @@
     let startH = 0;
 
     function startResize(e: PointerEvent) {
-        // Left-button only — ignore right-click and middle-click.
+        // Left-button only: ignore right-click and middle-click.
         if (e.button !== 0) return;
         resizing = true;
         startClientX = e.clientX;
@@ -250,10 +255,13 @@
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <button class="toolbar-btn" onclick={() => brushGraph.measureAndLayout()} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
+        <button class="toolbar-btn" onclick={() => (saveOpen = true)} title="Save this brush to your library">Save</button>
         <button class="toolbar-btn" onclick={handleCopy} title="Copy graph as YAML to clipboard">Copy</button>
         <button class="toolbar-btn" onclick={handlePaste} title="Replace graph with YAML from clipboard">Paste</button>
     </div>
 </div>
+
+<SaveBrushModal bind:open={saveOpen} />
 
 <AddNodeMenu
     open={addMenu.open}
@@ -329,14 +337,14 @@
         right: 0;
         z-index: 10;
         /* Catch hover so the close button can fade in, but keep the
-         * preview image itself click-through — the node graph under
+         * preview image itself click-through, so the node graph under
          * that rectangle stays draggable. */
     }
     .preview-dock :global(.brush-preview) {
         pointer-events: none;
     }
     .resize-handle {
-        /* Top-left inward corner — grabs here grow the preview toward
+        /* Top-left inward corner: grabs here grow the preview toward
          * the upper-left since the dock is anchored bottom-right. */
         position: absolute;
         top: 0;
@@ -367,7 +375,7 @@
     }
     .close-btn {
         /* Top-left inward corner with equal h/v padding. Renders on top
-         * of the resize handle (same corner) — the handle still has a
+         * of the resize handle (same corner); the handle still has a
          * graspable L-ring exposed around the button's outer edge, and
          * clicks inside the button area dismiss the preview. */
         position: absolute;
@@ -384,7 +392,7 @@
         color: var(--text-muted);
         cursor: pointer;
         font-size: 13px;
-        /* Revealed on hover of the whole dock — matches the "chromeless
+        /* Revealed on hover of the whole dock: matches the "chromeless
          * until you need it" pattern used elsewhere in the editor. */
         opacity: 0;
         transition: opacity 0.15s, color 0.15s, background 0.15s;
@@ -397,7 +405,7 @@
         background: var(--bg-active);
     }
     .bookmark {
-        /* Small vertical tab sticking out from the right edge — the
+        /* Small vertical tab sticking out from the right edge: the
          * minimal affordance for "the preview is here, click to pull
          * it out." */
         writing-mode: vertical-rl;

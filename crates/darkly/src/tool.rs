@@ -2,6 +2,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use crate::catalog::{Catalog, CatalogEntry};
 use crate::gpu::params::ParamDef;
 
 /// What each tool module returns from its `register()` function.
@@ -10,7 +11,45 @@ use crate::gpu::params::ParamDef;
 pub struct ToolRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name for the toolbar button. A tool whose glyph depends on
+    /// session state (the brush's eraser mode) overrides this in its frontend
+    /// descriptor; this is the registry's own, state-free answer.
+    pub icon: &'static str,
+    /// One-sentence summary of what the tool does on the canvas: the toolbar
+    /// tooltip and the reference manual's row for it.
+    pub description: &'static str,
+    /// Id of the action that selects this tool. Bindings in
+    /// `presets/*.yaml` name this string, and it is deliberately not derived
+    /// from `type_id`: `colorpicker` binds `colorPickerTool`.
+    pub hotkey_action: &'static str,
     pub params: &'static [ParamDef],
+}
+
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "tools";
+
+impl ToolRegistration {
+    pub fn catalog_entry(&self) -> CatalogEntry {
+        CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+            .with_hotkey_action(self.hotkey_action)
+            .with_params(self.params)
+    }
+}
+
+/// The tool catalog: every registered tool, sorted by `type_id`.
+pub fn catalog() -> Catalog {
+    Catalog::new(
+        CATALOG_ID,
+        "Tools",
+        registry()
+            .types()
+            .into_iter()
+            .map(ToolRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("What a pointer does on the canvas: painting, filling, picking, selecting.")
 }
 
 /// Auto-discovered tool registry. Owns the human-friendly display name surface
@@ -20,8 +59,10 @@ pub struct ToolRegistry {
 }
 
 struct ToolEntry {
-    display_name: &'static str,
-    params: &'static [ParamDef],
+    /// The full registration this entry was built from. All metadata accessors
+    /// read straight off this, so a new `ToolRegistration` field is exposed
+    /// without widening any tuple or touching the registry.
+    reg: ToolRegistration,
 }
 
 impl Default for ToolRegistry {
@@ -34,13 +75,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         let mut entries = HashMap::new();
         for reg in crate::tools::registrations() {
-            entries.insert(
-                reg.type_id,
-                ToolEntry {
-                    display_name: reg.display_name,
-                    params: reg.params,
-                },
-            );
+            entries.insert(reg.type_id, ToolEntry { reg });
         }
         ToolRegistry { entries }
     }
@@ -48,23 +83,23 @@ impl ToolRegistry {
     pub fn display_name(&self, type_id: &str) -> &'static str {
         self.entries
             .get(type_id)
-            .map(|e| e.display_name)
+            .map(|e| e.reg.display_name)
             .unwrap_or("")
     }
 
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+        self.entries
+            .get(type_id)
+            .map(|e| e.reg.params)
+            .unwrap_or(&[])
     }
 
-    /// Return every registered tool as `(type_id, display_name, params)`,
-    /// sorted by `type_id` for deterministic output.
-    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
-        let mut v: Vec<_> = self
-            .entries
-            .iter()
-            .map(|(&id, e)| (id, e.display_name, e.params))
-            .collect();
-        v.sort_by_key(|(id, _, _)| *id);
+    /// Return every registered tool's full [`ToolRegistration`], sorted by
+    /// `type_id` for deterministic output. Callers read whatever fields they
+    /// need off the registration; a new field is free here.
+    pub fn types(&self) -> Vec<&ToolRegistration> {
+        let mut v: Vec<&ToolRegistration> = self.entries.values().map(|e| &e.reg).collect();
+        v.sort_by_key(|reg| reg.type_id);
         v
     }
 }
@@ -78,13 +113,13 @@ pub fn registry() -> &'static ToolRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// ToolSession — generic shared-state container for tools
+// ToolSession: generic shared-state container for tools
 // ---------------------------------------------------------------------------
 
 /// Process-wide bag of tool state shared across every `DarklyEngine`
 /// spawned from one `DarklySession`. Tools that have state which must
-/// survive engine swaps — multi-tab brush graph being the motivating
-/// example — register a state type here and read/write it through
+/// survive engine swaps (multi-tab brush graph being the motivating
+/// example), register a state type here and read/write it through
 /// `get::<T>()` / `get_mut::<T>()`.
 ///
 /// The container has zero knowledge of which tools exist or what they

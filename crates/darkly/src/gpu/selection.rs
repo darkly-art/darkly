@@ -52,7 +52,7 @@ pub struct SelectionPipelines {
     /// Recyclable R8 texture used as `combine`'s `shape_tex` binding.
     /// Sized to exactly the selection's `(width, height)` because the
     /// combine shader samples with UV in `[0, 1]` over the full texture
-    /// extent — a larger scratch would shift the UV mapping and miss the
+    /// extent: a larger scratch would shift the UV mapping and miss the
     /// uploaded shape data. Re-allocated only when the selection's
     /// dimensions change (canvas resize, document load).
     shape_scratch: Option<ShapeScratch>,
@@ -305,7 +305,7 @@ impl SelectionPipelines {
     }
 
     /// Build a fullscreen-triangle pipeline that samples one R8 source and
-    /// writes an R8 target — the common shape of the morphology and blur
+    /// writes an R8 target, the common shape of the morphology and blur
     /// passes (only the fragment shader differs).
     fn build_single_input_pipeline(
         device: &wgpu::Device,
@@ -345,7 +345,7 @@ impl SelectionPipelines {
 
     /// Ensure `shape_scratch` is exactly `(w, h)` and return its view. The
     /// combine shader's UV must map `(0, 1)` to the uploaded data, so the
-    /// scratch dimensions cannot be larger than the selection — when the
+    /// scratch dimensions cannot be larger than the selection; when the
     /// selection's dims change we reallocate.
     fn ensure_shape_scratch(&mut self, device: &wgpu::Device, w: u32, h: u32) -> &ShapeScratch {
         let needs_alloc = match &self.shape_scratch {
@@ -838,7 +838,7 @@ impl CombineMode {
 }
 
 // ---------------------------------------------------------------------------
-// SelectionState — GPU resources for the global selection (compositor-owned)
+// SelectionState - GPU resources for the global selection (compositor-owned)
 // ---------------------------------------------------------------------------
 
 /// The single bind group layout for sampling the selection mask, shared by
@@ -847,7 +847,7 @@ impl CombineMode {
 /// the exact layout it was built against, so without sharing each pipeline would
 /// need its own (structurally identical) copy.
 ///
-/// Visibility is `FRAGMENT | COMPUTE` — the union of where the mask is sampled:
+/// Visibility is `FRAGMENT | COMPUTE`, the union of where the mask is sampled:
 /// paint reads it in a fragment shader, brush nodes also read it from compute
 /// shaders. A render pipeline may legally use a layout whose visibility is a
 /// superset of the stages it actually uses, so this single layout serves both.
@@ -885,7 +885,7 @@ pub struct SelectionState {
     pub current: usize,
     /// The selection mask is consumed by both the brush and paint pipelines.
     /// Both share a single [`selection_mask_bgl`] layout, so one bind group
-    /// serves every consumer — see that function's note on visibility.
+    /// serves every consumer (see that function's note on visibility).
     bind_group: wgpu::BindGroup,
     /// Cloned at construction (cheap, Arc-backed) so reallocating ops can
     /// rebuild `bind_group` against the new texture view without the caller
@@ -894,7 +894,7 @@ pub struct SelectionState {
     /// Constant across the state's lifetime; built once instead of per-rebuild.
     sampler: wgpu::Sampler,
     /// Filter id this state is paired with (for region-store and undo
-    /// keying — the document's selection filter id).
+    /// keying, the document's selection filter id).
     pub filter_id: LayerId,
     pub width: u32,
     pub height: u32,
@@ -951,7 +951,7 @@ impl SelectionState {
     /// Borrow the current selection texture as a `CanvasFrame`. The selection
     /// texture is window-sized; its `canvas_extent` is window-local `(0, 0,
     /// w, h)` (the plane anchoring is realized by [`Self::resize`], not by a
-    /// non-zero extent origin — see CLAUDE.md selection notes).
+    /// non-zero extent origin, see CONTRIBUTING.md selection notes).
     pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
         crate::gpu::atlas::CanvasFrame {
             texture: self.texture(),
@@ -965,8 +965,8 @@ impl SelectionState {
     /// The mask is a window-sized R8 texture whose pixel `(0, 0)` represents
     /// the plane position `old_origin`. When the window moves to `new_rect`,
     /// allocate fresh ping-pong textures at the new dimensions, clear them to
-    /// "unselected", and copy the **plane-overlap** of the old and new windows
-    /// — preserving which *plane* pixels stay selected. Selection outside the
+    /// "unselected", and copy the **plane-overlap** of the old and new windows,
+    /// preserving which *plane* pixels stay selected. Selection outside the
     /// new window is clipped away. Same overlap-anchored copy as
     /// [`Compositor::resize_node_texture`], generalized to a window that may
     /// move in any direction (so the overlap is clipped, not assumed to grow).
@@ -1054,7 +1054,7 @@ impl SelectionState {
     }
 
     /// Orthogonally transform the selection mask about its own centre (which
-    /// coincides with the canvas centre — the mask is window-sized). Flips and
+    /// coincides with the canvas centre, since the mask is window-sized). Flips and
     /// 180° rotate ping-pong in place; 90° rotations swap the mask dimensions
     /// to match the rotated canvas. Exact, like every ortho transform.
     pub fn apply_ortho(

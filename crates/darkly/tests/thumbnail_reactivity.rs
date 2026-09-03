@@ -1,7 +1,7 @@
 //! Regression tests for the layer-panel thumbnail reactivity fix.
 //!
 //! The bug: layer thumbnails in the side panel didn't populate on first
-//! load and didn't update after painting — only after Ctrl+Z. Root cause
+//! load and didn't update after painting, only after Ctrl+Z. Root cause
 //! was that the Rust-side thumbnail cache is updated asynchronously by
 //! GPU readbacks, but Svelte `$derived` consumers had no signal to
 //! re-evaluate when those readbacks completed.
@@ -15,7 +15,7 @@
 //!
 //! Critical methodology: assertions go through `test_thumbnail_cache_peek`,
 //! NOT `layer_thumbnail`. Calling the latter inside the assertion would
-//! queue a readback through the legacy path and mask the bug — these tests
+//! queue a readback through the legacy path and mask the bug; these tests
 //! must observe the auto-queued readback, not synthesize one.
 
 use darkly::engine::types::StrokeOp;
@@ -31,7 +31,7 @@ fn fresh_engine() -> DarklyEngine {
 
 /// Paint a short brush stroke across the layer at its vertical center.
 fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: darkly::layer::LayerId) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..10 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 20.0 + 10.0,
@@ -51,7 +51,7 @@ fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: darkly::layer::LayerI
     engine.end_stroke();
 }
 
-/// True if any RGBA pixel in `bytes` has non-zero alpha — i.e. the
+/// True if any RGBA pixel in `bytes` has non-zero alpha, i.e. the
 /// thumbnail captured something other than the all-zero default.
 /// `generate_rgba_thumbnail_from_pixels` composites the layer over a
 /// checkerboard before storing, but since the layer texture starts all
@@ -62,9 +62,9 @@ fn has_painted_pixels(bytes: &[u8]) -> bool {
     // Checkerboard fills are 102 or 153 on each RGB channel for an
     // empty layer (see `generate_rgba_thumbnail_from_pixels`). A red
     // brush stroke has cr=1.0, cg=0, cb=0, so the thumbnail will have
-    // pixels with R near 255 and G near 0 — well outside the checker
+    // pixels with R near 255 and G near 0, well outside the checker
     // values. Loose check: any pixel with R > 200 OR G+B contrast > 50.
-    bytes.chunks_exact(4).any(|p| {
+    bytes.as_chunks::<4>().0.iter().any(|p| {
         let r = p[0];
         let g = p[1];
         let b = p[2];
@@ -172,8 +172,8 @@ fn undo_auto_queues_thumbnail_readback() {
         .expect("undo path repopulated the cache");
     assert!(
         !has_painted_pixels(&post_undo),
-        "post-undo thumbnail should no longer show the painted stroke \
-         — auto-queue must have re-read the restored (empty) layer texture"
+        "post-undo thumbnail should no longer show the painted stroke; \
+         auto-queue must have re-read the restored (empty) layer texture"
     );
 }
 
@@ -181,7 +181,7 @@ fn undo_auto_queues_thumbnail_readback() {
 /// cache. Auto-queueing a readback from these getters creates a feedback
 /// loop with the JS-side `thumbnailEpoch` sync: every readback completion
 /// bumps the engine version, the panel's `$derived` re-runs and calls
-/// back into here, queuing another readback — replicating per-dab
+/// back into here, queuing another readback, replicating per-dab
 /// updates during strokes (~1.3 GB/s GPU→CPU at 4K, observed in
 /// production before this fix).
 #[test]
@@ -190,7 +190,7 @@ fn layer_thumbnail_does_not_auto_queue_readback() {
     let layer_id = engine.add_raster_layer(None);
     engine.fill_background(layer_id);
 
-    // Settle — let the legitimate auto-queue from `fill_background`
+    // Settle: let the legitimate auto-queue from `fill_background`
     // (via `mark_layer_pixels_dirty` → drain) complete so the cache
     // and version are in their post-init state.
     engine.render(0.0);
@@ -226,12 +226,12 @@ fn brush_stroke_queues_thumbnail_readback_only_at_end() {
     let mut engine = fresh_engine();
     let layer_id = engine.add_raster_layer(None);
 
-    // Settle baseline — empty layer, no marks fired.
+    // Settle baseline: empty layer, no marks fired.
     engine.render(0.0);
     engine.test_flush_readbacks();
     let v_baseline = engine.thumbnail_version();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     for step in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
             x: step as f32 * 10.0 + 10.0,

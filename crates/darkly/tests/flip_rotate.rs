@@ -8,7 +8,7 @@
 //!
 //! A second half is a **composition suite**: flip/rotate combined with painting,
 //! cropping (non-zero `canvas_origin`), document rescale, masks, multiple layers,
-//! deep round-trips, and long undo/redo sequences — the coordinate frames that
+//! deep round-trips, and long undo/redo sequences: the coordinate frames that
 //! a transform can quietly corrupt (cf. the `image_rescale.rs` tool-accuracy
 //! suite). The crop cases are the ones that exercise a non-`(0,0)` origin.
 //!
@@ -372,13 +372,13 @@ fn flip_layer_with_ellipse_selection_clips_to_shape() {
 }
 
 // ===========================================================================
-// Composition suite — flip/rotate combined with paint, crop, rescale, masks,
+// Composition suite: flip/rotate combined with paint, crop, rescale, masks,
 // multiple layers, deep round-trips, and long undo/redo sequences.
 // ===========================================================================
 
 /// Paint a short red horizontal stroke centred near plane `(cx, cy)`.
 fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let steps = 16;
     for i in 0..=steps {
         let x = cx - 3.0 + 6.0 * (i as f32 / steps as f32);
@@ -431,7 +431,7 @@ fn pump(engine: &mut DarklyEngine, n: u32) {
 }
 
 /// A transparent `cw`×`ch` RGBA buffer with an opaque red `sz`×`sz` square at
-/// plane `(x0, y0)`. A deterministic position marker — unlike the default brush
+/// plane `(x0, y0)`. A deterministic position marker: unlike the default brush
 /// (which floods small canvases), a pasted square has an exact, clip-free
 /// centroid, so it's the right tool for absolute-position assertions.
 fn rgba_with_marker(cw: u32, ch: u32, x0: u32, y0: u32, sz: u32) -> Vec<u8> {
@@ -506,7 +506,7 @@ fn flip_canvas_transforms_every_layer_and_undo_restores_all() {
     let l1 = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
     // A second, differently-valued layer so the two can't be confused.
     let mut rgba2 = distinct_rgba(w, h);
-    for p in rgba2.chunks_exact_mut(4) {
+    for p in rgba2.as_chunks_mut::<4>().0 {
         p[2] = 200; // tag layer 2 with a blue channel
     }
     let l2 = e.paste_image(w, h, &rgba2, 0, 0, None);
@@ -695,7 +695,7 @@ fn flip_then_rescale_undo_undo_restores_original() {
 
 // ---- Painting AFTER a transform lands at the right plane coordinate ---------
 
-// (64px base: the default brush floods a 32px canvas, masking position — see
+// (64px base: the default brush floods a 32px canvas, masking position; see
 // image_rescale.rs. Position-of-paint assertions need the larger canvas.)
 
 #[test]
@@ -728,7 +728,7 @@ fn paint_after_rotate_lands_at_plane_coords() {
     let r = e.canvas_rect();
     assert_eq!((r.width, r.height), (64, 96));
 
-    // Off-centre interior target window-local (40, 60) — ≥20px from every edge
+    // Off-centre interior target window-local (40, 60), ≥20px from every edge
     // so the ~20px brush dab fits and the centroid is clean. Painted via its
     // plane coordinate so this exercises the post-rotate plane→paint mapping.
     let (lx, ly) = (40.0f32, 60.0f32);
@@ -785,7 +785,7 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
 
     // Mirror of x in [4,12) about a 32-wide canvas → x in [20,28).
     // Paint a row spanning both the (now-unselected) left and (selected) right.
-    e.begin_stroke(layer);
+    e.begin_stroke(layer).unwrap();
     let steps = 64;
     for i in 0..=steps {
         let x = 2.0 + 28.0 * (i as f32 / steps as f32); // sweep x in [2,30]
@@ -814,7 +814,7 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
     assert_eq!(
         alpha_at(&buf, w, 8, 16),
         0,
-        "the original (left) band is no longer selected after the flip — must stay clear"
+        "the original (left) band is no longer selected after the flip, must stay clear"
     );
 }
 

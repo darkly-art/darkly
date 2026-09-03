@@ -7,6 +7,7 @@ use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
+use crate::gpu::preview::PreviewBackdrop;
 use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
@@ -14,7 +15,7 @@ use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 /// Which surface the color picker samples from. Type-owned dispatch via
-/// `resolve` — `pick_color` never matches on the variant.
+/// `resolve`: `pick_color` never matches on the variant.
 #[derive(Copy, Clone, Debug)]
 pub enum PickSource {
     /// The merged root composite (default behavior).
@@ -64,7 +65,7 @@ impl PickSource {
 }
 
 /// Thumbnail size used for the layer panel previews. Single source of
-/// truth — the frontend reads it via `engine_default_thumb_size()` so
+/// truth: the frontend reads it via `engine_default_thumb_size()` so
 /// the auto-queued readbacks land in the cache at the same dimensions
 /// the panel renders. Don't drift the literal in `thumbnails.ts`.
 pub const DEFAULT_THUMB_SIZE: u32 = 36;
@@ -110,7 +111,7 @@ impl DarklyEngine {
     /// Re-derive the present view matrix from the stored `view_params` and the
     /// **current** `doc.width/height`, and upload it. The matrix bakes in the
     /// canvas dimensions, so this must run on every canvas-dimension change
-    /// (resize / crop / undo) as well as on pointer-driven view updates —
+    /// (resize / crop / undo) as well as on pointer-driven view updates;
     /// otherwise the present pass samples a resized composite through a
     /// stale-dim matrix and the image shows stretched/offset. Single chokepoint
     /// for "view params + canvas dims → cached matrix".
@@ -134,7 +135,7 @@ impl DarklyEngine {
     }
 
     /// Map a screen point to **plane** coordinates (window-local +
-    /// `doc.canvas_origin`) — the frame every tool and the overlay operate in.
+    /// `doc.canvas_origin`), the frame every tool and the overlay operate in.
     /// Reads the same cached `view_transform` the present pass consumes.
     pub fn screen_to_plane(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
         let o = self.doc.canvas_origin;
@@ -158,6 +159,16 @@ impl DarklyEngine {
         self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
 
+    /// Compile the vector renderer's GPU pipelines ahead of first use, so the
+    /// first text (or path) object doesn't stall the frame that would show it on
+    /// Vello's one-time shader compile. The frontend fires this when the text
+    /// tool is selected: the compile overlaps the gap before the artist commits a
+    /// box. Idempotent: a no-op once the renderer is warm.
+    #[handler]
+    pub fn warm_vector_renderer(&mut self) {
+        self.compositor.ensure_vector_renderer(&self.gpu.device);
+    }
+
     /// Start an async color pick at canvas coordinates.
     ///
     /// `source` selects which surface to sample. If a `Layer` source can't be
@@ -179,7 +190,7 @@ impl DarklyEngine {
         let point = CanvasPoint::new(x as i32, y as i32);
 
         let resolved = source.resolve(&self.compositor, point, o).or_else(|| {
-            // Layer source couldn't be sampled — fall back to merged.
+            // Layer source couldn't be sampled; fall back to merged.
             PickSource::Merged.resolve(&self.compositor, point, o)
         });
         let Some((texture, rect)) = resolved else {
@@ -197,14 +208,14 @@ impl DarklyEngine {
             self.readbacks.submit(request, ReadbackContext::ColorPick);
         });
 
-        // Return cached color for immediate feedback — real result arrives next frame.
+        // Return cached color for immediate feedback; real result arrives next frame.
         self.last_picked_color
     }
 
     // --- Thumbnails ---
 
     /// Return the cached thumbnail for any node id (raster layer or mask
-    /// filter). Pure read — readback queueing is owned by
+    /// filter). Pure read: readback queueing is owned by
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
@@ -218,7 +229,7 @@ impl DarklyEngine {
 
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
-    /// GPU texture — callers don't dispatch on layer-vs-filter.
+    /// GPU texture; callers don't dispatch on layer-vs-filter.
     ///
     /// Reads the texture's full extent, not a canvas-sized rect. Layer
     /// textures may be smaller than canvas (e.g. a small paste) or larger
@@ -320,7 +331,7 @@ impl DarklyEngine {
     /// if any landed.
     ///
     /// Factored out of [`Self::poll_pending`] so the save flow can drain
-    /// its own readbacks from [`Self::poll_save_result`] — letting a
+    /// its own readbacks from [`Self::poll_save_result`], letting a
     /// backgrounded tab finish a recovery snapshot without running a full
     /// `render()`/present (only the focused tab renders).
     pub(crate) fn drain_readbacks(&mut self) -> bool {
@@ -375,6 +386,9 @@ impl DarklyEngine {
                     extent,
                     pixels,
                 );
+            }
+            ReadbackContext::AlphaToSelection { was_active, extent } => {
+                self.complete_alpha_to_selection(was_active, extent, pixels);
             }
             ReadbackContext::ExportImage { width, height } => {
                 self.complete_export(width, height, pixels);
@@ -435,9 +449,10 @@ impl DarklyEngine {
             ReadbackContext::BrushStrokePreview {
                 width,
                 height,
+                backdrop,
                 graph_version,
             } => {
-                // Drop stale results — if the graph has changed since
+                // Drop stale results: if the graph has changed since
                 // this render was issued, a fresher render has already
                 // been queued and will supersede this one.
                 if graph_version == self.brush_graph_version() {
@@ -448,6 +463,8 @@ impl DarklyEngine {
                         height,
                         tw,
                         th,
+                        backdrop,
+                        self.preview_theme_fg,
                         self.preview_theme_bg,
                     );
                     let png_bytes = encode_rgba_as_png(&framed, tw, th);
@@ -457,26 +474,31 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::BrushThumbnailForSave {
-                name,
+                id,
                 width,
                 height,
+                backdrop,
             } => {
                 let (tw, th) = super::brush_library::BRUSH_THUMBNAIL_SIZE;
-                let framed =
-                    frame_stroke_thumbnail(&pixels, width, height, tw, th, self.preview_theme_bg);
+                let framed = frame_stroke_thumbnail(
+                    &pixels,
+                    width,
+                    height,
+                    tw,
+                    th,
+                    backdrop,
+                    self.preview_theme_fg,
+                    self.preview_theme_bg,
+                );
                 let png_bytes = encode_rgba_as_png(&framed, tw, th);
                 if !png_bytes.is_empty() {
-                    self.brush_library.set_thumbnail(&name, png_bytes);
+                    crate::brush::library::with_mut(|lib| lib.set_thumbnail(&id, png_bytes));
                 }
             }
-            ReadbackContext::BrushDabThumbnail {
-                name,
-                width,
-                height,
-            } => {
+            ReadbackContext::BrushDabThumbnail { id, width, height } => {
                 let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
                 if !png_bytes.is_empty() {
-                    self.brush_library.set_dab_thumbnail(&name, png_bytes);
+                    crate::brush::library::with_mut(|lib| lib.set_dab_thumbnail(&id, png_bytes));
                 }
             }
             ReadbackContext::BrushCursorPreviewScale {
@@ -484,7 +506,7 @@ impl DarklyEngine {
                 width,
                 height,
             } => {
-                // Drop stale results — a later compile may have already
+                // Drop stale results: a later compile may have already
                 // queued its own readback, and the one in hand is no
                 // longer descriptive of the active brush.
                 if topology_version == self.brush_topology_version() {
@@ -496,8 +518,9 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::PreviewFrame {
-                kind,
+                catalog,
                 type_id,
+                variant,
                 frame_idx,
                 total,
             } => {
@@ -505,7 +528,7 @@ impl DarklyEngine {
                 // putImageData. Guard against a stale generation (frame count
                 // mismatch) so a superseded request can't write into a freshly
                 // sized buffer.
-                if let Some(job) = self.previews.get_mut(&(kind, type_id)) {
+                if let Some(job) = self.previews.get_mut(&(catalog, type_id, variant)) {
                     if job.frames.len() == total as usize {
                         if let Some(slot) = job.frames.get_mut(frame_idx as usize) {
                             *slot = Some(pixels);
@@ -534,7 +557,7 @@ impl DarklyEngine {
                     });
             }
             ReadbackContext::ActiveBrushDab { topology_version } => {
-                // Drop stale results — but key off topology, not graph
+                // Drop stale results, but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
                 // dab thanks to `reset_exposed_scrubs`, so a readback
                 // queued before a scrub change is still valid.
@@ -550,7 +573,7 @@ impl DarklyEngine {
                 node_id,
                 topology_version,
             } => {
-                // Drop stale results — key off topology, like ActiveBrushDab:
+                // Drop stale results; key off topology, like ActiveBrushDab:
                 // scrub-only changes don't alter the rendered output thanks to
                 // `reset_exposed_scrubs`, so a readback queued before a scrub
                 // change is still valid.
@@ -619,8 +642,8 @@ impl DarklyEngine {
     /// Drain layers whose pixels were modified since the last call and
     /// queue thumbnail readbacks at the engine's default panel size.
     /// Run on every `render()` (production *and* headless tests) so the
-    /// layer panel sees fresh thumbnails after paint, fill, undo, paste
-    /// — anything that calls `compositor.mark_layer_pixels_dirty`.
+    /// layer panel sees fresh thumbnails after paint, fill, undo, paste, or
+    /// anything that calls `compositor.mark_layer_pixels_dirty`.
     fn drain_dirty_thumbnail_readbacks(&mut self) {
         let nodes = self.compositor.drain_dirty_pixels();
         for node_id in nodes {
@@ -631,7 +654,7 @@ impl DarklyEngine {
     /// Render a frame. Returns true if animations need another frame.
     pub fn render(&mut self, time_secs: f32) -> bool {
         // Sub-phase wall-clock timing for the slow-frame log. Always
-        // recorded into `self.last_frame_phases` even on fast frames — the
+        // recorded into `self.last_frame_phases` even on fast frames: the
         // WASM bridge decides whether to emit; nominal cost is a handful
         // of `Instant::now()` calls.
         let t_poll = web_time::Instant::now();
@@ -645,6 +668,11 @@ impl DarklyEngine {
         // undo-commits (which bump the document revision) are visible, and
         // before the headless early-return so tests exercise the same path.
         self.tick_process_recording(time_secs);
+
+        // Picker previews advance a bounded slice per tick, beside the readback
+        // drain that lands their frames. Before the headless early-return for
+        // the same reason the recorder is.
+        self.pump_previews();
 
         let t_thumb = web_time::Instant::now();
         // Auto-queue thumbnail readbacks for layers whose pixels were
@@ -717,7 +745,18 @@ impl DarklyEngine {
         };
 
         // Keep requesting frames while async operations are in flight.
+        self.frame_needs_more()
+    }
+
+    /// Whether the frame loop must schedule another frame: the value returned
+    /// to JS, which reschedules while it is `true`. Covers in-flight async work
+    /// and, critically, a present the compositor still owes: a `Lost`/`Outdated`
+    /// acquire reconfigures the surface and returns without presenting, so
+    /// `needs_present` stays set and the reconfigured surface would otherwise
+    /// never get a real frame.
+    pub(super) fn frame_needs_more(&self) -> bool {
         self.compositor.needs_animation(&self.doc)
+            || self.compositor.needs_present()
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
@@ -791,7 +830,7 @@ impl DarklyEngine {
 
         // Execute every GPU region restore this action owns. Most actions own
         // one; image rescale owns one per pixel-bearing node (and the snapshot
-        // restores across a texture extent change — see below). Node id
+        // restores across a texture extent change, see below). Node id
         // resolves to the right texture via the unified node-texture pool.
         let label = match direction {
             UndoDirection::Undo => "undo-restore",
@@ -810,7 +849,7 @@ impl DarklyEngine {
             // Normal actions keep doc bounds == texture extent (growth is
             // document-led), so `target_extent` is `None` and this is the plain
             // path. `entry.canvas_rect` is a sub-rect for paint, so it can't be
-            // used to detect the extent change — the doc bounds are the signal.
+            // used to detect the extent change: the doc bounds are the signal.
             let target_extent = self
                 .doc
                 .node_pixel_bounds(node_id)
@@ -887,7 +926,7 @@ impl DarklyEngine {
                     *entry = forward;
                 }
             }
-            // Restored pixels — refresh the panel thumbnail.
+            // Restored pixels: refresh the panel thumbnail.
             self.compositor.mark_node_pixels_dirty(node_id);
         }
 
@@ -927,7 +966,7 @@ impl DarklyEngine {
         }
         // Undo/redo mutate the document without passing through the
         // `UndoStack::push` chokepoint, so the revision counter is bumped
-        // here — the single point covering both directions.
+        // here: the single point covering both directions.
         self.doc.revision += 1;
         self.compositor.mark_dirty();
     }
@@ -939,7 +978,7 @@ impl DarklyEngine {
         // The host's `isolated` uniform = "render my mask as grayscale on
         // canvas". That's what mask isolation means: the canvas becomes the
         // mask. When the target IS the host (raster/group itself), the host
-        // renders normally — the isolation filter elsewhere already hides
+        // renders normally: the isolation filter elsewhere already hides
         // its siblings. So this flag only fires when the target is a
         // filter whose host is this node.
         let isolated_host = |node_id: LayerId| -> bool {
@@ -952,7 +991,7 @@ impl DarklyEngine {
         // --- Content layers: ensure GPU state + uniforms ---
         // One walk over every layer that participates in the standard blend
         // pipeline (raster + void). Kind dispatch lives inside
-        // `Compositor::ensure_layer` — the engine doesn't branch on it.
+        // `Compositor::ensure_layer`: the engine doesn't branch on it.
         // Both kinds store blend state in the compositor's unified
         // `layer_cache`, so the uniforms write is one shared call. Void
         // state is regenerable from `(void_type, params)`, so on load (or
@@ -972,8 +1011,8 @@ impl DarklyEngine {
             );
             // Push the doc's authoritative void state downhill. `ensure_layer`
             // only *creates* missing void caches (it's idempotent), so without
-            // this an undo/redo of a void param or transform — or applying a
-            // freshly-loaded layer's stored transform — would leave the running
+            // this an undo/redo of a void param or transform (or applying a
+            // freshly-loaded layer's stored transform) would leave the running
             // void instance stale. Both calls no-op for raster layers and for
             // voids that don't consume them.
             if let Some((params, transform)) = layer.void_state() {
@@ -1029,7 +1068,7 @@ impl DarklyEngine {
         // Non-passthrough groups need the full group_state + blend uniforms.
         // Passthrough groups may still own a `mask_snapshot_state` whose
         // `isolated` lerp uniform must track the engine's isolation target,
-        // so we update them through the same path — `update_group_uniforms`
+        // so we update them through the same path: `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the
         // pms uniform.
         let groups: Vec<(LayerId, bool, f32, u32, bool)> = self
@@ -1079,11 +1118,11 @@ enum UndoDirection {
 
 /// Encode a region restore into `frame` and swap the produced redo-side
 /// entry back into `*entry`. Shared by the layer-pixels and selection
-/// branches of `apply_undo` — only the frame source (node texture vs
+/// branches of `apply_undo`: only the frame source (node texture vs
 /// selection state) and the post-restore side effects differ between
 /// callers. Kept as a free function so the caller can hold a
 /// `CanvasFrame<'_>` borrowed from `self.compositor` while passing
-/// `&self.region_scratch` and `&mut self.readbacks` alongside — field-level
+/// `&self.region_scratch` and `&mut self.readbacks` alongside: field-level
 /// borrow splitting that a `&mut self` method couldn't express.
 fn restore_gpu_region(
     gpu: &GpuContext,
@@ -1112,7 +1151,7 @@ fn restore_gpu_region(
 ///
 /// Free function (not a `&mut self` method) so callers can hold a
 /// `CanvasFrame<'_>` borrowed from `&self.compositor` while passing in
-/// `&self.region_scratch` and `&mut self.readbacks` — three disjoint
+/// `&self.region_scratch` and `&mut self.readbacks`: three disjoint
 /// field-level borrows that an `&mut self` method couldn't express.
 pub(crate) fn commit_undo_region(
     gpu: &GpuContext,
@@ -1137,7 +1176,7 @@ pub(crate) fn commit_undo_region(
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail generation — nearest-neighbor sampling from GPU readback pixels
+// Thumbnail generation: nearest-neighbor sampling from GPU readback pixels
 // ---------------------------------------------------------------------------
 
 fn generate_rgba_thumbnail_from_pixels(
@@ -1198,7 +1237,7 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 192;
 /// Ink Pen produces unboosted, so attenuated brushes (Charcoal: paper
 /// texture × shape masks → ~0.2 unboosted) land at the same apparent
 /// visibility under the cursor. Multiplier-only against an empty
-/// background — preserves true zero coverage exactly; the shader
+/// background: preserves true zero coverage exactly; the shader
 /// saturates highlights at 1.0.
 const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
 
@@ -1211,18 +1250,22 @@ const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 /// max_x, max_y]` (inclusive) or `None` when no pixel qualifies.
 ///
 /// This is the single CPU implementation of "bounding box of the changed
-/// pixels" — the same min/max reduction the GPU [`BboxReduction`] runs, on
+/// pixels": the same min/max reduction the GPU [`BboxReduction`] runs, on
 /// the CPU side of an already-read-back buffer. The two thumbnail framers
-/// pass a "differs from the theme bg" predicate; the cursor-preview coverage
+/// pass a "differs from the backdrop" predicate; the cursor-preview coverage
 /// scan passes an alpha-threshold predicate. Keeping the scan in one place
 /// means a border/empty-region convention can't drift between the callers.
+///
+/// The predicate is given the pixel's position as well as its value, because a
+/// stroke staged over a field is only "changed" relative to what that field put
+/// at that position.
 ///
 /// [`BboxReduction`]: crate::gpu::bbox::BboxReduction
 pub(crate) fn changed_pixels_bbox(
     pixels: &[u8],
     width: u32,
     height: u32,
-    interesting: impl Fn([u8; 4]) -> bool,
+    interesting: impl Fn(u32, u32, [u8; 4]) -> bool,
 ) -> Option<[u32; 4]> {
     let mut min_x = width;
     let mut min_y = height;
@@ -1232,7 +1275,11 @@ pub(crate) fn changed_pixels_bbox(
     for y in 0..height {
         for x in 0..width {
             let i = ((y * width + x) * 4) as usize;
-            if interesting([pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]) {
+            if interesting(
+                x,
+                y,
+                [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]],
+            ) {
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
                 max_x = max_x.max(x);
@@ -1248,6 +1295,10 @@ pub(crate) fn changed_pixels_bbox(
 /// solid `bg` on any RGB channel by more than `tol`? The tolerance
 /// accommodates the GPU's premultiplied-alpha rounding and any
 /// color-management drift while still catching a pale stroke against the bg.
+fn quantize_rgb(c: [f32; 4]) -> [u8; 3] {
+    std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
 fn differs_from_bg(px: [u8; 4], bg: [u8; 3], tol: i32) -> bool {
     (px[0] as i32 - bg[0] as i32).abs() > tol
         || (px[1] as i32 - bg[1] as i32).abs() > tol
@@ -1256,7 +1307,7 @@ fn differs_from_bg(px: [u8; 4], bg: [u8; 3], tol: i32) -> bool {
 
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
-/// Generic across every brush — no per-brush logic. The procedure:
+/// Generic across every brush; no per-brush logic. The procedure:
 ///   1. Scan for non-bg pixels (anything outside the theme bg by more
 ///      than a small tolerance) and compute their bounding box.
 ///   2. Square the bbox (use the longer side), inflate by 10% margin,
@@ -1279,13 +1330,9 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         );
         return Vec::new();
     }
-    let bg_u8 = [
-        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
+    let bg_u8 = quantize_rgb(bg);
     const TOLERANCE: i32 = 12;
-    let bbox = changed_pixels_bbox(pixels, width, height, |px| {
+    let bbox = changed_pixels_bbox(pixels, width, height, |_, _, px| {
         differs_from_bg(px, bg_u8, TOLERANCE)
     });
 
@@ -1309,7 +1356,7 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         let crop_y = cy.saturating_sub(half).min(height - side);
         image::imageops::crop_imm(&src, crop_x, crop_y, side, side).to_image()
     } else {
-        // Empty render — centered square of bg. Visible as a flat tile.
+        // Empty render: centered square of bg. Visible as a flat tile.
         let side = width.min(height);
         let crop_x = (width - side) / 2;
         let crop_y = (height - side) / 2;
@@ -1342,7 +1389,7 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
 /// Compute the coverage scale to apply to the cursor-preview overlay
 /// from a freshly-rendered preview-mask readback. Same content-bbox +
 /// 10% margin shape as `frame_dab_thumbnail` (so attenuated brushes
-/// hit the same target mean coverage they hit pre-removal) — only the
+/// hit the same target mean coverage they hit pre-removal), only the
 /// post-process changes: instead of multiplying RGB bytes we hand the
 /// scale to the overlay shader as a uniform.
 ///
@@ -1361,7 +1408,7 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
     // "no content" pixel value 0 exactly).
     const TOLERANCE: u8 = 12;
     let Some([min_x, min_y, max_x, max_y]) =
-        changed_pixels_bbox(pixels, width, height, |px| px[3] > TOLERANCE)
+        changed_pixels_bbox(pixels, width, height, |_, _, px| px[3] > TOLERANCE)
     else {
         return 1.0;
     };
@@ -1398,22 +1445,31 @@ pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: 
 /// Frame a rendered stroke into the cache aspect ratio and resize.
 ///
 /// Same shape as `frame_dab_thumbnail` but for the S-curve preview:
-///   1. Scan for non-bg pixels and compute their bounding box.
+///   1. Scan for pixels the backdrop did not put there and compute their
+///      bounding box.
 ///   2. Expand the bbox to match the target aspect ratio so the stroke
 ///      isn't squashed by the resize.
 ///   3. Inflate by a 10% margin on each axis, then re-center on the
 ///      bbox centroid and clamp to the source bounds.
 ///   4. Resize the cropped region to `(dst_w, dst_h)`.
 ///
-/// Brush size doesn't enter into any of this — bigger dabs paint a
+/// Brush size doesn't enter into any of this: bigger dabs paint a
 /// bigger bbox, smaller dabs paint a smaller bbox, the framer fits
 /// either to the target. The preview path is the same for every brush.
-fn frame_stroke_thumbnail(
+///
+/// "Non-bg" is measured against `backdrop` rather than against a colour,
+/// because a stroke staged over a field was not drawn over one colour. A
+/// [`PreviewBackdrop::Flat`] backdrop answers `bg` at every position, so the
+/// general form degenerates to the flat comparison for the ten brushes that
+/// stage nothing, and no call site branches on which backdrop it got.
+pub(crate) fn frame_stroke_thumbnail(
     pixels: &[u8],
     src_w: u32,
     src_h: u32,
     dst_w: u32,
     dst_h: u32,
+    backdrop: PreviewBackdrop,
+    fg: [f32; 4],
     bg: [f32; 4],
 ) -> Vec<u8> {
     let expected = (src_w * src_h * 4) as usize;
@@ -1424,16 +1480,12 @@ fn frame_stroke_thumbnail(
         );
         return Vec::new();
     }
-    let bg_u8 = [
-        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
-    // Same tolerance shape as frame_dab_thumbnail — accommodates
+    // Same tolerance shape as frame_dab_thumbnail: accommodates
     // premultiplied-alpha rounding on the GPU side.
     const TOLERANCE: i32 = 12;
-    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |px| {
-        differs_from_bg(px, bg_u8, TOLERANCE)
+    let bbox = changed_pixels_bbox(pixels, src_w, src_h, |x, y, px| {
+        let (u, v) = crate::gpu::preview::pixel_centre(x, y, src_w, src_h);
+        differs_from_bg(px, quantize_rgb(backdrop.sample(u, v, fg, bg)), TOLERANCE)
     });
 
     let Some(src) = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec()) else {
@@ -1468,10 +1520,12 @@ fn frame_stroke_thumbnail(
         let crop_y = cy.saturating_sub(crop_h / 2).min(src_h - crop_h);
         image::imageops::crop_imm(&src, crop_x, crop_y, crop_w, crop_h).to_image()
     } else {
-        // Empty render — return a flat field of bg at the target size.
-        // Skip the resize entirely; constructing it directly is cheaper
-        // and avoids the resize filter introducing rounding.
+        // Nothing was drawn: return a flat field of bg at the target size,
+        // whatever was staged under it. Skip the resize entirely; constructing
+        // it directly is cheaper and avoids the resize filter introducing
+        // rounding.
         let mut buf = Vec::with_capacity((dst_w * dst_h * 4) as usize);
+        let bg_u8 = quantize_rgb(bg);
         let bg_a = (bg[3].clamp(0.0, 1.0) * 255.0).round() as u8;
         for _ in 0..(dst_w * dst_h) {
             buf.extend_from_slice(&[bg_u8[0], bg_u8[1], bg_u8[2], bg_a]);
@@ -1489,7 +1543,7 @@ fn frame_stroke_thumbnail(
     resized.into_raw()
 }
 
-/// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
+/// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails:
 /// the PNG goes into the `.darkly-brush` ZIP as `preview.png`. Also
 /// reused by per-node CPU-rendered previews (the brush builder's
 /// in-card thumbnails).
@@ -1551,6 +1605,11 @@ fn generate_mask_thumbnail_from_pixels(
 mod tests {
     use super::*;
 
+    /// Theme foreground for the framing tests. Only ever reaches
+    /// [`PreviewBackdrop::Flat::sample`], which ignores it: the framing cases
+    /// below are about the crop, not about the staging.
+    const FG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
     /// Build a `src_w * src_h` RGBA buffer filled with `bg`, then paint a
     /// solid rectangle of `fg` at `(x0..x1, y0..y1)`.
     fn fill_with_rect(
@@ -1583,10 +1642,11 @@ mod tests {
         let bg = [0.05, 0.05, 0.05, 1.0];
         let bg_u8 = [13u8, 13, 13, 255];
         let pixels = fill_with_rect(640, 240, bg_u8, bg_u8, 0, 0, 0, 0);
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         assert_eq!(framed.len(), (320 * 120 * 4) as usize);
         // Every pixel matches bg.
-        for chunk in framed.chunks_exact(4) {
+        for chunk in framed.as_chunks::<4>().0 {
             assert_eq!(chunk[0], bg_u8[0]);
             assert_eq!(chunk[1], bg_u8[1]);
             assert_eq!(chunk[2], bg_u8[2]);
@@ -1608,7 +1668,8 @@ mod tests {
             325,
             125,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
         assert_eq!(framed.len(), (320 * 120 * 4) as usize);
         // Center 80x40 region should be predominantly bright.
         let mut bright = 0;
@@ -1642,8 +1703,14 @@ mod tests {
             640,
             130,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
-        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
+        let bright = framed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 128)
+            .count();
         assert!(
             bright > 100,
             "full-canvas stripe should survive the downscale, got {bright} bright pixels"
@@ -1666,8 +1733,14 @@ mod tests {
             120,
             30,
         );
-        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
-        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        let framed =
+            frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, PreviewBackdrop::Flat, FG, bg);
+        let bright = framed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 128)
+            .count();
         assert!(
             bright > 200,
             "off-center stripe should appear in framed output, got {bright}"

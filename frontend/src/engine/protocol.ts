@@ -11,7 +11,7 @@ export interface EngineError {
     message: string;
 }
 
-/** Default sink for `post()` rejections — a fire-and-forget request that fails
+/** Default sink for `post()` rejections: a fire-and-forget request that fails
  *  surfaces here instead of being swallowed by a bare `void`. */
 export function reportEngineError(e: unknown): void {
     const err = e as Partial<EngineError> | undefined;
@@ -52,7 +52,7 @@ interface DrainResult {
 
 /** Cached, synchronously-readable snapshot of engine state the frontend mirrors,
  *  returned by {@link Engine.render} each frame. One struct for every value the
- *  UI caches (frame/thumbnail counters + document bools) — they ride together
+ *  UI caches (frame/thumbnail counters + document bools): they ride together
  *  because they all exist for the same reason (mirroring), not as a handful of
  *  loose return scalars. The UI reads this (sync) instead of awaiting per-value
  *  engine queries; grow it as the UI needs more. Mirrors the Rust `EngineState`. */
@@ -71,14 +71,14 @@ interface FrameStatus {
     results?: RawResult[];
 }
 
-/** The async request/response boundary to the Darkly engine — the in-process
+/** The async request/response boundary to the Darkly engine: the in-process
  *  transport. Wraps a wasm {@link DarklyHandle}: callers `send`/`post` requests
  *  by kind and the engine resolves them on a scheduled drain or at frame time.
  *
  *  Two drain trigger points share one FIFO: a `MessageChannel` macrotask
  *  (armed on first enqueue, drains promptly between frames) and {@link render}
  *  (drains under its borrow before compositing, for frame coherence). The
- *  scheduler yields to render — a busy drain reschedules instead of blocking.
+ *  scheduler yields to render, so a busy drain reschedules instead of blocking.
  *
  *  Worker/Tauri backends (P2/P3) reuse this same id→promise table over a
  *  different wire; only the `enqueue`/`drain` hop changes. */
@@ -89,7 +89,7 @@ export class Engine {
     private drainScheduled = false;
     private readonly channel: MessageChannel;
 
-    /** The typed, per-kind request surface — the only public request API.
+    /** The typed, per-kind request surface, the only public request API.
      *  Generated from the engine's method signatures (`protocol_gen.ts`);
      *  closes over this transport's private request/postFF hop. */
     readonly api: EngineApi;
@@ -109,7 +109,7 @@ export class Engine {
         this.api = makeApi(this.transport);
     }
 
-    /** Awaited path — resolves with the response value (a binary response
+    /** Awaited path: resolves with the response value (a binary response
      *  resolves with the JSON value plus a `bytes: Uint8Array` field). Rejects
      *  with an {@link EngineError} on protocol/handler failure. Private: the
      *  only public request surface is the typed {@link api}. */
@@ -123,7 +123,7 @@ export class Engine {
         return promise;
     }
 
-    /** Fire-and-forget path — for pointer-frequency mutations. Routes rejections
+    /** Fire-and-forget path: for pointer-frequency mutations. Routes rejections
      *  to {@link reportEngineError} instead of a bare `void`, so a failed
      *  enqueue is logged rather than silently dropped. Submission order is
      *  preserved regardless of `postFF`/`request` interleaving (single FIFO). */
@@ -134,7 +134,7 @@ export class Engine {
     /** Render a frame. Drains the FIFO under render's borrow, resolves those
      *  results, and returns the frame status (`needsMore` + the frame/thumbnail
      *  counters that used to be separate borrowing reads). `busy` is true when a
-     *  re-entrant render couldn't get the borrow — caller must not reschedule. */
+     *  re-entrant render couldn't get the borrow, so caller must not reschedule. */
     render(timeSecs: number): FrameStatus {
         const status = this.handle.render(timeSecs) as FrameStatus;
         if (!status.busy && status.results) this.resolveResults(status.results);
@@ -143,7 +143,7 @@ export class Engine {
 
     /** Queue an `ImageBitmap` frame upload for a camera-style void. The one
      *  engine op that can't cross the serialized protocol (an `ImageBitmap`
-     *  isn't JSON) — still deferred, applied at the next drain/render. The
+     *  isn't JSON) is still deferred, applied at the next drain/render. The
      *  bridge closes the bitmap once the copy is recorded. */
     uploadVoidExternalImage(layerId: number, bitmap: ImageBitmap): void {
         this.handle.upload_void_external_image(layerId, bitmap);

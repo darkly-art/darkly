@@ -1,6 +1,5 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { focusedTextTool } from '../../tools/text.svelte';
     import LayerProperties from './LayerProperties.svelte';
     import GroupProperties from './GroupProperties.svelte';
     import TextProperties from './TextProperties.svelte';
@@ -8,68 +7,39 @@
     import VoidProperties from '../voids/VoidProperties.svelte';
     import FilterProperties from '../filters/FilterProperties.svelte';
 
-    function findNode(nodes: any[], id: number): any | null {
-        for (const n of nodes) {
-            if (n.id === id) return n;
-            if (n.children) {
-                const found = findNode(n.children, id);
-                if (found) return found;
-            }
-        }
-        return null;
-    }
-
-    let activeLayer = $derived(
-        app.activeLayerId !== null ? findNode(app.layerTree, app.activeLayerId) : null,
-    );
+    let activeLayer = $derived(app.activeNode);
 
     // `activeVeilIndex` is a chain position (the engine's `index` field on
-    // each VeilInfo), not a position in `veilList` — the list is returned in
-    // reverse chain order for display. Look up by `index` so the two stay
+    // each VeilInfo), not a position in `veilList`, since the list is returned
+    // in reverse chain order for display. Look up by `index` so the two stay
     // aligned regardless of length.
     let activeVeil = $derived(
         app.activeVeilIndex !== null
             ? app.veilList.find((v: { index: number }) => v.index === app.activeVeilIndex) ?? null
             : null,
     );
-
-    // A pending text placement (from the text tool) owns the panel — reactive
-    // through the focused instance's text tool.
-    let textPlacement = $derived(focusedTextTool()?.placement ?? null);
 </script>
 
 <div class="panel">
     <div class="panel-body">
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
-        {:else if activeLayer || textPlacement}
-            <!-- A pending placement owns the panel: it shows only the text editor
-                 (the gate below stays true), so the still-active layer's own
-                 controls are suppressed. Placing text is a new-object gesture,
-                 and the text tool no longer deselects to express that — so we
-                 hide the other panels here instead. -->
-            {#if !textPlacement}
-                <!-- Filter layers honor neither opacity nor blend mode yet (the
-                     first slice composites at full strength), so the blend/opacity
-                     controls are hidden rather than shown as inert. Re-enable when
-                     opacity/blend honoring lands. -->
-                {#if activeLayer && activeLayer.type !== 'filter'}
-                    <LayerProperties node={activeLayer} />
-                {/if}
-                {#if activeLayer?.type === 'group'}
-                    <GroupProperties group={activeLayer} />
-                {:else if activeLayer?.type === 'void'}
-                    <VoidProperties node={activeLayer} />
-                {:else if activeLayer?.type === 'filter'}
-                    <FilterProperties node={activeLayer} />
-                {/if}
+        {:else if activeLayer}
+            <!-- Filter layers honor neither opacity nor blend mode yet (the
+                 first slice composites at full strength), so the blend/opacity
+                 controls are hidden rather than shown as inert. Re-enable when
+                 opacity/blend honoring lands. -->
+            {#if activeLayer.type !== 'filter'}
+                <LayerProperties node={activeLayer} />
             {/if}
-            <!-- One TextProperties instance, rendered from a single template
-                 position so Svelte keeps it across the pending→bound transition
-                 (a fresh placement becoming a real layer). A second usage would
-                 remount and drop the caret on the first keystroke. -->
-            {#if activeLayer?.type === 'vector' || textPlacement}
-                <TextProperties node={activeLayer?.type === 'vector' ? activeLayer : null} />
+            {#if activeLayer.type === 'group'}
+                <GroupProperties group={activeLayer} />
+            {:else if activeLayer.type === 'void'}
+                <VoidProperties node={activeLayer} />
+            {:else if activeLayer.type === 'filter'}
+                <FilterProperties node={activeLayer} />
+            {:else if activeLayer.type === 'vector'}
+                <TextProperties node={activeLayer} />
             {/if}
         {:else}
             <div class="empty">No selection</div>

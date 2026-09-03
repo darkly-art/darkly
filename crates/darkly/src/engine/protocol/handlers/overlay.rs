@@ -62,7 +62,7 @@ impl From<PrimIn> for OverlayPrimitive {
     }
 }
 
-/// `{ primitives }` — the full overlay primitive list to upload.
+/// `{ primitives }`: the full overlay primitive list to upload.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct SetOverlayReq {

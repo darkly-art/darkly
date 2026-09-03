@@ -2,7 +2,7 @@
 //!
 //! Before this lands, the dab-tile bake path (`frame_dab_thumbnail`) ran
 //! a Photoshop-Levels auto-brighten on the readback pixels and the
-//! cursor-follow overlay got no equivalent boost — so attenuated brushes
+//! cursor-follow overlay got no equivalent boost, so attenuated brushes
 //! (charcoal: paper × shape ≈ 0.2 mean coverage) had a visible bake
 //! tile but a barely-visible cursor halo. The fix flips the wiring: the
 //! bake stays at the brush's natural intensity, and the cursor overlay
@@ -12,7 +12,7 @@
 //! What this test pins down:
 //!   - Charcoal recompile → readback → cached scale lifts the cursor
 //!     overlay above an explicit visibility threshold.
-//!   - Ink Pen (already at near-full coverage) stays at ≈1.0 — no
+//!   - Ink Pen (already at near-full coverage) stays at ≈1.0: no
 //!     over-boost.
 //!   - The scale tracks brush identity: switching from charcoal to
 //!     ink pen recomputes back down rather than carrying the charcoal
@@ -50,7 +50,7 @@ fn charcoal_cursor_preview_scale_lifts_above_visibility_floor() {
          invisible at this scale."
     );
     // Cap is 8.0; if we hit it the brush rendered as effectively empty
-    // and the normalize ran wild — also a failure mode.
+    // and the normalize ran wild, which is also a failure mode.
     assert!(
         scale < 8.0,
         "scale capped at MAX_BOOST=8.0 → preview mask was nearly empty; \
@@ -62,7 +62,7 @@ fn charcoal_cursor_preview_scale_lifts_above_visibility_floor() {
 fn ink_pen_cursor_preview_scale_stays_near_unity() {
     let engine = engine_for_brush("Ink Pen");
     let scale = engine.cursor_preview_coverage_scale();
-    // Ink Pen is a natural full-coverage brush — its mask averages well
+    // Ink Pen is a natural full-coverage brush: its mask averages well
     // above the target so the formula short-circuits to 1.0 (no boost).
     // A scale above ~1.2 here would mean either the brush regressed
     // toward partial coverage or the formula over-boosts.
@@ -84,7 +84,7 @@ fn overlay_shader_multiplies_coverage_by_preview_scale() {
     let src = include_str!("../shaders/overlay.wgsl");
     assert!(
         src.contains("preview_coverage_scale"),
-        "overlay.wgsl must reference preview_coverage_scale — the \
+        "overlay.wgsl must reference preview_coverage_scale: the \
          coverage normalization that lifts attenuated brushes to \
          visible brightness depends on it."
     );
@@ -94,7 +94,7 @@ fn overlay_shader_multiplies_coverage_by_preview_scale() {
     assert!(
         src.contains("raw * u.preview_coverage_scale"),
         "the KIND_MASKED_STAMP branch must multiply sampled mask \
-         coverage by u.preview_coverage_scale — otherwise the cursor \
+         coverage by u.preview_coverage_scale; otherwise the cursor \
          halo dims back to the pre-fix bug."
     );
 }

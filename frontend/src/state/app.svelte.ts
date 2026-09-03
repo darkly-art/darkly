@@ -1,8 +1,9 @@
 import { reportEngineError, type Engine, type EngineState } from '../engine/protocol';
-import type { JsonValue } from '../engine/protocol_gen';
+import type { Catalog, CatalogEntry, JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry, type Tool } from '../tools/registry';
+import { tooltipForAction } from '../config/store.svelte';
 import { pollPick } from '../tools/color_pick_sync';
 import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -12,6 +13,16 @@ import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
 import { freshDocument } from './freshDocument';
+import { recentColors } from './recents.svelte';
+import { colorToHex } from '../lib/color';
+import { newId } from '../lib/id';
+import {
+    appearedRoots,
+    collapsedAncestorsOf,
+    indexLayerTree,
+    nextActiveAfterRemoval,
+    type LayerTreeIndex,
+} from './layerTree';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -55,7 +66,7 @@ function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
  * document, one set of UI state (active tool, layer selection, view
  * transform, copy callback, frame scheduler, …). Multiple instances can
  * coexist (multi-tab host); a stand-alone embed has just one. The instance
- * has zero awareness of tabs, siblings, or any host that might contain it —
+ * has zero awareness of tabs, siblings, or any host that might contain it;
  * tab management is an outer layer (`frontend/src/multi_tab/shell.svelte.ts`)
  * that simply owns a collection of instances.
  *
@@ -65,10 +76,7 @@ function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
  */
 export class DarklyInstance {
     /** Stable id, useful as a `{#each}` key in the multi-tab shell. */
-    readonly id: string =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `instance-${Math.random().toString(36).slice(2)}`;
+    readonly id: string = newId('instance');
 
     engine = $state<Engine | null>(null);
 
@@ -76,14 +84,11 @@ export class DarklyInstance {
      *  `id` so it reads clearly at the recovery-store boundary; repeated
      *  autosaves overwrite one snapshot file per tab. A tab restored from
      *  a snapshot gets a fresh `recoveryId` (it's a new live tab). */
-    readonly recoveryId: string =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `recovery-${Math.random().toString(36).slice(2)}`;
+    readonly recoveryId: string = newId('recovery');
 
     /** Initial document name to apply once the WASM handle finishes
      *  bootstrapping. The shell uses this to thread "Untitled N"
-     *  through the async handle-init gap — the engine itself defaults
+     *  through the async handle-init gap; the engine itself defaults
      *  to plain "Untitled", so without this the first read in the
      *  tab strip would race the rename. Cleared by `createInstance`
      *  once it's been pushed through `set_document_name`. */
@@ -100,7 +105,7 @@ export class DarklyInstance {
     /** Per-tab cached `.darkly` file handle from the FS Access API.
      *  Set after a successful Save As or after opening a file via
      *  `showOpenFilePicker`; subsequent Ctrl+S writes back to the same
-     *  file with no picker prompt. Session-only — handles are not
+     *  file with no picker prompt. Session-only: handles are not
      *  persisted across page reloads in v1 (see plan's "Out of scope"). */
     fileHandle = $state<FileSystemFileHandle | null>(null);
 
@@ -110,11 +115,11 @@ export class DarklyInstance {
     onHandleReady: ((engine: Engine) => void) | null = null;
 
     /** Synchronously-readable mirror of engine state, refreshed from
-     *  `engine.render`'s returned snapshot each frame (no per-frame query — it's
+     *  `engine.render`'s returned snapshot each frame (no per-frame query; it's
      *  a downhill projection of render's one borrow). The single home for every
      *  value the UI caches: frame/thumbnail counters and document bools. UI
-     *  consumers that can't `await` — `$derived`, menu `enabled()` gates,
-     *  `beforeunload` — read this instead of querying the engine. `$state` so
+     *  consumers that can't `await` (`$derived`, menu `enabled()` gates,
+     *  `beforeunload`) read this instead of querying the engine. `$state` so
      *  they re-derive when it changes. Grows as the UI needs more (see Rust
      *  `EngineState`). Null until the first frame renders. */
     engineState = $state<EngineState | null>(null);
@@ -123,13 +128,30 @@ export class DarklyInstance {
     foreground = $state<Color>({ ...freshDocument.foreground });
     background = $state<Color>({ ...freshDocument.background });
 
+    /**
+     * The foreground color, recorded as recently used.
+     *
+     * Tools call this at the point they are about to paint with the color,
+     * which is what "recent" means here, as distinct from "scrubbed past in
+     * the picker", which the picker's per-`pointermove` writes to
+     * `foreground` would otherwise record dozens of times a drag.
+     *
+     * Reading the color and recording it are the same act, so there is no
+     * flag for a tool to forget to set: a new color-using tool records
+     * because it needs the color.
+     */
+    consumeForeground(): Color {
+        recentColors.use(colorToHex(this.foreground));
+        return this.foreground;
+    }
+
     // Active tool
     activeToolId = $state<string>('brush');
 
-    /** This instance's live tool session — the cancellation-aware engine handle
+    /** This instance's live tool session: the cancellation-aware engine handle
      *  every tool op routes through. Owned here (not module-global) so each tab
      *  keeps its own session: a background tab finishing async init can't steal
-     *  the focused tab's session. Plain field — read imperatively inside hooks,
+     *  the focused tab's session. Plain field, read imperatively inside hooks,
      *  never reactively. Begun / severed by the `CanvasView` transition effect
      *  via {@link beginToolSession} / {@link killToolSession}. See
      *  `tools/tool_session.ts`. */
@@ -161,11 +183,28 @@ export class DarklyInstance {
         return this.session;
     }
 
-    /** Sever this instance's tool session and leave none — parked ops reject on
+    /** Sever this instance's tool session and leave none; parked ops reject on
      *  resume. Called on tab close so a hook can't land on a torn-down tab. */
     killToolSession(): void {
         this.session?.kill();
         this.session = null;
+    }
+
+    /** Tear this instance down when its tab closes: stop its tool session and
+     *  stream sources, free the WASM handle, then drop the engine reference. The
+     *  instance owns every consumer of its handle, so it owns their teardown:
+     *  the shell just removes it from the strip. Nulling `engine` is what makes
+     *  the render loop's `if (!engine) return` guard short-circuit an
+     *  already-queued rAF; without it, that frame would call `render` on a freed
+     *  handle and throw "Attempt to use a moved value". Order matters: stop the
+     *  consumers first, then free, then null last so any synchronous `$state`
+     *  reaction observes a fully torn-down instance. Idempotent. */
+    dispose(): void {
+        this.killToolSession();
+        for (const id of [...this.streamSources.keys()]) this.stopStreamSource(id);
+        this.engine?.free();
+        this.engine = null;
+        this.engineState = null;
     }
 
     /** Monotonic counter the `CanvasView` transition effect watches to re-run a
@@ -181,104 +220,81 @@ export class DarklyInstance {
     }
 
     /** Last activated sub-tool per cluster id. Lets a cluster button restore
-     *  the user's previous choice on click (e.g. "the last selection tool I
+     *  the artist's previous choice on click (e.g. "the last selection tool I
      *  used was lasso"). Populated by a $effect in LeftSidebar that watches
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
 
-    // Registry-backed display-name lookups. Each map is populated once at
-    // startup from the matching `*_types()` WASM query (see `loadRegistries`).
-    // Per-instance payloads (LayerInfo, VeilInfo, ModifierInfo, etc.) carry
-    // only the stable `type_id`; UI code resolves the human-readable label
-    // through these maps — there is no second copy of the display string.
-    toolDisplayNames = $state<Record<string, string>>({});
-    veilDisplayNames = $state<Record<string, string>>({});
-    voidDisplayNames = $state<Record<string, string>>({});
+    /** Every registry the Rust core declares, keyed by catalog id ("filters",
+     *  "veils", "tools", …). Fetched once at startup (see `loadRegistries`).
+     *  Per-instance payloads (LayerInfo, VeilInfo, …) carry only the stable
+     *  `type_id`; UI code resolves the human-readable label and the icon
+     *  through here, so there is no second copy of either. */
+    catalogs = $state<Record<string, Catalog>>({});
+
     /** `voidType → CaptureKind` for voids backed by a browser MediaStream
-     *  (camera / screenshare). Built from `void_types` in `loadRegistries`;
-     *  procedural voids are absent. Drives which `MediaDevices` API to call and
-     *  is the single source of truth for "is this a stream-backed void?" across
-     *  the reconciler, picker, and properties panel. */
+     *  (camera / screenshare). Built from the `voids` catalog in
+     *  `loadRegistries`; procedural voids are absent. Drives which
+     *  `MediaDevices` API to call and is the single source of truth for "is
+     *  this a stream-backed void?" across the reconciler, picker, and
+     *  properties panel. */
     voidCaptureKind = $state<Map<string, CaptureKind>>(new Map());
-    blendModeDisplayNames = $state<Record<string, string>>({});
-    modifierDisplayNames = $state<Record<string, string>>({});
-    layerKindDisplayNames = $state<Record<string, string>>({});
 
-    /** Registered destructive color-filter types (invert, …), fetched once
-     *  at startup. Drives the dynamic, auto-discovered Colors-menu actions in
-     *  `registerActions` — a new filter in the Rust core surfaces a menu
-     *  entry with zero frontend edits. */
-    filterTypes = $state<
-        Array<{
-            type: string;
-            displayName: string;
-            icon: string;
-            description: string;
-            params?: unknown[];
-        }>
-    >([]);
-
-    toolDisplayName(id: string): string {
-        return this.toolDisplayNames[id] ?? id;
-    }
-    veilDisplayName(id: string): string {
-        return this.veilDisplayNames[id] ?? id;
-    }
-    voidDisplayName(id: string): string {
-        return this.voidDisplayNames[id] ?? id;
-    }
-    blendModeDisplayName(id: string): string {
-        return this.blendModeDisplayNames[id] ?? id;
-    }
-    modifierDisplayName(id: string): string {
-        return this.modifierDisplayNames[id] ?? id;
-    }
-    layerKindDisplayName(id: string): string {
-        return this.layerKindDisplayNames[id] ?? id;
-    }
-    /** Display label for a filter `type_id` (e.g. `"curves"` → `"Curves"`),
-     *  resolved from the `filterTypes` registry list. */
-    filterDisplayName(id: string): string {
-        return this.filterTypes.find((f) => f.type === id)?.displayName ?? id;
+    /** Entries of one catalog, or an empty array when it is unknown. */
+    entries(catalogId: string): CatalogEntry[] {
+        return this.catalogs[catalogId]?.entries ?? [];
     }
 
-    /** Populate every registry-backed display-name map from the Rust core in
-     *  one pass. Called once during editor init, before action registration
-     *  and before `this.handle` is set, so the maps are ready by the time any
-     *  UI mounts. */
+    /** One entry by catalog and `type_id`, or `undefined`. */
+    entry(catalogId: string, typeId: string): CatalogEntry | undefined {
+        return this.entries(catalogId).find((e) => e.type === typeId);
+    }
+
+    /** Display label for a `type_id` within a catalog (e.g. `"curves"` →
+     *  `"Curves"`), falling back to the id itself when unknown. */
+    displayName(catalogId: string, typeId: string): string {
+        return this.entry(catalogId, typeId)?.displayName ?? typeId;
+    }
+
+    /** The Iconify glyph to render for a tool.
+     *
+     *  A tool's glyph is registry metadata and lives on its Rust registration.
+     *  A descriptor may override it when the glyph depends on live session
+     *  state a static registration cannot express: the brush shows the eraser
+     *  icon while erase mode is on. This is the single place that precedence
+     *  is decided, so no caller branches on a tool id. */
+    toolGlyph(typeId: string): string {
+        const override = toolRegistry.get(typeId)?.icon;
+        const resolved = typeof override === 'function' ? override() : override;
+        return resolved ?? this.entry('tools', typeId)?.icon ?? 'fa6-solid:wrench';
+    }
+
+    /** A tool button's `title`: its label plus the chord currently bound to
+     *  the action that selects it. Both the label and that action id are the
+     *  tool's own registry metadata, so resolving them together here keeps the
+     *  toolbar and the cluster flyout from each doing the lookup. */
+    toolTooltip(typeId: string): string {
+        const entry = this.entry('tools', typeId);
+        return tooltipForAction(entry?.displayName ?? typeId, entry?.hotkeyAction ?? '');
+    }
+
+    /** Populate every registry projection from the Rust core in one pass.
+     *  Called once during editor init, before action registration and before
+     *  `this.handle` is set, so the catalogs are ready by the time any UI
+     *  mounts. */
     async loadRegistries(engine: Engine) {
-        const buildMap = (
-            arr: Array<{ type: string; displayName: string }>,
-        ): Record<string, string> => {
-            const m: Record<string, string> = {};
-            for (const e of arr ?? []) m[e.type] = e.displayName;
-            return m;
-        };
-        const [tools, veils, voids, blends, modifiers, layerKinds, filters] = await Promise.all([
-            engine.api.toolTypes(),
-            engine.api.veilTypes(),
-            engine.api.voidTypes(),
-            engine.api.blendModeTypes(),
-            engine.api.modifierTypes(),
-            engine.api.layerKindTypes(),
-            engine.api.filterTypes(),
-        ]);
-        this.toolDisplayNames = buildMap(tools);
-        this.veilDisplayNames = buildMap(veils);
-        this.voidDisplayNames = buildMap(voids);
-        // Map each void type to its browser capture API, if any. Voids with a
-        // `captureKind` (camera / screenshare) drive the generic MediaStream
-        // lifecycle; procedural voids (noise) omit the field and never appear
-        // here. Built once from the same `void_types` query.
+        const byId: Record<string, Catalog> = {};
+        for (const c of (await engine.api.catalogs()) ?? []) byId[c.id] = c;
+        this.catalogs = byId;
+        // Map each void type to its browser capture API, if any. Only voids
+        // whose source is a capture stream (camera / screenshare) drive the
+        // generic MediaStream lifecycle; procedural and image-sourced voids
+        // never appear here.
         const capKinds = new Map<string, CaptureKind>();
-        for (const v of (voids ?? []) as Array<{ type: string; captureKind?: CaptureKind }>) {
-            if (v.captureKind) capKinds.set(v.type, v.captureKind);
+        for (const v of this.entries('voids')) {
+            if (v.source?.kind === 'capture') capKinds.set(v.type, v.source.capture);
         }
         this.voidCaptureKind = capKinds;
-        this.blendModeDisplayNames = buildMap(blends);
-        this.modifierDisplayNames = buildMap(modifiers);
-        this.layerKindDisplayNames = buildMap(layerKinds);
-        this.filterTypes = filters ?? [];
     }
 
     /** Add a veil with a partial overrides record. Param names match the
@@ -303,7 +319,7 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
-    // Active layer — the "primary" layer within the selection. Drives the
+    // Active layer: the "primary" layer within the selection. Drives the
     // properties panel, paint target, shift-click anchor, and per-row
     // emphasis. Always a member of `selectedLayerIds` when that set is
     // non-empty; null iff the set is empty.
@@ -314,7 +330,13 @@ export class DarklyInstance {
     // `clearSelection` so the invariant with `activeLayerId` holds.
     selectedLayerIds = $state<Set<number>>(new Set());
 
-    // Active veil. Mutually exclusive with activeLayerId — the right
+    // The layer tree's shape as of the last `refreshLayerTree`. Plain, not
+    // `$state`: the reconciler consults the pre-mutation shape to work out which
+    // row replaced a deleted one, and reading `layerTree` there would tie the
+    // layer panel's `$effect` to the very state the refresh just wrote.
+    private treeIndex: LayerTreeIndex = indexLayerTree([]);
+
+    // Active veil. Mutually exclusive with activeLayerId: the right
     // sidebar's properties pane shows the props of whichever is non-null.
     activeVeilIndex = $state<number | null>(null);
 
@@ -358,7 +380,7 @@ export class DarklyInstance {
 
     /** Mirror of the engine's document dimensions, set at handle creation
      *  and on `open_document`. JS coord transforms (`canvasToScreen` /
-     *  `screenToCanvas`) recenter around these — reading the engine
+     *  `screenToCanvas`) recenter around these; reading the engine
      *  per-frame would alias the RefCell borrow held by `render()`. The
      *  Rust side stays the source of truth; this is a read-only cache
      *  kept in sync at the same join points that already mutate the doc. */
@@ -374,14 +396,14 @@ export class DarklyInstance {
     canvasOriginY = $state(0);
 
     /** Viewport backing-store size in buffer pixels (`canvas.width/height` =
-     *  CSS × DPR). Set by CanvasView on mount and on element resize — the
+     *  CSS × DPR). Set by CanvasView on mount and on element resize, the
      *  reactive mirror that lets {@link viewMatrices} stay fresh on resize
      *  without reading the DOM element from a `$derived`. */
     viewportW = $state(1);
     viewportH = $state(1);
 
     /** The screen↔plane coordinate matrices, derived from the single Rust
-     *  source of truth (`compute_view_matrices`) — the JS coordinate path
+     *  source of truth (`compute_view_matrices`): the JS coordinate path
      *  consumes these instead of re-deriving the transform. 12 floats:
      *  `[screen→plane (6), plane→screen (6)]`, each row-major
      *  `[m00, m01, m02, m10, m11, m12]`. Reactive over every view input
@@ -403,10 +425,10 @@ export class DarklyInstance {
         );
     });
 
-    // Tool cursor — when non-null, overrides nav cursor on the canvas element.
+    // Tool cursor: when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
-    // Transform-mode context menu: viewport coords where the user right-clicked
+    // Transform-mode context menu: viewport coords where the artist right-clicked
     // inside the active transform gizmo, or null when closed. The transform
     // tool sets it; `TransformModeMenu` renders against it (mirrors how
     // `toolCursor` flows tool → reactive UI).
@@ -419,23 +441,53 @@ export class DarklyInstance {
 
     selectLayer(id: number | null) {
         // Clicking any layer other than the currently isolated one exits
-        // isolation. The user is asking to navigate to a layer that's
+        // isolation. The artist is asking to navigate to a layer that's
         // off-path under the current solo, so the click implies they're
-        // done with the solo session — keeping isolation would be a
+        // done with the solo session: keeping isolation would be a
         // confusing UI deadlock (the click would silently appear to do
         // nothing if the new layer is hidden by isolation). Selecting the
         // same isolated node is a no-op.
         if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
             void this.setIsolatedNode(null);
         }
+        this.setSoleSelection(id);
+    }
+
+    /** Make `id` the entire selection. The single mutator of the
+     *  `activeLayerId` / `selectedLayerIds` pair; `selectLayer` layers the
+     *  isolation-exit policy on top, which the reconciler deliberately does not
+     *  want (it clears isolation only when the isolated node itself dies). */
+    private setSoleSelection(id: number | null) {
         this.activeLayerId = id;
         this.selectedLayerIds = id === null ? new Set() : new Set([id]);
         this.activeVeilIndex = null;
     }
 
+    /** The layer-tree node with `id`, searched depth-first through the group
+     *  hierarchy, or null if absent. The single home for "resolve a node by id"
+     *  so consumers (tools, panels) never re-walk the tree themselves. */
+    nodeById(id: number): any | null {
+        const walk = (nodes: any[]): any | null => {
+            for (const n of nodes) {
+                if (n.id === id) return n;
+                if (Array.isArray(n.children)) {
+                    const found = walk(n.children);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+        return walk(this.layerTree);
+    }
+
+    /** The active layer's tree node, or null when nothing is selected. */
+    get activeNode(): any | null {
+        return this.activeLayerId === null ? null : this.nodeById(this.activeLayerId);
+    }
+
     /** The mask modifier id relevant to the active node, or null. Resolves
      *  both cases: the active node is a host that owns a mask, and the
-     *  active node *is* a mask modifier — clicking the mask thumbnail makes
+     *  active node *is* a mask modifier; clicking the mask thumbnail makes
      *  the mask the active node, and a mask has no mask child of its own.
      *  Drives the `maskToSelection` enabled guard. */
     get activeMaskId(): number | null {
@@ -488,7 +540,9 @@ export class DarklyInstance {
             this.selectLayer(id);
             return;
         }
-        const order = this.flattenedVisibleIds();
+        // Visible order only: shift-click spans the rows the artist can see, so
+        // it never reaches into a collapsed group.
+        const order = indexLayerTree(this.layerTree).visibleOrder;
         const anchorIdx = order.indexOf(this.activeLayerId);
         const targetIdx = order.indexOf(id);
         if (anchorIdx < 0 || targetIdx < 0) {
@@ -500,7 +554,7 @@ export class DarklyInstance {
             : [targetIdx, anchorIdx];
         this.selectedLayerIds = new Set(order.slice(lo, hi + 1));
         // Active follows the click so subsequent shift-clicks extend from
-        // where the user is currently pointing — standard Photoshop.
+        // where the artist is currently pointing (standard Photoshop).
         this.activeLayerId = id;
         this.activeVeilIndex = null;
     }
@@ -508,7 +562,7 @@ export class DarklyInstance {
     /** Replace the multi-selection with `ids`. The last id becomes
      *  active (matches plain-click semantics: focus follows the most
      *  recent touch). Used by batch ops like duplicate that want the
-     *  user to land on the freshly-created layers. */
+     *  artist to land on the freshly-created layers. */
     selectLayers(ids: number[]) {
         if (ids.length === 0) {
             this.clearSelection();
@@ -536,82 +590,81 @@ export class DarklyInstance {
         else this.selectLayer(id);
     }
 
-    /** Walk the visible tree depth-first, returning every clickable node
-     *  id in panel-top-to-panel-bottom order. Children of collapsed
-     *  groups are skipped (the user can't see them, so shift-click
-     *  shouldn't reach them). */
-    private flattenedVisibleIds(): number[] {
-        const out: number[] = [];
-        const walk = (nodes: any[]) => {
-            for (const n of nodes) {
-                if (n?.id === undefined) continue;
-                out.push(n.id);
-                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
-                    walk(n.children);
-                }
-            }
-        };
-        walk(this.layerTree);
-        return out;
-    }
-
-    /** Pick the first id in `set` that appears in panel order. Returns
-     *  null when the set is empty or none of its ids are still in the
-     *  tree. Caller is the active-layer demotion path for ctrl-click. */
+    /** Pick the first id in `set` that appears in panel order, skipping rows
+     *  inside collapsed groups: the caller is the ctrl-click demotion path, so
+     *  the answer should be a row the artist can see. Returns null when the set is
+     *  empty or none of its ids are still visible. Indexed fresh from the live
+     *  tree, since callers may have assigned `layerTree` without a refresh. */
     private firstInTreeOrder(set: Set<number>): number | null {
         if (set.size === 0) return null;
-        for (const id of this.flattenedVisibleIds()) {
+        for (const id of indexLayerTree(this.layerTree).visibleOrder) {
             if (set.has(id)) return id;
         }
         return null;
     }
 
-    /** Reconcile `selectedLayerIds` and `activeLayerId` against the latest
-     *  layer tree. Ids that no longer exist (deleted, undone, replaced by a
-     *  bake result, etc.) drop out; if the active id disappeared, demote
-     *  to the next remaining selected id in panel order or null. Called
-     *  from `refreshLayerTree` so batch-delete / undo / cross-tab swap
-     *  fallout is handled in one place.
+    /** Reconcile session state that references layer ids against the latest
+     *  layer tree: the selection and the isolation target. Ids that no longer
+     *  exist (deleted, undone, replaced by a bake result, etc.) drop out, and
+     *  when the active row itself disappeared, the row that took its place
+     *  becomes active, so no removal path has to know about reselection.
+     *  Called from `refreshLayerTree`, which every tree mutation funnels
+     *  through, so delete / batch-delete / undo fallout is handled in one place.
+     *
+     *  `adoptAppeared` asks for the opposite direction: rows that just came into
+     *  existence become the selection. Only undo/redo pass it: an ordinary
+     *  refresh must never seize the selection just because it noticed a row for
+     *  the first time.
      *
      *  Takes the tree as a parameter (rather than reading `this.layerTree`)
-     *  so this code path stays write-only on `layerTree` — reading it here
+     *  so this code path stays write-only on `layerTree`: reading it here
      *  would tie the LayerPanel's `$effect` to the very state the method
      *  just wrote, looping Svelte's update guard. Same pattern as
      *  `reconcileStreamSources(next)`. */
-    private pruneSelectionAgainstTree(tree: any[]) {
-        const alive = new Set<number>();
-        const visibleOrder: number[] = [];
-        const walk = (nodes: any[]) => {
-            for (const n of nodes) {
-                if (n?.id === undefined) continue;
-                alive.add(n.id);
-                visibleOrder.push(n.id);
-                if (Array.isArray(n.modifiers)) {
-                    for (const m of n.modifiers) {
-                        if (m?.id !== undefined) alive.add(m.id);
-                    }
-                }
-                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
-                    walk(n.children);
-                }
-            }
-        };
-        walk(tree);
+    private reconcileSelection(tree: any[], adoptAppeared = false) {
+        const prev = this.treeIndex;
+        const next = indexLayerTree(tree);
+        this.treeIndex = next;
 
-        let mutated = false;
-        const nextSelected = new Set<number>();
-        for (const id of this.selectedLayerIds) {
-            if (alive.has(id)) nextSelected.add(id);
-            else mutated = true;
+        // The isolation target is session state pointing at a document node: if
+        // it leaves the tree it becomes unreachable from the compositor's root
+        // walk, every node tests as off-path, and the canvas goes blank until
+        // something happens to reset it. Checked independently of the selection
+        // below, because the isolated node can die while a different, still-live
+        // layer is active. Krita ends isolation the same way when its isolation
+        // root is removed (`KisImage::aboutToRemoveANode`).
+        if (this.isolatedNodeId !== null && !next.ids.has(this.isolatedNodeId)) {
+            void this.setIsolatedNode(null);
         }
-        if (mutated) this.selectedLayerIds = nextSelected;
 
-        if (this.activeLayerId !== null && !alive.has(this.activeLayerId)) {
-            let replacement: number | null = null;
-            for (const id of visibleOrder) {
-                if (nextSelected.has(id)) { replacement = id; break; }
+        const survivors = [...this.selectedLayerIds].filter((id) => next.ids.has(id));
+        if (survivors.length !== this.selectedLayerIds.size) {
+            this.selectedLayerIds = new Set(survivors);
+        }
+
+        const appeared = adoptAppeared ? appearedRoots(prev, next) : [];
+        if (appeared.length > 0) {
+            this.selectedLayerIds = new Set(appeared);
+            this.activeLayerId = appeared[0];
+            this.activeVeilIndex = null;
+        } else {
+            const active = this.activeLayerId;
+            if (active !== null && !next.ids.has(active)) {
+                // Prefer a surviving member of the selection, keeping the rest
+                // of it intact; otherwise adopt whatever replaced the dead row.
+                const demoted = next.order.find((id) => this.selectedLayerIds.has(id));
+                if (demoted !== undefined) this.activeLayerId = demoted;
+                else this.setSoleSelection(nextActiveAfterRemoval(prev, next.ids, active));
             }
-            this.activeLayerId = replacement;
+        }
+
+        // A row the panel doesn't draw reads to the artist as "nothing selected",
+        // which is the complaint reselection exists to fix. Open whatever hides
+        // it, as GIMP's tree view does for every newly selected item.
+        if (this.activeLayerId !== null) {
+            for (const id of collapsedAncestorsOf(next, this.activeLayerId)) {
+                this.engine?.api.setGroupCollapsed({ id, collapsed: false });
+            }
         }
     }
 
@@ -628,24 +681,24 @@ export class DarklyInstance {
     }
 
     /** Active external-frame void inputs, keyed by the void layer's id. Each
-     *  entry is a `FrameSource` — a `MediaStreamSource` (camera / screenshare)
-     *  or an `HttpStreamSource` (Blender feed) — owning its per-frame upload
+     *  entry is a `FrameSource`: a `MediaStreamSource` (camera / screenshare)
+     *  or an `HttpStreamSource` (Blender feed), owning its per-frame upload
      *  logic. `refreshLayerTree` reaps entries whose layer no longer exists
      *  (covers undo / explicit delete / document close). Reactive `$state` so
      *  the properties panel re-renders when an entry's `error` string changes. */
     streamSources = $state<Map<number, FrameSource>>(new Map());
 
-    /** Set of stream-backed void layer IDs the user has explicitly authorized
+    /** Set of stream-backed void layer IDs the artist has explicitly authorized
      *  for this session. The picker adds the id when a new layer is created;
      *  the "Connect"/"Resume" button in VoidProperties adds it for layers loaded
      *  from a `.darkly` (or after an external stop / disconnect). Reopening a
      *  document does NOT add to this set, so the saved last frame is shown until
-     *  the user opts back in — no surprise permission prompt or capture
+     *  the artist opts back in: no surprise permission prompt or capture
      *  indicator. Session-only: never persisted, cleared on document open /
      *  page reload. */
     streamSessionStarted = $state<Set<number>>(new Set());
 
-    /** Mark a stream-backed void as explicitly user-started for this session.
+    /** Mark a stream-backed void as explicitly artist-started for this session.
      *  Idempotent. Triggers a layer-tree refresh so the reconciler picks the
      *  new state up (drives `showResume` in VoidProperties). The actual source
      *  is started by the gesture via `startStreamSource`, not here. */
@@ -656,7 +709,7 @@ export class DarklyInstance {
     }
 
     /** Acquire a `MediaStream` for the given capture kind. MUST be called
-     *  synchronously inside a user gesture (before any awaitable round-trip) —
+     *  synchronously inside a user gesture (before any awaitable round-trip):
      *  `getDisplayMedia` requires transient activation, which expires if an
      *  `await` runs first. Rejects with a `DOMException` the caller maps via
      *  `describeMediaError`. */
@@ -669,13 +722,13 @@ export class DarklyInstance {
 
     /** Start a frame source for a stream-backed void, dispatching on capture
      *  kind. `camera` / `display` build a `MediaStreamSource` and adopt (or
-     *  acquire) a `MediaStream` — the reconciler no longer starts these; only
+     *  acquire) a `MediaStream`: the reconciler no longer starts these; only
      *  gestures do (the picker and the Resume button), which keeps every start
      *  inside a user activation. The picker, which has already `await`ed
      *  `add_void`, passes its in-gesture pre-acquired `stream` (or `acquireError`
-     *  if the user cancelled); Resume passes neither and acquires in-gesture
+     *  if the artist cancelled); Resume passes neither and acquires in-gesture
      *  here. `stream` voids (Blender) build an `HttpStreamSource` and connect to
-     *  the layer's `url` param immediately — no gesture or permission needed for
+     *  the layer's `url` param immediately; no gesture or permission needed for
      *  a localhost HTTP stream. Idempotent. */
     async startStreamSource(
         layerId: number,
@@ -684,14 +737,14 @@ export class DarklyInstance {
         acquireError?: unknown,
     ) {
         if (!this.engine) return;
-        // A live healthy source wins — repeat gestures are no-ops. A dead one
+        // A live healthy source wins; repeat gestures are no-ops. A dead one
         // (`ended`) or one whose acquisition failed (`error` set but never
         // ended, e.g. a denied permission prompt) yields to the retry.
         const existing = this.streamSources.get(layerId);
         if (existing && !existing.ended && !existing.error) return;
         existing?.stop();
 
-        // Both callbacks reassign the map so Svelte sees a new identity —
+        // Both callbacks reassign the map so Svelte sees a new identity:
         // field mutation on a class instance inside a `$state` Map is
         // invisible to reactivity.
         const onEnded = (id: number) => this.onStreamSourceEnded(id);
@@ -740,7 +793,7 @@ export class DarklyInstance {
                 this.clearStreamSessionStarted(layerId);
             }
         }
-        // Force a redraw — `error` may have just been set, and we want a frame
+        // Force a redraw: `error` may have just been set, and we want a frame
         // so the void either starts presenting frames or the notice appears.
         this.streamSources = new Map(this.streamSources);
         this.requestFrame();
@@ -780,7 +833,7 @@ export class DarklyInstance {
 
     /** React to a source ending *externally* (the browser's "Stop sharing" bar,
      *  a webcam unplug, or a Blender stream disconnect). Stop the source but
-     *  keep it registered — the dead entry is the record of its own demise,
+     *  keep it registered: the dead entry is the record of its own demise,
      *  feeding the error notice and status row in VoidProperties (pruning here
      *  would vanish the error before it could render). Drop the session opt-in
      *  so "Connect"/"Resume" shows again; the next start replaces the corpse.
@@ -817,8 +870,8 @@ export class DarklyInstance {
      *  tree. Responsibilities: tear down sources whose void was deleted /
      *  undone, push the latest `freeze` + `frame_divisor` + effective-visibility
      *  into each live source, and prune the session-opt-in set. It does NOT
-     *  start sources — that's a gesture-only concern (see `startMediaStreamVoid`)
-     *  so activation never expires — and it does NOT stop a source merely
+     *  start sources (that's a gesture-only concern, see `startMediaStreamVoid`,
+     *  so activation never expires), and it does NOT stop a source merely
      *  because the void is frozen: freeze suppresses uploads while keeping the
      *  stream open (stopping a `getDisplayMedia` track would end the share for
      *  good). Called from `refreshLayerTree` after every layer mutation so dead
@@ -826,7 +879,7 @@ export class DarklyInstance {
      *  actually goes away.
      *
      *  Takes the tree as a parameter (rather than reading `this.layerTree`) so
-     *  the caller — `refreshLayerTree` — doesn't accidentally read the same
+     *  the caller (`refreshLayerTree`) doesn't accidentally read the same
      *  reactive store it's about to write, which would loop Svelte's
      *  infinite-update guard. */
     private reconcileStreamSources(tree: any[]) {
@@ -838,13 +891,13 @@ export class DarklyInstance {
         // visible only if every ancestor up to the root is visible, matching
         // the compositor's nested-visibility semantics (see
         // `Doc::effective_visible`). The eye on the void's own row is necessary
-        // but not sufficient — hiding the parent group must also halt uploads.
+        // but not sufficient: hiding the parent group must also halt uploads.
         const walk = (nodes: any[], parentVisible: boolean) => {
             for (const n of nodes) {
                 const selfVisible = n?.visible !== false; // default true
                 const effectiveVisible = parentVisible && selfVisible;
-                // `type` (not `kind`) is the serde variant tag on `LayerInfo`
-                // — set by `#[serde(tag = "type")]` in engine/types.rs. Any
+                // `type` (not `kind`) is the serde variant tag on `LayerInfo`,
+                // set by `#[serde(tag = "type")]` in engine/types.rs. Any
                 // void whose kind declares a `captureKind` is stream-backed.
                 const cap = this.voidCaptureKind.get(n?.voidType);
                 if (n?.type === 'void' && cap) {
@@ -884,7 +937,7 @@ export class DarklyInstance {
         walk(tree, true);
 
         // Tear down sources only for layers that actually disappeared (deleted
-        // / undone). Freezing is handled by `setFrozen` below — it must keep
+        // / undone). Freezing is handled by `setFrozen` below: it must keep
         // the stream open.
         for (const id of [...this.streamSources.keys()]) {
             if (!desired.has(id)) {
@@ -985,7 +1038,13 @@ export class DarklyInstance {
         return [r.origin_x, r.origin_y, r.width, r.height];
     }
 
-    async refreshLayerTree(): Promise<void> {
+    /** Re-read the layer tree and reconcile session state against it.
+     *
+     *  `adoptAppeared` makes rows that just came into existence the selection,
+     *  passed by undo/redo so undoing a delete lands on the layer it brought
+     *  back, matching both GIMP (which selects the restored layer) and Krita
+     *  (which restores the pre-delete selection set). */
+    async refreshLayerTree(opts?: { adoptAppeared?: boolean }): Promise<void> {
         if (!this.engine) return;
         const parsed = await this.engine.api.layerTree();
         const next: any[] = Array.isArray(parsed) ? parsed : [];
@@ -994,14 +1053,14 @@ export class DarklyInstance {
         // frozen / undone voids tear down (turning off the OS capture
         // indicator) and divisor/visibility changes propagate. Done BEFORE
         // assignment so this method only *writes* `layerTree` (never reads it),
-        // keeping it out of any enclosing effect's dependency set — otherwise
+        // keeping it out of any enclosing effect's dependency set; otherwise
         // the write loops back through it.
         this.reconcileStreamSources(next);
-        this.pruneSelectionAgainstTree(next);
+        this.reconcileSelection(next, opts?.adoptAppeared ?? false);
         this.layerTree = next;
         // Schedule a render frame: callers invoke this after layer mutations
         // (undo/redo, add/remove, drag/drop, etc.), and the engine may have
-        // async work pending — dirty-pixel readbacks, content-bounds compute,
+        // async work pending: dirty-pixel readbacks, content-bounds compute,
         // animation. Without a frame, drain_dirty_thumbnail_readbacks never
         // runs and the layer panel ends up showing pre-mutation thumbnails.
         this.requestFrame();
@@ -1052,6 +1111,10 @@ export class DarklyInstance {
 
     private _framePending = false;
 
+    /** Handle of the rAF scheduled by {@link requestFrame}, so {@link renderNow}
+     *  can cancel a still-pending frame before rendering synchronously. */
+    private _frameHandle = 0;
+
     /**
      * Number of active UI interactions (panel drags, slider adjustments,
      * etc.) that should suppress continuous animation rendering.  While
@@ -1072,12 +1135,12 @@ export class DarklyInstance {
     }
 
     /** True while a canvas pointer stroke/drag is in flight (any tool).
-     *  Set by CanvasView's pointer dispatch. Generic, not brush-specific —
+     *  Set by CanvasView's pointer dispatch. Generic, not brush-specific:
      *  it gates autosave so a snapshot never captures a half-committed
      *  stroke or runs its offscreen composite mid-stroke. */
     pointerActive = $state(false);
 
-    /** Safe to take an autosave snapshot right now? False while the user
+    /** Safe to take an autosave snapshot right now? False while the artist
      *  is mid-stroke on the canvas or mid-drag in the brush builder. */
     get idleForSnapshot(): boolean {
         return !this.pointerActive && this._interactionCount === 0;
@@ -1111,7 +1174,7 @@ export class DarklyInstance {
     /** Frame the document in the viewport: zoom-to-fit (enlarging a document
      *  smaller than the viewport past 1:1 to fill it) and recenter, preserving
      *  the current rotation and mirror. The orientation-agnostic counterpart to
-     *  {@link resetView} — GIMP "Fit Image in Window". */
+     *  {@link resetView} (GIMP "Fit Image in Window"). */
     fitToScreen() {
         this.panX = 0;
         this.panY = 0;
@@ -1120,7 +1183,7 @@ export class DarklyInstance {
     }
 
     /** Recenter the canvas in the viewport, leaving zoom, rotation, and mirror
-     *  untouched — GIMP "Center Image in Window". */
+     *  untouched (GIMP "Center Image in Window"). */
     centerView() {
         this.panX = 0;
         this.panY = 0;
@@ -1131,131 +1194,158 @@ export class DarklyInstance {
     requestFrame() {
         if (this._framePending) return;
         this._framePending = true;
-        requestAnimationFrame((ts) => {
+        this._frameHandle = requestAnimationFrame((ts) => {
             this._framePending = false;
-            const engine = this.engine;
-            if (!engine) return;
-            // Push the latest external frames (webcam / screenshare / Blender
-            // stream) into their void input textures BEFORE render — render
-            // reads from those textures during composite, so a later upload
-            // would lag by a frame.
-            //
-            // The frame count we pass to `tick` is the value the compositor's
-            // master counter *will* hold once render increments it (inside
-            // `update_animations`): one past the count the *previous* render
-            // returned. Anticipating the increment keeps JS-side divisor gates
-            // phase-locked with the Rust-side veil / overlay / void divisors
-            // that check the post-increment value — so a camera `divisor=N`
-            // fires on the same rAF as a veil `divisor=N`, not one off. (We
-            // can't read `frame_count` directly anymore — it would be a third
-            // competing engine borrow; render returns it on the state mirror.)
-            const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
-            for (const src of this.streamSources.values()) {
-                src.tick(nextFrameCount);
-            }
+            this.runFrame(ts / 1000.0);
+        });
+    }
 
-            // The ONE engine borrow per frame: drains the request FIFO (which
-            // resolves any pending `send`/`post` promises) then composites. A
-            // re-entrant render reached via the event pump returns `busy` — the
-            // outer render handles everything, so we bail without rescheduling.
-            const frame = engine.render(ts / 1000.0);
-            if (frame.busy) return;
+    /** Drive one full frame synchronously in the current task: the synchronous
+     *  counterpart to {@link requestFrame}. The canvas-resize path needs this:
+     *  Firefox's zero-copy WebGPU present stalls the GPU process when a present
+     *  straddles a swapchain reconfigure, so the just-enqueued `resize`
+     *  (→ `surface.configure`) and the present must run in the same JS task as
+     *  the `canvas.width`/`canvas.height` write, with no browser turn between. */
+    renderNow(ts: number = performance.now() / 1000) {
+        // A normal rAF may already be queued; running now makes it redundant.
+        // Cancel it so we don't render twice and, critically, so `_framePending`
+        // is not left set, which would make the next `requestFrame` a silent no-op.
+        if (this._framePending) {
+            cancelAnimationFrame(this._frameHandle);
+            this._framePending = false;
+        }
+        this.runFrame(ts);
+    }
 
-            // Refresh the synchronously-readable engine-state mirror from
-            // render's returned snapshot — no per-frame query; it's a downhill
-            // projection of the borrow render already held this frame. This one
-            // assignment updates everything the UI caches: frame/thumbnail
-            // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
-            // changes) and document bools.
-            if (frame.state) this.engineState = frame.state;
+    /** One frame's work: drain the request FIFO + composite (the single engine
+     *  borrow), refresh the state mirror, run per-frame tool/pointer hooks, poll
+     *  async readbacks, and self-schedule the animation loop. Shared by the
+     *  deferred ({@link requestFrame}) and synchronous ({@link renderNow}) entry
+     *  points; `ts` is in seconds. Must not touch `_framePending`: the rAF path
+     *  owns clearing it at the seam it scheduled. */
+    private runFrame(ts: number) {
+        const engine = this.engine;
+        if (!engine) return;
+        // Push the latest external frames (webcam / screenshare / Blender
+        // stream) into their void input textures BEFORE render: render
+        // reads from those textures during composite, so a later upload
+        // would lag by a frame.
+        //
+        // The frame count we pass to `tick` is the value the compositor's
+        // master counter *will* hold once render increments it (inside
+        // `update_animations`): one past the count the *previous* render
+        // returned. Anticipating the increment keeps JS-side divisor gates
+        // phase-locked with the Rust-side veil / overlay / void divisors
+        // that check the post-increment value, so a camera `divisor=N`
+        // fires on the same rAF as a veil `divisor=N`, not one off. (We
+        // can't read `frame_count` directly anymore: it would be a third
+        // competing engine borrow; render returns it on the state mirror.)
+        const nextFrameCount = (this.engineState?.frameCount ?? 0) + 1;
+        for (const src of this.streamSources.values()) {
+            src.tick(nextFrameCount);
+        }
 
-            // Per-frame tool hook — async state sync (e.g. GPU readback
-            // completion). The instance's OWN tool runs against its OWN session,
-            // so a background tab's frame drives its own tool, never the focused
-            // one. Wrapped so a hook whose engine op was cancelled by a session
-            // change mid-await settles cleanly (see tool_session.ts).
-            void runHook(this.tool(this.activeToolId)?.onFrame?.());
+        // The ONE engine borrow per frame: drains the request FIFO (which
+        // resolves any pending `send`/`post` promises) then composites. A
+        // re-entrant render reached via the event pump returns `busy`: the
+        // outer render handles everything, so we bail without rescheduling.
+        const frame = engine.render(ts);
+        if (frame.busy) return;
 
-            // Drain completed process-recording captures to the encoder
-            // worker. No-op unless this tab's recorder is live.
-            processRecording.pollFrame(this);
+        // Refresh the synchronously-readable engine-state mirror from
+        // render's returned snapshot: no per-frame query; it's a downhill
+        // projection of the borrow render already held this frame. This one
+        // assignment updates everything the UI caches: frame/thumbnail
+        // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
+        // changes) and document bools.
+        if (frame.state) this.engineState = frame.state;
 
-            // Pointer singletons tick with the focused canvas's frame — there is
-            // one pointer, and these read/write the global `app` (the focused
-            // instance). A background tab's frame must not drive them.
-            if (getActiveInstance() === this) {
-                // Global color-pick poll — drives both the color-picker tool and
-                // the modifier-held `sampleColor` chord. Runs regardless of
-                // active tool so a Ctrl-drag started in (e.g.) the brush tool
-                // completes.
-                pollPick();
-                // Refresh the color-picker cursor against the latest foreground
-                // committed by `pollPick`. Cheap when nothing changed.
-                tickColorPickerCursor();
-                // Refresh the clone set-source cursor — re-queries "needs source"
-                // on brush change and shows/hides the crosshair. Cheap when
-                // nothing changed (memo guards).
-                tickCloneSourceCursor();
-            }
+        // Per-frame tool hook: async state sync (e.g. GPU readback
+        // completion). The instance's OWN tool runs against its OWN session,
+        // so a background tab's frame drives its own tool, never the focused
+        // one. Wrapped so a hook whose engine op was cancelled by a session
+        // change mid-await settles cleanly (see tool_session.ts).
+        void runHook(this.tool(this.activeToolId)?.onFrame?.());
 
-            // Check for completed async copy/cut readback.
-            if (this._copyCallback) {
-                engine.api.pollCopyResult().then((result) => {
-                    if (result && this._copyCallback) {
-                        const cb = this._copyCallback;
-                        this._copyCallback = null;
-                        cb(result);
+        // Drain completed process-recording captures to the encoder
+        // worker. No-op unless this tab's recorder is live.
+        processRecording.pollFrame(this);
+
+        // Pointer singletons tick with the focused canvas's frame; there is
+        // one pointer, and these read/write the global `app` (the focused
+        // instance). A background tab's frame must not drive them.
+        if (getActiveInstance() === this) {
+            // Global color-pick poll: drives both the color-picker tool and
+            // the modifier-held `sampleColor` chord. Runs regardless of
+            // active tool so a Ctrl-drag started in (e.g.) the brush tool
+            // completes.
+            pollPick();
+            // Refresh the color-picker cursor against the latest foreground
+            // committed by `pollPick`. Cheap when nothing changed.
+            tickColorPickerCursor();
+            // Refresh the clone set-source cursor: re-queries "needs source"
+            // on brush change and shows/hides the crosshair. Cheap when
+            // nothing changed (memo guards).
+            tickCloneSourceCursor();
+        }
+
+        // Check for completed async copy/cut readback.
+        if (this._copyCallback) {
+            engine.api.pollCopyResult().then((result) => {
+                if (result && this._copyCallback) {
+                    const cb = this._copyCallback;
+                    this._copyCallback = null;
+                    cb(result);
+                }
+            });
+        }
+
+        // Check for completed async export readback.
+        if (this._exportCallback) {
+            engine
+                .api.pollExportResult()
+                .then((result) => {
+                    if (result && this._exportCallback) {
+                        const cb = this._exportCallback;
+                        this._exportCallback = null;
+                        cb({ width: result.width, height: result.height, rgba: result.bytes });
                     }
                 });
-            }
+        }
 
-            // Check for completed async export readback.
-            if (this._exportCallback) {
-                engine
-                    .api.pollExportResult()
-                    .then((result) => {
-                        if (result && this._exportCallback) {
-                            const cb = this._exportCallback;
-                            this._exportCallback = null;
-                            cb({ width: result.width, height: result.height, rgba: result.bytes });
-                        }
-                    });
-            }
+        // Check for completed async `.darkly` save readbacks. The bundle's
+        // byte blobs arrive concatenated in `bytes`; slice them back out
+        // into the per-blob shape `saveDocument.ts` expects.
+        if (this._saveCallback) {
+            engine.api.pollSaveResult().then((packed) => {
+                if (!packed || !this._saveCallback) return;
+                const cb = this._saveCallback;
+                this._saveCallback = null;
+                cb(unpackSaveBundle(packed));
+            });
+        }
 
-            // Check for completed async `.darkly` save readbacks. The bundle's
-            // byte blobs arrive concatenated in `bytes`; slice them back out
-            // into the per-blob shape `saveDocument.ts` expects.
-            if (this._saveCallback) {
-                engine.api.pollSaveResult().then((packed) => {
-                    if (!packed || !this._saveCallback) return;
-                    const cb = this._saveCallback;
-                    this._saveCallback = null;
-                    cb(unpackSaveBundle(packed));
-                });
-            }
-
-            // Continue animation loop only when no UI interaction is
-            // monopolizing the main thread.  One-shot renders (tool
-            // actions, resize, etc.) always go through — only the
-            // self-scheduling continuous loop is suppressed.
-            const shouldContinue =
-                frame.needsMore ||
-                this._copyCallback ||
-                this._exportCallback ||
-                this._saveCallback;
-            if (shouldContinue && this._interactionCount === 0) {
-                this.requestFrame();
-            }
-        });
+        // Continue animation loop only when no UI interaction is
+        // monopolizing the main thread.  One-shot renders (tool
+        // actions, resize, etc.) always go through; only the
+        // self-scheduling continuous loop is suppressed.
+        const shouldContinue =
+            frame.needsMore ||
+            this._copyCallback ||
+            this._exportCallback ||
+            this._saveCallback;
+        if (shouldContinue && this._interactionCount === 0) {
+            this.requestFrame();
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// `app` — global proxy for "the currently focused instance"
+// `app`: global proxy for "the currently focused instance"
 // ---------------------------------------------------------------------------
 //
 // 40+ files do `import { app } from './state/app.svelte'`. To keep them
-// untouched, `app` stays a single exported symbol — but it's now a Proxy
+// untouched, `app` stays a single exported symbol, but it's now a Proxy
 // over a swappable underlying instance. Single-instance hosts call
 // `setActiveInstance(theLoneInstance)` at boot; the multi-tab shell calls it
 // whenever the focused tab changes.

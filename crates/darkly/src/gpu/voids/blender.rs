@@ -1,7 +1,7 @@
-//! Blender void — a live Blender view as a layer.
+//! Blender void: a live Blender view as a layer.
 //!
 //! Sibling of the camera and screenshare voids: a thin config over the shared
-//! [`crate::gpu::video_stream_void`] machinery. Frames arrive not from a browser
+//! [`crate::gpu::textured_void`] machinery. Frames arrive not from a browser
 //! `MediaStream` but from an HTTP stream ([`CaptureKind::Stream`]) served by the
 //! companion Blender add-on (`blender-addon/`), which captures the 3D viewport's
 //! own view (or a camera POV), encodes alpha-carrying PNG, and streams
@@ -13,10 +13,11 @@
 //! The `url` param is the one addition over the other stream voids: it's a
 //! document-persisted value the **frontend** reads to know where to connect. The
 //! Rust void looks its params up by name (`freeze`, `frame_divisor`) and never
-//! reads `url` — it exists purely as frontend-facing document state.
+//! reads `url`; it exists purely as frontend-facing document state.
 
-use crate::gpu::video_stream_void::{self, VideoStreamConfig};
-use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration};
+use crate::gpu::textured_void::ContentFit;
+use crate::gpu::textured_void::{self, TexturedVoidConfig};
+use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "blender";
 
@@ -30,39 +31,38 @@ const PARAMS: &[ParamDef] = &[
     // Freeze on the last received frame; suppresses uploads (GPU holds the last
     // frame) while the frontend keeps the HTTP stream open, so unfreezing
     // resumes instantly (see camera void).
-    ParamDef::Bool {
-        name: "freeze",
-        default: false,
-    },
+    ParamDef::boolean("freeze", false)
+        .with_label("Freeze")
+        .with_description("Holds the last received frame instead of following the live stream."),
     // rAF frames to skip between decoded-frame → GPU uploads (see camera void).
-    ParamDef::Int {
-        name: "frame_divisor",
-        min: 1,
-        max: 60,
-        default: 4,
-    },
-    // Where the frontend `fetch`es the frame stream. Not read by the Rust void —
-    // `VideoStreamVoid` resolves params by name and ignores this one; it's
+    ParamDef::int("frame_divisor", 1, 60, 4)
+        .with_label("Frame Skip")
+        .with_description("Take one frame in this many, to lighten the load."),
+    // Where the frontend `fetch`es the frame stream. Not read by the Rust void;
+    // `TexturedVoid` resolves params by name and ignores this one; it's
     // document-persisted purely so the frontend knows where to connect and so
     // the endpoint round-trips through save/load.
-    ParamDef::String {
-        name: "url",
-        default: DEFAULT_URL,
-    },
+    ParamDef::string("url", DEFAULT_URL)
+        .with_label("Stream URL")
+        .with_description("Address the Blender frame stream is served from."),
 ];
 
-static CONFIG: VideoStreamConfig = VideoStreamConfig {
+static CONFIG: TexturedVoidConfig = TexturedVoidConfig {
     type_id: TYPE_ID,
     display_name: "Blender",
+    description: "Live viewport frames streamed from a running Blender session.",
     icon: "file-icons:blender",
     params: PARAMS,
-    capture_kind: CaptureKind::Stream,
+    source: VoidSource::Capture {
+        capture: CaptureKind::Stream,
+    },
+    fit: ContentFit::Cover,
     default_transform: |_, _| crate::transform::Transform::identity(),
 };
 
 pub fn register() -> VoidRegistration {
-    video_stream_void::registration(&CONFIG, |params, shared| {
-        video_stream_void::build_void(&CONFIG, params, shared)
+    textured_void::registration(&CONFIG, |params, shared| {
+        textured_void::build_void(&CONFIG, params, shared)
     })
 }
 
@@ -77,7 +77,7 @@ mod tests {
         let reg = register();
         assert_eq!(reg.type_id, "blender");
         assert_eq!(reg.display_name, "Blender");
-        assert_eq!(reg.capture_kind, Some(CaptureKind::Stream));
+        assert_eq!(reg.source.capture_kind(), Some(CaptureKind::Stream));
     }
 
     #[test]
@@ -90,9 +90,9 @@ mod tests {
     fn exposes_url_string_param_with_default() {
         // The `url` param is the frontend's connection endpoint. It must be a
         // String param carrying the localhost default so a freshly-created void
-        // connects without the user typing anything.
+        // connects without the artist typing anything.
         let reg = register();
-        let names: Vec<_> = reg.params.iter().map(|p| p.name()).collect();
+        let names: Vec<_> = reg.params.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["freeze", "frame_divisor", "url"]);
 
         let defaults: Vec<ParamValue> = reg.params.iter().map(|d| d.default_value()).collect();

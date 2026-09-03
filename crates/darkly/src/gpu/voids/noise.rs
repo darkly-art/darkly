@@ -1,4 +1,4 @@
-//! Noise void — domain-warped fractional Brownian motion.
+//! Noise void: domain-warped fractional Brownian motion.
 //!
 //! The cloudy / marbled / lightning-like procedural field described in the
 //! README as the "de-facto Void". Pure-GPU: the shader generates the layer's
@@ -12,8 +12,10 @@
 use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
-use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
-use std::cell::Cell;
+use crate::gpu::hash::pcg_hash;
+use crate::gpu::preview::{swing, PreviewAnim};
+use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration, VoidSource};
+use crate::units::UnitType;
 use std::sync::Arc;
 
 /// Procedural-render downscale factor. The FBM shader runs into an aux
@@ -36,75 +38,63 @@ const NOISE3D_DIM: u32 = 64;
 pub const TYPE_ID: &str = "noise";
 
 const PARAMS: &[ParamDef] = &[
-    // Seed indexes the procedural field — every integer produces a different
+    // Seed indexes the procedural field: every integer produces a different
     // noise pattern, so a randomize button (or just typing a number) gives
     // the "infinite combinations of entropy" the README promises.
-    ParamDef::Int {
-        name: "seed",
-        min: 0,
-        max: i32::MAX,
-        default: 42,
-    },
+    ParamDef::int("seed", 0, i32::MAX, 42)
+        .with_label("Seed")
+        .with_description("Picks which noise pattern is generated; any two seeds look unrelated."),
     // Octave count of the underlying FBM. More octaves = more detail; cost
     // scales linearly. 5 is a good cloud-like default.
-    ParamDef::Int {
-        name: "octaves",
-        min: 1,
-        max: 8,
-        default: 5,
-    },
+    ParamDef::int("octaves", 1, 8, 5)
+        .with_label("Detail")
+        .with_description("How many layers of ever-finer noise are stacked up."),
     // Feature size in canvas pixels. Higher = larger blobs; lower =
-    // grainier. The default is tuned for 1k–2k canvases producing visible
+    // grainier. The default is tuned for 1k-2k canvases producing visible
     // cloud structure without going either flat or noisy. Converted to
     // a frequency multiplier (1 / size) at uniform-write time.
-    ParamDef::Float {
-        name: "size",
-        min: 20.0,
-        max: 2000.0,
-        default: 200.0,
-    },
+    ParamDef::float("size", 20.0, 2000.0, 200.0)
+        .with_label("Size")
+        .with_description("How large the noise features are on the canvas.")
+        .with_unit(UnitType::Pixels),
     // Domain-warp strength. 0 = pure FBM, increasing values produce more
     // marbled / swirly deformation per Quilez's warp.
-    ParamDef::Float {
-        name: "warp",
-        min: 0.0,
-        max: 3.0,
-        default: 1.5,
-    },
+    ParamDef::float("warp", 0.0, 3.0, 1.5)
+        .with_label("Warp")
+        .with_description("Bends the noise into marbled, swirling shapes."),
     // Darkness / tonal contrast. Applied as `pow(value, 1.0 + darkness)`
     // in the shader. 0 = linear (washed-out grayscale); higher values
     // push midtones toward black, giving a Watery-style deep base with
     // brighter peaks. Range tuned so the default looks like a moodier
     // cloud field, not a flat gray ramp.
-    ParamDef::Float {
-        name: "darkness",
-        min: 0.0,
-        max: 3.0,
-        default: 1.0,
-    },
-    // Time slider — z-coordinate into the 3D noise volume. Each value
+    ParamDef::float("darkness", 0.0, 3.0, 1.0)
+        .with_label("Darkness")
+        .with_description(
+            "Pushes the midtones down, deepening the field beneath the bright peaks.",
+        ),
+    // Time slider: z-coordinate into the 3D noise volume. Each value
     // produces a different cross-section of the same FBM field; scrub to
     // explore variations of the current seed without changing pattern
     // identity. Range chosen so the full slider covers many full noise-cell
     // crossings at the default Z scale (Z_SCALE = 0.15 in the shader).
-    ParamDef::Float {
-        name: "time",
-        min: 0.0,
-        max: 100.0,
-        default: 0.0,
-    },
+    ParamDef::float("time", 0.0, 100.0, 0.0)
+        .with_label("Time")
+        .with_description(
+            "Scrubs through variations of the same seed without changing its character.",
+        ),
 ];
 
 pub fn register() -> VoidRegistration {
     VoidRegistration {
         type_id: TYPE_ID,
         display_name: "Noise",
+        description: "Procedural fractal noise: clouds, grain and organic texture from a seed.",
         params: PARAMS,
         icon: "tabler:galaxy",
-        supports_preview: true,
+        preview: Some(PreviewAnim::LOOPING),
         supports_live_transform: true,
-        // Purely procedural — no external capture, identity seed transform.
-        capture_kind: None,
+        // Purely procedural: no external capture, identity seed transform.
+        source: VoidSource::Procedural,
         default_transform: |_, _| crate::transform::Transform::identity(),
         create_pipeline,
         from_params: |params, shared| Box::new(Noise::from_params(params, shared)),
@@ -125,8 +115,8 @@ struct NoiseUniforms {
     // struct, so every uniform write rebuilds the whole struct from state.
     canvas_scale: f32,
     _pad0: f32,
-    // Inverse of the user transform's homography (packed rows [m, _], see
-    // gpu::transform::pack_inv_rows) — applied to the canvas-space sampling
+    // Inverse of the artist transform's homography (packed rows [m, _], see
+    // gpu::transform::pack_inv_rows), applied to the canvas-space sampling
     // coordinate so the field pans / scales / rotates / warps with the gizmo.
     // Affine carries inv_row2 = [0,0,1,_], collapsing the perspective divide.
     inv_row0: [f32; 4],
@@ -143,17 +133,16 @@ pub struct Noise {
     pub size: f32,
     pub warp: f32,
     pub darkness: f32,
-    /// Z-axis offset into the 3D noise volume. User-controlled slider; a
+    /// Z-axis offset into the 3D noise volume. Artist-controlled slider; a
     /// scrub control for exploring different cross-sections of the field
     /// without changing the seed.
     pub time: f32,
-    /// User transform (gizmo affine). The shader samples the field through its
+    /// Artist transform (gizmo affine). The shader samples the field through its
     /// inverse, so the noise pattern pans / scales / rotates under the gizmo.
     transform: crate::transform::Transform,
-    /// Render-target→canvas px scale, baked at `create_cache`. `Cell` because
-    /// the trait hands `&self` there; cached so uniform writes need no extra
-    /// argument and never clobber it.
-    canvas_scale: Cell<f32>,
+    /// Render-target→canvas px scale, kept from `create_cache` so every
+    /// uniform write rebuilds the whole struct from state and never clobbers it.
+    canvas_scale: f32,
     shared: Arc<EffectPipeline>,
     dirty: DirtyFlag,
 }
@@ -171,7 +160,7 @@ impl Clone for Noise {
             darkness: self.darkness,
             time: self.time,
             transform: self.transform,
-            canvas_scale: Cell::new(self.canvas_scale.get()),
+            canvas_scale: self.canvas_scale,
             shared: self.shared.clone(),
             dirty: DirtyFlag::new_dirty(),
         }
@@ -212,7 +201,7 @@ impl Noise {
             darkness,
             time,
             transform: crate::transform::Transform::identity(),
-            canvas_scale: Cell::new(1.0),
+            canvas_scale: 1.0,
             shared,
             dirty: DirtyFlag::new_dirty(),
         }
@@ -228,7 +217,7 @@ impl Noise {
             warp: self.warp,
             darkness: self.darkness,
             time: self.time,
-            canvas_scale: self.canvas_scale.get(),
+            canvas_scale: self.canvas_scale,
             _pad0: 0.0,
             inv_row0,
             inv_row1,
@@ -265,6 +254,17 @@ impl Void for Noise {
         self.dirty.mark();
     }
 
+    /// The field drifts forward through the noise volume and rewinds. `time` is
+    /// an ordinary parameter rather than the animation trait's clock, so the
+    /// whole sweep is a value that can be written and re-written, which is what
+    /// lets it return to where it started and close the loop.
+    fn preview_at(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) -> bool {
+        self.time = 6.0 * swing(t);
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
+        self.dirty.mark();
+        true
+    }
+
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
         self.seed = match params.first() {
             Some(ParamValue::Int(v)) => *v,
@@ -290,11 +290,9 @@ impl Void for Noise {
             Some(ParamValue::Float(v)) => *v,
             _ => self.time,
         };
-        // Full write — `canvas_scale` is cached on the struct, so rebuilding
+        // Full write: `canvas_scale` is cached on the struct, so rebuilding
         // the whole uniform can't clobber it.
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
@@ -305,14 +303,12 @@ impl Void for Noise {
         transform: &crate::transform::Transform,
     ) {
         self.transform = *transform;
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
-        }
+        cache.write_uniform(queue, 0, bytemuck::bytes_of(&self.uniforms()));
         self.dirty.mark();
     }
 
     fn create_cache(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _dst_view: &wgpu::TextureView,
@@ -322,7 +318,7 @@ impl Void for Noise {
     ) -> EffectCache {
         let aux_w = (render_width / AUX_DOWNSCALE).max(AUX_MIN_DIM);
         let aux_h = (render_height / AUX_DOWNSCALE).max(AUX_MIN_DIM);
-        self.canvas_scale.set(render_width as f32 / aux_w as f32);
+        self.canvas_scale = render_width as f32 / aux_w as f32;
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("void-noise-uniforms"),
@@ -389,7 +385,7 @@ impl Void for Noise {
         //   binding 0: uniform buffer
         //   binding 1: 3D noise texture
         //   binding 2: noise sampler
-        // Duplicated to keep the [BindGroup; 2] cache shape — voids don't
+        // Duplicated to keep the [BindGroup; 2] cache shape: voids don't
         // ping-pong but the cache layout is shared with veils.
         let fbm_bg = |label: &str| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -540,7 +536,7 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
         immediate_size: 0,
     });
 
-    // WGSL has no native #include — concatenate the shared helpers ahead of
+    // WGSL has no native #include, so concatenate the shared helpers ahead of
     // this void's shader: the inverse-homography sampler (so the field warps
     // with perspective, sharing one impl with the floating path) and the FBM
     // primitive. A future warp veil will assemble the same way.
@@ -596,9 +592,9 @@ fn create_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> Effec
 /// `Rgba8Unorm` texture format; each channel is an independent
 /// pseudo-random byte so callers that read different channels get
 /// decorrelated noise (currently only `.x` is read, but the others are
-/// reserved for future use). The seed makes per-instance volumes distinct
-/// — if two voids have the same `seed` param they share an identical
-/// volume layout, which is the user-visible determinism contract.
+/// reserved for future use). The seed makes per-instance volumes distinct:
+/// if two voids have the same `seed` param they share an identical
+/// volume layout, which is the artist-visible determinism contract.
 fn seed_noise_volume(dim: u32, seed: u32) -> Vec<u8> {
     let count = (dim * dim * dim) as usize;
     let mut bytes = vec![0u8; count * 4];
@@ -608,12 +604,4 @@ fn seed_noise_volume(dim: u32, seed: u32) -> Vec<u8> {
         *b = (s >> 24) as u8;
     }
     bytes
-}
-
-/// PCG hash matching the GPU-side `fbm_pcg` in `shaders/lib/fbm.wgsl`.
-/// Used to seed the 3D noise volume on the CPU.
-fn pcg_hash(n: u32) -> u32 {
-    let mut h = n.wrapping_mul(747796405).wrapping_add(2891336453);
-    h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277803737);
-    (h >> 22) ^ h
 }

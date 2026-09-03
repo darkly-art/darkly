@@ -4,7 +4,7 @@
 //! canvas (the reported "grain swims under the rotating stamp" bug).
 //!
 //! The graph has no circle node, so the dab silhouette (a full disc) is
-//! identical between the two renders — only the interior grain differs. The
+//! identical between the two renders; only the interior grain differs. The
 //! probe therefore compares **RGB** (the noise color), not alpha coverage.
 //! At the dab centre the oriented frame is invariant, so probes are taken
 //! off-centre where rotation actually moves the sample.
@@ -48,8 +48,8 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 }
 
 /// Dab-space noise → paint, with `pen.drawing_angle → noise.rotation`.
-/// `scale_with_brush = false` and a small `scale` pack several fBm cells
-/// across the stamp so rotation produces a strong, easily-probed change.
+/// A small `scale` packs several fBm cells across the stamp so rotation
+/// produces a strong, easily-probed change.
 fn build_dab_noise_graph() -> Graph<BrushWireType> {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
@@ -67,7 +67,6 @@ fn build_dab_noise_graph() -> Graph<BrushWireType> {
         ("warp", InputValue::Scalar(0.6)),
         ("roughness", InputValue::Scalar(0.5)),
         ("space", InputValue::Int(1)),
-        ("scale_with_brush", InputValue::Bool(false)),
     ] {
         graph.set_port_value(&noise, name, v).unwrap();
     }

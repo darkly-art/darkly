@@ -1,4 +1,4 @@
-/** Minimal typings for gifenc (https://github.com/mattdesl/gifenc) —
+/** Minimal typings for gifenc (https://github.com/mattdesl/gifenc), since
  *  the package ships no TypeScript declarations. Only the surface the
  *  timelapse GIF export uses is declared. */
 declare module 'gifenc' {

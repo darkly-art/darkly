@@ -3,15 +3,24 @@
  *
  * Rust owns the authoritative graph. This module is a thin command layer
  * that sends mutations to WASM and replaces its local view with the
- * returned snapshot. Node positions are a UI-only concern — they live in
+ * returned snapshot. Node positions are a UI-only concern: they live in
  * `nodePositions` here, populated by `autoLayout` after every structural
  * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
 import { freshDocument } from './freshDocument';
+import { recentBrushes } from './recents.svelte';
+import { brushLibrary } from './brush_library.svelte';
 import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
 
 export type { BrushInfo };
+
+/** Upper bound the editor's "extended range" toggle unlocks numeric sliders to,
+ *  replacing the declared `0..1`. Purely a frontend affordance for entering
+ *  large gains (e.g. a math node scaling a signal into the canvas-pixel domain);
+ *  the engine never enforces slider ranges, so authored/wired values are already
+ *  unbounded; this only relaxes the editor's own slider validation. */
+export const EXTENDED_RANGE_MAX = 1000;
 
 // --- Types mirroring Rust's nodegraph structures ---
 
@@ -27,17 +36,17 @@ export interface PortDef {
     wire_type: string;  // BrushWireType variant name
     min: number;
     max: number;
-    /** The authored value used when the input is disconnected — the full
+    /** The authored value used when the input is disconnected: the full
      *  typed value (scalar default, enum index, texture name, curve points).
      *  Replaces the old scalar-only `default`. */
     value: InputValue;
-    /** Dropdown labels in index order — non-empty only for `Enum` inputs. */
+    /** Dropdown labels in index order, non-empty only for `Enum` inputs. */
     enum_options?: string[];
     /** Whether an upstream wire may drive this input per-dab. Sourced from
      *  `BrushWireType::is_wirable` in Rust and carried as data; the wire dot
      *  is drawn only when true. */
     wirable: boolean;
-    /** Whether a user may expose this input as a brush-bar control. Sourced
+    /** Whether an artist may expose this input as a brush-bar control. Sourced
      *  from `BrushWireType::is_user_exposable` in Rust and carried as data;
      *  the expose eye toggle is shown only when true (so curves/strings,
      *  which the brush bar can't render, offer no toggle). */
@@ -49,7 +58,7 @@ export interface PortDef {
     exposed: boolean;
     /** When set, the port is shown only when the named input's current
      *  integer value is in the allowed list. Tuple shape mirrors the
-     *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
+     *  Rust serialization of `(String, Vec<i32>)`. UI-only: the engine
      *  ignores this field. */
     visible_when?: [string, number[]];
     /** Quantization step for the slider. `0` means continuous; positive
@@ -61,7 +70,7 @@ export interface PortDef {
      *  value can be wired *from* into other nodes. The editor shows the
      *  source handle only while the input is not itself driven. */
     source: boolean;
-    /** This output emits a spatial image (`PortDef::preview_image` in Rust) —
+    /** This output emits a spatial image (`PortDef::preview_image` in Rust):
      *  a coverage mask or colour field worth a preview thumbnail. Carried as
      *  data; the node card shows an in-card preview only when an output has
      *  it set. Off for per-dab constants and sensor/math outputs. */
@@ -99,7 +108,7 @@ export interface NodeTypeInfo {
 // The exposed-control payload shapes are generated from the Rust
 // `ts_rs` derives (`ExposedValue` / `ExposedPortInfo` in
 // `engine/brush_graph.rs`). Re-export them so the brush bar has a single
-// source of truth — extending the control vocabulary (e.g. adding the
+// source of truth: extending the control vocabulary (e.g. adding the
 // enum dropdown) happens once, on the Rust side, and flows here on regen.
 export type { ExposedValue, ExposedPortInfo };
 
@@ -117,7 +126,7 @@ export const WIRE_COLORS: Record<string, string> = {
     Bool: '#ff6b6b',
     Vec2: '#6bff6b',
     Vec4: '#ffaa4a',
-    // Non-wirable data shapes — never drawn on a wire, but coloured for the
+    // Non-wirable data shapes, never drawn on a wire, but coloured for the
     // editing widgets that show their swatch/label.
     Enum: '#c58aff',
     String: '#ffd24a',
@@ -126,7 +135,7 @@ export const WIRE_COLORS: Record<string, string> = {
 
 // --- State ---
 
-/** Result of a WASM graph command — the `returns = graph` wire shape: the
+/** Result of a WASM graph command (the `returns = graph` wire shape): the
  *  serialized graph on success or `{ error }` on failure. The `graph` is
  *  dynamic (`JsonValue`) at the boundary and cast to [`BrushGraph`] here. */
 type GraphCommandResult = { graph: JsonValue } | { error: string };
@@ -139,11 +148,27 @@ export class BrushGraphState {
      *  after every structural change; never sent to Rust. */
     nodePositions = $state<Record<string, [number, number]>>({});
 
+    /** UI-only set of node ids whose numeric-input sliders the artist has
+     *  unlocked to [`EXTENDED_RANGE_MAX`]. A pure editor affordance for
+     *  entering large gains on math nodes, never sent to Rust, never
+     *  persisted. The port *value* persists in the graph as normal; this only
+     *  relaxes the editor's slider bound/validation for that node. */
+    extendedRangeNodes = $state<Set<string>>(new Set());
+
+    /** Toggle the extended-range slider unlock for `nodeId`. Reassigns the set
+     *  so Svelte re-runs dependent sliders. */
+    toggleExtendedRange(nodeId: string) {
+        const next = new Set(this.extendedRangeNodes);
+        if (next.has(nodeId)) next.delete(nodeId);
+        else next.add(nodeId);
+        this.extendedRangeNodes = next;
+    }
+
     /** Monotonic token identifying the current graph load. Bumped by
      *  `beginLayoutGeneration` whenever the graph is replaced by a fresh
      *  load/reset/import/tab-sync. Node positions and the one-shot layout
      *  guard are scoped to it, so a freshly-loaded graph is always treated as
-     *  un-laid-out — even when it reuses the previous brush's node ids — and a
+     *  un-laid-out (even when it reuses the previous brush's node ids) and a
      *  stale async layout write for a superseded generation is discarded.
      *  Frontend-only, like `nodePositions`; never crosses to Rust. Distinct
      *  from `lastTopologyVersion` (which preserves `activeBrush` across
@@ -161,8 +186,24 @@ export class BrushGraphState {
     /** Last compilation error (null = valid). */
     error = $state<string | null>(null);
 
-    /** Whether the brush builder panel is open. */
+    /** Whether the brush builder panel is expanded.
+     *
+     *  Expanded is not the same as **visible**: the panel is the brush tool's
+     *  `panelComponent`, so it only mounts while that tool is active, and this
+     *  flag survives a tool switch. Anything asking "should I behave as though
+     *  the builder is on screen" wants {@link isVisible}, not this. */
     isOpen = $state(false);
+
+    /** Whether the brush builder is actually on screen.
+     *
+     *  Expanded *and* the brush tool active, which is what mounts the panel.
+     *  Consumers that redirect behaviour towards the builder (paste, node
+     *  insertion) must gate on this: keying off {@link isOpen} alone lets an
+     *  invisible panel swallow input, which is exactly how a paste ended up in
+     *  a hidden node editor instead of on the canvas. */
+    get isVisible(): boolean {
+        return this.isOpen && app.activeToolId === 'brush';
+    }
 
     /** Whether the brush builder panel is expanded to fill the window. The
      *  fullscreen surface is the whole bottom area (tool-options strip +
@@ -183,9 +224,6 @@ export class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
-    /** Available brushes. */
-    brushes = $state<BrushInfo[]>([]);
-
     /** Currently loaded brush name (null = custom/modified). */
     activeBrush = $state<string | null>(null);
 
@@ -195,7 +233,7 @@ export class BrushGraphState {
     /** Does the active brush's terminal honor erase (paint vs. erase) mode?
      *  Refreshed from `brush_active_capabilities` whenever
      *  the graph topology changes. The Rust side reads each terminal
-     *  node's `supports_erase` registration flag — there is no central
+     *  node's `supports_erase` registration flag; there is no central
      *  list of which terminals opt out (it lives on each node module's
      *  `register()`). When `false`, the brush-tool options bar hides
      *  the erase toggle. */
@@ -203,14 +241,14 @@ export class BrushGraphState {
 
     /** Iconify icon shown in place of the live baked previews when the
      *  active graph contains a content-dependent node (clone, blur,
-     *  smudge, liquify) — its bake against the flat preview background
+     *  smudge, liquify): its bake against the flat preview background
      *  renders blank. Declared per node type via the registration's
-     *  `preview_fallback_icon`; refreshed alongside `supportsErase`. */
+     *  `preview_staging`; refreshed alongside `supportsErase`. */
     previewIcon = $state<string | null>(null);
 
     /**
      * Last topology version we observed from the engine. The engine bumps
-     * this only on structural changes — exposed-port scrubs don't advance
+     * this only on structural changes; exposed-port scrubs don't advance
      * it. We compare on each mutation result to decide whether the active
      * preset name still applies (scrub: keep) or the graph genuinely
      * changed shape (clear → "Custom").
@@ -220,7 +258,7 @@ export class BrushGraphState {
     /** Guards `init()` against re-entrancy. `init()` is fired unawaited from
      *  two `if (!brushGraph.graph)` sites (brush-tool activation and the
      *  builder's `ensureInit`), and `graph` isn't set until its final
-     *  `loadBrush` resolves — so without this flag two callers can both pass
+     *  `loadBrush` resolves, so without this flag two callers can both pass
      *  the guard and double-load the default brush. */
     private initStarted = false;
 
@@ -249,7 +287,7 @@ export class BrushGraphState {
         }
     }
 
-    /** Query Rust for the active graph's derived capabilities — erase
+    /** Query Rust for the active graph's derived capabilities: erase
      *  support and the preview fallback icon. Cheap (a single WASM
      *  borrow + graph walk); we call this on every topology change
      *  rather than per-render so the `$state` fields drive reactive
@@ -263,8 +301,8 @@ export class BrushGraphState {
 
     /**
      * Resync `lastTopologyVersion` from the engine. Call after deliberate
-     * topology changes that don't go through `applyResult` — `loadBrush`,
-     * `resetToDefault`, `init` — so subsequent scrubs see no version
+     * topology changes that don't go through `applyResult` (`loadBrush`,
+     * `resetToDefault`, `init`) so subsequent scrubs see no version
      * delta and preserve `activeBrush`.
      */
     private async snapshotTopologyVersion() {
@@ -273,7 +311,7 @@ export class BrushGraphState {
     }
 
     /** Fetch the current graph snapshot from Rust. Every caller is a
-     *  whole-graph replacement (fresh load / reset / import / tab-sync — never
+     *  whole-graph replacement (fresh load / reset / import / tab-sync, never
      *  an in-place mutation, which goes through `applyResult`), so this is the
      *  single place a new layout generation begins. Clearing positions +
      *  bumping the generation happens in the *same synchronous step* as the
@@ -292,7 +330,7 @@ export class BrushGraphState {
     // --- Public API ---
 
     /** Re-sync this singleton's local view from the currently-active
-     *  engine. Call after a tab switch — `brushGraph.graph` /
+     *  engine. Call after a tab switch: `brushGraph.graph` /
      *  `.exposedPorts` / `.lastTopologyVersion` are a CACHE of the
      *  active engine's brush state, and become stale when the focused
      *  instance changes.
@@ -300,7 +338,7 @@ export class BrushGraphState {
      *  Does NOT touch `activeBrush`. The engine doesn't track which
      *  named library brush a graph came from (it just has a graph), so
      *  the singleton's `activeBrush` is the only place that knowledge
-     *  lives. For v1 we leave it as-is — re-syncing the brush name
+     *  lives. For v1 we leave it as-is: re-syncing the brush name
      *  cross-tab would mean tracking it per-instance, which is the
      *  follow-up after we decide whether named-brush selection is
      *  per-tab or shell-global. */
@@ -316,24 +354,30 @@ export class BrushGraphState {
         await this.snapshotTopologyVersion();
     }
 
-    /** Initialize from WASM — load node types, brushes, and default graph. */
+    /** Initialize from WASM: load node types, brushes, and default graph. */
     async init() {
         if (this.initStarted || !app.engine) return;
         this.initStarted = true;
         const types = await app.engine.api.brushNodeTypes();
         this.nodeTypes = (Array.isArray(types) ? types : []) as unknown as NodeTypeInfo[];
-        await this.refreshBrushes();
+        // The library (brushes and packs alike) has one home, and it is
+        // `brushLibrary`. Hydration replays the painter's stored records
+        // first, so the boot selection below can land on one of them.
+        await brushLibrary.hydrate();
 
         // Boot with a real library brush selected so the brush picker
         // trigger (and anywhere else that reads `activeBrush`) has a named
         // brush to render. The engine's procedural default graph would
         // leave `activeBrush` null and the trigger would fall back to "Custom".
+        const brushes = brushLibrary.brushes;
         const defaultBrush =
-            this.brushes.find(b => b.name === freshDocument.defaultBrushName) ?? this.brushes[0];
+            brushes.find(b => b.name === freshDocument.defaultBrushName) ?? brushes[0];
         if (defaultBrush) {
-            await this.loadBrush(defaultBrush.name);
+            // Deliberately not `loadBrush`: the painter did not reach for this
+            // one, so it must not take the top slot in their recents.
+            await this.#load(defaultBrush.name);
         } else {
-            // No library brushes available — fall through to the engine's
+            // No library brushes available: fall through to the engine's
             // default graph as a degenerate fallback.
             await this.fetchGraph();
             await this.refreshExposedPorts();
@@ -363,7 +407,7 @@ export class BrushGraphState {
 
     /** Replace the active brush graph from a portable YAML string.
      *  Returns null on success or an error string on parse/validation
-     *  failure — same convention as `loadBrush`. */
+     *  failure, same convention as `loadBrush`. */
     async importYaml(yaml: string): Promise<string | null> {
         if (!app.engine) return 'engine not ready';
         const result = await app.engine.api.brushGraphImportYaml({ yaml });
@@ -383,13 +427,6 @@ export class BrushGraphState {
         this.activeBrush = null;
         await this.snapshotTopologyVersion();
         return null;
-    }
-
-    /** Refresh the brush list from WASM. */
-    async refreshBrushes() {
-        if (!app.engine) return;
-        const list = await app.engine.api.brushList();
-        this.brushes = Array.isArray(list) ? list : [];
     }
 
     /** Refresh exposed ports from the active brush graph. */
@@ -447,21 +484,53 @@ export class BrushGraphState {
         );
     }
 
+    /** Override an input port's slider bounds on one node instance.
+     *  `min`/`max` are display-space: hand back the numbers the control
+     *  was rendered with. Rejected by the engine unless ascending. */
+    async setPortRange(nodeId: string, portName: string, min: number, max: number) {
+        if (!app.engine) return;
+        await this.applyResult(
+            await app.engine.api.brushGraphSetPortRange({
+                node_id: nodeId,
+                port_name: portName,
+                display_min: min,
+                display_max: max,
+            }),
+        );
+    }
+
     /** Move a brush-bar entry to a target index in the display order. */
     async reorderExposedPort(key: string, newIndex: number) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphReorderExposedPort({ key, new_index: newIndex }));
     }
 
-    /** Load a brush by name. */
-    async loadBrush(name: string) {
-        if (!app.engine) return;
+    /**
+     * Load a brush the painter chose, and record it as recently used.
+     *
+     * `id` is the brush's identity and `name` is what the engine looks it up
+     * by; `brush_load` is the one name-keyed call in the library API. Recents
+     * stores the id, so a later rename does not drop the entry.
+     */
+    async loadBrush(name: string, id: string) {
+        // Only a successful load counts as use: a brush that never loaded was
+        // never used.
+        if (await this.#load(name)) recentBrushes.use(id);
+    }
+
+    /** Load a brush by name, without recording it. Returns whether it loaded.
+     *
+     *  `loadBrush` is the painter-facing entry point; this is the mechanism
+     *  under it, so a selection the painter did not make (the boot default)
+     *  can reach the engine without claiming the top of their recents. */
+    async #load(name: string): Promise<boolean> {
+        if (!app.engine) return false;
         // brush_load rejects on error (old Result throw path).
         try {
             await app.engine.api.brushLoad({ name });
         } catch (e) {
             this.error = String(e instanceof Error ? e.message : e);
-            return;
+            return false;
         }
         this.activeBrush = name;
         // `fetchGraph` begins a new layout generation atomically with the
@@ -471,9 +540,10 @@ export class BrushGraphState {
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
         this.error = null;
-        // brush_load is a Topology change — snapshot here so the next
+        // brush_load is a Topology change: snapshot here so the next
         // exposed-port scrub doesn't see a delta and clear `activeBrush`.
         await this.snapshotTopologyVersion();
+        return true;
     }
 
     /** Begin a new layout generation: clear node positions and bump
@@ -494,7 +564,7 @@ export class BrushGraphState {
         this.layoutGeneration++;
     }
 
-    /** True when the current layout generation has not been laid out yet —
+    /** True when the current layout generation has not been laid out yet,
      *  i.e. the graph was just loaded/reset/imported/tab-synced and the canvas
      *  should run its one-time auto-layout. Keyed on `layoutGeneration`, not on
      *  which node ids happen to carry positions, so a fresh graph that reuses
@@ -559,8 +629,8 @@ export class BrushGraphState {
         if (!this.graph) return null;
         const id = (result as { added_node_id?: string }).added_node_id;
         if (!id) return null;
-        // Position assignment is local-only — auto-layout would
-        // disturb the user's current arrangement.
+        // Position assignment is local-only: auto-layout would
+        // disturb the artist's current arrangement.
         this.nodePositions[id] = [x, y];
         return id;
     }
@@ -573,7 +643,7 @@ export class BrushGraphState {
         delete this.nodePositions[nodeId];
     }
 
-    /** Update a node's UI position (drag-to-move). Local-only — positions
+    /** Update a node's UI position (drag-to-move). Local-only: positions
      *  are not persisted to Rust. */
     moveNode(nodeId: string, x: number, y: number) {
         this.nodePositions[nodeId] = [x, y];
@@ -602,7 +672,7 @@ export class BrushGraphState {
     }
 
     /** Update an input's authored value via Rust (compiles the graph). One
-     *  setter for every input kind — the unified replacement for the former
+     *  setter for every input kind: the unified replacement for the former
      *  `setParam` (by index) / `setPortDefault` (by name) pair. `kind` is one
      *  of `float`/`int`/`enum`/`bool`/`string`/`curve`. */
     async setInput(nodeId: string, inputName: string, kind: string, value: InputValue) {
@@ -617,7 +687,7 @@ export class BrushGraphState {
         if (node) node.comment = comment;
     }
 
-    /** Commit a node's author comment via Rust. Bumps no version — a comment
+    /** Commit a node's author comment via Rust. Bumps no version: a comment
      *  is inert w.r.t. render output and preset identity. */
     async setNodeComment(nodeId: string, comment: string) {
         if (!app.engine) return;

@@ -5,7 +5,7 @@
 //! event queue *inside* `queue.submit()` while `render()` holds
 //! `engine.borrow_mut()`; a re-entrant call takes a competing borrow and panics.
 //!
-//! Browser event-pump re-entrancy itself is not reproducible headless — that is
+//! Browser event-pump re-entrancy itself is not reproducible headless; that is
 //! the manual browser repro's job. But the *competing-borrow class* is: these
 //! tests model render holding the engine borrow and assert the transport's two
 //! invariants hold (enqueue borrows nothing; drain yields instead of panicking).
@@ -32,7 +32,7 @@ fn test_engine_cell(width: u32, height: u32) -> RefCell<DarklyEngine> {
 
 /// The bug, reproduced: the old `flush_if_needed` took a `borrow_mut` even when
 /// render already held one. With a render-style borrow held, that second
-/// `borrow_mut` panics — exactly the production crash. This is what the deferred
+/// `borrow_mut` panics, exactly the production crash. This is what the deferred
 /// transport eliminates.
 #[test]
 #[should_panic(expected = "already")]
@@ -45,7 +45,7 @@ fn naive_synchronous_access_under_held_borrow_panics() {
 }
 
 /// Invariant #1: enqueue takes no engine borrow, so it is safe to call while
-/// render holds the engine — the request just lands in the FIFO. Against the
+/// render holds the engine: the request just lands in the FIFO. Against the
 /// pre-fix synchronous model the equivalent call would `borrow_mut` and panic.
 #[test]
 fn transport_enqueue_under_held_borrow_does_not_panic() {

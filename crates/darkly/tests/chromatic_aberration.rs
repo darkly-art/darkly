@@ -1,4 +1,4 @@
-//! Destructive chromatic-aberration integration tests — the CA filter over the
+//! Destructive chromatic-aberration integration tests: the CA filter over the
 //! shared `filter_node_region` substrate, exercising the new `SrcSampling::
 //! Bilinear` source mode and the List/Color/Vec2 param kinds end to end.
 //!
@@ -22,7 +22,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// A `w`×`h` flat opaque RGBA buffer of a single color.
 fn solid_rgba(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
     let mut v = vec![0u8; (w * h * 4) as usize];
-    for px in v.chunks_exact_mut(4) {
+    for px in v.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&color);
     }
     v
@@ -92,7 +92,7 @@ fn single_offset_aberration_shifts_pixels() {
 }
 
 /// R/G/B entries with zero offset, unit scale, no blur are a bit-exact
-/// passthrough — every displaced sample equals the base, so all content deltas
+/// passthrough: every displaced sample equals the base, so all content deltas
 /// are zero and no entry contributes anything.
 #[test]
 fn identity_params_preserve_pixels_exactly() {
@@ -131,7 +131,7 @@ fn radial_scale_moves_edges_not_center() {
     assert_eq!(
         px(&after, w, 7, 7),
         px(&before, w, 7, 7),
-        "the center pixel is the scale pivot — unchanged"
+        "the center pixel is the scale pivot, unchanged"
     );
     // A far-from-center pixel is resampled and differs.
     assert_ne!(
@@ -170,7 +170,7 @@ fn selection_clips_aberration() {
 }
 
 /// Veil smoke test: the CA veil, driven through its own GPU path (registry →
-/// `create_cache` → `encode`), produces non-identity output — a white entry
+/// `create_cache` → `encode`), produces non-identity output: a white entry
 /// offset 4 px right shifts the whole-canvas result.
 #[test]
 fn veil_produces_non_identity_output() {
@@ -189,7 +189,7 @@ fn veil_produces_non_identity_output() {
 
     let mut registry = VeilRegistry::new();
     let params = ca_params(vec![entry([4.0, 0.0], 1.0, [1.0, 1.0, 1.0], 0.0)]);
-    let veil = registry.create_veil("chromatic_aberration", &params, &device, format);
+    let mut veil = registry.create_veil("chromatic_aberration", &params, &device, format);
     let cache = veil.create_cache(&device, &queue, &[view0, view1], &sampler, w, h);
 
     let (dst, dst_view) = create_test_texture(&device, &queue, w, h, &[]);
@@ -398,7 +398,7 @@ fn hue_120_entry_is_exact_green_channel_shift() {
 
 /// When a channel is shifted off an alpha edge, the surviving content stays
 /// visible: shifting the red out of opaque yellow (across a transparent
-/// boundary) leaves an *opaque* green — the representability floor keeps alpha
+/// boundary) leaves an *opaque* green: the representability floor keeps alpha
 /// from collapsing while a channel remains.
 #[test]
 fn shifted_away_channel_keeps_remaining_content_visible() {

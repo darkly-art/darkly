@@ -3,6 +3,12 @@
     import { exportTimelapse } from '../state/exportTimelapse.svelte';
     import { getActiveInstance } from '../state/app.svelte';
     import { downloadBlob, sanitizeFilename } from '../storage';
+    import {
+        hasFilePicker,
+        pickFileHandle,
+        writeToHandle,
+        type SaveAccept,
+    } from '../storage/fileHandle';
     import { processRecording } from '../recording/recorder.svelte';
     import { fitToLongEdge, WIDTH_ALIGN, HEIGHT_ALIGN } from '../recording/codec';
     import {
@@ -28,6 +34,13 @@
         { id: 'gif', label: 'GIF', ext: 'gif' },
     ];
 
+    // Save-picker filters: a timelapse is never the document, so it uses the
+    // shared picker but never sets `fileHandle`.
+    const TIMELAPSE_ACCEPT: Record<Format, SaveAccept> = {
+        mp4: { description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } },
+        gif: { description: 'GIF Image', accept: { 'image/gif': ['.gif'] } },
+    };
+
     const METHODS: Array<{ id: ConversionMethod; label: string }> = [
         { id: 'fit', label: 'Fit (letterbox)' },
         { id: 'fill', label: 'Fill (crop)' },
@@ -40,7 +53,7 @@
     let exporting = $state(false);
     let info = $state<RecordingInfo | null>(null);
     let loading = $state(false);
-    /** Index into `info.groups` — the target aspect ratio. */
+    /** Index into `info.groups`, the target aspect ratio. */
     let groupIndex = $state(0);
     let method = $state<ConversionMethod>('fit');
     let width = $state(0);
@@ -48,8 +61,8 @@
 
     const group = $derived(info?.groups[groupIndex] ?? null);
 
-    // Re-read the recording summary each time the modal opens — the
-    // recording grows while the user paints.
+    // Re-read the recording summary each time the modal opens: the
+    // recording grows while the artist paints.
     $effect(() => {
         if (exportTimelapse.open) void refreshInfo();
     });
@@ -114,6 +127,25 @@
     async function confirm() {
         const inst = getActiveInstance();
         if (!inst || exporting || !info || !group) return;
+
+        const ext = FORMATS.find((f) => f.id === format)!.ext;
+        const filename = `${sanitizeFilename(baseName) || 'darkly-timelapse'}.${ext}`;
+
+        // Acquire the destination in the click's user-activation window, before
+        // the long async encode consumes it. Chromium → native picker (same
+        // wrapper as Save); elsewhere the handle stays null and we download.
+        let handle: FileSystemFileHandle | null = null;
+        if (hasFilePicker) {
+            try {
+                handle = await pickFileHandle(filename, [TIMELAPSE_ACCEPT[format]], 'darkly-file');
+            } catch (e) {
+                console.error('[export-timelapse] picker failed', e);
+                alert('Timelapse export failed: see console for details.');
+                return;
+            }
+            if (!handle) return; // cancelled
+        }
+
         exporting = true;
         try {
             const rate = clampFps(Number(fps));
@@ -123,13 +155,12 @@
                 format === 'mp4'
                     ? await exportTimelapseMp4(inst, opts)
                     : await exportTimelapseGif(inst, opts);
-            const ext = FORMATS.find((f) => f.id === format)!.ext;
-            const filename = `${sanitizeFilename(baseName) || 'darkly-timelapse'}.${ext}`;
-            downloadBlob(blob, filename);
+            if (handle) await writeToHandle(handle, blob);
+            else downloadBlob(blob, filename);
             exportTimelapse.open = false;
         } catch (e) {
             console.error('[export-timelapse] export failed', e);
-            alert('Timelapse export failed — see console for details.');
+            alert('Timelapse export failed: see console for details.');
         } finally {
             exporting = false;
         }
@@ -152,7 +183,7 @@
             <p class="info">Reading recording…</p>
         {:else if !info}
             <p class="info">
-                No process recording yet — paint with recording enabled
+                No process recording yet: paint with recording enabled
                 (Settings → Recording) and come back.
             </p>
         {:else}

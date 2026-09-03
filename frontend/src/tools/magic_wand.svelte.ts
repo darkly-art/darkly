@@ -14,7 +14,7 @@ import type { DarklyInstance } from '../state/app.svelte';
 import { selectionMode } from './selection_helpers';
 import MagicWandOptions from '../ui/MagicWandOptions.svelte';
 
-/** Magic-wand session state — an app-global user preference. Persists within
+/** Magic-wand session state: an app-global artist preference. Persists within
  *  the session; resets on reload. */
 class MagicWandSession {
     /** Color-distance threshold for the flood fill (0 = exact match, 255 = anything). */
@@ -46,10 +46,8 @@ class MagicWandTool extends ToolBase {
 
 export const magicWandTool: ToolDescriptor = {
     id: 'magic_wand',
-    icon: 'fa6-solid:wand-magic-sparkles',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'magicWandTool',
     optionsComponent: MagicWandOptions,
     create: (inst: DarklyInstance) => new MagicWandTool(inst),
 };

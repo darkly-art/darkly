@@ -1,6 +1,6 @@
 //! Distance-based dab spacing.
 //!
-//! Spacing is expressed as a proportion of the dab diameter — the default
+//! Spacing is expressed as a proportion of the dab diameter: the default
 //! ~10% matches Krita's `KisSpacingInformation::isotropicSpacing`.  At each
 //! `move_to`, the stroke engine walks from the previous position to the
 //! current position, placing dabs at spacing intervals along the path.
@@ -14,10 +14,10 @@ pub const ABSOLUTE_MIN_SPACING_PX: f32 = 1.0;
 /// How far apart dabs are placed along the stroke path.
 #[derive(Clone, Copy, Debug)]
 pub struct SpacingConfig {
-    /// Spacing as a fraction of dab diameter (0.01–1.0).
+    /// Spacing as a fraction of dab diameter (0.01-1.0).
     /// 0.1 = 10% of diameter (Krita default for most brushes).
     pub ratio: f32,
-    /// Per-config minimum spacing in pixels — prevents microscopic gaps
+    /// Per-config minimum spacing in pixels: prevents microscopic gaps
     /// at small sizes. `distance()` additionally enforces an absolute
     /// floor of `ABSOLUTE_MIN_SPACING_PX` below this.
     pub min_px: f32,
@@ -35,7 +35,7 @@ impl Default for SpacingConfig {
 impl SpacingConfig {
     /// Compute the actual spacing distance in pixels for a given dab diameter.
     /// Always returns at least `ABSOLUTE_MIN_SPACING_PX`, regardless of
-    /// `ratio`, `min_px`, or `diameter_px` — including NaN inputs.
+    /// `ratio`, `min_px`, or `diameter_px`, including NaN inputs.
     pub fn distance(&self, diameter_px: f32) -> f32 {
         (diameter_px * self.ratio)
             .max(self.min_px)

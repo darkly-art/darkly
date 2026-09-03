@@ -1,15 +1,15 @@
-//! Levels filter — parametric black-point / gamma / white-point / output-range
+//! Levels filter: parametric black-point / gamma / white-point / output-range
 //! tone mapping, modeled on Krita's `KisLevelsFilter`.
 //!
 //! A Levels adjustment is mathematically a parametric curve, so it shares the
 //! entire GPU realization with [Curves](super::curves): the same eight virtual
 //! channels (RGB composite, Red, Green, Blue, Alpha, Hue, Saturation, Lightness),
 //! the same 256×2 LUT, the same `curves.wgsl` shader. Levels is a thin provider
-//! over the shared [`lut_param_filter`] scaffold — it hands [`bake_lut`] eight
+//! over the shared [`lut_param_filter`] scaffold: it hands [`bake_lut`] eight
 //! per-channel [`levels_transfer`] evaluators and the shared code owns the composite fold,
 //! the HSV/Lab round trips, and the pipeline.
 //!
-//! Transfer function — Krita `libs/image/KisLevelsCurve.cpp:58`:
+//! Transfer function (Krita `libs/image/KisLevelsCurve.cpp:58`):
 //!   `out = outBlack + (outWhite − outBlack) · clamp((x−inBlack)/(inWhite−inBlack), 0, 1)^(1/gamma)`
 //! clamped to `outBlack` for `x ≤ inBlack` and `outWhite` for `x ≥ inWhite`.
 //! Config order `[inBlack, inWhite, gamma, outBlack, outWhite]` matches
@@ -20,47 +20,42 @@ use std::sync::Arc;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::lut_filter::{bake_lut, lut_param_filter, lut_shader_source, Baked};
 use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::preview::{swing_signed, PreviewAnim};
 
-/// Identity levels — `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
+/// Identity levels: `[inBlack, inWhite, gamma, outBlack, outWhite]`. Maps the
 /// full `[0,1]` input range linearly onto `[0,1]` output: a no-op transfer.
 const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
 
-/// Parameter schema — Krita's channel order for an RGBA image, identical to
+/// Parameter schema: Krita's channel order for an RGBA image, identical to
 /// [Curves](super::curves::PARAMS). Load-bearing: [`build_lut`] indexes these
 /// positionally (matching [`Channel`](crate::gpu::lut_filter::Channel)).
 pub const PARAMS: &[ParamDef] = &[
-    ParamDef::Levels {
-        name: "rgb",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "red",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "green",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "blue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "alpha",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "hue",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "saturation",
-        default: IDENTITY,
-    },
-    ParamDef::Levels {
-        name: "lightness",
-        default: IDENTITY,
-    },
+    ParamDef::levels("rgb", IDENTITY)
+        .with_label("RGB")
+        .with_description(
+            "Black point, white point and gamma for all three color channels together.",
+        ),
+    ParamDef::levels("red", IDENTITY)
+        .with_label("Red")
+        .with_description("Black point, white point and gamma for the red channel alone."),
+    ParamDef::levels("green", IDENTITY)
+        .with_label("Green")
+        .with_description("Black point, white point and gamma for the green channel alone."),
+    ParamDef::levels("blue", IDENTITY)
+        .with_label("Blue")
+        .with_description("Black point, white point and gamma for the blue channel alone."),
+    ParamDef::levels("alpha", IDENTITY)
+        .with_label("Alpha")
+        .with_description("Black point, white point and gamma for opacity."),
+    ParamDef::levels("hue", IDENTITY)
+        .with_label("Hue")
+        .with_description("Black point, white point and gamma applied to hue."),
+    ParamDef::levels("saturation", IDENTITY)
+        .with_label("Saturation")
+        .with_description("Black point, white point and gamma applied to saturation."),
+    ParamDef::levels("lightness", IDENTITY)
+        .with_label("Lightness")
+        .with_description("Black point, white point and gamma applied to lightness."),
 ];
 
 /// Read a levels param by index, falling back to identity when missing/malformed.
@@ -72,7 +67,7 @@ fn levels_params(params: &[ParamValue], idx: usize) -> [f32; 5] {
 }
 
 /// Krita's `KisLevelsCurve` transfer (see module docs). `x` and the result are
-/// normalized `[0,1]`; `gamma` is the raw exponent (`0.1–10`, `1.0` = linear).
+/// normalized `[0,1]`; `gamma` is the raw exponent (`0.1-10`, `1.0` = linear).
 fn levels_transfer(p: &[f32; 5], x: f32) -> f32 {
     let [in_black, in_white, gamma, out_black, out_white] = *p;
     if x <= in_black {
@@ -108,13 +103,42 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
     Arc::new(lut_param_filter(device, &lut_shader_source(), build_lut))
 }
 
+/// The input range pinches inward against a brightening gamma, then opens back
+/// out against a darkening one, and returns: the two halves of what the
+/// control does, in one pass.
+///
+/// `gamma` is a raw exponent rather than a perceptual scale, so it sweeps as a
+/// ratio around 1.0 rather than an even numeric spread: the two extremes are
+/// reciprocals and read as equal and opposite. Only the composite `rgb` channel
+/// moves; the other seven stay at their identity defaults.
+fn preview_params(t: f32) -> Vec<ParamValue> {
+    let s = swing_signed(t);
+    let pinch = 0.15 * s.max(0.0);
+    let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+    params[0] = ParamValue::Levels([
+        // rgb
+        pinch,
+        1.0 - pinch,
+        2.2f32.powf(-s),
+        0.0,
+        1.0,
+    ]);
+    params
+}
+
 pub fn register() -> FilterPipelineRegistration {
     FilterPipelineRegistration {
         type_id: "levels",
         display_name: "Levels",
         icon: "fa6-solid:sliders",
         description: "Tone mapping with black point, white point, gamma, and output range.",
+        hotkey_action: "filterLevels",
         params: PARAMS,
+        // A signed sweep rests in the middle, so the default still would be the
+        // frame that looks like no effect at all. The quarter point is its
+        // positive extreme.
+        preview: Some(PreviewAnim::LOOPING.with_still_at(0.25)),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }
@@ -143,7 +167,7 @@ mod tests {
     const LIGHTNESS: usize = Channel::Lightness as usize;
 
     /// Default (identity) levels ⇒ identity LUT on every channel (both rows),
-    /// and neither gated stage armed — an all-default Levels layer is a no-op.
+    /// and neither gated stage armed: an all-default Levels layer is a no-op.
     #[test]
     fn identity_levels_yield_identity_lut() {
         let params: Vec<ParamValue> = PARAMS.iter().map(|d| d.default_value()).collect();
@@ -204,7 +228,7 @@ mod tests {
     }
 
     /// Inverted output (`outBlack > outWhite`) is permitted and produces a
-    /// descending transfer — the Krita formula falls out of it unchanged.
+    /// descending transfer, and the Krita formula falls out of it unchanged.
     #[test]
     fn inverted_output_descends() {
         let p = [0.0, 1.0, 1.0, 1.0, 0.0];
@@ -213,7 +237,7 @@ mod tests {
         assert!((levels_transfer(&p, 0.25) - 0.75).abs() < 1e-6);
     }
 
-    /// Fold order matches Krita: the color channels are `rgb(channel(i))` — the
+    /// Fold order matches Krita: the color channels are `rgb(channel(i))`, the
     /// per-channel transfer first, then the composite "RGB" transfer on top.
     #[test]
     fn composite_composes_over_channel() {
@@ -240,7 +264,7 @@ mod tests {
     }
 
     /// A non-identity Hue or Saturation transfer arms the HSV pass; a
-    /// non-identity Lightness transfer arms the Lab pass — independently.
+    /// non-identity Lightness transfer arms the Lab pass, independently.
     #[test]
     fn hsl_levels_arm_their_stages() {
         let mut p = PARAMS.iter().map(|d| d.default_value()).collect::<Vec<_>>();

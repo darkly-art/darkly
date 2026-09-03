@@ -1,45 +1,45 @@
-# Krita Brush System — Deep Dive
+# Krita Brush System: Deep Dive
 
 ## Artist Sentiment & Pain Points
 
 ### What Artists Love
 
-- **Customization depth** — 16 brush engines with massive parameter control, far beyond what you'd expect from FOSS
-- **Natural media emulation** — oils, watercolor, charcoal feel more "traditional" than Photoshop to many artists
-- **Default preset quality** — ships with 100+ pro presets; David Revoy's community packs are widely beloved
-- **Brush editor UX** — described as "simple and easy" vs Photoshop's "intimidating" editor
-- **Free** — professional-grade brush tools accessible to everyone
+- **Customization depth** - 16 brush engines with massive parameter control, far beyond what you'd expect from FOSS
+- **Natural media emulation** - oils, watercolor, charcoal feel more "traditional" than Photoshop to many artists
+- **Default preset quality** - ships with 100+ pro presets; David Revoy's community packs are widely beloved
+- **Brush editor UX** - described as "simple and easy" vs Photoshop's "intimidating" editor
+- **Free** - professional-grade brush tools accessible to everyone
 
 ### Top Pain Points (ranked by community frequency)
 
-1. **Performance at scale** — large canvas (8K+) with large brushes (500px+) lags badly, especially Color Smudge. GPU acceleration is the #1 request but devs say "all signs point to no" for at least 2 years (blocked on Qt6 port)
-2. **Per-stroke texture mode is missing** — Krita only does per-dab texture. This is the single most-cited blocker for porting Photoshop/CSP brushes
-3. **Fragmented "snowflake" engines** — 16 isolated engines with inconsistent feature parity. Artists want a composable/stackable system (apply blur + smudge + texture in one stroke). 3DCoat's modular engine is cited as inspiration
-4. **Brush smoothing/stabilizer is weak** — trails CSP and SAI significantly. Weighted mode is inconsistent, stabilizer overshoots, and it "stabilizes but doesn't actually smooth"
-5. **Stroke-start delay** — large brush tips (2048px+) caused up to 1s delays from redundant pyramid regeneration (fixed in 5.0 but left a lasting reputation)
+1. **Performance at scale** - large canvas (8K+) with large brushes (500px+) lags badly, especially Color Smudge. GPU acceleration is the #1 request but devs say "all signs point to no" for at least 2 years (blocked on Qt6 port)
+2. **Per-stroke texture mode is missing** - Krita only does per-dab texture. This is the single most-cited blocker for porting Photoshop/CSP brushes
+3. **Fragmented "snowflake" engines** - 16 isolated engines with inconsistent feature parity. Artists want a composable/stackable system (apply blur + smudge + texture in one stroke). 3DCoat's modular engine is cited as inspiration
+4. **Brush smoothing/stabilizer is weak** - trails CSP and SAI significantly. Weighted mode is inconsistent, stabilizer overshoots, and it "stabilizes but doesn't actually smooth"
+5. **Stroke-start delay** - large brush tips (2048px+) caused up to 1s delays from redundant pyramid regeneration (fixed in 5.0 but left a lasting reputation)
 
-### ABR Import — Barely Functional
+### ABR Import: Barely Functional
 
-A major pain point that surprises users constantly:
+A major pain point that surprises artists constantly:
 
-- **Only brush tips are imported** — all dynamics, parameters, presets, patterns, and texture settings are silently discarded. Users must manually recreate every preset from scratch
-- **Modern ABR versions often fail** — Krita handles PS 7.x era formats but struggles with newer versions. Users resort to third-party tools like abrMate to downconvert
-- **Confusing UX** — after import, "nothing happens" — tips appear in the brush editor (F5) but NOT in the preset docker, causing massive confusion
+- **Only brush tips are imported** - all dynamics, parameters, presets, patterns, and texture settings are silently discarded. Artists must manually recreate every preset from scratch
+- **Modern ABR versions often fail** - Krita handles PS 7.x era formats but struggles with newer versions. Artists resort to third-party tools like abrMate to downconvert
+- **Confusing UX** - after import, "nothing happens": tips appear in the brush editor (F5) but NOT in the preset docker, causing massive confusion
 - **A draft MR exists** (#2539, Dec 2025) for improved ABR import with descriptor parsing and auto-preset creation, but it's not merged
-- **Heavily attempted, rarely successful** — one of the most common support topics on krita-artists.org, precisely because artists coming from Photoshop expect their ABR collections to work and hit a wall
+- **Heavily attempted, rarely successful** - one of the most common support topics on krita-artists.org, precisely because artists coming from Photoshop expect their ABR collections to work and hit a wall
 
-See [ABR Format — Reverse Engineering Analysis](brush/abr-format.md) for a deep dive into the format, what has been reverse-engineered, and how GIMP/Krita/community parsers compare.
+See [ABR Format: Reverse Engineering Analysis](brush/abr-format.md) for a deep dive into the format, what has been reverse-engineered, and how GIMP/Krita/community parsers compare.
 
 ### Other Notable Issues
 
-- **8-bit build-up mode bug** — painting at 1% opacity never reaches 100% due to rounding errors (works in 16-bit)
-- **Tag/preset management fragility** — deleted tags reappear, no drag-and-drop reorder (a community plugin was built just to fix this)
-- **No Procreate/CSP brush import** — only community converter tools exist
-- **Pressure sensitivity config hell** — WinTab vs Windows Ink conflicts are the most common support topic overall
+- **8-bit build-up mode bug** - painting at 1% opacity never reaches 100% due to rounding errors (works in 16-bit)
+- **Tag/preset management fragility** - deleted tags reappear, no drag-and-drop reorder (a community plugin was built just to fix this)
+- **No Procreate/CSP brush import** - only community converter tools exist
+- **Pressure sensitivity config hell** - WinTab vs Windows Ink conflicts are the most common support topic overall
 
 ### Key Takeaway
 
-Krita's brushes are deeply loved for depth and natural media quality but architecturally fragmented. The system is CPU-bound with no GPU path, ABR import is essentially broken (tips only, no presets), and the stabilizer trails commercial competitors. The community's dream — a composable GPU-accelerated universal engine — would be a ground-up rethinking that Krita's team hasn't committed to.
+Krita's brushes are deeply loved for depth and natural media quality but architecturally fragmented. The system is CPU-bound with no GPU path, ABR import is essentially broken (tips only, no presets), and the stabilizer trails commercial competitors. The community's dream (a composable GPU-accelerated universal engine) would be a ground-up rethinking that Krita's team hasn't committed to.
 
 ---
 
@@ -47,10 +47,10 @@ Krita's brushes are deeply loved for depth and natural media quality but archite
 
 Krita's brush system is a layered architecture with four main subsystems:
 
-1. **Brush Tips** — the stamp image or procedural mask applied at each dab
-2. **Brush Engines (Paintops)** — the algorithms that decide *how* dabs are placed and what they do
-3. **Dynamics / Sensors** — curves that map tablet input (pressure, tilt, speed…) to brush parameters
-4. **Presets** — serialized bundles (`.kpp` files) that package an engine + its settings + embedded resources
+1. **Brush Tips** - the stamp image or procedural mask applied at each dab
+2. **Brush Engines (Paintops)** - the algorithms that decide *how* dabs are placed and what they do
+3. **Dynamics / Sensors** - curves that map tablet input (pressure, tilt, speed…) to brush parameters
+4. **Presets** - serialized bundles (`.kpp` files) that package an engine + its settings + embedded resources
 
 The stroke pipeline connects these: input events flow through sensors, produce `KisPaintInformation`, the engine decides where to stamp, the brush tip generates a mask, and `KisPainter` composites the dab onto the canvas.
 
@@ -62,14 +62,14 @@ The stroke pipeline connects these: input events flow through sensors, produce `
 
 ```
 KoResource
-  └── KisBrush                       (base — mask generation API)
+  └── KisBrush                       (base - mask generation API)
        ├── KisAutoBrush               (procedural: circle, rect, gaussian, curve)
        └── KisScalingSizeBrush        (adds user-effective-size via scale)
             ├── KisSvgBrush           (SVG vector tips)
-            ├── KisAbrBrush           (Adobe .abr — read-only, grayscale only)
+            ├── KisAbrBrush           (Adobe .abr - read-only, grayscale only)
             └── KisColorfulBrush      (adds brightness/contrast adjustment)
-                 ├── KisGbrBrush      (GIMP .gbr — grayscale or RGBA)
-                 │    └── KisImagePipeBrush  (animated .gih — multi-frame)
+                 ├── KisGbrBrush      (GIMP .gbr - grayscale or RGBA)
+                 │    └── KisImagePipeBrush  (animated .gih - multi-frame)
                  └── KisPngBrush      (PNG images as brush tips)
 ```
 
@@ -90,7 +90,7 @@ The central method is `KisBrush::generateMaskAndApplyMaskOrCreateDab()`. Two pat
 1. Mask dimensions are computed from `KisDabShape`
 2. Center is calculated with subpixel offset
 3. `KisMaskGenerator` is configured with softness, scale
-4. A SIMD-optimized `KisBrushMaskApplicatorBase` stamps the mask generator's output directly — no intermediate bitmap
+4. A SIMD-optimized `KisBrushMaskApplicatorBase` stamps the mask generator's output directly: no intermediate bitmap
 
 ### Mask Generators
 
@@ -100,7 +100,7 @@ The central method is `KisBrush::generateMaskAndApplyMaskOrCreateDab()`. Two pat
 |------|--------|-----------|
 | **Default** (hard/soft) | `KisCircleMaskGenerator` | `KisRectangleMaskGenerator` |
 | **Gaussian** | `KisGaussCircleMaskGenerator` | `KisGaussRectMaskGenerator` |
-| **Curve** (user-defined falloff) | `KisCurveCircleMaskGenerator` | `KisCurveRectMaskGenerator` |
+| **Curve** (artist-defined falloff) | `KisCurveCircleMaskGenerator` | `KisCurveRectMaskGenerator` |
 
 Parameters: radius, ratio (aspect), horizontal/vertical fade, spikes (star/polygon shapes when > 2), antialiasEdges, softness, custom curve string.
 
@@ -131,10 +131,10 @@ virtual KisSpacingInformation updateSpacingImpl(const KisPaintInformation& info)
 ```
 
 Optional overrides:
-- `paintLine()` — for engines that draw continuous lines rather than discrete dabs (curve, hairy, sketch, particle)
-- `paintBezierCurve()` — for Bezier path segments
-- `doAsynchronousUpdate()` — for engines with multithreaded dab rendering (pixel brush)
-- `updateTimingImpl()` — for airbrush-style timed repeat
+- `paintLine()` - for engines that draw continuous lines rather than discrete dabs (curve, hairy, sketch, particle)
+- `paintBezierCurve()` - for Bezier path segments
+- `doAsynchronousUpdate()` - for engines with multithreaded dab rendering (pixel brush)
+- `updateTimingImpl()` - for airbrush-style timed repeat
 
 ### Engine Catalog
 
@@ -189,7 +189,7 @@ Tablet Input → KisPaintInformation → KisDynamicSensor → curve mapping → 
 
 | Sensor ID | Name | Source | Mode |
 |-----------|------|--------|------|
-| `pressure` | Pressure | `info.pressure()` (0–1) | Multiplicative |
+| `pressure` | Pressure | `info.pressure()` (0-1) | Multiplicative |
 | `pressurein` | PressureIn | `info.maxPressure()` (max so far in stroke) | Multiplicative |
 | `speed` | Speed | `info.drawingSpeed()` | Multiplicative |
 | `distance` | Distance | `info.drawingDistance()` | Multiplicative (has length + periodic) |
@@ -212,13 +212,13 @@ Tablet Input → KisPaintInformation → KisDynamicSensor → curve mapping → 
 
 Evaluation flow:
 1. `computeValueComponents(info)` iterates active sensors
-2. Each sensor calls its `value(info)` to get a raw 0–1 input
+2. Each sensor calls its `value(info)` to get a raw 0-1 input
 3. If a curve is configured (non-identity), the value is mapped through a 256-point `KisCubicCurve` transfer function
 4. Results accumulate into `ValueComponents`:
-   - `scaling` — product of all multiplicative sensor outputs
-   - `additive` — sum of all additive sensor outputs (fuzzy, rotation, tilt direction)
-   - `absoluteOffset` — for drawing angle (absolute rotation)
-   - `constant` — the base strength/value
+   - `scaling` - product of all multiplicative sensor outputs
+   - `additive` - sum of all additive sensor outputs (fuzzy, rotation, tilt direction)
+   - `absoluteOffset` - for drawing angle (absolute rotation)
+   - `constant` - the base strength/value
 5. Final parameter value:
    - **Size-like:** `constant * scaling + constant * additive`, clamped to min/max
    - **Rotation-like:** complex formula combining base angle, axis flipping, scaling, and additive parts
@@ -226,8 +226,8 @@ Evaluation flow:
 ### Sensor Data Serialization
 
 Each sensor stores:
-- `KoID id` — sensor identifier
-- `QString curve` — serialized cubic curve control points
+- `KoID id` - sensor identifier
+- `QString curve` - serialized cubic curve control points
 - `bool isActive`
 
 Extended data for specific sensors:
@@ -249,15 +249,15 @@ The `KisKritaSensorPack` bundles all 16 sensor data structs for serialization wi
    ↓
 3. KisPainter::paintLine(pi1, pi2, currentDistance)
    ↓
-4. KisPaintOp::paintLine() — default: iterate dab positions via spacing
+4. KisPaintOp::paintLine() - default: iterate dab positions via spacing
    ↓
-5. KisPaintOpUtils::paintLine() — interpolates between pi1 and pi2:
+5. KisPaintOpUtils::paintLine() - interpolates between pi1 and pi2:
    │  a. currentDistance.getNextPointPosition() → find next dab position
    │  b. KisPaintInformation::mix() → interpolate tablet data at that position
    │  c. Optionally paintFan() for smooth rotation corners
    │  d. Call paintAt() at each dab position
    ↓
-6. KisPaintOp::paintAt(info) — engine-specific: generates the dab
+6. KisPaintOp::paintAt(info) - engine-specific: generates the dab
    │  a. Evaluate dynamics/sensors for this dab's parameters
    │  b. Generate mask via KisBrush::generateMaskAndApplyMaskOrCreateDab()
    │  c. Composite via KisPainter::bltFixed() or similar
@@ -270,8 +270,8 @@ For Bezier curves: `paintBezierCurve()` subdivides using midpoint subdivision (t
 ### Spacing
 
 `KisSpacingInformation` defines how far apart dabs are placed:
-- `m_distanceSpacing` — QPointF for anisotropic (x/y can differ)
-- `m_rotation` — rotation of the spacing ellipse
+- `m_distanceSpacing` - QPointF for anisotropic (x/y can differ)
+- `m_rotation` - rotation of the spacing ellipse
 - Auto-spacing formula: `coeff * (value < 1.0 ? value : sqrt(value))`
 - Supports isotropic and anisotropic modes
 
@@ -281,12 +281,12 @@ For Bezier curves: `paintBezierCurve()` subdivides using midpoint subdivision (t
 - Max pressure during stroke
 - `getNextPointPosition()` finds the next dab location
 
-### KisPainter — The Compositing Layer
+### KisPainter: The Compositing Layer
 
 `KisPainter` is the rendering context:
-- `bitBlt()` / `bltFixed()` — composite source onto target with composite op + opacity + selection
-- `renderMirrorMask()` — handles symmetry painting by mirroring dabs across axes
-- `renderDabWithMirroringNonIncremental()` — for non-incremental engines (Experiment)
+- `bitBlt()` / `bltFixed()` - composite source onto target with composite op + opacity + selection
+- `renderMirrorMask()` - handles symmetry painting by mirroring dabs across axes
+- `renderDabWithMirroringNonIncremental()` - for non-incremental engines (Experiment)
 - Properties: compositeOpId, opacity, flow, averageOpacity, paintColor, pattern, gradient, selection, channelFlags, mirror axes
 
 ### Async Dab Rendering (Pixel Brush)
@@ -327,13 +327,13 @@ This means `.kpp` files can be previewed as regular images by any PNG viewer.
 
 **Version 2.2 (legacy):**
 - Resources are referenced by filename but NOT embedded
-- External brush tips/patterns must exist in the user's resource folder
+- External brush tips/patterns must exist in the artist's resource folder
 - Resource filenames tracked via `"dependent_resources_filenames"` metadata
 
 **Version 5.0 (current):**
 - All linked resources (brushes, patterns, gradients) are **embedded as base64** in `<resources>`
 - On import, embedded resources are "side-loaded" into the resource database if they don't already exist (matched by MD5 + filename + name)
-- Fully self-contained — no external dependencies
+- Fully self-contained: no external dependencies
 
 ### Loading Flow
 
@@ -345,7 +345,7 @@ This means `.kpp` files can be previewed as regular images by any PNG viewer.
 
 ### Saving Flow
 
-1. Build XML from `KisPaintOpSettings::toXML()` — all settings as `<param>` elements
+1. Build XML from `KisPaintOpSettings::toXML()`: all settings as `<param>` elements
 2. Serialize linked resources as base64 in `<resources>`
 3. Sanitize (remove texture settings if texture disabled)
 4. Write as PNG with text metadata, always version `"5.0"`
@@ -358,7 +358,7 @@ This means `.kpp` files can be previewed as regular images by any PNG viewer.
 
 | File | Purpose |
 |------|---------|
-| `libs/brush/kis_abr_brush_collection.h/.cpp` | Binary format parser — the main ABR loader |
+| `libs/brush/kis_abr_brush_collection.h/.cpp` | Binary format parser, the main ABR loader |
 | `libs/brush/kis_abr_brush.h/.cpp` | Individual ABR brush wrapper |
 | `libs/brush/KisAbrStorage.h/.cpp` | Resource storage plugin for .abr files |
 
@@ -370,11 +370,11 @@ struct AbrInfo { short version; short subversion; short count; };
 
 | Version | Subversion | Status |
 |---------|-----------|--------|
-| 1 | — | Supported (sampled brushes, no names) |
-| 2 | — | Supported (sampled brushes, UCS-2 names) |
+| 1 | - | Supported (sampled brushes, no names) |
+| 2 | - | Supported (sampled brushes, UCS-2 names) |
 | 6 | 1 | Supported (8BIM sections) |
 | 6 | 2 | Supported (8BIM sections, larger skip) |
-| 3, 4, 5, 7+ | — | **Unsupported** |
+| 3, 4, 5, 7+ | - | **Unsupported** |
 
 ### Binary Format Parsing
 
@@ -393,7 +393,7 @@ struct AbrInfo { short version; short subversion; short count; };
 1. Navigate to `"samp"` section by scanning for `8BIM` tags
 2. Count brushes by iterating the sample section (4-byte aligned records)
 3. Per brush: read size, skip key data (37 bytes + version-specific extra: 10 for sub1, 264 for sub2)
-4. Read bounding box, depth, compression — same pipeline as v1/2
+4. Read bounding box, depth, compression: same pipeline as v1/2
 
 **RLE decompression:** Standard PackBits/Photoshop RLE. Per-scanline compressed lengths, then decode where negative run-length = repetition, positive = literal copy.
 
@@ -408,13 +408,13 @@ The raw grayscale buffer is inverted and converted to a QImage. Each brush becom
 
 ### Limitations
 
-- **Computed brushes (type 1) are not supported** — only sampled (type 2)
-- **Grayscale only** — no color/RGBA extraction
-- **Read-only** — `save()` returns false, `isSerializable()` returns false
-- **No individual loading** — must go through `KisAbrBrushCollection`
-- **No dynamics extracted** — Photoshop spacing, angle, etc. are ignored (there's a `XXX: call extra setters` comment in the code)
+- **Computed brushes (type 1) are not supported** - only sampled (type 2)
+- **Grayscale only** - no color/RGBA extraction
+- **Read-only** - `save()` returns false, `isSerializable()` returns false
+- **No individual loading** - must go through `KisAbrBrushCollection`
+- **No dynamics extracted** - Photoshop spacing, angle, etc. are ignored (there's a `XXX: call extra setters` comment in the code)
 - **Height limit:** 16384 pixels for v1/v2
-- **Only versions 1, 2, and 6 (sub 1/2)** — everything else is rejected
+- **Only versions 1, 2, and 6 (sub 1/2)** - everything else is rejected
 
 ### Resource System Integration
 
@@ -431,18 +431,18 @@ The raw grayscale buffer is inverted and converted to a QImage. Each brush becom
 
 ```
 KisResourceLocator (singleton)
-  ├── KisResourceStorage (Folder)     — default resources directory
-  ├── KisResourceStorage (Bundle)     — .bundle archives
-  ├── KisResourceStorage (ABR)        — .abr files via KisAbrStorage
-  ├── KisResourceStorage (ASL)        — .asl files
-  ├── KisResourceStorage (Memory)     — temporary/in-memory
-  └── KisResourceStorage (Font)       — system fonts
+  ├── KisResourceStorage (Folder)     - default resources directory
+  ├── KisResourceStorage (Bundle)     - .bundle archives
+  ├── KisResourceStorage (ABR)        - .abr files via KisAbrStorage
+  ├── KisResourceStorage (ASL)        - .asl files
+  ├── KisResourceStorage (Memory)     - temporary/in-memory
+  └── KisResourceStorage (Font)       - system fonts
          ↓
    SQLite cache database (KisResourceCacheDb)
          ↓
    KisAllResourcesModel (QAbstractTableModel)
          ↓
-   KisResourceModel (QSortFilterProxyModel — filters active/inactive)
+   KisResourceModel (QSortFilterProxyModel - filters active/inactive)
 ```
 
 ### Discovery Flow

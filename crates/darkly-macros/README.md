@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://darkly.art"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="Darkly — a GPU-native paint engine in Rust" width="600"></a>
+<a href="https://darkly.art"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="Darkly: a GPU-native paint engine in Rust" width="600"></a>
 
 **Proc-macro support for [`darkly`](https://crates.io/crates/darkly), the GPU-native paint engine in Rust: the `#[handlers]` engine-bridge macro that turns tagged engine methods into the request/response protocol surface.**
 
@@ -16,7 +16,7 @@
 
 `darkly-macros` is an internal implementation detail of [Darkly](https://darkly.art), a GPU-native paint program for artists. It provides the `#[handlers]` procedural macro used by the [`darkly`](https://crates.io/crates/darkly) core crate to derive its request/response protocol surface.
 
-Tag an `impl DarklyEngine { … }` block with `#[handlers]` and mark the methods that should be reachable over the protocol with an inner `#[handler]`. For each marked method the macro derives — from the signature alone — the `Deserialize` request struct and the registration that decodes it, calls the method, and encodes the response. The method name is the protocol kind; the signature is the single source of truth.
+Tag an `impl DarklyEngine { … }` block with `#[handlers]` and mark the methods that should be reachable over the protocol with an inner `#[handler]`. For each marked method the macro derives (from the signature alone) the `Deserialize` request struct and the registration that decodes it, calls the method, and encodes the response. The method name is the protocol kind; the signature is the single source of truth.
 
 You almost certainly want the [`darkly`](https://crates.io/crates/darkly) crate, not this one directly. This crate is published so that `darkly` can depend on it from crates.io.
 

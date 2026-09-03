@@ -2,6 +2,7 @@ import init from '../wasm/pkg/darkly_wasm';
 import { config } from './config/store.svelte';
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { registerActions } from './actions';
+import { actions, actionDocs } from './actions/registry';
 import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
@@ -18,20 +19,24 @@ import { setupHeldModsTracking } from './actions/held_mods';
 import { autosave } from './state/autosave.svelte';
 import { recovery } from './state/recovery.svelte';
 import { processRecording } from './recording/recorder.svelte';
+import { loadRecents } from './state/recents.svelte';
 
 let processInitialized = false;
 
 /** Process-level setup: WASM module load, config load, theme sync,
- *  action+hotkey registration. Idempotent — safe to call multiple times.
+ *  action+hotkey registration. Idempotent: safe to call multiple times.
  *  The multi-tab shell calls this once at boot before opening any tabs.
  *
  *  WASM init happens FIRST because `config.init()` calls into WASM exports
- *  (`config_schema`, `config_base_names`) — those would throw with
+ *  (`config_schema`, `config_base_names`) that would throw with
  *  "Cannot read properties of undefined" if the module hadn't loaded yet. */
 export async function ensureProcessInit(): Promise<void> {
     if (processInitialized) return;
     await init();
     await config.init();
+    // Recents are painter-scoped and independent of any canvas, so they load
+    // once here rather than per tab.
+    await loadRecents();
     // Theme subscribes to config in its module; trigger an initial sync so
     // body class and WASM preview colors match `ui.theme` from startup.
     theme.syncFromConfig();
@@ -52,7 +57,7 @@ export async function ensureProcessInit(): Promise<void> {
     // modules below consume. Idempotent.
     setupModifierCursorTracking();
 
-    // Window-level backstop that swallows an unhandled ToolSessionCancelled —
+    // Window-level backstop that swallows an unhandled ToolSessionCancelled,
     // the safety net for any bare `void tool.asyncHook()` spawn that skipped
     // `runHook`. Idempotent.
     setupToolSessionRejectionGuard();
@@ -62,7 +67,7 @@ export async function ensureProcessInit(): Promise<void> {
     // on pointerdown). Idempotent.
     setupColorPickerModifierTracking();
 
-    // Same for the Clone brush's set-source cursor — arms the crosshair
+    // Same for the Clone brush's set-source cursor: arms the crosshair
     // while the held modifier resolves to `setCloneSource` with a clone
     // brush active. Idempotent.
     setupCloneSourceModifierTracking();
@@ -85,10 +90,10 @@ export async function ensureProcessInit(): Promise<void> {
 /** Options for {@link createInstance}. */
 export interface CreateInstanceOptions {
     /** Seed a fresh document with its default background layer (the
-     *  deploy-flavor's {@link freshDocument} initial layer — the demo
+     *  deploy-flavor's {@link freshDocument} initial layer, the demo
      *  background image or the app's black fill). Done **before** the engine is
      *  published to `instance.engine`, so any `$effect` that watches
-     *  `app.engine` sees a fully-bootstrapped engine — no
+     *  `app.engine` sees a fully-bootstrapped engine: no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
     seedBackground?: boolean;
 }
@@ -103,11 +108,11 @@ export interface CreateInstanceOptions {
  *
  *  **Publish order matters**: `instance.engine = engine` is the *last*
  *  thing that happens before `onHandleReady` fires. Every bootstrap
- *  mutation — registry load, name application, optional bg seed —
+ *  mutation (registry load, name application, optional bg seed)
  *  completes first, so reactive consumers that subscribe on the engine
  *  becoming non-null read a fully-initialised engine.
  *
- *  Does NOT touch `setActiveInstance` — the caller decides focus. */
+ *  Does NOT touch `setActiveInstance`; the caller decides focus. */
 export async function createInstance(
     canvas: HTMLCanvasElement,
     docWidth: number,
@@ -119,25 +124,31 @@ export async function createInstance(
 
     const engine = await createHandle(canvas, docWidth, docHeight);
 
-    // Display-name maps describe the WASM core's process-global registries —
+    // Display-name maps describe the WASM core's process-global registries,
     // identical for every instance, but loading them per-instance keeps the
     // instance self-contained (no shell-level "registry source" coupling).
     await instance.loadRegistries(engine);
 
     // Replay the personal font library into this fresh handle so its engine's
-    // font collection matches every other tab's before the first frame — the
+    // font collection matches every other tab's before the first frame: the
     // single chokepoint every new handle passes through.
     await fontLibrary.registerIntoHandle(engine);
 
     // Action/hotkey registration is process-wide but reads the active
     // instance via the `app` proxy. Calling it here is idempotent.
+    //
+    // Every action's documentation is Rust's (`crates/darkly/src/actions/`) and
+    // arrives in the `actions` catalog; the registry joins it to the handlers by
+    // id. Installed before registration so nothing observes a half-joined
+    // registry.
+    actions.setDocs(actionDocs(instance.entries('actions')));
     registerActions();
     registerHotkeys();
     rebuildClickIndex();
 
     // Apply the shell's "Untitled N" suggestion if one was stashed
     // before the async handle init. The engine's own default is
-    // plain "Untitled" — without this the first tab-strip read would
+    // plain "Untitled"; without this the first tab-strip read would
     // race the rename.
     if (instance.pendingName !== null) {
         engine.api.setDocumentName({ name: instance.pendingName });
@@ -147,7 +158,7 @@ export async function createInstance(
     // Seed the default background layer for fresh docs. Done before
     // publishing the engine so any reactive consumer that fires on
     // `app.engine` becoming truthy reads a doc that already has its
-    // bg layer — eliminates the "refresh after mutation" race the
+    // bg layer, eliminating the "refresh after mutation" race the
     // LayerPanel would otherwise hit.
     if (options.seedBackground) {
         const bg = await engine.api.addRaster({ anchor: null });
@@ -173,10 +184,10 @@ export async function createInstance(
 
 /** Populate a freshly-booted instance with the deploy-flavor's default
  *  starter content (the demo build's hidden veils, or nothing for the app
- *  build) — see {@link freshDocument}. Caller decides when to invoke
+ *  build): see {@link freshDocument}. Caller decides when to invoke
  *  (skipped for tabs that load existing documents). Living as a free
  *  function (not a `DarklyInstance` method) keeps "what's in a fresh tab"
- *  at the application layer — the engine itself stays opinion-free. */
+ *  at the application layer: the engine itself stays opinion-free. */
 export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
     if (!instance.engine) return;
     freshDocument.seedVeils(instance, docW, docH);

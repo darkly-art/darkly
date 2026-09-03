@@ -1,5 +1,5 @@
 name: Smooth Watercolor
-category: Wet Media
+description: Wet pigment that pools and blends into what is already on the canvas, with a soft, even edge.
 nodes:
   pen_input:
     type: pen_input

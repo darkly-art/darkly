@@ -66,7 +66,7 @@ function beginSession() {
     (fakeApp.session as SessionEngine | null)?.kill();
     fakeApp.session = new SessionEngine(engine as never);
 }
-/** Sever the session, leaving none — parked ops reject on resume. */
+/** Sever the session, leaving none; parked ops reject on resume. */
 function killSession() {
     (fakeApp.session as SessionEngine | null)?.kill();
     fakeApp.session = null;
@@ -94,7 +94,7 @@ beforeEach(() => {
  * 'frame')` in transform.onFrame): onFrame awaits an engine read, and a tool
  * switch runs onDeactivate (nulling the gizmo) + kills the session during that
  * await. The resumed read must reject via the dead session BEFORE the
- * `await gizmo.frame()` deref — so onFrame rejects with ToolSessionCancelled,
+ * `await gizmo.frame()` deref, so onFrame rejects with ToolSessionCancelled,
  * never a TypeError. (has_floating resolves `false`, so absent the session
  * reject the resumed onFrame would fall straight through to the null deref.)
  */
@@ -126,7 +126,7 @@ describe('transform onFrame resumes into a torn-down tool', () => {
  * Regression for wrong-layer resumption: activate() captures the active layer
  * before its first await. If the active layer changes (and the session is
  * rebegun) while activate is parked, the captured op must NOT proceed against
- * the stale layer — the old session's next send rejects, so no `begin_transform`
+ * the stale layer; the old session's next send rejects, so no `begin_transform`
  * / attach fires.
  */
 describe('transform activate resumes after an active-layer change', () => {
@@ -151,7 +151,7 @@ describe('transform activate resumes after an active-layer change', () => {
         beginSession();
         expect(fakeApp.session).not.toBeNull();
 
-        // The parked has_floating read now resolves — but on the dead session, so
+        // The parked has_floating read now resolves, but on the dead session, so
         // activate unwinds without issuing begin_transform or attaching.
         deferrals.hf.resolve(false);
         await flush();

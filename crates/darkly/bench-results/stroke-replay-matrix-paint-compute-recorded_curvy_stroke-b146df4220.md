@@ -1,8 +1,8 @@
-# stroke_replay_matrix — `paint-compute`
+# stroke_replay_matrix: `paint-compute`
 
-Brush: `Ink Pen` topology `paint-compute` (terminal: `paint_compute`, stabilize=`1`). Recording: 204 events spanning 3536 ms recorded at 4000×2000. Replay pacing: real-time. `behind_by_ms = wall_total - stroke_duration` — positive means the engine fell behind the recorded cadence. `max_event_behind_ms` is the worst single-event lateness (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).
+Brush: `Ink Pen` topology `paint-compute` (terminal: `paint_compute`, stabilize=`1`). Recording: 204 events spanning 3536 ms recorded at 4000×2000. Replay pacing: real-time. `behind_by_ms = wall_total - stroke_duration`: positive means the engine fell behind the recorded cadence. `max_event_behind_ms` is the worst single-event lateness (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).
 
-Markdown carries the slim view; the sibling TSV has p95/max for every column. `gpu_shader` is the compute pass; `gpu_sync_in` is `copy_texture_to_buffer`; `gpu_sync_out` is `copy_buffer_to_texture`. The sync columns are zero unless the adapter exposes `TIMESTAMP_QUERY_INSIDE_ENCODERS`. `submit` is host wall-clock around `queue.submit()` — high values indicate back-pressure. `dispatches/ev`, `dabs/ev`, `bbox/ev` are per-event averages of the workload the engine fed the GPU.
+Markdown carries the slim view; the sibling TSV has p95/max for every column. `gpu_shader` is the compute pass; `gpu_sync_in` is `copy_texture_to_buffer`; `gpu_sync_out` is `copy_buffer_to_texture`. The sync columns are zero unless the adapter exposes `TIMESTAMP_QUERY_INSIDE_ENCODERS`. `submit` is host wall-clock around `queue.submit()`: high values indicate back-pressure. `dispatches/ev`, `dabs/ev`, `bbox/ev` are per-event averages of the workload the engine fed the GPU.
 
 | canvas | radius_px | events | wall (ms) | behind (ms) | worst-frame (ms) | cpu p50 (µs) | gpu_shader p50 (µs) | gpu_sync_in p50 (µs) | gpu_sync_out p50 (µs) | submit p50 (µs) | dispatches/ev | dabs/ev | bbox px²/ev |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|

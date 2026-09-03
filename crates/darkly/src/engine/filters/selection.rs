@@ -9,7 +9,7 @@
 //! - **Compositor**: `compositor.selection_state` carries the ping-pong R8
 //!   textures, the shared selection-mask bind group, and the filter id used
 //!   for region-store / undo keying.
-//! - **Engine**: this file. The high-level ops the user invokes (select_rect,
+//! - **Engine**: this file. The high-level ops the artist invokes (select_rect,
 //!   apply_selection_mask, invert, clear, magic wand, …) plus the bridge
 //!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
 //!   `selection_pixel_bounds`, …).
@@ -20,7 +20,7 @@ use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, OverlayChannel, ReadbackContext};
 use crate::coord::{CanvasRect, WindowRect};
 use crate::document::SelectionMode;
-use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
+use crate::gpu::layer_readback::{self, LayerReadbackExtent};
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
 use crate::gpu::selection::{CombineMode, MorphOp};
@@ -29,7 +29,7 @@ use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
 
 /// Concatenate every overlay channel bottom-to-top in [`OverlayChannel::ALL`]
-/// order (`Selection`, `CloneSource`, `Tool`). Pure — the z-order is the one
+/// order (`Selection`, `CloneSource`, `Tool`). Pure: the z-order is the one
 /// behaviour worth pinning down in a test, decoupled from the GPU push in
 /// [`DarklyEngine::push_merged_overlay`].
 pub(crate) fn merge_overlay_channels(
@@ -44,7 +44,7 @@ pub(crate) fn merge_overlay_channels(
 }
 
 /// Emit marching-ants overlay primitives from contour polylines. Each edge
-/// produces a pair of dashed-line primitives — black backing + white dashes —
+/// produces a pair of dashed-line primitives (black backing + white dashes),
 /// carrying cumulative arc length in `dash_offset` so dash phase flows
 /// continuously around the contour. Without that, each edge resets phase at
 /// its start: invisible at high zoom, glitchy flicker when zoomed out.
@@ -98,7 +98,7 @@ fn emit_marching_ants(
 
 /// Reinterpret window-local selection bounds as a rect in the selection
 /// texture's **undo frame**. That frame is itself window-local-at-origin-0
-/// (`SelectionState::canvas_frame`), so the numbers carry over directly — this
+/// (`SelectionState::canvas_frame`), so the numbers carry over directly; this
 /// is *not* a `canvas_origin` lift to plane (use `WindowRect::to_canvas` for
 /// that). Kept as one named conversion so the undo path stays in `CanvasRect`
 /// (the shared region API) without leaking the window-local fact.
@@ -109,7 +109,7 @@ fn selection_undo_frame_rect(b: WindowRect) -> CanvasRect {
 #[handlers]
 impl DarklyEngine {
     // ========================================================================
-    // Bridge helpers — read/write the selection's split state through one
+    // Bridge helpers: read/write the selection's split state through one
     // facade so consumers don't have to know whether a fact lives on the
     // document filter or the compositor's GPU state.
     // ========================================================================
@@ -124,7 +124,7 @@ impl DarklyEngine {
     /// CPU mirror of the selection's R8 texture, if present. Populated by the
     /// async `SelectionReadback` and by the `Replace` upload paths (which have
     /// the data in hand). Cleared after combine/invert until the next
-    /// readback lands. Read-only access — engine helpers above mutate.
+    /// readback lands. Read-only access; engine helpers above mutate.
     pub fn selection_cpu_cache(&self) -> Option<&[u8]> {
         let id = self.doc.selection?;
         self.doc
@@ -180,7 +180,7 @@ impl DarklyEngine {
         }
     }
 
-    /// Invalidate the CPU mirror — called after combine/invert.
+    /// Invalidate the CPU mirror (called after combine/invert).
     pub(crate) fn invalidate_selection_cpu_cache(&mut self) {
         let id = match self.doc.selection {
             Some(id) => id,
@@ -195,7 +195,7 @@ impl DarklyEngine {
         }
     }
 
-    /// Toggle the active flag (mapped onto `common.visible`). Engine internal —
+    /// Toggle the active flag (mapped onto `common.visible`). Engine internal:
     /// public visibility toggling is via [`Self::set_layer_visible`].
     pub(crate) fn set_selection_active(&mut self, active: bool) {
         let id = match self.doc.selection {
@@ -208,7 +208,7 @@ impl DarklyEngine {
     }
 
     // ========================================================================
-    // Selection ops — the user-facing shape fills, booleans, invert, clear.
+    // Selection ops: the artist-facing shape fills, booleans, invert, clear.
     // ========================================================================
 
     #[handler]
@@ -316,7 +316,7 @@ impl DarklyEngine {
         }
 
         let was_active = self.has_selection();
-        // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
+        // Magic wand operates on full-canvas data, so reserve a full-canvas undo rect.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
@@ -328,7 +328,7 @@ impl DarklyEngine {
                 label: Some("magic-wand-readback"),
             });
         let (request, extent) =
-            flood_fill::request_layer_flood_fill_readback(&self.gpu.device, &mut encoder, &pt);
+            layer_readback::request_layer_readback(&self.gpu.device, &mut encoder, &pt);
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(
             request,
@@ -350,11 +350,59 @@ impl DarklyEngine {
         seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: SelectionMode,
-        extent: LayerFloodFillExtent,
+        extent: LayerReadbackExtent,
         pixels: Vec<u8>,
     ) {
         let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);
         self.apply_selection_full(fill_mask, mode, was_active);
+    }
+
+    /// Load a node's per-pixel opacity as the selection - Krita's "select
+    /// opaque", GIMP's "alpha to selection", the `$mod`+click-the-thumbnail
+    /// gesture. Node-kind agnostic: an RGBA layer contributes its alpha
+    /// channel, an R8 mask filter its coverage (see
+    /// [`LayerReadbackExtent::opacity_to_canvas_mask`]). A node with no
+    /// texture is a no-op.
+    ///
+    /// The pixels come back through the async readback pipeline, so the
+    /// selection lands on a later frame, the same shape as magic wand and
+    /// for the same reason (`CLAUDE.md`: no blocking GPU readbacks).
+    #[handler]
+    pub fn alpha_to_selection(&mut self, id: LayerId) {
+        if self.paint_target(id).is_none() {
+            return;
+        }
+
+        let was_active = self.has_selection();
+        // Whole-layer coverage lands anywhere in the window, so reserve a
+        // full-canvas undo rect.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
+
+        let pt = self.paint_target(id).unwrap();
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("alpha-to-selection-readback"),
+            });
+        let (request, extent) =
+            layer_readback::request_layer_readback(&self.gpu.device, &mut encoder, &pt);
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(
+            request,
+            ReadbackContext::AlphaToSelection { was_active, extent },
+        );
+    }
+
+    pub(crate) fn complete_alpha_to_selection(
+        &mut self,
+        was_active: bool,
+        extent: LayerReadbackExtent,
+        pixels: Vec<u8>,
+    ) {
+        let mask = extent.opacity_to_canvas_mask(&pixels);
+        self.apply_selection_full(mask, SelectionMode::Replace, was_active);
     }
 
     #[handler]
@@ -368,7 +416,7 @@ impl DarklyEngine {
     }
 
     /// Clear the active selection and return its undo data `(was_active,
-    /// entry)` **without** pushing an undo step — the caller records it. The
+    /// entry)` **without** pushing an undo step; the caller records it. The
     /// public [`clear_selection`](Self::clear_selection) wraps it in a
     /// `SelectionAction`; image rescale folds the pair into its single undo
     /// step (so a rescale-with-active-selection undoes in one operation).
@@ -499,7 +547,7 @@ impl DarklyEngine {
         self.blur_selection(radius);
     }
 
-    /// Antialias the active selection — a fixed small-radius Gaussian blur that
+    /// Antialias the active selection: a fixed small-radius Gaussian blur that
     /// softens the staircase of a hard-edged selection.
     #[handler]
     pub fn antialias_selection(&mut self) {
@@ -525,7 +573,7 @@ impl DarklyEngine {
 
     /// Run `count` single-pixel morphology steps over the selection mask,
     /// alternating 4-/8-connectivity for a rounder structuring element. Each
-    /// step is its own submit (the per-step uniform varies). No undo handling —
+    /// step is its own submit (the per-step uniform varies). No undo handling;
     /// the caller brackets the whole edit.
     fn run_morph_steps(&mut self, op: MorphOp, count: u32) {
         for i in 0..count {
@@ -546,7 +594,7 @@ impl DarklyEngine {
     }
 
     /// Separable Gaussian blur (H then V) of the selection mask, wrapped in one
-    /// undo step. σ = radius / 2, kernel extent ±ceil(radius) — matching
+    /// undo step. σ = radius / 2, kernel extent ±ceil(radius), matching
     /// [`crate::mask::gaussian_kernel`]. Shared by feather / antialias.
     fn blur_selection(&mut self, radius: f32) {
         let rect = self.selection_full_canvas_rect();
@@ -740,7 +788,7 @@ impl DarklyEngine {
         self.set_selection_cpu_cache(cache);
     }
 
-    /// Full-canvas R8 replace — sets bounds from the buffer's non-zero region
+    /// Full-canvas R8 replace: sets bounds from the buffer's non-zero region
     /// and seeds the CPU cache directly.
     pub(crate) fn upload_selection_replace_full(&mut self, data: &[u8]) {
         if let Some(state) = self.compositor.selection_state_mut() {
@@ -811,7 +859,7 @@ impl DarklyEngine {
         ))
     }
 
-    /// Full-canvas undo rect — used when post-op extent isn't known up-front.
+    /// Full-canvas undo rect, used when post-op extent isn't known up-front.
     ///
     /// Window-local `(0, 0, w, h)`: the selection mask is a window-sized R8
     /// texture and its `canvas_frame` is window-local, so selection undo rects
@@ -824,7 +872,7 @@ impl DarklyEngine {
 
     /// Undo rect that covers both the current (pre-op) selection and a new
     /// shape that's about to be applied. Save and commit must use the same
-    /// rect — otherwise stale bytes outside the save rect leak into the
+    /// rect; otherwise stale bytes outside the save rect leak into the
     /// commit and corrupt the selection on undo.
     pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> CanvasRect {
         let cw = self.doc.width;
@@ -905,7 +953,7 @@ impl DarklyEngine {
     /// Merge every overlay channel in z-order and push to the compositor's
     /// single overlay slot. Channels render bottom-to-top in
     /// [`OverlayChannel::ALL`] order (`Selection`, `CloneSource`, `Tool`),
-    /// so the dab preview lands on top. A new channel is additive — extend
+    /// so the dab preview lands on top. A new channel is additive - extend
     /// the enum and it folds in here with no edit.
     pub(crate) fn push_merged_overlay(&mut self) {
         let merged = merge_overlay_channels(&self.overlays);
@@ -996,7 +1044,7 @@ mod overlay_channel_tests {
         ch
     }
 
-    /// The merge concatenates Selection, then CloneSource, then Tool — the
+    /// The merge concatenates Selection, then CloneSource, then Tool, so the
     /// dab (`Tool`) lands on top.
     #[test]
     fn merges_in_z_order() {
@@ -1008,7 +1056,7 @@ mod overlay_channel_tests {
         assert_eq!(merged, vec![1.0, 2.0, 3.0, 4.0]);
     }
 
-    /// Clearing the `Tool` channel leaves the `CloneSource` marker intact —
+    /// Clearing the `Tool` channel leaves the `CloneSource` marker intact:
     /// the property that lets the source crosshair survive the dab preview's
     /// every-hover-move replacement.
     #[test]

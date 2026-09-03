@@ -5,20 +5,24 @@ use crate::gpu::compositor::Compositor;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
-/// Undo action for adding a layer/group.
+/// Undo action for adding an entity: layer, group, or filter.
 ///
-/// Undo unlinks the node from the tree (it stays in the document's slotmap
+/// Undo unlinks the entity from its parent (it stays in the document's slotmap
 /// orphaned, so the id is preserved).
-/// Redo reinserts it at the original position.
-pub struct LayerAddAction {
+/// Redo reinserts it under the same parent at the original position.
+///
+/// Kind-uniform: `Document`'s detach/reattach pair routes by the entity's own
+/// kind, so attaching a mask to a host and a layer to a group are the same
+/// operation from here. Adding a new entity kind needs no new action.
+pub struct EntityAddAction {
     layer_id: LayerId,
     parent: Option<LayerId>,
     position: usize,
 }
 
-impl LayerAddAction {
+impl EntityAddAction {
     pub fn new(layer_id: LayerId, parent: Option<LayerId>, position: usize) -> Self {
-        LayerAddAction {
+        EntityAddAction {
             layer_id,
             parent,
             position,
@@ -26,28 +30,32 @@ impl LayerAddAction {
     }
 }
 
-impl UndoAction for LayerAddAction {
+impl UndoAction for EntityAddAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         doc.detach_for_undo(self.layer_id);
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_node(self.layer_id, self.parent, self.position);
+        doc.reinsert_entity(self.layer_id, self.parent, self.position);
         HashMap::new()
     }
 }
 
-/// Undo action for removing a layer/group.
+/// Undo action for removing an entity: layer, group, or filter.
 ///
-/// The node stays in the document's slotmap as an orphan between detach
-/// and reattach — the id (and all attached filters/descendants) survives
+/// The entity stays in the document's slotmap as an orphan between detach
+/// and reattach: the id (and all attached filters/descendants) survives
 /// across undo/redo with no copy. The subtree's GPU textures are
 /// tombstoned so the pixels survive too; they're disposed only when this
 /// action is evicted from the undo stack while the deletion is still in
-/// effect (i.e. the user never undid it). Undo relinks the node; redo
+/// effect (i.e. the artist never undid it). Undo relinks the entity; redo
 /// unlinks again.
-pub struct LayerRemoveAction {
+///
+/// Callers that manage a filter's pixels themselves (`remove_mask` saves the
+/// mask texture into a `GpuRegionAction` and disposes it eagerly) pass an
+/// empty tombstone set.
+pub struct EntityRemoveAction {
     layer_id: LayerId,
     parent: Option<LayerId>,
     position: usize,
@@ -60,14 +68,14 @@ pub struct LayerRemoveAction {
     applied: bool,
 }
 
-impl LayerRemoveAction {
+impl EntityRemoveAction {
     pub fn new(
         layer_id: LayerId,
         parent: Option<LayerId>,
         position: usize,
         tombstones: Vec<LayerId>,
     ) -> Self {
-        LayerRemoveAction {
+        EntityRemoveAction {
             layer_id,
             parent,
             position,
@@ -77,9 +85,9 @@ impl LayerRemoveAction {
     }
 }
 
-impl UndoAction for LayerRemoveAction {
+impl UndoAction for EntityRemoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_node(self.layer_id, self.parent, self.position);
+        doc.reinsert_entity(self.layer_id, self.parent, self.position);
         self.applied = false;
         HashMap::new()
     }
@@ -128,14 +136,14 @@ impl LayerMoveAction {
 impl UndoAction for LayerMoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         if doc.detach_for_undo(self.layer_id).is_some() {
-            doc.reinsert_node(self.layer_id, self.old_parent, self.old_position);
+            doc.reinsert_entity(self.layer_id, self.old_parent, self.old_position);
         }
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         if doc.detach_for_undo(self.layer_id).is_some() {
-            doc.reinsert_node(self.layer_id, self.new_parent, self.new_position);
+            doc.reinsert_entity(self.layer_id, self.new_parent, self.new_position);
         }
         HashMap::new()
     }
@@ -146,8 +154,8 @@ impl UndoAction for LayerMoveAction {
 /// Undo detaches the duplicated root (the entire subtree orphans together
 /// because `detach_for_undo` walks the tree). Redo reinserts it at its
 /// original anchor. Eviction disposes the duplicated subtree's GPU
-/// textures **only when the dup is currently detached** — i.e. the action
-/// was sitting on the redo stack when it got evicted. If the dup is
+/// textures **only when the dup is currently detached** (i.e. the action
+/// was sitting on the redo stack when it got evicted). If the dup is
 /// attached at eviction time, its texture is part of live document state
 /// and must not be touched.
 pub struct DuplicateAction {
@@ -188,7 +196,7 @@ impl UndoAction for DuplicateAction {
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        doc.reinsert_node(self.root_new_id, self.parent, self.position);
+        doc.reinsert_entity(self.root_new_id, self.parent, self.position);
         self.applied = true;
         HashMap::new()
     }
@@ -208,18 +216,18 @@ pub struct BakeSourceSlot {
 }
 
 /// Undo action for merge-down and flatten-image. Both ops consume a set of
-/// source layers / groups and emit a single baked raster — same shape,
+/// source layers / groups and emit a single baked raster: same shape,
 /// different selection rules.
 ///
 /// The action holds the detach/reinsert metadata for every source plus the
 /// position metadata for the baked result. The source GPU textures are
 /// **tombstoned** in the compositor (not disposed) while the action is on
 /// either stack, so undo restores pixels for free. On redo the engine
-/// re-runs `bake_subtree_to_layer` to recompose the result — cheaper than
-/// snapshotting it.
+/// re-runs `bake_subtree_to_layer` to recompose the result, which is cheaper
+/// than snapshotting it.
 pub struct BakeLayersAction {
     pub sources: Vec<BakeSourceSlot>,
-    /// Pixel-bearing node ids inside the source subtrees — detached on
+    /// Pixel-bearing node ids inside the source subtrees, detached on
     /// the forward (applied) side, reattached on undo. Disposed at evict
     /// time **only if the action was applied** (sources currently detached).
     source_tombstones: Tombstones,
@@ -227,7 +235,7 @@ pub struct BakeLayersAction {
     pub result_id: LayerId,
     pub result_parent: Option<LayerId>,
     pub result_position: usize,
-    /// The baked result's pixel-bearing node ids — typically just
+    /// The baked result's pixel-bearing node ids, typically just
     /// `[result_id]`. Disposed at evict time **only if the action was
     /// undone** (result currently detached).
     result_tombstones: Tombstones,
@@ -264,7 +272,7 @@ impl BakeLayersAction {
         }
     }
 
-    /// Source ids in bottom-to-top order — the order needed for compose.
+    /// Source ids in bottom-to-top order, the order needed for compose.
     pub fn source_ids_bottom_to_top(&self) -> Vec<LayerId> {
         let mut ids: Vec<(usize, LayerId)> =
             self.sources.iter().map(|s| (s.position, s.id)).collect();
@@ -277,16 +285,16 @@ impl UndoAction for BakeLayersAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         // Detach the baked result; its texture lives on as a tombstone for
         // the next redo cycle (the result's texture is untouched between
-        // undo and redo — nothing draws into detached textures — so no
+        // undo and redo, since nothing draws into detached textures, so no
         // recomposite is needed when redo brings it back).
         doc.detach_for_undo(self.result_id);
 
-        // Reinsert sources in ascending position order — earlier slots first
+        // Reinsert sources in ascending position order, earlier slots first,
         // so later positions remain valid as the tree grows back.
         let mut sources_sorted = self.sources.clone();
         sources_sorted.sort_by_key(|s| s.position);
         for slot in sources_sorted {
-            doc.reinsert_node(slot.id, slot.parent, slot.position);
+            doc.reinsert_entity(slot.id, slot.parent, slot.position);
         }
         self.applied = false;
         HashMap::new()
@@ -298,7 +306,7 @@ impl UndoAction for BakeLayersAction {
         for slot in &self.sources {
             doc.detach_for_undo(slot.id);
         }
-        doc.reinsert_node(self.result_id, self.result_parent, self.result_position);
+        doc.reinsert_entity(self.result_id, self.result_parent, self.result_position);
         self.applied = true;
         HashMap::new()
     }

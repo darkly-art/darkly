@@ -10,7 +10,7 @@ describe('effectivePressure', () => {
     beforeEach(() => resetPressureCapability());
 
     // Regression for the iPad finger-painting bug: a sensorless touchscreen
-    // reports pressure 0, which — wired into brush size/flow — collapsed every
+    // reports pressure 0, which (wired into brush size/flow) collapsed every
     // dab to the sub-pixel radius floor and painted nothing. Until a device
     // proves it measures force, its input reads as full pressure.
     it('forces full pressure for finger touch reporting 0 (the bug)', () => {
@@ -38,7 +38,7 @@ describe('effectivePressure', () => {
     });
 
     // Regression: once a pen has proven it carries a sensor, a genuine 0
-    // (stroke start / end / featherlight) passes through untouched — not
+    // (stroke start / end / featherlight) passes through untouched, not
     // jumping to full, which is what the old `pressure > 0 ? pressure : 1.0`
     // clause did.
     it('passes a proven pen zero through as zero', () => {

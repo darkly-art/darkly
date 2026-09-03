@@ -20,10 +20,10 @@
         group: {
             type: 'group'; id: number; name: string; visible: boolean;
             locked?: boolean;
-            // See LayerItem — `locked` is the node's own flag, `editable`
+            // See LayerItem: `locked` is the node's own flag, `editable`
             // is the effective (ancestor-aware) form used to gate edits.
             editable?: boolean;
-            // Per-kind mask capability (see LayerKindRegistration) — gates the
+            // Per-kind mask capability (see LayerKindRegistration): gates the
             // add-mask control without branching on the kind.
             canHaveMask?: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
@@ -68,7 +68,7 @@
     let layerMenuX = $state(0);
     let layerMenuY = $state(0);
 
-    /// Same predicate as LayerItem — kept colocated rather than pulled into
+    /// Same predicate as LayerItem, kept colocated rather than pulled into
     /// a shared helper for one walk's worth of code.
     function siblingBelowExists(nodes: any[], id: number): boolean {
         for (const n of nodes) {
@@ -91,7 +91,7 @@
     let canAddMask = $derived(Boolean(group.canHaveMask) && !hasMask && editable);
 
     // Chord dispatch is owned by `use:bindingSite` on each preview element
-    // below — `bindingSite` intercepts modifier+click in capture phase
+    // below: `bindingSite` intercepts modifier+click in capture phase
     // and dispatches against its named site. These onclick handlers are
     // the no-chord fallback.
     function toggleVisibility(e: MouseEvent) {
@@ -115,7 +115,7 @@
     }
 
     function onLayerClick(e: MouseEvent) {
-        // The group-header body has no bindings — modifier+click is
+        // The group-header body has no bindings; modifier+click is
         // reserved for the previews. Plain / ctrl / shift dispatch is
         // shared with LayerItem via app.handleLayerRowClick.
         app.handleLayerRowClick(group.id, e);
@@ -196,7 +196,7 @@
         return items;
     });
 
-    // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
+    // Structural menu items dispatch WITHOUT `ctx.layerId`: the action
     // handler reads `app.selectedLayerIds` directly. See LayerItem.svelte
     // for the same pattern and the rationale.
 

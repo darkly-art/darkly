@@ -1,10 +1,10 @@
 //! Typed coordinate spaces.
 //!
-//! `CanvasPoint` / `CanvasRect` live in **plane** coordinates — the absolute
+//! `CanvasPoint` / `CanvasRect` live in **plane** coordinates, the absolute
 //! document frame that does not move on crop. They may be negative (paste-extent
 //! layers can sit at negative canvas offsets).
 //!
-//! `WindowPoint` / `WindowRect` live in **window-local** coordinates — origin at
+//! `WindowPoint` / `WindowRect` live in **window-local** coordinates, origin at
 //! the canvas-window top-left, i.e. plane `canvas_origin`. The window-sized
 //! selection texture and floating-preview texture live here. Convert to plane
 //! with `to_canvas(canvas_origin)` (the invariant is
@@ -12,23 +12,23 @@
 //!
 //! `LayerPoint` / `LayerRect` live in a specific layer texture's local pixel
 //! coordinates and are always non-negative. Conversion to plane requires a
-//! `LayerTexture` (or its bounds) — see `crate::gpu::atlas::LayerTexture`.
+//! `LayerTexture` (or its bounds); see `crate::gpu::atlas::LayerTexture`.
 //!
 //! `Point<S>` / `Rect<S>` are generic over a zero-size coordinate-space tag
 //! `S` ([`Plane`] / [`Window`]). The space-agnostic rect/point algebra is
 //! written once here; `CanvasPoint`/`CanvasRect`/`WindowPoint`/`WindowRect` are
 //! type aliases. `Rect<Plane>` and `Rect<Window>` are distinct, incompatible
-//! types — mixing frames is a compile error — and the only space-specific code
+//! types; mixing frames is a compile error, and the only space-specific code
 //! is the `to_canvas` / `to_window` conversions on the concrete instantiations.
 
 use std::marker::PhantomData;
 
-/// Coordinate-space tag for the **plane** frame — the absolute document frame
+/// Coordinate-space tag for the **plane** frame, the absolute document frame
 /// that does not move on crop. May be negative.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Plane;
 
-/// Coordinate-space tag for the **window-local** frame — origin at the
+/// Coordinate-space tag for the **window-local** frame, origin at the
 /// canvas-window top-left (plane `canvas_origin`). The window-sized selection
 /// and floating-preview textures are indexed in this frame.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -104,7 +104,7 @@ impl<S: Copy> Rect<S> {
 
     /// Round the rect's edges outward to a multiple of `chunk` pixels.
     /// Origin floors toward more-negative; far edge ceils toward more-positive.
-    /// Uses `div_euclid` so the floor is correct for negative coords —
+    /// Uses `div_euclid` so the floor is correct for negative coords:
     /// `(-1).div_euclid(256) = -1`, not 0 (which is what `/` gives in Rust).
     pub fn round_outward(self, chunk: u32) -> Rect<S> {
         if self.is_empty() {
@@ -161,7 +161,7 @@ impl<S: Copy> Rect<S> {
     }
 
     /// Build a rect from two corners. A reversed or off-extent axis yields
-    /// extent 0 (an empty rect), never an underflow — this is the single home
+    /// extent 0 (an empty rect), never an underflow; this is the single home
     /// for the "clamp a bounding box and difference the edges" arithmetic that
     /// callers must not re-roll by hand. Inputs must be finite (callers casting
     /// from `f32` must clamp `NaN`/∞ first); `saturating_sub` keeps even extreme
@@ -282,7 +282,7 @@ impl CanvasRect {
 
 // On the wire a `Point`/`Rect` is a plain `{ x, y }` / `{ origin, width, height }`
 // regardless of its phantom coordinate space, so to the typed TS client they are
-// inline object expressions — not declared, named types (which would collide
+// inline object expressions, not declared, named types (which would collide
 // across `S` instantiations that share a TS shape). The space marker erases at
 // the boundary, mirroring its `#[serde(skip)]` `PhantomData`.
 #[cfg(feature = "ts-export")]
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn intersect_touching_is_none() {
-        // touching at edge — zero area, should be None
+        // touching at edge: zero area, should be None
         assert_eq!(r(0, 0, 10, 10).intersect(r(10, 0, 10, 10)), None);
     }
 
@@ -601,7 +601,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // LayerRect — texture-local rect helpers
+    // LayerRect: texture-local rect helpers
     // ------------------------------------------------------------------
 
     fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
@@ -656,7 +656,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // WindowRect ↔ CanvasRect — plane = window_local + canvas_origin
+    // WindowRect ↔ CanvasRect: plane = window_local + canvas_origin
     // ------------------------------------------------------------------
 
     #[test]
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn window_to_canvas_zero_origin_is_identity() {
         // Until the first crop `canvas_origin == (0, 0)` and the two frames
-        // coincide — which is exactly why origin bugs hide in fresh docs.
+        // coincide, which is exactly why origin bugs hide in fresh docs.
         let origin = CanvasPoint::new(0, 0);
         let w = WindowRect::from_xywh(5, 9, 11, 13);
         assert_eq!(w.to_canvas(origin), CanvasRect::from_xywh(5, 9, 11, 13));

@@ -13,9 +13,9 @@
     let showColorPicker = $state(false);
 
     // Track the last-activated sub-tool per cluster id so a cluster-button
-    // click can restore the user's previous choice. The mutation is wrapped
+    // click can restore the artist's previous choice. The mutation is wrapped
     // in `untrack` so the write doesn't subscribe this effect to its own
-    // target — otherwise the spread-and-reassign would re-fire infinitely.
+    // target; otherwise the spread-and-reassign would re-fire infinitely.
     $effect(() => {
         const id = app.activeToolId;
         const clusterId = toolRegistry.get(id)?.cluster;
@@ -40,7 +40,7 @@
     // Build a flat list of toolbar items (individual tool buttons OR cluster
     // flyouts), then split into groups by tool.group for visual separators.
     //
-    // A tool that belongs to a cluster is hidden as a standalone button — the
+    // A tool that belongs to a cluster is hidden as a standalone button: the
     // cluster takes its slot at the position of its first member in
     // registration order. Subsequent members are skipped.
     type ToolbarItem =
@@ -60,7 +60,7 @@
                     items.push({ kind: 'cluster', cluster, group: t.group ?? '' });
                     continue;
                 }
-                // Cluster id is set but not registered — fall through and
+                // Cluster id is set but not registered; fall through and
                 // render the tool as a standalone button so it isn't lost.
             }
             items.push({ kind: 'tool', tool: t, group: t.group ?? '' });
@@ -100,11 +100,9 @@
                         class="tool"
                         class:active={app.activeToolId === item.tool.id}
                         onclick={() => app.activeToolId = item.tool.id}
-                        title={tooltipForAction(app.toolDisplayName(item.tool.id), item.tool.hotkeyAction)}
+                        title={app.toolTooltip(item.tool.id)}
                     >
-                        {#if item.tool.icon}
-                            <Icon name={item.tool.icon} />
-                        {/if}
+                        <Icon name={app.toolGlyph(item.tool.id)} />
                     </button>
                 {/if}
             {/each}

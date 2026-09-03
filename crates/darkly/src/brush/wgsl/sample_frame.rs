@@ -3,12 +3,12 @@
 //!
 //! Both nodes sample a field (`fbm_tile` / `textureSample`) at a `vec2<f32>`
 //! coordinate. Historically that coordinate was always `target_pos / scale`
-//! — canvas-global pixels — so the pattern stayed pinned to the canvas and
+//! (canvas-global pixels), so the pattern stayed pinned to the canvas and
 //! the grain "swam" under a rotating stamp. This module folds a `space`
 //! selector into the emitted coordinate so a node can instead sample in the
 //! dab's own oriented frame, locking the grain to the stamp.
 //!
-//! The frame is chosen at compile time — the emitter produces only the
+//! The frame is chosen at compile time: the emitter produces only the
 //! selected arm, never a runtime `switch`. The emitted WGSL references only
 //! skeleton-provided locals (`target_pos`, `local_uv`, `d`) and the caller's
 //! own `rotation`/`variation` input expressions, so it composes into both the
@@ -17,10 +17,10 @@
 /// Coordinate frame a spatial node samples in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleFrame {
-    /// Canvas-global pixel space — grain pinned to the canvas; overlapping
+    /// Canvas-global pixel space: grain pinned to the canvas; overlapping
     /// strokes share one coherent sheet. `rotation`/`variation` are ignored.
     Canvas,
-    /// The dab's oriented unit frame — grain rotates and translates rigidly
+    /// The dab's oriented unit frame: grain rotates and translates rigidly
     /// with each stamp.
     Dab,
 }
@@ -45,21 +45,29 @@ impl SampleFrame {
 /// `variation_expr` are the node's own input expressions (screen-relative
 /// radians and a per-dab decorrelation scalar respectively).
 ///
-/// `scale_with_brush` is meaningful only in [`SampleFrame::Dab`]: `true`
-/// samples the radius-normalized unit-disc frame so the pattern scales with
-/// the brush; `false` reconstructs pixel offsets so grain density stays
-/// constant in canvas pixels as the brush grows. It is ignored for Canvas.
+/// In [`SampleFrame::Dab`] the field is sampled in oriented dab-pixels, so
+/// `scale` is a canvas-pixel feature size exactly as in Canvas space, and grain
+/// density stays constant in pixels as the brush grows. To make the grain scale
+/// *with* the brush instead, drive `scale` from `brush_settings.size` (also in
+/// canvas pixels): the dab radius and the scale then grow together and cancel.
 ///
-/// `scale_expr` is the caller's `scale` **input expression** — a `{:.6}`
+/// `scale_expr` is the caller's `scale` **input expression**: a `{:.6}`
 /// literal when the scale input is unwired, or an upstream WGSL expression
 /// when it's driven per-dab. It is interpolated parenthesized so a wired
 /// expression composes correctly inside the divide.
+///
+/// `period` is the repeat period of the field the caller samples, in the same
+/// units as `coord` (Dab space only). The per-dab decorrelation offset is a
+/// 2D hash of `variation` scattered over `[0, period)²`, so it lands on a fresh
+/// phase of the field per dab without resonating with its repeat. Callers pass
+/// their field's period (e.g. the baked-tile span for `noise`, `1.0` for an
+/// `fract`-wrapped texture). Ignored for Canvas.
 pub fn frame_sample_coord_expr(
     space: SampleFrame,
     scale_expr: &str,
-    scale_with_brush: bool,
     rotation_expr: &str,
     variation_expr: &str,
+    period: f32,
     ident: &str,
 ) -> (String, String) {
     match space {
@@ -78,25 +86,26 @@ pub fn frame_sample_coord_expr(
                  \x20      -local_uv.x * {ident}_sa + local_uv.y * {ident}_ca,\n\
                  \x20   );\n"
             );
-            // `variation` walks overlapping dabs to disjoint regions of the
-            // continuous field; the large stride keeps adjacent values (from
-            // `random`) landing in uncorrelated regions.
-            let offset = format!("vec2<f32>(({variation_expr}) * 64.0, ({variation_expr}) * 64.0)");
-            let coord = if scale_with_brush {
-                // Stamp-relative frequency: the unit-disc offset spans ~[-1,1]
-                // across the stamp at any brush size, so the same pattern maps
-                // across the whole stamp — the grain scales with the brush.
-                format!("{ident}_dab_local / ({scale_expr}) + {offset}")
-            } else {
-                // Pixel-locked frequency: multiply the unit-disc offset back to
-                // oriented dab-pixels so grain density stays constant in canvas
-                // px as the brush grows (the stamp is a bigger window onto the
-                // same grain).
-                preamble.push_str(&format!(
-                    "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
-                ));
-                format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}")
-            };
+            // Per-dab 2D decorrelation: hash `variation` into two independent
+            // components (via `fbm_offset2`, from the always-prepended
+            // `fbm2d.wgsl`) so overlapping dabs sample uncorrelated regions of
+            // the periodic field, bounded to one `period` so it can't resonate
+            // with the field's repeat. `max(.., 0.0)` keeps the `u32` cast
+            // well-defined for any wired input.
+            preamble.push_str(&format!(
+                "    let {ident}_off = fbm_offset2(u32(max(({variation_expr}), 0.0) * 4096.0), {period:.6});\n"
+            ));
+            let offset = format!("{ident}_off");
+            // Multiply the unit-disc offset back to oriented dab-pixels, so
+            // `scale` is a canvas-pixel feature size and grain density stays
+            // constant in px as the brush grows. Wiring `brush_settings.size`
+            // (also px) into `scale` makes the radius and scale cancel, so the
+            // grain scales with the brush.
+            preamble.push_str(&format!(
+                "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
+            ));
+            let coord =
+                format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}");
             (preamble, coord)
         }
     }
@@ -111,9 +120,9 @@ mod tests {
         let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Canvas,
             "32.000000",
-            true,
             "d.n1_rotation",
             "d.n2_variation",
+            16.0,
             "noise_3",
         );
         assert!(pre.is_empty(), "Canvas emits no preamble");
@@ -126,41 +135,48 @@ mod tests {
     }
 
     #[test]
-    fn dab_scale_with_brush_normalizes_unit_disc() {
-        let (pre, coord) =
-            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", true, "1.5", "0.0", "noise_3");
+    fn dab_rotates_local_uv_by_rotation_expr() {
+        let (pre, _coord) =
+            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", "1.5", "0.0", 16.0, "noise_3");
         // Oriented basis rotates local_uv by the rotation expression.
         assert!(pre.contains("cos(1.5)"));
         assert!(pre.contains("sin(1.5)"));
         assert!(pre.contains("noise_3_dab_local"));
         assert!(pre.contains("local_uv.x * noise_3_ca + local_uv.y * noise_3_sa"));
-        // scale_with_brush=true divides the unit-disc offset directly and
-        // never reconstructs pixels.
-        assert!(coord.contains("noise_3_dab_local / (8.000000)"));
-        assert!(!coord.contains("inv_radius_target_px"));
-        assert!(!pre.contains("inv_radius_target_px"));
     }
 
     #[test]
-    fn dab_pixel_locked_reconstructs_radius() {
+    fn dab_reconstructs_radius_so_scale_is_canvas_pixels() {
         let (pre, coord) =
-            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", false, "0.0", "0.0", "img_5");
-        // scale_with_brush=false multiplies back to oriented dab-pixels.
+            frame_sample_coord_expr(SampleFrame::Dab, "8.000000", "0.0", "0.0", 1.0, "img_5");
+        // Dab space always multiplies the unit-disc offset back to oriented
+        // dab-pixels, so `scale` is a canvas-pixel feature size.
         assert!(pre.contains("let img_5_radius_px = 1.0 / d.inv_radius_target_px;"));
         assert!(coord.contains("(img_5_dab_local * img_5_radius_px) / (8.000000)"));
     }
 
     #[test]
-    fn dab_folds_variation_offset() {
-        let (_pre, coord) = frame_sample_coord_expr(
+    fn dab_variation_offset_is_2d_and_period_bounded() {
+        let (pre, coord) = frame_sample_coord_expr(
             SampleFrame::Dab,
             "8.000000",
-            true,
             "0.0",
             "d.n2_variation",
+            16.0,
             "noise_3",
         );
-        assert!(coord.contains("vec2<f32>((d.n2_variation) * 64.0, (d.n2_variation) * 64.0)"));
+        // Defects 1+2: the offset is a 2D hash of `variation` bounded to the
+        // caller's field period (16), not the same scalar on both axes, and
+        // not a `* 64.0` stride that resonates with period 16. `fbm_offset2`
+        // (fbm2d.wgsl) draws x and y from two different PCG inputs by
+        // construction, so referencing it *is* the 2D guarantee.
+        assert!(pre.contains(
+            "let noise_3_off = fbm_offset2(u32(max((d.n2_variation), 0.0) * 4096.0), 16.000000)"
+        ));
+        assert!(coord.contains("+ noise_3_off"));
+        assert!(!coord.contains("* 64.0"));
+        // Old diagonal form must be gone.
+        assert!(!coord.contains("d.n2_variation) * 64.0, (d.n2_variation)"));
     }
 
     #[test]

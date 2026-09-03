@@ -3,14 +3,14 @@
 //! This is the only text-specific code in the engine. It owns parley's font
 //! collection (fontique) and layout contexts, shapes a [`TextProps`] block into
 //! positioned glyph runs, and builds a `vello::Scene` from a layer's vector
-//! objects — text via `draw_glyphs`, paths via kurbo. Everything else about a
+//! objects: text via `draw_glyphs`, paths via kurbo. Everything else about a
 //! vector layer is generic kurbo/peniko geometry the renderer consumes directly.
 //!
 //! The same glyph runs would feed `vello_cpu`'s `glyph_run` unchanged, so the
 //! shaping step is renderer-independent (see the text-tool plan, §6).
 //!
 //! Bundled font: Noto Sans, upright + italic variable faces (SIL Open Font
-//! License 1.1), © the Noto Project Authors —
+//! License 1.1), © the Noto Project Authors:
 //! <https://github.com/notofonts/latin-greek-cyrillic>.
 
 use std::borrow::Cow;
@@ -52,7 +52,7 @@ pub struct FontCapabilities {
 /// "Noto Sans" family: the upright variable face covers the whole weight range,
 /// and the italic variable face gives parley a real face to satisfy
 /// `FontStyle::Italic` (synthesis would be poor). OS-font enumeration (fontique
-/// does it for free on native) and user upload are additive behind this same
+/// does it for free on native) and artist upload are additive behind this same
 /// registry.
 const BUNDLED_FONTS: &[&[u8]] = &[
     include_bytes!("../../resources/fonts/NotoSans-VF.ttf"),
@@ -63,7 +63,7 @@ const BUNDLED_FONTS: &[&[u8]] = &[
 /// Owned by the engine; the shaping/scene-build methods take `&mut self` because
 /// parley caches shaping work across calls.
 ///
-/// The layout brush parameter is `()` — we render glyphs with each object's own
+/// The layout brush parameter is `()`: we render glyphs with each object's own
 /// peniko brush via `draw_glyphs`, so parley never needs to carry color.
 pub struct FontRegistry {
     font_cx: FontContext,
@@ -71,9 +71,9 @@ pub struct FontRegistry {
     /// Display names of every registered family, surfaced to the UI font picker.
     families: Vec<String>,
     /// Content-addressed cache of the raw SFNT bytes behind every
-    /// user-registered font, keyed by the hex content hash. One blob can
+    /// artist-registered font, keyed by the hex content hash. One blob can
     /// register several families, so bytes are keyed by hash (not family) and
-    /// deduped — registering the same bytes twice is free. The bundled fallback
+    /// deduped: registering the same bytes twice is free. The bundled fallback
     /// (Noto Sans) is deliberately absent: it's binary-resident and never
     /// embedded, and the *absence* of runtime bytes is exactly what excludes it
     /// from `.darkly` embedding.
@@ -86,7 +86,7 @@ pub struct FontRegistry {
 /// Stable 64-bit FNV-1a content hash of `bytes`, hex-encoded. Used to address
 /// font blobs by content: identical bytes always hash the same (dedup), and the
 /// hex string is both the `font_data` key and the `fonts/<hash>.ttf` container
-/// path. Deterministic across runs — no random seeding — so saved files are
+/// path. Deterministic across runs (no random seeding), so saved files are
 /// reproducible.
 fn content_hash(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -135,11 +135,11 @@ impl FontRegistry {
         &self.families
     }
 
-    /// Register a user-supplied font (uploaded `.ttf`/`.otf`, a Google import,
+    /// Register an artist-supplied font (uploaded `.ttf`/`.otf`, a Google import,
     /// or a font embedded in an opened `.darkly`). Caches the raw bytes under
     /// their content hash so the families they provide can be re-embedded on
     /// save, and returns the family names it contributed so the picker can
-    /// refresh. Registering identical bytes twice is free — the byte cache
+    /// refresh. Registering identical bytes twice is free: the byte cache
     /// dedups on the content hash.
     pub fn register_font(&mut self, bytes: Vec<u8>) -> Vec<String> {
         let hash = content_hash(&bytes);
@@ -158,7 +158,7 @@ impl FontRegistry {
                 names.push(name);
             }
         }
-        // Only cache the bytes if the blob actually registered a family — a blob
+        // Only cache the bytes if the blob actually registered a family: a blob
         // parley rejected contributes nothing to embed.
         if !names.is_empty() {
             self.font_data.entry(hash).or_insert(bytes);
@@ -168,7 +168,7 @@ impl FontRegistry {
 
     /// Raw SFNT bytes backing `family`, if it was registered from bytes (upload
     /// / Google / embedded). `None` for the binary-resident fallback and generic
-    /// families (`sans-serif`) — they have no runtime bytes, which is exactly
+    /// families (`sans-serif`): they have no runtime bytes, which is exactly
     /// what keeps them out of `.darkly` embedding.
     pub fn font_bytes(&self, family: &str) -> Option<&[u8]> {
         let hash = self.family_hash.get(family)?;
@@ -259,7 +259,7 @@ impl FontRegistry {
         // Variable-font axes drive shaping via a CSS `font-variation-settings`
         // string. Weight is just the `wght` axis, but we *also* push `FontWeight`
         // from it so face selection + faux-bold stays correct (a `wght` on a
-        // static face is a harmless no-op). The two agree rather than fight — see
+        // static face is a harmless no-op). The two agree rather than fight: see
         // `variations_and_font_weight_agree_on_coords`.
         if let Some(css) = variation_settings(&text.variations) {
             builder.push_default(StyleProperty::FontVariations(FontVariations::Source(
@@ -284,21 +284,21 @@ impl FontRegistry {
         let mut layout: Layout<()> = builder.build(&text.content);
         // Area text wraps to the box width; point text breaks only at explicit
         // newlines (natural width). Either way, alignment resolves within a
-        // width — the box width for area text, the block's own natural width for
-        // point text — so the Align control is never inert (a single line still
+        // width (the box width for area text, the block's own natural width for
+        // point text), so the Align control is never inert (a single line still
         // has nothing to shift, which is correct). A future `Path` layout adds
         // one arm here; area/point both go through `area_size`.
         let max_adv = text.layout.area_size().map(|(w, _)| w);
         layout.break_all_lines(max_adv);
         // With no `max_advance` from line breaking (point text), parley aligns
-        // relative to the longest line's natural width — the same reference the
+        // relative to the longest line's natural width: the same reference the
         // explicit width used to provide.
         layout.align(to_parley_align(text.align), AlignmentOptions::default());
         layout
     }
 
-    /// Report what `family` can do — its variable axes and whether it has a real
-    /// italic face — so the UI renders font-driven controls. Reads the live font
+    /// Report what `family` can do (its variable axes and whether it has a real
+    /// italic face), so the UI renders font-driven controls. Reads the live font
     /// collection (no blob reread), so it works uniformly for bundled, imported,
     /// and system families. An unknown family reports no capabilities. Axes are
     /// unioned across the family's faces (first face to expose a tag wins its
@@ -406,7 +406,7 @@ mod tests {
     }
 
     /// The `wght`-axis normalized coordinates of the first glyph run when
-    /// `text` is shaped — empty for a non-variable face (parley emits no
+    /// `text` is shaped: empty for a non-variable face (parley emits no
     /// variation coords). Used by the variable-axis spike to prove a weight
     /// scrub reaches the face as a real variation.
     fn first_run_coords(reg: &mut FontRegistry, text: &TextProps) -> Vec<i16> {
@@ -424,7 +424,7 @@ mod tests {
     /// Phase-0 gate for the font-import strategy: parley must honor a `weight`
     /// scrub against a **variable** face as a real axis variation, not snap to a
     /// named static instance. Register one variable family (Cantarell-VF, a CFF2
-    /// font with a `wght` 100–800 axis), shape the same string at weight 300 vs
+    /// font with a `wght` 100-800 axis), shape the same string at weight 300 vs
     /// 700, and assert the run's `normalized_coords` (the `wght` axis coord)
     /// actually differ. Passing means a single variable file per family covers
     /// every weight (`css2?family=X:wght@100..900`); failing would force discrete
@@ -454,21 +454,21 @@ mod tests {
         );
         assert_ne!(
             light, bold,
-            "a weight scrub against a variable face must change the wght axis coord \
-             — if equal, parley is snapping to a static instance and imports must \
+            "a weight scrub against a variable face must change the wght axis coord; \
+             if equal, parley is snapping to a static instance and imports must \
              fetch discrete weights instead"
         );
     }
 
     /// Identity of the face parley selected for `text`'s first run: the font
     /// Regression: the Italic control was inert because the bundled default font
-    /// shipped only an upright face. On wasm (the real target — no system fonts)
+    /// shipped only an upright face. On wasm (the real target, no system fonts)
     /// parley's `FontStyle::Italic` then had nothing to match and rendered
     /// upright. The bundle must provide a genuine italic face for "Noto Sans".
     ///
     /// Checked against a **system-font-free** collection: on native, a
     /// system-installed Noto Sans would otherwise supply an italic face and mask
-    /// a missing bundled one — exactly the gap that bites in the browser.
+    /// a missing bundled one, which is exactly the gap that bites in the browser.
     #[test]
     fn bundled_noto_provides_an_italic_face() {
         use parley::fontique::{Collection, CollectionOptions, FontStyle};
@@ -500,7 +500,7 @@ mod tests {
         layout.lines().count()
     }
 
-    /// x of the first positioned glyph — its alignment offset within the box.
+    /// x of the first positioned glyph: its alignment offset within the box.
     fn first_glyph_x(layout: &Layout<()>) -> f32 {
         for line in layout.lines() {
             for item in line.items() {
@@ -614,7 +614,7 @@ mod tests {
         via_variation.variations.insert("wght".to_string(), 700.0);
         let variation_coords = first_run_coords(&mut reg, &via_variation);
 
-        // An equivalent shape that reaches the face through `FontWeight` alone —
+        // An equivalent shape that reaches the face through `FontWeight` alone,
         // built by hand so no `variations` entry is present.
         let mut pure_weight = TextProps::new("Weight".to_string());
         pure_weight.font_family = family;
@@ -650,7 +650,7 @@ mod tests {
         );
     }
 
-    /// A `wght` variation must never break shaping — pushing one onto a face
+    /// A `wght` variation must never break shaping: pushing one onto a face
     /// that can't honor it (a static face, or one whose axis range excludes the
     /// value) is a harmless no-op, not a panic. Shaping still yields glyphs.
     #[test]
@@ -689,7 +689,7 @@ mod tests {
         );
     }
 
-    /// Positive letter spacing widens a line's advance — the horizontal spacing
+    /// Positive letter spacing widens a line's advance: the horizontal spacing
     /// control reaches the shaper.
     #[test]
     fn letter_spacing_widens_advance() {

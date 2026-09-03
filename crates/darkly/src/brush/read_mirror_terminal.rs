@@ -1,5 +1,5 @@
 //! Shared infrastructure for per-dab fragment-pass terminals that read
-//! the scratch read mirror, transform it, and write it back —
+//! the scratch read mirror, transform it, and write it back:
 //! [`smudge`](super::nodes::smudge), [`liquify`](super::nodes::liquify),
 //! and [`blur`](super::nodes::blur).
 //!
@@ -7,12 +7,12 @@
 //! read mirror (bound at `@group(3)`), produces a new pixel, and writes
 //! it straight back under REPLACE blend. Dabs run one render pass each
 //! (`i..i+1`) with a `copy_texture_to_texture` between them, so every dab
-//! sees the prior dab's output through the mirror — the implicit barrier
+//! sees the prior dab's output through the mirror: the implicit barrier
 //! that makes the per-dab serialization real. The only thing that varies
 //! per terminal is *how* the fragment shader transforms the sample and
-//! how wide a read region each dab needs; everything else — the per-brush
+//! how wide a read region each dab needs; everything else (the per-brush
 //! pipeline, the dab-meta queue, the flush loop, the `copy_origin`
-//! plumbing, the cursor preview — is identical and lives here.
+//! plumbing, the cursor preview) is identical and lives here.
 //!
 //! A terminal opts in by implementing [`ReadMirrorTerminal`] (its read
 //! half-extent math + variant WGSL) and delegating each
@@ -21,7 +21,7 @@
 //!
 //! ## Blend state
 //!
-//! REPLACE — the fragment shader fully composes its output and writes it
+//! REPLACE: the fragment shader fully composes its output and writes it
 //! straight to scratch. `LoadOp::Load` keeps prior scratch pixels intact
 //! outside the dab footprint; the fragment shader discards past
 //! `d.bbox_target_px`.
@@ -51,7 +51,7 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 
 /// The `@group(3)` scratch read-mirror bindings every read-mirror
 /// terminal samples. Owned here so variants never declare the layout
-/// themselves — the per-brush pipeline below must match it exactly.
+/// themselves; the per-brush pipeline below must match it exactly.
 const SCRATCH_MIRROR_BINDINGS: &str =
     "@group(3) @binding(0) var scratch_mirror_tex: texture_2d<f32>;\n\
      @group(3) @binding(1) var scratch_mirror_smp: sampler;\n";
@@ -62,7 +62,7 @@ const SCRATCH_MIRROR_BINDINGS: &str =
 /// read half-extent (how wide a mirror snapshot each dab needs) and its
 /// variant WGSL; the free functions below own everything else.
 pub trait ReadMirrorTerminal {
-    /// Registry id of this terminal's [`ReadMirrorPipeline`] —
+    /// Registry id of this terminal's [`ReadMirrorPipeline`]:
     /// `"smudge"` | `"liquify"` | `"blur"`.
     const PIPELINE_ID: &'static str;
     /// Human-readable label prefix for GPU debug labels.
@@ -71,7 +71,7 @@ pub trait ReadMirrorTerminal {
     /// Desired read half-extent (canvas px, per axis), or `None` to drop
     /// this dab before it reaches the queue. `None` is the terminal's
     /// early-out: a stationary smudge, a sub-threshold liquify push, a
-    /// zero-strength blur — all collapse to an identity write, so the
+    /// zero-strength blur; all collapse to an identity write, so the
     /// per-dab pass and its mirror copy are pure waste.
     ///
     /// The framework clamps the returned half-extent up to at least the
@@ -82,7 +82,7 @@ pub trait ReadMirrorTerminal {
 
     /// Insert any extra per-dab `slot_outputs` this terminal's WGSL reads
     /// through a [`DabField`] (e.g. blur's `blur_px`). Called immediately
-    /// before `queue_dab`, so the value packs into *this* dab's record —
+    /// before `queue_dab`, so the value packs into *this* dab's record:
     /// the same ordering `copy_origin` relies on. Default: no extra slots.
     fn pack_extra(
         &self,
@@ -105,7 +105,7 @@ pub trait ReadMirrorTerminal {
         copy_origin_field: &str,
     ) -> Result<NodeWgsl, String>;
 
-    /// Variant preview-mode body — the cursor footprint, sampling no
+    /// Variant preview-mode body: the cursor footprint, sampling no
     /// `@group(3)` bindings (preview omits them).
     fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String>;
 }
@@ -141,7 +141,12 @@ struct PerBrushPipeline {
 }
 
 impl PerBrushPipeline {
-    fn build(ctx: &BuildContext, compiled: &CompiledBrush, label: &str) -> Self {
+    fn build(
+        ctx: &BuildContext,
+        compiled: &CompiledBrush,
+        label: &str,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -165,7 +170,7 @@ impl PerBrushPipeline {
                 }],
             });
 
-        // group(0..2) standard; group(3) is the scratch read mirror —
+        // group(0..2) standard; group(3) is the scratch read mirror:
         // same layout as `watercolor`'s atlas binding, only the binding
         // semantics differ.
         let layout = ctx
@@ -181,9 +186,13 @@ impl PerBrushPipeline {
                 immediate_size: 0,
             });
 
-        // REPLACE blend — the fragment shader writes the final pixel;
+        // No blending: the fragment shader writes the final value;
         // outside the disc it discards so LoadOp::Load preserves the
-        // scratch.
+        // scratch. `blend: None` rather than `BlendState::REPLACE`
+        // because a warp terminal's target is `Rg32Float`, and wgpu gates
+        // *any* blend state on a format being BLENDABLE, which float32
+        // formats are not without the optional `FLOAT32_BLENDABLE`
+        // feature. A pure replace is what REPLACE meant anyway.
         let pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -199,8 +208,8 @@ impl PerBrushPipeline {
                     module: &shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        format: target_format,
+                        blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
@@ -281,11 +290,17 @@ impl ReadMirrorPipeline {
         }
     }
 
-    fn ensure_pipeline(&self, ctx: &BuildContext, compiled: &CompiledBrush, label: &str) {
+    fn ensure_pipeline(
+        &self,
+        ctx: &BuildContext,
+        compiled: &CompiledBrush,
+        label: &str,
+        target_format: wgpu::TextureFormat,
+    ) {
         let mut cache = self.cache.borrow_mut();
         cache
             .entry(compiled.topology_hash)
-            .or_insert_with(|| PerBrushPipeline::build(ctx, compiled, label));
+            .or_insert_with(|| PerBrushPipeline::build(ctx, compiled, label, target_format));
     }
 
     fn with_pipeline<R>(&self, hash: u64, f: impl FnOnce(&PerBrushPipeline) -> R) -> R {
@@ -324,7 +339,7 @@ pub fn read_mirror_pipeline_reg(id: &'static str) -> BrushPipelineRegistration {
 /// Effective dab radius in canvas pixels: the stroke's ambient base size
 /// (`pen_input.size`, via [`EvalContext::base_size`]) times this terminal's
 /// per-touch `size` modulation. Floored at 0.5 px so a dab always has
-/// positive area. Shared by every terminal — `paint` and `watercolor`
+/// positive area. Shared by every terminal: `paint` and `watercolor`
 /// delegate to it, and the read-mirror terminals (blur/smudge/liquify) call
 /// it through this module.
 pub fn effective_radius(ctx: &EvalContext) -> f32 {
@@ -378,43 +393,27 @@ pub fn evaluate_gpu<T: ReadMirrorTerminal>(
     // plain disc upstream this is `radius`.
     let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
 
-    // Terminal's desired read half-extent — `None` is the early-out for
+    // Terminal's desired read half-extent: `None` is the early-out for
     // dabs whose transform is an identity write.
     let Some(read_half) = term.read_half(ctx, radius, bbox_radius) else {
         return dab_size();
     };
 
     let canvas_ext = paint_target.canvas_extent();
-    // Near-edge of the layer extent — reused below for the read-region
+    // Near-edge of the layer extent, reused below for the read-region
     // copy origin (a one-sided clamp, distinct from the dab footprint
     // clamp).
     let layer_x0 = canvas_ext.x0() as f32;
     let layer_y0 = canvas_ext.y0() as f32;
-    // Clamp the dab footprint to the layer extent; a dab entirely
-    // off-extent has no pixels to draw and is skipped.
-    let canvas_bbox = match canvas_ext.clamp_f32(
-        position[0] - bbox_radius,
-        position[1] - bbox_radius,
-        position[0] + bbox_radius,
-        position[1] + bbox_radius,
-    ) {
-        Some(r) => r,
-        None => return dab_size(),
-    };
-    let local = paint_target
-        .canvas_frame()
-        .canvas_to_layer_rect(canvas_bbox)
-        .expect("canvas_bbox came from canvas_ext.clamp_f32, so it overlaps the extent");
-    gpu.dab_batch.push_write_bbox(canvas_bbox);
-    gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
-        Some([x0, y0, x1, y1]) => [
-            x0.min(local.x0()),
-            y0.min(local.y0()),
-            x1.max(local.x1()),
-            y1.max(local.y1()),
-        ],
-        None => [local.x0(), local.y0(), local.x1(), local.y1()],
-    });
+    // Publish the footprint; `None` means the dab is entirely off-extent
+    // and has no pixels to draw.
+    if gpu
+        .dab_batch
+        .record_dab_footprint(paint_target, position, bbox_radius)
+        .is_none()
+    {
+        return dab_size();
+    }
 
     // The write region is the dab footprint; the read region is the
     // mirror snapshot. Clamp the read half up to at least the write half
@@ -471,9 +470,7 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
         return;
     };
 
-    let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
-    let union_w = bbox[2].saturating_sub(bbox[0]);
-    let union_h = bbox[3].saturating_sub(bbox[1]);
+    let (union_w, union_h) = gpu.dab_batch.batch_extent();
     let (dab_bytes, total_dabs) = gpu.dab_batch.take();
     let meta_bytes = gpu.dab_batch.take_meta();
     if total_dabs == 0 {
@@ -489,8 +486,16 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
     gpu.perf
         .record_dab_flush_workload(total_dabs, union_w, union_h);
 
+    // The pass renders into the scratch, so the pipeline's colour target
+    // and its `@group(3)` layout both follow the scratch's format: colour
+    // for smudge/blur, a float displacement field for liquify.
+    let target_format = gpu
+        .stroke
+        .as_ref()
+        .map(|s| s.scratch.format())
+        .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT);
     let pipeline_ref = gpu.pipelines.get::<ReadMirrorPipeline>(T::PIPELINE_ID);
-    ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled, T::LABEL);
+    ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled, T::LABEL, target_format);
 
     let stroke = gpu
         .stroke
@@ -528,7 +533,7 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
             // re-copies the scratch even when it shares an origin with the
             // previous dab. Without this, two dabs at the same spot would
             // reuse the prior snapshot and the dab would read stale pixels
-            // instead of the previous dab's writeback — which would break
+            // instead of the previous dab's writeback, which would break
             // dwell-compounding (scrub-in-place re-blur / re-smear) and the
             // per-dab barrier for any same-origin pair.
             if let Some(stroke) = gpu.stroke.as_mut() {
@@ -546,7 +551,7 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
                 meta.read_half[1],
             );
 
-            // Fresh read-mirror bind group each iteration — a mid-loop
+            // Fresh read-mirror bind group each iteration: a mid-loop
             // grow can rebuild it.
             let scratch_ref = &*gpu
                 .stroke
@@ -590,13 +595,40 @@ pub fn flush_dabs<T: ReadMirrorTerminal>(gpu: &mut BrushGpuContext) {
     gpu.perf.record_dab_flush(total_dabs);
 }
 
-/// Direct blit scratch → layer. The scratch already holds the finished
-/// image; commit just copies it across. `gpu.blend_mode` is ignored —
-/// erase semantics aren't meaningful for these read-back transforms.
+/// Scratch → layer. `gpu.blend_mode` is ignored, since erase semantics
+/// aren't meaningful for these read-back transforms.
+///
+/// Color terminals (smudge, blur) hold the finished image in the
+/// scratch, so commit is a direct blit. A warp terminal's scratch holds a
+/// displacement field instead, so commit is the single resample that
+/// turns it into pixels: sampling the pre-stroke snapshot (or a
+/// clone-style `source_override`) through the field across the layer's
+/// full extent. Which one runs is decided by the scratch's own format,
+/// not by a list of terminal names here.
 pub fn commit(gpu: &mut BrushGpuContext) {
     let Some(stroke) = gpu.stroke.as_ref() else {
         return;
     };
+
+    if stroke.scratch.format() == crate::brush::warp_field::FIELD_FORMAT {
+        let extent = stroke.paint_target.layer_extent();
+        let source_view = stroke.source_view();
+        gpu.pipelines
+            .get::<crate::brush::warp_field::WarpFieldResolve>(
+                crate::brush::warp_field::RESOLVE_PIPELINE_ID,
+            )
+            .resolve(
+                gpu.device,
+                &mut gpu.encoder,
+                stroke.scratch.write_view(),
+                &source_view,
+                stroke.paint_target.view(),
+                stroke.paint_target.format(),
+                (extent.width, extent.height),
+            );
+        return;
+    }
+
     stroke.paint_target.commit_scratch_blit(
         gpu.device,
         &mut gpu.encoder,
@@ -629,7 +661,7 @@ pub fn compile_wgsl<T: ReadMirrorTerminal>(
 
     debug_assert!(
         wgsl.terminal_bindings.is_empty(),
-        "read-mirror variant must not set terminal_bindings — the wrapper owns @group(3)",
+        "read-mirror variant must not set terminal_bindings; the wrapper owns @group(3)",
     );
 
     // Shared per-dab `copy_origin` field. The terminal's `evaluate_gpu`
@@ -657,22 +689,27 @@ fn ensure_per_brush_pipeline(
     pipe: &ReadMirrorPipeline,
     compiled: &CompiledBrush,
     label: &str,
+    target_format: wgpu::TextureFormat,
 ) {
     if pipe.cache.borrow().contains_key(&compiled.topology_hash) {
         return;
     }
+    // `@group(3)` binds the scratch's own read-mirror bind group, so the
+    // pipeline layout has to be the one that scratch was built against.
+    let (canvas_copy_bgl, canvas_copy_sampler) =
+        gpu.pipelines.canvas_copy_layout_for(target_format);
     let ctx = BuildContext {
         device: gpu.device,
         queue: gpu.queue,
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
-        canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
+        canvas_copy_bgl,
+        canvas_copy_sampler,
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
         baked_sources: gpu.pipelines.baked_sources(),
     };
-    pipe.ensure_pipeline(&ctx, compiled, label);
+    pipe.ensure_pipeline(&ctx, compiled, label, target_format);
 }
 
 #[cfg(test)]
@@ -692,12 +729,13 @@ mod tests {
             stroke_seed: 0,
             dab_index: 0,
             base_size,
+            dabs_per_pass: 1.0,
             node_id: TEST_NODE_ID.get_or_init(|| NodeId("test".into())),
         }
     }
 
     /// Behavior-preservation regression: `effective_radius` is exactly
-    /// `base_size × modulation × DAB_REFERENCE_SIZE × 0.5` (floored 0.5) — the
+    /// `base_size × modulation × DAB_REFERENCE_SIZE × 0.5` (floored 0.5), the
     /// same product the old `size_input × size` model produced, with the base
     /// now supplied by the ambient `pen_input.size` and the terminal port
     /// carrying only the per-touch modulation.

@@ -118,7 +118,7 @@
         <Icon name="material-symbols:curtains-rounded" />
     </span>
 
-    <span class="veil-name">{app.veilDisplayName(veil.type)}</span>
+    <span class="veil-name">{app.displayName('veils', veil.type)}</span>
 
     <button
         class="remove-btn"

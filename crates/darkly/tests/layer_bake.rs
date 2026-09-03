@@ -4,6 +4,7 @@
 
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
+use darkly::engine::LayerInfo;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
@@ -17,7 +18,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// Paint a solid coloured stamp at canvas centre. Used to give layers
 /// distinguishable pixel content before merge/flatten.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -40,14 +41,14 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
-/// Paint a black dab onto a host's mask filter — R8 value drops toward 0
+/// Paint a black dab onto a host's mask filter: R8 value drops toward 0
 /// where the brush lands, leaving the rest of the mask at its prior value
 /// (255 for a freshly-added, all-reveal mask).
 fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
     let mask_id = engine
         .host_mask_id(host_id)
         .expect("paint_mask_dot requires the host to have a mask filter");
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -185,7 +186,7 @@ fn merge_down_undo_restores_both_sources() {
     assert!(engine.has_layer(upper), "upper restored");
     assert!(!engine.has_layer(result), "result detached on undo");
 
-    // Source pixels must be intact — tombstoning kept textures alive.
+    // Source pixels must be intact: tombstoning kept textures alive.
     let lower_px = engine.test_readback_layer(lower);
     assert!(
         alpha_at(&lower_px, w, 32, 48) > 0,
@@ -254,8 +255,8 @@ fn flatten_undo_restores_original_tree() {
 //
 // Protects the "every write-site marks its node thumbnail-dirty" invariant
 // (see `Compositor::mark_node_pixels_dirty` docs). Without that, a fresh
-// duplicate appears in the panel as a thumbnail-less row until the user
-// makes their first edit — the original bug this refactor was written to
+// duplicate appears in the panel as a thumbnail-less row until the artist
+// makes their first edit: the original bug this refactor was written to
 // kill, recurring "the fourth or fifth time" in the codebase's history.
 
 #[test]
@@ -340,7 +341,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     //     └─ child_b (green dot at 48,32)
     //
     // Flattening the group must consume every child and every mask. Undo
-    // must put all of it back — tree shape, both masks, and every pixel
+    // must put all of it back: tree shape, both masks, and every pixel
     // byte-for-byte.
     let (w, h) = (64u32, 64u32);
     let mut engine = test_engine(w, h);
@@ -367,7 +368,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let result = engine.flatten_node(group).expect("group flatten succeeded");
     assert!(engine.has_layer(result), "result raster attached");
     assert!(!group_at_root(&engine, group), "group consumed by flatten");
-    // Result composite must reflect both children — proof the bake actually
+    // Result composite must reflect both children, proof the bake actually
     // walked the subtree, rather than emitting an empty placeholder.
     let result_pixels = engine.test_readback_layer(result);
     assert!(
@@ -421,12 +422,17 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
 }
 
 // ============================================================================
-// merge_layers — multi-source bake, same-parent and cross-parent
+// merge_layers: multi-source bake, same-parent and cross-parent
 // ============================================================================
 
 /// Merging a same-parent selection lands the result at the panel-topmost
-/// selected sibling's slot and inherits that sibling's name / blend /
-/// opacity / visibility.
+/// selected sibling's slot and inherits that sibling's name / blend mode /
+/// visibility.
+///
+/// Opacity is the exception, and the assertion below is deliberate: the
+/// topmost's opacity is baked into the result's pixels, so the result carries
+/// 100 % and composites to the same image. See
+/// `merge_layers_does_not_double_the_topmosts_opacity`.
 #[test]
 fn merge_layers_same_parent_inherits_topmost_props() {
     use darkly::engine::types::LayerInfo;
@@ -441,6 +447,12 @@ fn merge_layers_same_parent_inherits_topmost_props() {
     paint_dot(&mut engine, lower, 8.0, 8.0, [1.0, 0.0, 0.0]);
     paint_dot(&mut engine, upper, 16.0, 16.0, [0.0, 1.0, 0.0]);
 
+    // What the user sees before the merge. Merging is a restructuring, not an
+    // edit, so this must survive it unchanged: the assertion that actually
+    // catches a doubled opacity, whatever the tree ends up looking like.
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
     let result = engine.merge_layers(vec![lower, upper]).expect("merge ok");
 
     // Source layers should be detached from the tree.
@@ -448,7 +460,7 @@ fn merge_layers_same_parent_inherits_topmost_props() {
     assert!(!engine.has_layer(upper));
     assert!(engine.has_layer(result));
 
-    // Result inherits the topmost's name + opacity.
+    // Result inherits the topmost's name; its opacity is in the pixels.
     let info = engine
         .layer_tree()
         .into_iter()
@@ -462,7 +474,18 @@ fn merge_layers_same_parent_inherits_topmost_props() {
         _ => panic!(),
     };
     assert_eq!(name, "topmost");
-    assert!((opacity - 0.5).abs() < 1e-3, "opacity inherited: {opacity}");
+    assert!(
+        (opacity - 1.0).abs() < 1e-3,
+        "the topmost's opacity is baked into the pixels, so the result must \
+         carry 100% or it would be applied twice: {opacity}",
+    );
+
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "merging must not change the composite",
+    );
 }
 
 /// A cross-parent selection (one layer at root, one inside a group)
@@ -553,8 +576,8 @@ fn merge_layers_undo_restores_all_sources() {
     );
 }
 
-/// `merge_layers` aborts if any source is locked — a partial bake
-/// would destroy the user's data.
+/// `merge_layers` aborts if any source is locked, since a partial bake
+/// would destroy the artist's data.
 #[test]
 fn merge_layers_rejects_locked() {
     let mut engine = test_engine(32, 32);
@@ -581,4 +604,189 @@ fn merge_layers_needs_two_sources() {
 
     let r2 = engine.merge_layers(vec![l1, l1]);
     assert!(r2.is_err(), "duplicate-id merge must error (dedupes to 1)");
+}
+
+/// Regression: merging must not apply the target's opacity twice.
+///
+/// The bake composites each source through its own blend uniforms, so a 50 %
+/// layer already contributes at 50 % in the accumulated result. Copying that
+/// same opacity onto the result layer applies it a second time at composite,
+/// so a merged 50 % layer used to read 25 %. The result inherits the target's
+/// blend *mode* (which is a no-op against the cleared accumulator and so is
+/// not baked in), but its opacity is already in the pixels.
+#[test]
+fn merge_down_does_not_double_the_targets_opacity() {
+    let mut engine = test_engine(32, 32);
+    let target = engine.add_raster_layer(None);
+    paint_dot(&mut engine, target, 16.0, 16.0, [1.0, 0.0, 0.0]);
+    engine.set_opacity(target, 0.5);
+
+    // An empty layer above: merge_down composites `[target, source]`, so the
+    // result is the target's pixels at 50 % and nothing else.
+    let source = engine.add_raster_layer(None);
+    engine.merge_down(source).expect("merge_down");
+    engine.render(0.0);
+
+    let px = engine.test_readback_canvas();
+    assert_eq!(
+        alpha_at(&px, 32, 16, 16),
+        128,
+        "a merged 50 % layer must composite at 50 %, not 25 %",
+    );
+}
+
+/// Sibling of the above for the multi-select path, which carries the same
+/// inheritance. Two opaque layers merged with the topmost at 50 %: the bake
+/// puts the topmost over the bottom at 50 %, which is already fully opaque
+/// where they overlap, so the result must be opaque.
+#[test]
+fn merge_layers_does_not_double_the_topmosts_opacity() {
+    let mut engine = test_engine(32, 32);
+    let bottom = engine.add_raster_layer(None);
+    paint_dot(&mut engine, bottom, 16.0, 16.0, [0.0, 0.0, 1.0]);
+    let top = engine.add_raster_layer(None);
+    paint_dot(&mut engine, top, 16.0, 16.0, [1.0, 0.0, 0.0]);
+    engine.set_opacity(top, 0.5);
+
+    engine
+        .merge_layers(vec![bottom, top])
+        .expect("merge_layers");
+    engine.render(0.0);
+
+    let px = engine.test_readback_canvas();
+    assert_eq!(
+        alpha_at(&px, 32, 16, 16),
+        255,
+        "opaque-under-translucent merges to opaque; the topmost's opacity is \
+         already in the baked pixels",
+    );
+}
+
+// ============================================================================
+// Guards for the shared bake tail
+//
+// Every bake op ends in the same sequence: tombstone the sources, detach them,
+// land the result in a specific slot, push one `BakeLayersAction`. These four
+// tests pin the parts of that sequence nothing else asserted: the result's
+// *position*, redo through the action, hidden-source tombstoning, and that the
+// undo entry is a single step. Without them a wrong slot or a dropped source
+// passes the rest of this file unnoticed.
+// ============================================================================
+
+/// Flatten Image puts its result at the bottom of the root stack: the
+/// Photoshop "Background" convention. `layer_tree()` is top-to-bottom, so the
+/// result is the LAST entry.
+#[test]
+fn flatten_image_result_lands_at_the_bottom_of_root() {
+    let mut engine = test_engine(32, 32);
+    let a = engine.add_raster_layer(None);
+    paint_dot(&mut engine, a, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    let b = engine.add_raster_layer(None);
+    paint_dot(&mut engine, b, 16.0, 16.0, [0.0, 1.0, 0.0]);
+
+    let result = engine.flatten_image().expect("flatten succeeded");
+
+    let tree = engine.layer_tree();
+    assert_eq!(tree.len(), 1, "flatten leaves exactly one root node");
+    let last = tree.last().expect("non-empty");
+    let id = match last {
+        LayerInfo::Raster { id, .. } => *id,
+        _ => panic!("expected a raster at the bottom of root"),
+    };
+    assert_eq!(id, result.to_ffi() as f64, "result is the bottom-most node");
+}
+
+/// Merge Down lands its result in the *target's* slot, not the source's, and
+/// leaves every unrelated sibling where it was.
+#[test]
+fn merge_down_result_takes_the_targets_slot() {
+    let mut engine = test_engine(32, 32);
+    // Bottom-to-top: keep_low, target, source, keep_high.
+    let keep_low = engine.add_raster_layer(None);
+    let target = engine.add_raster_layer(None);
+    let source = engine.add_raster_layer(None);
+    let keep_high = engine.add_raster_layer(None);
+    paint_dot(&mut engine, target, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, source, 16.0, 16.0, [0.0, 1.0, 0.0]);
+
+    let result = engine.merge_down(source).expect("merge_down");
+
+    // Top-to-bottom: keep_high, result, keep_low.
+    let ids: Vec<f64> = engine
+        .layer_tree()
+        .iter()
+        .map(|n| match n {
+            LayerInfo::Raster { id, .. } => *id,
+            _ => panic!("expected only rasters at root"),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            keep_high.to_ffi() as f64,
+            result.to_ffi() as f64,
+            keep_low.to_ffi() as f64,
+        ],
+        "result occupies the target's slot, siblings undisturbed",
+    );
+    assert!(!engine.has_layer(target));
+}
+
+/// Undo then redo through a `BakeLayersAction` must return the document to the
+/// post-bake state, pixels included; nothing else in this file drives redo
+/// through a bake.
+#[test]
+fn merge_down_redo_restores_the_merged_result() {
+    let mut engine = test_engine(32, 32);
+    let target = engine.add_raster_layer(None);
+    let source = engine.add_raster_layer(None);
+    paint_dot(&mut engine, target, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, source, 16.0, 16.0, [0.0, 1.0, 0.0]);
+
+    let result = engine.merge_down(source).expect("merge_down");
+    engine.render(0.0);
+    let merged = engine.test_readback_canvas();
+
+    engine.undo();
+    assert!(engine.has_layer(target), "sources back");
+    assert!(engine.has_layer(source), "sources back");
+
+    engine.redo();
+    engine.render(0.0);
+    assert!(engine.has_layer(result), "result back after redo");
+    assert!(!engine.has_layer(target), "sources detached again");
+    assert_eq!(
+        engine.test_readback_canvas(),
+        merged,
+        "redo restores the merged pixels, not a blank layer",
+    );
+}
+
+/// Flatten discards hidden layers but must still tombstone them, so undo can
+/// bring them back with their pixels. Nothing else here flattens with a hidden
+/// source, which is the path where a dropped tombstone would show up.
+#[test]
+fn flatten_undo_restores_a_hidden_source_with_its_pixels() {
+    let mut engine = test_engine(32, 32);
+    let visible = engine.add_raster_layer(None);
+    paint_dot(&mut engine, visible, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    let hidden = engine.add_raster_layer(None);
+    paint_dot(&mut engine, hidden, 16.0, 16.0, [0.0, 1.0, 0.0]);
+    let hidden_px = engine.test_readback_layer(hidden);
+    engine.set_layer_visible(hidden, false);
+
+    let result = engine.flatten_image().expect("flatten succeeded");
+    assert!(
+        !engine.has_layer(hidden),
+        "hidden source detached by flatten"
+    );
+
+    engine.undo();
+    assert!(engine.has_layer(hidden), "hidden source restored");
+    assert!(!engine.has_layer(result));
+    assert_eq!(
+        engine.test_readback_layer(hidden),
+        hidden_px,
+        "a hidden source's pixels survive the round trip",
+    );
 }

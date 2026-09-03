@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 pub enum Property {
     Opacity(f32),
     /// Held as a registry reference so undo records the *same* identity the
-    /// document carries — there is no enum copy that could drift.
+    /// document carries; there is no enum copy that could drift.
     BlendMode(&'static BlendModeRegistration),
     Visible(bool),
     Name(String),
@@ -28,7 +28,7 @@ pub enum Property {
     /// curve drag into one undo step. The compositor rebuilds the derived LUT
     /// from the restored params on the next `sync_projection_states`.
     FilterParams(Vec<ParamValue>),
-    /// A void layer's user transform (gizmo-edited pan / scale / rotate).
+    /// A void layer's artist transform (gizmo-edited pan / scale / rotate).
     /// Coalesces on `same_kind` so a whole gizmo drag is one undo step,
     /// exactly like `VoidParams`. The GPU re-sync happens in
     /// `sync_compositor_layers` after the doc is restored.
@@ -101,8 +101,8 @@ pub struct PropertyAction {
     /// Finer-grained coalesce key, layered on top of `(layer_id, Property
     /// kind)`. Default `0` for callers separated by `Property` kind alone
     /// (opacity, blend, void params…). A single `Property` kind that carries
-    /// several distinct logical ops — `VectorObjects` is content / style /
-    /// transform of one object — sets a non-zero tag so a typing run and a
+    /// several distinct logical ops (`VectorObjects` is content / style /
+    /// transform of one object) sets a non-zero tag so a typing run and a
     /// later gizmo drag don't collapse into one undo step.
     coalesce_tag: u64,
 }
@@ -132,7 +132,7 @@ impl PropertyAction {
 
     /// Try to coalesce another PropertyAction into this one.
     /// Succeeds if both target the same layer, the same property kind, and the
-    /// same coalesce tag — in which case we keep our `old_value` and take their
+    /// same coalesce tag, in which case we keep our `old_value` and take their
     /// `new_value`.
     pub fn try_coalesce(&mut self, other: &PropertyAction) -> bool {
         if self.layer_id == other.layer_id

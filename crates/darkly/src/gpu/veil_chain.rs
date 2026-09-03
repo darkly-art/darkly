@@ -13,7 +13,7 @@ fn config_veil_scale() -> f32 {
 }
 
 /// Per-veil reduced-resolution resources. Created when
-/// `rendering.veil_scale` < 1.0 — the veil chain downscales its input,
+/// `rendering.veil_scale` < 1.0: the veil chain downscales its input,
 /// runs the veil at reduced resolution, and upscales the output. Veils
 /// themselves are resolution-agnostic and never see the distinction.
 struct VeilScaling {
@@ -52,7 +52,7 @@ pub struct VeilChain {
     /// use a dedicated 4-tap filter sized by screen-space derivatives.
     /// Created lazily on first scaled veil.
     downscale_pipeline: Option<EffectPipeline>,
-    /// Single-tap bilinear upscale pipeline — correct as-is for upscaling
+    /// Single-tap bilinear upscale pipeline, correct as-is for upscaling
     /// since each output pixel reads a sub-input-texel position.
     upscale_pipeline: Option<EffectPipeline>,
     sampler: wgpu::Sampler,
@@ -99,7 +99,7 @@ impl VeilChain {
 
     /// Re-read `rendering.veil_scale` from config and, if it changed since
     /// the last call, rebuild per-veil scaling resources. Called once per
-    /// frame by the compositor — no-op when the value is unchanged or no
+    /// frame by the compositor; no-op when the value is unchanged or no
     /// veils are active.
     pub fn sync_resolution_scale(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let desired = config_veil_scale();
@@ -140,7 +140,12 @@ impl VeilChain {
     // --- Veil management ---
 
     /// Add a veil to the chain. Creates GPU resources immediately.
-    pub fn add_veil(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, veil: Box<dyn Veil>) {
+    pub fn add_veil(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut veil: Box<dyn Veil>,
+    ) {
         self.ensure_textures(device);
         self.ensure_scaling_pipelines(device);
         let native_views = self.views.as_ref().unwrap();
@@ -148,7 +153,7 @@ impl VeilChain {
         let (scaling, cache) = create_veil_resources(
             device,
             queue,
-            &*veil,
+            &mut *veil,
             native_views,
             &self.sampler,
             self.downscale_pipeline.as_ref(),
@@ -203,14 +208,14 @@ impl VeilChain {
     }
 
     /// Replace the veil at `index` with a new instance, preserving visibility.
-    /// Used when parameters change — veil params affect GPU resources,
+    /// Used when parameters change: veil params affect GPU resources,
     /// so recreation is required.
     pub fn update_veil(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         index: usize,
-        new_veil: Box<dyn Veil>,
+        mut new_veil: Box<dyn Veil>,
     ) {
         if index >= self.entries.len() {
             return;
@@ -222,7 +227,7 @@ impl VeilChain {
         let (scaling, cache) = create_veil_resources(
             device,
             queue,
-            &*new_veil,
+            &mut *new_veil,
             native_views,
             &self.sampler,
             self.downscale_pipeline.as_ref(),
@@ -286,7 +291,7 @@ impl VeilChain {
 
     /// Update all animated veils with the given delta time.
     /// Called by the compositor's frame scheduler on veil-scheduled frames.
-    /// No throttle — the frame scheduler handles rate limiting.
+    /// No throttle: the frame scheduler handles rate limiting.
     pub fn update_veils(&mut self, queue: &wgpu::Queue, dt: f32) {
         for entry in &mut self.entries {
             if entry.visible && entry.veil.needs_animation() {
@@ -413,7 +418,7 @@ impl VeilChain {
     // --- Internal helpers ---
 
     /// Ensure the downscale and upscale pipelines exist. Needed whenever
-    /// a veil renders at reduced resolution — either because the global
+    /// a veil renders at reduced resolution, either because the global
     /// `rendering.veil_scale` is < 1.0 or because the veil declares a
     /// `perf_scale_factor` below 1.0. Cheap enough to create
     /// unconditionally once veils exist.
@@ -511,7 +516,7 @@ impl VeilChain {
             let (scaling, cache) = create_veil_resources(
                 device,
                 queue,
-                &*entry.veil,
+                &mut *entry.veil,
                 native_views,
                 &self.sampler,
                 self.downscale_pipeline.as_ref(),
@@ -537,7 +542,7 @@ impl VeilChain {
 fn create_veil_resources(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    veil: &dyn Veil,
+    veil: &mut dyn Veil,
     native_views: &[wgpu::TextureView; 2],
     sampler: &wgpu::Sampler,
     scaling_layout: Option<&EffectPipeline>,

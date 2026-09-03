@@ -1,4 +1,4 @@
-//! Add node — Scalar + Scalar → Scalar.
+//! Add node: Scalar + Scalar → Scalar.
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::node::BrushNodeRegistration;
@@ -10,7 +10,7 @@ pub fn register() -> BrushNodeRegistration {
     ScalarBinaryNode {
         type_id: TYPE_ID,
         display_name: "Add",
-        description: "Adds two values — use it to offset one signal by another, e.g. lift pressure by a constant floor.",
+        description: "Adds two values; use it to offset one signal by another, e.g. lift pressure by a constant floor.",
         a_description: "First addend",
         b_description: "Second addend",
         result_description: "Sum of a + b",

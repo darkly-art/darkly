@@ -1,4 +1,4 @@
-//! Stroke buffer — the per-stroke GPU resources that survive between pen
+//! Stroke buffer: the per-stroke GPU resources that survive between pen
 //! events.
 //!
 //! Three pieces:
@@ -18,13 +18,13 @@ use crate::coord::CanvasRect;
 /// A frozen texture for the brush program's sampled source slot
 /// (`@group(3)`), captured once at stroke start by
 /// [`StrokeBuffer::save_source_snapshot`] when the stroke samples
-/// something other than the painted layer — e.g. clone's cross-layer /
+/// something other than the painted layer, e.g. clone's cross-layer /
 /// sample-merged modes. When absent, the pre-stroke snapshot fills the
 /// slot instead. Always RGBA8 (R8 mask sources broadcast during capture,
 /// sharing `save_pre_stroke_snapshot`'s format handling).
 pub struct SourceSnapshot {
     texture: wgpu::Texture,
-    /// Plane-space rect the snapshot covers — the *sampled* texture's
+    /// Plane-space rect the snapshot covers: the *sampled* texture's
     /// frame, which the shader needs to map plane positions to snapshot
     /// UVs. Frozen with the pixels: destination-layer growth mid-stroke
     /// must not move it.
@@ -37,7 +37,7 @@ pub struct SourceSnapshot {
 /// `StrokeBuffer` owns the raw GPU resources; the stroke *semantics* (how
 /// the scratch is initialised, how it lands on the layer) belong to the
 /// active terminal node's lifecycle hooks (`begin_stroke` / `commit`). This
-/// keeps the engine free of terminal-type branching — swapping in a warp or
+/// keeps the engine free of terminal-type branching: swapping in a warp or
 /// smudge terminal doesn't require editing this file.
 pub struct StrokeBuffer {
     /// Writable stroke scratch + per-dab read mirror, managed as one unit.
@@ -66,13 +66,26 @@ impl StrokeBuffer {
     ///
     /// `pipelines` provides the canvas-copy BGL/sampler that the embedded
     /// `Scratch` needs for both its read-mirror and write bind groups.
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
+    /// `scratch_format` comes from the stroke's terminal
+    /// ([`BrushNodeRegistration::scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format)).
+    /// The pre-stroke snapshot stays `Rgba8Unorm` regardless; it holds the
+    /// layer's pixels, which a warp terminal resolves *through* its field.
+    pub fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        pipelines: &BrushPipelines,
+        scratch_format: wgpu::TextureFormat,
+    ) -> Self {
+        let (canvas_copy_bgl, canvas_copy_sampler) =
+            pipelines.canvas_copy_layout_for(scratch_format);
         let scratch = Scratch::new(
             device,
             width,
             height,
-            pipelines.canvas_copy_bind_group_layout(),
-            pipelines.canvas_copy_sampler(),
+            canvas_copy_bgl,
+            canvas_copy_sampler,
+            scratch_format,
         );
 
         let pre_stroke_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -123,13 +136,13 @@ impl StrokeBuffer {
         }
     }
 
-    /// The embedded scratch (write + read mirror).  Borrow mutably — the
+    /// The embedded scratch (write + read mirror).  Borrow mutably: the
     /// per-dab read-mirror sync may need to lazy-grow.
     pub fn scratch_mut(&mut self) -> &mut Scratch {
         &mut self.scratch
     }
 
-    /// Immutable access to the scratch.  For accessors only — anything
+    /// Immutable access to the scratch.  For accessors only: anything
     /// that might trigger a grow goes through `scratch_mut`.
     pub fn scratch(&self) -> &Scratch {
         &self.scratch
@@ -162,14 +175,14 @@ impl StrokeBuffer {
         &self.pre_stroke_texture
     }
 
-    /// The pre-stroke snapshot view — the destination of `save_pre_stroke_snapshot`
+    /// The pre-stroke snapshot view: the destination of `save_pre_stroke_snapshot`
     /// when the source is an R8 mask (which goes through a render pass instead
     /// of `copy_texture_to_texture`).
     pub fn pre_stroke_view(&self) -> &wgpu::TextureView {
         &self.pre_stroke_view
     }
 
-    /// Bind group over the pre-stroke snapshot using the canvas-copy BGL —
+    /// Bind group over the pre-stroke snapshot using the canvas-copy BGL:
     /// the composite pipeline binds this as the background at commit time.
     pub fn pre_stroke_bind_group(&self) -> &wgpu::BindGroup {
         &self.pre_stroke_bind_group
@@ -197,13 +210,13 @@ impl StrokeBuffer {
         );
     }
 
-    /// Freeze `source` into this stroke's [`SourceSnapshot`] — the texture
+    /// Freeze `source` into this stroke's [`SourceSnapshot`]: the texture
     /// the brush's sampled source slot binds instead of the pre-stroke
     /// snapshot (e.g. clone's pinned layer or the root composite). Wrapped
     /// as a paint target so the capture shares `save_pre_stroke_snapshot`'s
     /// format handling (R8 mask sources broadcast to RGBA8). Records into
     /// `encoder`; the caller submits. Strokes that sample the painted
-    /// layer itself never call this — the pre-stroke snapshot is their
+    /// layer itself never call this: the pre-stroke snapshot is their
     /// source.
     pub fn save_source_snapshot(
         &mut self,
@@ -226,7 +239,7 @@ impl StrokeBuffer {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             // RENDER_ATTACHMENT for the R8-mask broadcast pass, COPY_DST
-            // for the same-format hardware copy — mirrors the pre-stroke
+            // for the same-format hardware copy; mirrors the pre-stroke
             // snapshot's dual capture path.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -245,7 +258,7 @@ impl StrokeBuffer {
 
     /// Plane-space frame of the frozen source snapshot, if one was
     /// captured for this stroke. `None` means the pre-stroke snapshot is
-    /// the source (or the brush samples none) — the caller falls back to
+    /// the source (or the brush samples none): the caller falls back to
     /// the paint target's live extent.
     pub fn source_snapshot_frame(&self) -> Option<CanvasRect> {
         self.source_snapshot.as_ref().map(|cs| cs.frame)
@@ -262,7 +275,7 @@ impl StrokeBuffer {
     /// growth so the scratch keeps its canvas-anchored pre-stroke pixels
     /// even though the layer's local-coord origin has shifted.
     ///
-    /// The read mirror inside `scratch` is **not** touched here — its
+    /// The read mirror inside `scratch` is **not** touched here - its
     /// size is per-dab footprint-driven, not layer-driven, and a layer
     /// growth doesn't change what footprint the next dab will request.
     /// The next `Scratch::sync_read_mirror` call will re-copy in the new
@@ -286,7 +299,7 @@ impl StrokeBuffer {
         let target_w = new_w.max(self.width);
         let target_h = new_h.max(self.height);
 
-        // Grow the writable scratch atomically via Scratch — caller can't
+        // Grow the writable scratch atomically via Scratch: caller can't
         // forget either side.  Read mirror stays footprint-sized.
         self.scratch.grow_write(
             device,

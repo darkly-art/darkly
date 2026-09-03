@@ -76,7 +76,7 @@ fn layer_dto_carries_capability_flags_per_kind() {
     }
 
     // The original bug: raster and group disagreed on mask capability across
-    // the two frontend files. One source of truth now — they must agree.
+    // the two frontend files. One source of truth now; they must agree.
     assert_eq!(
         by_type["raster"]["canHaveMask"], by_type["group"]["canHaveMask"],
         "raster and group must agree on mask capability",

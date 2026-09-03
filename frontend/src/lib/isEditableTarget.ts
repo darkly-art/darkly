@@ -1,5 +1,5 @@
 /** True when a keyboard event targets a text-entry field (or a contenteditable
- *  element), where keystrokes are content the user is typing — not app/canvas
+ *  element), where keystrokes are content the artist is typing, not app/canvas
  *  shortcuts. Global key handlers (hotkeys, tool-overlay dismissal) consult this
  *  so typing in the text-properties editor, a layer-rename box, etc. never leaks
  *  out as a shortcut.

@@ -47,7 +47,7 @@ struct LerpUniforms {
 }
 @group(0) @binding(3) var<uniform> uniforms: LerpUniforms;
 
-// Mask texture — same bind group layout as composite.wgsl group 1.
+// Mask texture: same bind group layout as composite.wgsl group 1.
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {

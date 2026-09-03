@@ -1,7 +1,7 @@
 //! Round-trip test for rich-layer copy/paste.
 //!
 //! Confirms `copy_layer_rich` → JSON → `paste_layer_rich` preserves the
-//! source layer's pixels, blend mode, opacity, name, and mask presence —
+//! source layer's pixels, blend mode, opacity, name, and mask presence:
 //! the foundation of cross-tab paste in the multi-tab editor.
 //!
 //! Run with: `cargo test -p darkly --test layer_clipboard -- --test-threads=1`
@@ -19,7 +19,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -92,7 +92,7 @@ fn rich_copy_paste_preserves_blend_mode_opacity_and_pixels() {
     assert!(json.contains("\"blend_mode\":\"multiply\""));
     assert!(json.contains("\"name\":\"Source layer\""));
 
-    // Paste into a fresh engine — same engine→engine round-trip the
+    // Paste into a fresh engine: same engine→engine round-trip the
     // multi-tab cross-tab paste does, just without the system clipboard
     // in the middle.
     let mut sink = test_engine(w, h);
@@ -115,7 +115,7 @@ fn rich_copy_paste_preserves_blend_mode_opacity_and_pixels() {
         !pasted_pixels.is_empty(),
         "pasted layer should have non-empty pixel readback"
     );
-    let nonzero = pasted_pixels.chunks_exact(4).any(|p| p[3] > 0);
+    let nonzero = pasted_pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0);
     assert!(
         nonzero,
         "pasted layer should contain at least one non-zero alpha pixel"

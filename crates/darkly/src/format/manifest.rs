@@ -1,12 +1,12 @@
 //! Wire-format schema for `manifest.json` inside a `.darkly` ZIP.
 //!
-//! These are pure data structs — they round-trip through serde and never
+//! These are pure data structs: they round-trip through serde and never
 //! reference GPU state or registry pointers directly. The save path
 //! walks the in-memory [`crate::document::Document`] and builds a
 //! [`Manifest`]; the load path parses a [`Manifest`] back into a staging
 //! [`crate::document::Document`] with a fresh slotmap.
 //!
-//! Identifiers on disk are plain numeric ids (`u64`), not slotmap keys —
+//! Identifiers on disk are plain numeric ids (`u64`), not slotmap keys:
 //! the on-load id remap is what reconciles them with a fresh
 //! `Document::entities`.
 //!
@@ -24,7 +24,7 @@ use super::registry_io::InstancePayload;
 use crate::coord::CanvasRect;
 
 /// Current container schema version. Bumped *only* for fundamental
-/// container-structure breaks — see [the plan's "two version concepts"
+/// container-structure breaks; see [the plan's "two version concepts"
 /// section](../../../../darkly-file-format-plan.md#two-version-concepts-kept-strictly-separate).
 /// Expect zero bumps in the near term.
 pub const CONTAINER_VERSION: u32 = 1;
@@ -36,18 +36,18 @@ pub const FORMAT_TAG: &str = "darkly";
 /// Top-level manifest written as `manifest.json` inside the `.darkly` ZIP.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Fixed string `"darkly"` — guards against opening unrelated zips.
+    /// Fixed string `"darkly"`: guards against opening unrelated zips.
     pub format: String,
     /// Container schema version. See [`CONTAINER_VERSION`].
     pub container_version: u32,
     /// Tooling that produced this file (informational).
     pub writer: ManifestWriter,
-    /// User-visible document name. Defaults to `"Untitled"` for fresh
+    /// Artist-visible document name. Defaults to `"Untitled"` for fresh
     /// documents; updated by `set_document_name` or the Save As picker.
     pub name: String,
     /// Canvas dimensions in pixels.
     pub canvas: ManifestCanvas,
-    /// Inventory of modular features the file uses — see
+    /// Inventory of modular features the file uses; see
     /// [`ManifestRequires`].
     pub requires: ManifestRequires,
     /// Path inside the zip to a baked composite PNG (always written).
@@ -56,7 +56,7 @@ pub struct Manifest {
     /// Manifest id of the implicit root group inside [`Self::nodes`].
     pub root: u64,
     /// Every tree node (layers + groups) in the document, in id order.
-    /// Each entry's `body` is opaque to the central code — only the
+    /// Each entry's `body` is opaque to the central code: only the
     /// layer kind's `serialize` / `deserialize` touch its contents.
     pub nodes: Vec<ManifestEntry>,
     /// Every modifier (mask, selection, future filter/transform/…),
@@ -70,7 +70,7 @@ pub struct Manifest {
     /// Veil chain in apply order.
     pub veils: Vec<ManifestVeil>,
     /// Fonts embedded in this document so it renders self-contained on any
-    /// machine — one entry per `font_family` a text object actually uses that
+    /// machine: one entry per `font_family` a text object actually uses that
     /// the engine has runtime bytes for. Several families may share one blob
     /// (`hash`/`path`), so the loader deps on `hash` when re-registering. Empty
     /// for documents with no text, or whose text uses only the fallback family.
@@ -81,7 +81,7 @@ pub struct Manifest {
 /// Reference to a font blob (`fonts/<hash>.ttf`) embedded in the container.
 /// `hash` is the content hash the byte cache addresses the blob by; multiple
 /// families sharing one blob share the same `hash`/`path`, so the load path
-/// registers each unique blob once. Path uses `.ttf` uniformly — the extension
+/// registers each unique blob once. Path uses `.ttf` uniformly: the extension
 /// is cosmetic; the bytes are raw SFNT (TTF or OTF) either way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestFontRef {
@@ -91,12 +91,12 @@ pub struct ManifestFontRef {
 }
 
 /// Wire envelope for one entity (layer kind or modifier kind). The
-/// `body` is opaque to the central save/load code — only the kind's
+/// `body` is opaque to the central save/load code: only the kind's
 /// own registered `serialize` / `deserialize` functions read or write
 /// it.
 ///
 /// Named `ManifestEntry` (not `ManifestEntity`) to avoid colliding
-/// with the document-side `Entity::{Node, Filter}` enum — they're
+/// with the document-side `Entity::{Node, Filter}` enum; they're
 /// different abstractions: `Entity` is the in-doc storage
 /// discriminator; `ManifestEntry` is the wire envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,7 +107,7 @@ pub struct ManifestEntry {
     pub body: serde_json::Value,
 }
 
-/// Tooling identifier — `name` is fixed `"darkly"`; `version` mirrors
+/// Tooling identifier: `name` is fixed `"darkly"`; `version` mirrors
 /// the crate version so files leave a breadcrumb of which build wrote
 /// them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,7 +117,7 @@ pub struct ManifestWriter {
 }
 
 impl ManifestWriter {
-    /// Writer block for the running build — `name = "darkly"`, `version` from
+    /// Writer block for the running build: `name = "darkly"`, `version` from
     /// the git-derived [`crate::VERSION`].
     pub fn current() -> Self {
         ManifestWriter {
@@ -133,7 +133,7 @@ pub struct ManifestCanvas {
     pub height: u32,
     /// Plane-space offset of the canvas window (`Document::canvas_origin`).
     /// `(0, 0)` for a document that has never been cropped/resized with a
-    /// moved window. Pre-release: no migration — older files without this
+    /// moved window. Pre-release: no migration; older files without this
     /// field default to the origin.
     #[serde(default)]
     pub origin_x: i32,
@@ -143,8 +143,8 @@ pub struct ManifestCanvas {
 
 /// Inventory of every modular `type_id` the file uses, keyed by registry.
 ///
-/// Populated automatically by the save path — walked from the document,
-/// never hand-maintained. The load path diffs this against the binary's
+/// Populated automatically by the save path (walked from the document,
+/// never hand-maintained). The load path diffs this against the binary's
 /// registries and refuses up-front when anything's missing, so big files
 /// get rejected in milliseconds without parsing the body.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,7 +165,7 @@ pub struct ManifestRequires {
 pub struct ManifestVeil {
     #[serde(flatten)]
     pub instance: InstancePayload,
-    /// Veils carry per-instance visibility — the chain can disable an
+    /// Veils carry per-instance visibility: the chain can disable an
     /// effect without removing it.
     pub visible: bool,
 }
@@ -173,7 +173,7 @@ pub struct ManifestVeil {
 /// Reference to a pixel blob inside the zip.
 ///
 /// `format` is the `wgpu::TextureFormat` slug (`"rgba8unorm"`,
-/// `"r8unorm"`, future `"r16unorm"` etc.) — adding a new on-GPU format
+/// `"r8unorm"`, future `"r16unorm"` etc.); adding a new on-GPU format
 /// only adds a string variant here, never a new file extension. `pixels`
 /// is the zip-relative path; `bounds` is canvas-space.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,18 +183,18 @@ pub struct ManifestPixelRef {
     pub bounds: CanvasRect,
 }
 
-/// Output of a completed save — the Rust data path's hand-off shape.
+/// Output of a completed save: the Rust data path's hand-off shape.
 ///
 /// JS consumes this directly: PNG-encodes `composite_rgba` via
 /// `OffscreenCanvas` (and a downsampled thumbnail) and assembles the zip
-/// with `fflate`. Rust never writes the zip in production — keeping
+/// with `fflate`. Rust never writes the zip in production, keeping
 /// encoders off the WASM main thread and reusing the browser's native
 /// PNG path. Tests assemble the zip via [`super::zip_io::assemble_zip`].
 ///
 /// Pixel blobs are *raw bytes*, format declared per-blob in each entity's
 /// body inside [`Manifest::nodes`] / [`Manifest::modifiers`].
 pub struct SaveBundle {
-    /// `manifest.json` content — pretty-printed JSON.
+    /// `manifest.json` content: pretty-printed JSON.
     pub manifest_json: Vec<u8>,
     pub composite_width: u32,
     pub composite_height: u32,
@@ -216,7 +216,7 @@ pub struct SaveBlob {
 /// Map a `wgpu::TextureFormat` to its wire-format slug.
 ///
 /// Closed set today: `Rgba8Unorm` ↔ `"rgba8unorm"`, `R8Unorm` ↔
-/// `"r8unorm"`. Panics on anything else — the compositor allocates
+/// `"r8unorm"`. Panics on anything else: the compositor allocates
 /// only representable formats (raster textures are always `Rgba8Unorm`,
 /// mask/selection textures are always `R8Unorm`), so an unknown format
 /// reaching this function is a programming error, not a save-time
@@ -230,7 +230,7 @@ pub fn texture_format_to_str(format: wgpu::TextureFormat) -> &'static str {
 }
 
 /// Inverse of [`texture_format_to_str`]. Returns `None` for any string
-/// the binary doesn't recognize — the load path turns that into a
+/// the binary doesn't recognize: the load path turns that into a
 /// structured [`super::error::LoadError`].
 pub fn texture_format_from_str(slug: &str) -> Option<wgpu::TextureFormat> {
     match slug {

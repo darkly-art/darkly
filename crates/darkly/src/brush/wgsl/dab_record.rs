@@ -1,4 +1,4 @@
-//! Intrinsic per-dab record header — the fields every terminal packs
+//! Intrinsic per-dab record header: the fields every terminal packs
 //! at the front of every dab record, before any node-contributed fields.
 //!
 //! The per-dab record overall is *dynamic* (its layout is the union of
@@ -6,7 +6,7 @@
 //! order), so there is no single Rust `#[repr(C)]` struct mirroring it.
 //! The intrinsic header (`pos`, `bbox_target_px`,
 //! `inv_radius_target_px`) is the fixed prefix, packed by hand here so
-//! all four terminals — paint, watercolor, smudge, liquify — share one
+//! all four terminals (paint, watercolor, smudge, liquify) share one
 //! source of truth.
 
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::brush::wgsl::type_system::{DabField, WgslType};
 
 /// Numerical-stability floor for the target-px radius division. Not a
-/// physical limit — the post-scale preview radius can legitimately drop
+/// physical limit: the post-scale preview radius can legitimately drop
 /// below 1 target px on extreme brush sizes (a sub-pixel-radius preview
 /// is useless anyway). The clamp prevents 1/0 / huge inv values from
 /// poisoning the fragment.
@@ -47,7 +47,7 @@ pub const INTRINSIC_DAB_HEADER_FIELDS: usize = 3;
 /// inexpressible.
 ///
 /// `bbox_target_px` is the single source of truth for the dab's write
-/// footprint — the vertex stage sizes the rasterized quad against it,
+/// footprint: the vertex stage sizes the rasterized quad against it,
 /// the fragment stage discards past it, and (in stroke mode) the CPU
 /// layer-clip bbox is derived from the same value so save-points
 /// cannot truncate the GPU writes.
@@ -60,7 +60,7 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
             name: "pos".into(),
             ty: WgslType::Vec2,
             pack: Arc::new(|_outputs, _bytes| {
-                // Terminal packs `pos` directly — placeholder packer
+                // Terminal packs `pos` directly; placeholder packer
                 // here is unused because the terminal owns this field.
                 unreachable!("intrinsic pos packer should not be invoked");
             }),
@@ -82,7 +82,7 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
     ]
 }
 
-/// Pack the intrinsic dab header. Single source of truth — every
+/// Pack the intrinsic dab header. Single source of truth: every
 /// terminal's `evaluate_gpu` (stroke path) and
 /// [`crate::brush::wgsl::render_compiled_cursor_preview`] (preview path) call
 /// this. The fields are interpreted in the *target texture's pixel
@@ -90,8 +90,8 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
 /// inverts radius once so the fragment hot path is a multiply, not a
 /// divide.
 ///
-/// Stroke-only consumers — notably watercolor's pickup shader in
-/// `watercolor.rs` — treat `1 / inv_radius_target_px` as
+/// Stroke-only consumers (notably watercolor's pickup shader in
+/// `watercolor.rs`) treat `1 / inv_radius_target_px` as
 /// canvas-px radius. That's valid only because stroke's target ≡
 /// canvas. Any new sampler that derives canvas-px sizes from the dab
 /// record must restrict itself to stroke-mode dispatch.

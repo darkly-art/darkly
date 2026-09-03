@@ -2,25 +2,17 @@
 
 use darkly_macros::handlers;
 
-use super::types::{
-    node_to_layer_info, BlendModeTypeInfo, LayerInfo, LayerKindTypeInfo, ModifierTypeInfo,
-    ParamInfo, ToolTypeInfo, VeilInfo, VeilTypeInfo,
-};
+use super::types::{node_to_layer_info, LayerInfo, ParamInfo, VeilInfo};
 use super::DarklyEngine;
-use super::PreviewJob;
-use super::PreviewKind;
-use super::ReadbackContext;
-use crate::coord::LayerRect;
+use crate::catalog::Catalog;
 use crate::engine::protocol::{params_from_json, RawParams};
 use crate::gpu::params::{ParamDef, ParamValue};
-use crate::gpu::preview::ANIMATED_FRAMES;
-use crate::gpu::veil::Veil;
 
 #[handlers]
 impl DarklyEngine {
     // --- Veils ---
 
-    /// Wire entry for `add_veil` — coerces JSON `params` against the veil
+    /// Wire entry for `add_veil`: coerces JSON `params` against the veil
     /// type's schema, then [`Self::add_veil_layer`].
     #[handler]
     pub fn add_veil(&mut self, veil_type: String, params: RawParams) {
@@ -28,7 +20,7 @@ impl DarklyEngine {
         self.add_veil_layer(&veil_type, &pv);
     }
 
-    /// Wire entry for `update_veil` — resolves the slot's veil type, coerces
+    /// Wire entry for `update_veil`: resolves the slot's veil type, coerces
     /// `params` against its schema, then [`Self::update_veil_layer`]. A stale
     /// index is a silent no-op.
     #[handler]
@@ -84,147 +76,6 @@ impl DarklyEngine {
         chain.update_veil(&self.gpu.device, &self.gpu.queue, index, new_veil);
     }
 
-    // --- Picker previews ---
-
-    /// Begin generating the looping thumbnail preview for `type_id` — the veil
-    /// applied to the **current canvas**, captured as a sequence of frames.
-    /// Regenerates on every call (a no-op only while a generation is already in
-    /// flight) so the picker always reflects the live document. Frames land
-    /// asynchronously; retrieve them with
-    /// [`poll_veil_preview`](Self::poll_veil_preview).
-    ///
-    /// Fully isolated from the live veil chain: it downscales a snapshot of the
-    /// composite into the preview renderer's own textures and runs a fresh veil
-    /// instance over it, so the user's active veils, compositor surface, and
-    /// document are never mutated.
-    pub fn start_veil_preview(&mut self, type_id: &str) {
-        // Resolve to the registry's 'static id — it keys both the preview job
-        // and the readback context.
-        let Some(static_id) = self
-            .compositor
-            .veil_chain()
-            .registry()
-            .static_type_id(type_id)
-        else {
-            return;
-        };
-
-        // Don't queue a duplicate generation while one is in flight. (We do not
-        // skip when frames already exist — each open re-renders the live
-        // canvas, which may have changed since last time.)
-        if self.readbacks.any(|c| {
-            matches!(
-                c,
-                ReadbackContext::PreviewFrame { kind: PreviewKind::Veil, type_id: t, .. }
-                    if *t == static_id
-            )
-        }) {
-            return;
-        }
-
-        // Refresh the composite so the preview reflects the current document,
-        // even with no surface present yet (mirrors `start_export`).
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
-        let format = self.compositor.veil_chain().accum_format();
-
-        // Downscale the live composite into the preview input texture. Holds an
-        // immutable borrow of `compositor` (via the texture view) alongside the
-        // mutable renderer borrow — disjoint fields, so they don't alias.
-        {
-            let source = self.compositor.composited_texture();
-            let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
-            self.veil_preview_renderer.load_source(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &source_view,
-                canvas_w,
-                canvas_h,
-                format,
-            );
-        }
-
-        let defaults: Vec<ParamValue> = self
-            .compositor
-            .veil_chain()
-            .registry()
-            .param_defs(static_id)
-            .iter()
-            .map(|d| d.default_value())
-            .collect();
-
-        // Build the veil + cache over the loaded composite. Borrow-split the
-        // disjoint fields (registry on the compositor, the GPU context, the
-        // renderer) so they don't alias `self`.
-        let (mut veil, cache) = {
-            let Self {
-                compositor,
-                gpu,
-                veil_preview_renderer,
-                ..
-            } = self;
-            let registry = compositor.veil_chain_mut().registry_mut();
-            veil_preview_renderer.build_veil(
-                &gpu.device,
-                &gpu.queue,
-                registry,
-                static_id,
-                &defaults,
-                format,
-            )
-        };
-
-        let (pw, ph) = self.veil_preview_renderer.preview_size();
-        let total = if veil.needs_animation() {
-            ANIMATED_FRAMES
-        } else {
-            1
-        };
-        let dt = self.veil_preview_renderer.frame_dt();
-        self.previews.insert(
-            (PreviewKind::Veil, static_id),
-            PreviewJob {
-                width: pw,
-                height: ph,
-                frames: vec![None; total as usize],
-            },
-        );
-
-        let rect = LayerRect::from_xywh(0, 0, pw, ph);
-        for frame_idx in 0..total {
-            // Frame 0 captures the initial state; advance animated veils between
-            // frames so the loop shows motion. Each frame renders into the same
-            // output texture and copies to its own staging buffer in the same
-            // submission, so the readback captures that frame before the next
-            // overwrites it.
-            if frame_idx > 0 && veil.needs_animation() {
-                veil.update_time(&self.gpu.queue, &cache, dt);
-            }
-            let veil_ref: &dyn Veil = veil.as_ref();
-            let Self {
-                gpu,
-                readbacks,
-                veil_preview_renderer,
-                ..
-            } = self;
-            let output = veil_preview_renderer.output_texture();
-            Self::encode_preview_frame(
-                gpu,
-                readbacks,
-                PreviewKind::Veil,
-                static_id,
-                frame_idx,
-                total,
-                output,
-                format,
-                rect,
-                |encoder| veil_preview_renderer.encode_frame(encoder, veil_ref, &cache),
-            );
-        }
-    }
-
     // --- Queries ---
 
     #[handler]
@@ -269,87 +120,18 @@ impl DarklyEngine {
         list
     }
 
-    /// Return all registered veil types with their parameter definitions.
+    /// Every registry, projected into the one browsable shape the UI pickers,
+    /// the settings surface and the metadata export all consume. Delegates to
+    /// the GPU-free free function so an exporter can build the same data
+    /// without an engine; the handler exists so `ts_rs` emits `Catalog` into
+    /// the frontend's typed client.
     #[handler]
-    pub fn veil_types(&self) -> Vec<VeilTypeInfo> {
-        self.compositor
-            .veil_chain()
-            .registry()
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, description, defs)| VeilTypeInfo {
-                type_id,
-                display_name,
-                // Veils render a live preview in their picker, so no icon.
-                icon: "",
-                description,
-                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-            })
-            .collect()
+    pub fn catalogs(&self) -> Vec<Catalog> {
+        crate::catalog::catalogs()
     }
 
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.veil_chain().registry().param_defs(type_id)
-    }
-
-    /// Return all registered tool types with display name and parameter definitions.
-    /// Backs the WASM bridge so the UI can render tool names without hardcoding them.
-    #[handler]
-    pub fn tool_types(&self) -> Vec<ToolTypeInfo> {
-        crate::tool::registry()
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, defs)| ToolTypeInfo {
-                type_id,
-                display_name,
-                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
-            })
-            .collect()
-    }
-
-    /// Return all registered blend modes in GPU-value order, with display name
-    /// and category. Backs the WASM bridge so the UI populates the blend-mode
-    /// dropdown from the registry instead of a hardcoded table.
-    #[handler]
-    pub fn blend_mode_types(&self) -> Vec<BlendModeTypeInfo> {
-        crate::gpu::blend_mode::registry()
-            .all()
-            .into_iter()
-            .map(|reg| BlendModeTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-                category: reg.category,
-            })
-            .collect()
-    }
-
-    /// Return all registered filter kinds. UI uses this to resolve
-    /// `ModifierInfo.kind` to a display label and to populate the
-    /// "Add filter" menu.
-    #[handler]
-    pub fn modifier_types(&self) -> Vec<ModifierTypeInfo> {
-        crate::document::filter::registry()
-            .all()
-            .into_iter()
-            .map(|reg| ModifierTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-            })
-            .collect()
-    }
-
-    /// Return all registered layer kinds. UI uses this to resolve a layer's
-    /// `type` discriminator to a display label (e.g. "Raster Layer", "Group").
-    #[handler]
-    pub fn layer_kind_types(&self) -> Vec<LayerKindTypeInfo> {
-        crate::document::layer_kind::registry()
-            .all()
-            .into_iter()
-            .map(|reg| LayerKindTypeInfo {
-                type_id: reg.type_id,
-                display_name: reg.display_name,
-            })
-            .collect()
     }
 }

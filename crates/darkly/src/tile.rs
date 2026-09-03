@@ -1,4 +1,4 @@
-//! Sparse tile storage — retained **only for the selection system**.
+//! Sparse tile storage: retained **only for the selection system**.
 //!
 //! Selections use CPU-side `AlphaMask` (= `TileStore<AlphaF32>`) because
 //! selection operations (boolean add/subtract/intersect, contour extraction
@@ -16,7 +16,7 @@ pub const TILE_SIZE: usize = 64;
 pub const TILE_BYTES: usize = TILE_SIZE * TILE_SIZE * 4; // RGBA u8
 
 // ---------------------------------------------------------------------------
-// TileFormat trait — parameterizes the tile storage over pixel format
+// TileFormat trait: parameterizes the tile storage over pixel format
 // ---------------------------------------------------------------------------
 
 /// Marker trait for tile data formats. Each format defines its own data array type.
@@ -103,7 +103,7 @@ impl AlphaF32Data {
 }
 
 // ---------------------------------------------------------------------------
-// Tile<F> — a single tile with COW semantics
+// Tile<F>: a single tile with COW semantics
 // ---------------------------------------------------------------------------
 
 /// A single tile with COW (copy-on-write) semantics via Arc.
@@ -173,7 +173,7 @@ impl Tile<AlphaF32> {
 }
 
 // ---------------------------------------------------------------------------
-// TileStore<F> — sparse tile grid, generic over pixel format
+// TileStore<F>: sparse tile grid, generic over pixel format
 // ---------------------------------------------------------------------------
 
 /// Sparse tile grid. Key = (tile_x, tile_y) in tile coordinates.
@@ -239,7 +239,7 @@ impl<F: TileFormat> Default for TileStore<F> {
 // Type aliases
 // ---------------------------------------------------------------------------
 
-/// Single-channel f32 tile grid — used only for the **selection system**.
+/// Single-channel f32 tile grid: used only for the **selection system**.
 ///
 /// Selections use CPU-side AlphaMask because selection operations (boolean
 /// add/subtract/intersect, contour extraction for marching ants, feathering,

@@ -12,17 +12,17 @@ import {
     onPointerRelease,
 } from './modifier_cursor';
 // `?raw` is a Vite import suffix: bundles the file's text content at build
-// time. The SVG file is the single source of truth — we extract the
+// time. The SVG file is the single source of truth: we extract the
 // `<path d="..."/>` data from it and compose it with the dynamic color
 // indicator below. Swap the file to change the icon; no code edit needed.
 import colorPickerSvg from '../assets/color-picker.svg?raw';
 
-// Color-picker cursor — SVG builder + armed-state tracking. Whether a held
+// Color-picker cursor: SVG builder + armed-state tracking. Whether a held
 // modifier arms the picker is decided by the shared specificity resolver
 // (`dragModifierActions`): the picker engages only when the held modifier's
 // winning drag action is `sampleColor`. A brush that claims the same chord
 // with a more specific binding (clone's `setCloneSource`) therefore wins and
-// the picker yields — no separate modifier bookkeeping to disagree with the
+// the picker yields: no separate modifier bookkeeping to disagree with the
 // dispatcher.
 //
 // Armed conditions:
@@ -32,7 +32,7 @@ import colorPickerSvg from '../assets/color-picker.svg?raw';
 //      action does the actual pick on pointerdown; this module just owns
 //      the cursor.
 //
-// Holding the modifier does *not* swap `activeToolId` — the toolbar
+// Holding the modifier does *not* swap `activeToolId`: the toolbar
 // stays put. Hover suppression, the `app.toolCursor` slot, and the
 // suspend/restore handoff to the active tool are owned by the shared
 // engagement machinery in `modifier_cursor.ts`; this module only owns
@@ -50,12 +50,12 @@ const CURSOR_SIZE = 128;
 
 // Geometry: the dropper's tip and the crosshair form a diagonal pair.
 // `OFFSET` is the dropper-tip offset diagonally up-and-right from the
-// hotspot — gives visible clearance between the dropper's tip and the
-// crosshair so the user can see the pixel under the crosshair without
+// hotspot, giving visible clearance between the dropper's tip and the
+// crosshair so the artist can see the pixel under the crosshair without
 // the dropper covering it.
 const OFFSET = 6;
 
-// Hotspot — the pixel the color picker actually samples. The crosshair
+// Hotspot: the pixel the color picker actually samples. The crosshair
 // frames it; the dropper extends OFFSET pixels up-and-right from it.
 const HOTSPOT_X = 43;
 const HOTSPOT_Y = 85;
@@ -63,7 +63,7 @@ const TIP_X = HOTSPOT_X + OFFSET;
 const TIP_Y = HOTSPOT_Y - OFFSET;
 
 /** Extract the `d` attribute from the first `<path>` element in the
- *  Font Awesome SVG file. Source viewBox is `0 0 512 512` — tip near
+ *  Font Awesome SVG file. Source viewBox is `0 0 512 512`: tip near
  *  (32, 480) in path-space; we scale + translate so the tip lands at
  *  the hotspot. */
 function extractPathD(svgText: string): string {
@@ -83,19 +83,19 @@ function rgbCss(c: Color): string {
  *  Layers (bottom to top in the SVG):
  *  - **Dropper icon**: FA `eye-dropper` glyph, tip placed at the hotspot.
  *  - **Colored ring** (the indicator):
- *    - *Idle* (`pressed=false`) — a quarter-ring arc in the upper-right,
+ *    - *Idle* (`pressed=false`): a quarter-ring arc in the upper-right,
  *      stroked with rounded end caps for a clean fractional look.
- *    - *Pressed* (`pressed=true`) — the full ring, top half = primary
+ *    - *Pressed* (`pressed=true`): the full ring, top half = primary
  *      (foreground), bottom half = secondary (background), butt caps so
  *      the halves meet flush. The ring is large enough to envelop most
  *      of the dropper body, making the swatch comparison the
  *      dominant visual.
- *  - **Crosshair** at the hotspot — frames the exact pixel that will be
- *    sampled (the 1-pixel-wide center is left empty so the user can see
+ *  - **Crosshair** at the hotspot: frames the exact pixel that will be
+ *    sampled (the 1-pixel-wide center is left empty so the artist can see
  *    the pixel under the cursor).
  *
  *  The ring's colored region is rendered *without* a stroke so the swatch
- *  sits flush against the canvas pixels behind it — the whole point is
+ *  sits flush against the canvas pixels behind it; the whole point is
  *  to compare swatch vs. underlying pixel.
  *
  *  Returns the full CSS value including hotspot + fallback. */
@@ -150,7 +150,7 @@ export function colorPickerCursor(
         `stroke-width="64" stroke-linejoin="round" paint-order="stroke"/>` +
         `</g>`;
 
-    // Crosshair at the hotspot — four short arms with a 2px gap centered
+    // Crosshair at the hotspot: four short arms with a 2px gap centered
     // on the sampled pixel so the underlying canvas color stays visible
     // through the gap. Black core over a white halo for legibility on
     // any background. `shape-rendering="crispEdges"` keeps the 1px lines
@@ -235,14 +235,14 @@ function refreshCursor(): void {
 
 /** Mark a sample-in-progress (mouse button held during pick). Same call
  *  for both the color-picker tool's pointer hooks and the modifier-held
- *  chord action — both share the cursor's pressed/idle indicator. */
+ *  chord action; both share the cursor's pressed/idle indicator. */
 export function setColorPickerPressed(p: boolean): void {
     if (pressed === p) return;
     pressed = p;
     refreshCursor();
 }
 
-/** Per-frame tick — picks up foreground updates that `pollPick` commits
+/** Per-frame tick: picks up foreground updates that `pollPick` commits
  *  between pointer events. Cheap when nothing changed (memo guard). */
 export function tickColorPickerCursor(): void {
     refreshCursor();
@@ -286,7 +286,7 @@ function disengage(): void {
     // The shared machinery releases the cursor slot and restores the active
     // tool's hover. Exception: when the colorpicker *tool* itself has just
     // become active, it owns the cursor directly (its `refreshCursor` set
-    // it) — skip the release/restore handoff so we don't stomp it.
+    // it); skip the release/restore handoff so we don't stomp it.
     disengageModifierCursor('colorpicker', {
         release: app.activeToolId !== 'colorpicker',
     });
@@ -313,7 +313,7 @@ export function setupColorPickerModifierTracking(): void {
     onHeldModsChange(reevaluate);
     config.onChange(reevaluate);
 
-    // A pointer release re-opens the engagement gate — a "start stroke,
+    // A pointer release re-opens the engagement gate: a "start stroke,
     // press the modifier, release pointer" sequence arms for the next click.
     onPointerRelease(reevaluate);
 }

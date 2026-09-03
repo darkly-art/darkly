@@ -1,4 +1,4 @@
-//! Smoke tests for the Round / Airbrush / Ink Pen builtins. Each
+//! Smoke tests for the Airbrush / Ink Pen builtins. Each
 //! test loads the actual builtin graph (no test-only rewiring),
 //! renders one dab, and asserts the deposit lands inside its
 //! declared bbox.
@@ -6,7 +6,7 @@
 //! `rough_ink.rs` covers the deeper invariants of the paint
 //! pipeline (bbox-correctness on overlapping dabs, flow scaling,
 //! shape parity). These tests only need to verify each brush's
-//! graph wires up cleanly and produces visible output — per-brush
+//! graph wires up cleanly and produces visible output, so per-brush
 //! wire bugs (e.g. forgetting `paint_color → stamp.color`) surface
 //! here.
 
@@ -34,7 +34,7 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 
 fn black_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     out
@@ -78,7 +78,13 @@ fn render_single_dab_with_pressure(
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let mut stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -165,31 +171,18 @@ fn center_rgba(rgba: &[u8]) -> [u8; 4] {
 }
 
 fn count_deposited(rgba: &[u8]) -> usize {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
         .count()
 }
 
 #[test]
-fn round_deposits_at_center() {
-    let rgba = render_single_dab("Round", 0.15, [1.0, 0.0, 0.0, 1.0]);
-    let center = center_rgba(&rgba);
-    assert!(
-        center[0] > 150 && center[1] < 60 && center[2] < 60,
-        "Round center should be ~red, got {center:?}"
-    );
-    assert!(
-        count_deposited(&rgba) > 500,
-        "Round should deposit a substantial disc, got {} pixels",
-        count_deposited(&rgba),
-    );
-}
-
-#[test]
-fn airbrush_deposits_softer_than_round() {
-    // Airbrush has softness=1.0; Round has 0.5. Centre coverage should
+fn airbrush_deposits_softer_than_ink_pen() {
+    // Airbrush has softness=1.0; Ink Pen has 0.1. Centre coverage should
     // still be solid (pressure→opacity is 1.0), but the alpha falloff
-    // at the rim is gentler. Smoke-test centre only here — the softer
+    // at the rim is gentler. Smoke-test centre only here, since the softer
     // edge is hard to assert quantitatively without a per-pixel
     // gradient probe.
     let rgba = render_single_dab("Airbrush", 0.15, [0.0, 1.0, 0.0, 1.0]);
@@ -205,7 +198,7 @@ fn airbrush_deposits_softer_than_round() {
 /// the Airbrush, so the deposited color must scale with pressure. The
 /// bug was that `commit()` read `ctx.input_f32("opacity")` from an
 /// empty inputs map (lifecycle hooks weren't pulling slot values),
-/// always returning the port default 1.0 — so every Airbrush stroke
+/// always returning the port default 1.0, so every Airbrush stroke
 /// committed at full opacity regardless of pressure.
 #[test]
 fn airbrush_opacity_tracks_pressure() {
@@ -230,20 +223,23 @@ fn airbrush_opacity_tracks_pressure() {
     assert!(
         full_g - low_g > 50,
         "Airbrush center green at pressure=1.0 ({full_g}) must be significantly \
-         brighter than at pressure=0.2 ({low_g}) — opacity must track pressure",
+         brighter than at pressure=0.2 ({low_g}): opacity must track pressure",
     );
 }
 
 #[test]
-fn ink_pen_deposits_with_pressure_curve() {
-    // Ink Pen uses a front-loaded curve so pressure=1.0 reaches full
-    // size — same end deposit as Round at full pressure. Curve only
-    // shapes the response at lower pressures (not exercised here).
+fn ink_pen_deposits_at_center() {
+    // Pressure drives `paint.size` directly, so pressure=1.0 renders the
+    // full-size crisp disc at the canvas centre.
     let rgba = render_single_dab("Ink Pen", 0.15, [0.0, 0.0, 1.0, 1.0]);
     let center = center_rgba(&rgba);
     assert!(
         center[2] > 150 && center[0] < 60 && center[1] < 60,
         "Ink Pen center should be ~blue, got {center:?}"
     );
-    assert!(count_deposited(&rgba) > 500);
+    assert!(
+        count_deposited(&rgba) > 500,
+        "Ink Pen should deposit a substantial disc, got {} pixels",
+        count_deposited(&rgba),
+    );
 }

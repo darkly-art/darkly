@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://darkly.art"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="Darkly — a GPU-native paint engine in Rust" width="600"></a>
+<a href="https://darkly.art"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="Darkly: a GPU-native paint engine in Rust" width="600"></a>
 
 **A GPU-native paint engine for Rust: brushes, layers, blend modes, masks, selections, and undo, on [wgpu](https://wgpu.rs) (WebGPU). Runs on the desktop or in the browser via WebAssembly.**
 

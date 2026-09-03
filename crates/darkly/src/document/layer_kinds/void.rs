@@ -1,8 +1,8 @@
-//! Void layer kind — procedural-content leaf in the layer tree.
+//! Void layer kind: procedural-content leaf in the layer tree.
 //!
 //! Most voids carry no pixel buffer; their output is regenerated each
 //! frame from `(void_type, params)`, so the entire state round-trips
-//! through the manifest body — a clean win for save-file size.
+//! through the manifest body, a clean win for save-file size.
 //!
 //! The **camera** void is the exception: it consumes external input
 //! (live webcam frames) and the *last* frame is persistent so reopening
@@ -38,25 +38,25 @@ struct VoidBody {
     opacity: f32,
     blend_mode: String,
     /// Stable `type_id` from [`crate::gpu::void::VoidRegistry`], e.g.
-    /// `"noise"`. Anchors the param vector — a load that doesn't recognize
+    /// `"noise"`. Anchors the param vector, and a load that doesn't recognize
     /// this id is `CorruptManifest`, not a silent fallback.
     void_type: String,
     /// Parameter values in the order the void type's `ParamDef` schema
     /// declares them. Variant identity (`Int` vs `Float`) round-trips via
     /// the regression-tested `#[serde(untagged)]` ordering in `ParamValue`.
     params: Vec<ParamValue>,
-    /// User transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
+    /// Artist transform (gizmo-edited pan / scale / rotate). `#[serde(default)]`
     /// so procedural voids and pre-transform saves load as identity.
     #[serde(default)]
     transform: crate::transform::Transform,
     #[serde(default)]
     modifiers: Vec<u64>,
     /// Optional persistent frame for voids that consume external input
-    /// (camera, future screenshare). `None` for procedural voids — keeps
-    /// the save file as compact as before for noise / future portals.
+    /// (camera, future screenshare). `None` for procedural voids, which
+    /// keeps the save file as compact as before for noise / future portals.
     /// The field name is `pixels` (not `frame`) so the existing
     /// `extract_pixel_ref` in `engine/load.rs` finds it the same way it
-    /// finds raster pixel refs — one shared code path for both kinds.
+    /// finds raster pixel refs, one shared code path for both kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pixels: Option<ManifestPixelRef>,
 }
@@ -65,6 +65,7 @@ pub fn register() -> LayerKindRegistration {
     LayerKindRegistration {
         type_id: TYPE_ID,
         display_name: "Void Layer",
+        description: "Pixels generated on demand by a source rather than stored.",
         can_have_mask: true,
         can_rename: true,
         has_thumbnail: false,
@@ -162,7 +163,7 @@ mod tests {
     /// Round-trip a void layer through its registered serializer +
     /// deserializer. Regression-style: the entire procedural state must
     /// survive the wire format because there are NO pixel blobs to fall
-    /// back on — params + void_type are the whole document state for a
+    /// back on: params + void_type are the whole document state for a
     /// void.
     #[test]
     fn void_body_round_trips_through_registration() {
@@ -185,7 +186,7 @@ mod tests {
         let reg = register();
         let node = doc.find_node(id).expect("void exists");
 
-        // No pixel blobs — the procedural side is the entire document
+        // No pixel blobs: the procedural side is the entire document
         // state for a void. This is the "clean win for save-file size"
         // documented at the top of this module.
         let serialized = (reg.serialize)(node);
@@ -220,8 +221,8 @@ mod tests {
     /// last received webcam frame), serialize must round-trip the
     /// `ManifestPixelRef` AND emit a matching `PixelBlobSpec` so the save
     /// flow knows to readback the aux texture. This is the regression
-    /// shield for the camera-void persistence feature — without the spec
-    /// the save pipeline silently drops the frame and the user reopens to
+    /// shield for the camera-void persistence feature: without the spec
+    /// the save pipeline silently drops the frame and the artist reopens to
     /// a black layer.
     #[test]
     fn void_with_frame_emits_pixel_blob_spec() {
@@ -310,7 +311,7 @@ mod tests {
     }
 
     /// Old saves (and procedural voids) with no `transform` field load as
-    /// identity rather than failing — `#[serde(default)]`.
+    /// identity rather than failing (`#[serde(default)]`).
     #[test]
     fn void_missing_transform_defaults_to_identity() {
         let reg = register();
@@ -335,7 +336,7 @@ mod tests {
 
     /// A void without a frame (the normal noise void, or a freshly-added
     /// camera void that hasn't received a frame yet) must NOT declare a
-    /// pixel blob — otherwise the save flow tries to read back a texture
+    /// pixel blob; otherwise the save flow tries to read back a texture
     /// that doesn't carry any saved-frame state.
     #[test]
     fn void_without_frame_emits_no_pixel_blob() {
@@ -362,7 +363,7 @@ mod tests {
 
     /// A corrupt blend_mode in the saved body must surface as
     /// `CorruptManifest`, not a silent fallback. This is the contract the
-    /// raster body holds and voids must too — otherwise a save written by
+    /// raster body holds and voids must too; otherwise a save written by
     /// a build that registered a different blend mode would silently
     /// degrade.
     #[test]

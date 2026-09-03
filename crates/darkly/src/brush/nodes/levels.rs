@@ -1,4 +1,4 @@
-//! Levels node — clamp-and-rescale window over a 0..1 scalar.
+//! Levels node applies a clamp-and-rescale window over a 0..1 scalar.
 //!
 //! Maps `input` linearly from `[in_low, in_high]` onto `[0, 1]`, clamping
 //! to the unit range. Simpler than [`super::curve`] (no spline LUT, no
@@ -7,13 +7,13 @@
 //! `levels` is the right tool when the *meaning* of the operation is
 //! "open the shadow / blowout the highlight," not "general affine map."
 //!
-//! Squeezing `in_low` and `in_high` together gives a soft threshold —
+//! Squeezing `in_low` and `in_high` together gives a soft threshold:
 //! the `1e-6` floor on the denominator keeps the divide stable even
 //! when the two ends are equal, so a threshold node and a window node
 //! are the same node in two different parameter regimes.
 //!
 //! Output capping (Photoshop's "output white") is intentionally **not**
-//! a built-in slider — compose with [`super::multiply`] when you need
+//! a built-in slider; compose with [`super::multiply`] when you need
 //! it (a `multiply.b` default of 0.6 caps brightness at 60%). One
 //! primitive per operation, kept minimal.
 
@@ -32,7 +32,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "modulate",
             display_name: "Levels",
-            description: "Adjusts a value's low end, high end, and midpoint — the same idea as the image-editing Levels filter.",
+            description: "Adjusts a value's low end, high end, and midpoint, much like the image-editing Levels filter.",
             ports: vec![
                 PortDef::input("input", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
@@ -40,12 +40,12 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("in_low", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_description("Input black point — anything at or below this clips to 0"),
+                    .with_description("Input black point: anything at or below this clips to 0"),
                 PortDef::input("in_high", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
                     .with_description(
-                        "Input white point — anything at or above this saturates to 1",
+                        "Input white point: anything at or above this saturates to 1",
                     ),
                 PortDef::output("output", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
@@ -54,7 +54,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
         || Box::new(LevelsEvaluator),
     )
@@ -87,7 +87,7 @@ impl BrushNodeEvaluator for LevelsEvaluator {
         let in_low = cctx.input("in_low").as_f32();
         let in_high = cctx.input("in_high").as_f32();
         // 1e-6 floor stops the divide from exploding when the two
-        // ends are equal — the formula degenerates into a hard step
+        // ends are equal: the formula degenerates into a hard step
         // around `in_low` in that case, which is the threshold mode.
         let expr = format!(
             "clamp((({input}) - ({in_low})) / max(({in_high}) - ({in_low}), 1e-6), 0.0, 1.0)"

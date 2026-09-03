@@ -7,7 +7,7 @@
 //! `effective_node_view` and `effective_mask_bind_group` accessors swap
 //! the live view / mask bind group for the preview equivalents when the
 //! floating target is encountered, so the host's normal blend pass
-//! renders the preview without any extra render pass — and isolation,
+//! renders the preview without any extra render pass. Isolation,
 //! grouping, and other branch-free render concerns compose with it
 //! automatically.
 //!
@@ -49,7 +49,7 @@ impl Compositor {
     ///
     /// Preview is canvas-sized (not live-sized) so a translate that moves
     /// content past the live layer's bounding box still has room on the
-    /// preview to write — clipped at canvas bounds, which is all the
+    /// preview to write, clipped at canvas bounds, which is all the
     /// viewport renders anyway. Commit's `grow_node_to_fit` separately
     /// expands the live layer so off-canvas pixels survive the commit.
     fn allocate_preview_resources(
@@ -75,7 +75,7 @@ impl Compositor {
             format,
             // COPY_SRC needed because `render_commit` runs
             // `copy_for_compositing` against the render target before its
-            // shader pass — when the target is the preview texture, that
+            // shader pass; when the target is the preview texture, that
             // copy reads from preview.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
@@ -160,7 +160,7 @@ impl Compositor {
     }
 
     /// Set floating content by copying directly from a node's GPU texture.
-    /// GPU→GPU copy — no CPU tiles involved. Format dispatch (R8 mask vs RGBA
+    /// GPU→GPU copy: no CPU tiles involved. Format dispatch (R8 mask vs RGBA
     /// layer) is driven by the texture's own format from the unified node pool.
     pub fn prepare_transform_target_from_gpu(
         &mut self,
@@ -181,7 +181,7 @@ impl Compositor {
         }
         let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
             self.allocate_preview_resources(device, target_format);
-        // Re-borrow `layer` after `allocate_preview_resources` — the helper
+        // Re-borrow `layer` after `allocate_preview_resources`: the helper
         // doesn't take `&mut self`, but rust-analyzer prefers the explicit
         // re-fetch over keeping the borrow live across the helper call.
         let layer = self
@@ -238,6 +238,7 @@ impl Compositor {
         paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
         staged: &crate::gpu::compositor::StagedNodeTexture,
         param: &TransformPreviewParams<'_>,
+        lifted: crate::gpu::transform::LiftedContent,
     ) -> bool {
         let Some(state) = self
             .transform_session
@@ -282,16 +283,32 @@ impl Compositor {
                 *uncovered,
             ),
         }
-        encoder.with_raw(|raw| {
-            self.transform_pass.render_state_commit(
-                device,
-                raw,
-                state,
-                staged.texture(),
-                staged.view(),
-            )
-        });
+        if lifted == crate::gpu::transform::LiftedContent::ReturnedToSource {
+            encoder.with_raw(|raw| {
+                self.transform_pass.render_state_commit(
+                    device,
+                    raw,
+                    state,
+                    staged.texture(),
+                    staged.view(),
+                )
+            });
+        }
         true
+    }
+
+    /// The source texture of a single-target transform session.
+    ///
+    /// Trimmed, at native resolution, premultiplied: the same shape a paste's
+    /// source has, but held per session target rather than in the paste slot.
+    /// `None` when there is no session, or when it has more than one target
+    /// (nothing that consumes this has a meaning for "the" source then).
+    pub fn transform_session_source_texture(&self) -> Option<wgpu::Texture> {
+        let session = self.transform_session.as_ref()?;
+        match session.targets.as_slice() {
+            [only] => Some(only.source_texture.clone()),
+            _ => None,
+        }
     }
 
     pub fn clear_transform_session(&mut self) {
@@ -479,9 +496,9 @@ impl Compositor {
 
         // The preview is a window-local surface anchored at `canvas_origin`:
         // its texel (0,0) maps to plane `canvas_origin` (that is how the host's
-        // blend composites it — `layer_offset = canvas_origin` in
+        // blend composites it: `layer_offset = canvas_origin` in
         // `write_preview_blend_uniforms_if_active`). So the transform shader's
-        // `target_offset` — "where on the canvas the target's pixels live" —
+        // `target_offset` ("where on the canvas the target's pixels live")
         // must be `canvas_origin`, not (0,0); otherwise source content drawn at
         // plane `C` lands in texel `C` and then composites at plane
         // `canvas_origin + C`, shifting the whole preview by the crop offset.
@@ -509,7 +526,7 @@ impl Compositor {
 
         // 0. Reset the whole preview to transparent. The copy below only
         //    repaints the canvas portion live actually covers, and the
-        //    commit shader discards outside the transformed source bounds —
+        //    commit shader discards outside the transformed source bounds,
         //    so canvas pixels outside live's extent would otherwise retain
         //    previous-frame transform writes (ghost trails).
         encoder.with_raw(|raw| {
@@ -522,7 +539,7 @@ impl Compositor {
         //    `canvas_origin`, so intersect against the plane canvas window
         //    (`canvas_rect()`, at `canvas_origin`) and write to the window-local
         //    destination texel `visible - canvas_origin`. Off-window pixels are
-        //    not in the preview — the viewport never renders them, and commit's
+        //    not in the preview: the viewport never renders them, and commit's
         //    `grow_node_to_fit` preserves them on the live texture.
         let canvas_rect = self.canvas_rect();
         let live_canvas_extent = live.canvas_extent();
@@ -565,7 +582,7 @@ impl Compositor {
             });
         }
 
-        // 2. Apply the source-rect clear (transform mode only — paste mode
+        // 2. Apply the source-rect clear (transform mode only: paste mode
         //    leaves the preview as a copy of the live target so the commit
         //    shader composites over the existing pixels). The preview is
         //    canvas-aligned, so the paint target reports canvas dims/offset.

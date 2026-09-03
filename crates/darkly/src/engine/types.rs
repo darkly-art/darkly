@@ -1,23 +1,24 @@
-//! FFI/serialization types — serde-serializable for any WASM bridge.
+//! FFI/serialization types: serde-serializable for any WASM bridge.
 
-use crate::gpu::params::{ParamDef, ParamValue};
+use crate::gpu::params::{ParamDef, ParamKind, ParamValue};
+use crate::units::UnitType;
 
 /// Cached, synchronously-consumable snapshot of engine state that the frontend
 /// mirrors. Returned by `render` each frame (a downhill projection of the one
-/// borrow render already holds — no extra query, no per-frame poll) so
+/// borrow render already holds, with no extra query or per-frame poll) so
 /// synchronous UI consumers (`$derived`, menu `enabled()`, `beforeunload`) read
 /// a local mirror instead of awaiting the engine.
 ///
 /// This is a single struct *by design*: every field here exists for the same
-/// reason — frontend mirroring — so they ride together rather than as a
+/// reason (frontend mirroring), so they ride together rather than as a
 /// proliferating handful of return scalars. Mixes document state (`dirty`,
 /// `has_selection`) with compositor/session signals (`frame_count`,
 /// `thumbnail_version`); the unifying purpose is "values the UI caches," not a
-/// document/compositor distinction — hence the name. Grow it as the UI needs
+/// document/compositor distinction, hence the name. Grow it as the UI needs
 /// more; adding a field requires no new per-value plumbing on either side.
 ///
 /// `frame_count` is `f64` (not `u64`) so it crosses the wasm boundary as a JS
-/// `number`, not a `BigInt` — values up to 2^53 round-trip exactly.
+/// `number`, not a `BigInt`: values up to 2^53 round-trip exactly.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineState {
@@ -34,13 +35,13 @@ pub struct EngineState {
 }
 
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
-/// stable registry `type_id`s — display labels are looked up by the UI through
+/// stable registry `type_id`s; display labels are looked up by the UI through
 /// the matching `*_types()` table, never carried alongside as a redundant copy.
 ///
 /// `canHaveMask` / `canRename` / `hasThumbnail` / `icon` / `kindName` are
 /// per-kind capability flags sourced from the layer's
 /// [`crate::document::LayerKindRegistration`]. The frontend reads these instead
-/// of branching on `type` — a new layer kind declares its capabilities in its
+/// of branching on `type`: a new layer kind declares its capabilities in its
 /// own registration and the UI follows with no consumer-side edit.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -52,15 +53,25 @@ pub enum LayerInfo {
         name: String,
         visible: bool,
         locked: bool,
-        /// Effective editability — `false` when this node *or any ancestor*
+        /// Effective editability: `false` when this node *or any ancestor*
         /// carries `locked = true`. Mirrors `Document::is_node_editable`;
         /// the UI consumes this directly to grey out controls so the
         /// inheritance rule lives in one place (the document predicate)
         /// rather than being recomputed by every Svelte component.
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node, mirroring
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -73,7 +84,7 @@ pub enum LayerInfo {
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
         bounds: crate::coord::CanvasRect,
     },
-    /// Void (procedural-content) layer. Carries no pixel buffer — its
+    /// Void (procedural-content) layer. Carries no pixel buffer: its
     /// content is generated from `voidType` + `params` each frame.
     #[serde(rename_all = "camelCase")]
     Void {
@@ -82,9 +93,19 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node, mirroring
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         /// Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
         /// per-subtype from the void's registration. The layer panel renders
         /// it as the void layer's thumbnail.
@@ -93,7 +114,7 @@ pub enum LayerInfo {
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
-        /// Stable `type_id` from the void registry — UI resolves to a
+        /// Stable `type_id` from the void registry; UI resolves to a
         /// display label via `void_types()`.
         void_type: String,
         /// Param schema + current values, in the order the void's
@@ -101,7 +122,7 @@ pub enum LayerInfo {
         params: Vec<ParamInfo>,
     },
     /// Filter (non-destructive procedural-transform) layer. Carries no pixel
-    /// buffer — it transforms the composite of everything below it each frame.
+    /// buffer: it transforms the composite of everything below it each frame.
     #[serde(rename_all = "camelCase")]
     Filter {
         id: f64,
@@ -109,15 +130,25 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node, mirroring
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
         blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
-        /// Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
+        /// Stable filter `type_id` (e.g. `"invert"`); UI resolves to a
         /// display label via `filter_types()`.
         pipeline: String,
         /// Param schema + current values, in the order the filter's `ParamDef`
@@ -126,7 +157,7 @@ pub enum LayerInfo {
         /// uses.
         params: Vec<ParamInfo>,
     },
-    /// Vector-object layer (text today). Carries no pixel buffer — the texture
+    /// Vector-object layer (text today). Carries no pixel buffer: the texture
     /// is realized from its `objects`.
     #[serde(rename_all = "camelCase")]
     Vector {
@@ -135,9 +166,19 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node, mirroring
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         opacity: f32,
@@ -151,9 +192,19 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         editable: bool,
+        /// Whether paint ops have somewhere to land on this node, mirroring
+        /// `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
+        /// generated (void, filter, vector) and for groups; the panel reads it
+        /// to offer "Rasterize" instead of branching on `type`.
+        paintable: bool,
         can_have_mask: bool,
         can_rename: bool,
         has_thumbnail: bool,
+        /// Whether this row offers "Convert to Smart Object"; mirrors
+        /// `DarklyEngine::can_convert_layer_to_smart_object`. The engine
+        /// answers so the rule (owns its pixels, editable, no mask) lives with
+        /// the operation instead of being restated by the panel.
+        can_become_smart_object: bool,
         icon: &'static str,
         kind_name: &'static str,
         collapsed: bool,
@@ -180,100 +231,13 @@ pub struct ModifierInfo {
     pub locked: bool,
     /// Whether this modifier participates in transforms with its host.
     pub linked_to_host: bool,
-    /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
+    /// See [`LayerInfo::Raster::editable`]: a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct VeilTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-    /// Iconify name shown for this type. Filters carry a per-variant icon so
-    /// each reads distinctly in the Colors menu and the Add Filter Layer picker;
-    /// veils leave it empty (their UI renders a live preview, not an icon).
-    pub icon: &'static str,
-    /// One-sentence summary from the registration — picker tooltips, and (for
-    /// filters) folded into the Colors-menu action description where the
-    /// command palette's search indexes it.
-    pub description: &'static str,
-    pub params: Vec<ParamInfo>,
-}
-
-/// Registry view of a void type for the "Add Void" picker. Mirrors
-/// [`VeilTypeInfo`] but additionally carries `supportsPreview` (whether to
-/// render a live thumbnail at all) and the browser `captureKind`. The void's
-/// iconify `icon` is always present — the picker's fallback when there's no
-/// rendered preview.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct VoidTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-    pub params: Vec<ParamInfo>,
-    pub icon: &'static str,
-    pub supports_preview: bool,
-    /// How the browser captures this void's external frames (`"camera"` /
-    /// `"display"`), or absent for procedural voids. The frontend builds a
-    /// `voidType → CaptureKind` map from this to pick `getUserMedia` vs
-    /// `getDisplayMedia` and to drive the generic MediaStream lifecycle.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capture_kind: Option<crate::gpu::void::CaptureKind>,
-}
-
-/// Flat serialization-friendly view of a tool's registration metadata.
-/// Mirrors `VeilTypeInfo` so the UI consumes both in the same shape.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct ToolTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-    pub params: Vec<ParamInfo>,
-}
-
-/// Flat view of a registered blend mode for the layer-properties dropdown.
-/// `category` drives the `<optgroup>` grouping (Darken / Lighten / etc.).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct BlendModeTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-    pub category: &'static str,
-}
-
-/// Registry view of a modifier kind — the UI uses this to render the
-/// "Add modifier" menu and to look up display labels for `ModifierInfo.kind`.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct ModifierTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-}
-
-/// Registry view of a layer kind — used by the layer panel to render labels
-/// like "Raster Layer" / "Group" for the layer's own `type` discriminator.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct LayerKindTypeInfo {
-    #[serde(rename = "type")]
-    pub type_id: &'static str,
-    pub display_name: &'static str,
-}
-
 /// Per-instance view of a veil in the chain. `type` is the registry `type_id`;
-/// resolve to a display label via `veil_types()` — never duplicate it here.
+/// resolve to a display label via `veil_types()`; never duplicate it here.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -285,6 +249,31 @@ pub struct VeilInfo {
     pub params: Vec<ParamInfo>,
 }
 
+/// Range and default rendered for reading: each number converted into its
+/// display unit and suffixed. Carried alongside the raw numbers so a consumer
+/// that only wants to *show* the schema needs no unit table of its own.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct ParamDisplay {
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub default: Option<String>,
+    /// The unit suffix alone, for a column header. Empty for unitless values.
+    pub unit: &'static str,
+}
+
+/// Format a display-space number without trailing zeros: `180.0` reads
+/// `"180"`, `0.25` stays `"0.25"`.
+fn fmt_display(value: f32, unit: UnitType) -> String {
+    let v = unit.to_display(value);
+    let mut s = format!("{v:.3}");
+    if s.contains('.') {
+        s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    format!("{s}{}", unit.suffix())
+}
+
 /// Flat serialization-friendly view of a parameter definition + current value.
 /// Avoids nesting a tagged enum (ParamDef) which serde_wasm_bindgen can't handle.
 #[derive(serde::Serialize)]
@@ -292,6 +281,16 @@ pub struct VeilInfo {
 pub struct ParamInfo {
     pub kind: &'static str,
     pub name: &'static str,
+    /// Display label. `None` → the UI title-cases `name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'static str>,
+    /// How to render this parameter's editor. One closed set, which both
+    /// `ParamKind` and the settings schema's `WidgetHint` map into:
+    /// `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+    pub widget: &'static str,
+    pub unit: UnitType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -304,158 +303,166 @@ pub struct ParamInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(type = "JsonValue | null"))]
     pub options: Option<serde_json::Value>,
+    pub display: ParamDisplay,
 }
 
 impl ParamInfo {
     pub fn from_def(def: &ParamDef, value: Option<&ParamValue>) -> Self {
-        match def {
-            ParamDef::Float {
-                name,
-                min,
-                max,
-                default,
-            } => ParamInfo {
-                kind: "float",
-                name,
-                min: Some(*min as f64),
-                max: Some(*max as f64),
-                default: ParamValue::Float(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Int {
-                name,
-                min,
-                max,
-                default,
-            } => ParamInfo {
-                kind: "int",
-                name,
-                min: Some(*min as f64),
-                max: Some(*max as f64),
-                default: ParamValue::Int(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Bool { name, default } => ParamInfo {
-                kind: "bool",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::Bool(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::String { name, default } => ParamInfo {
-                kind: "string",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::String(default.to_string()),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Curve { name, default } => ParamInfo {
-                kind: "curve",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::Curve(default.to_vec()),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Levels { name, default } => ParamInfo {
-                kind: "levels",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::Levels(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Enum {
-                name,
-                options,
-                default,
-            } => ParamInfo {
-                kind: "enum",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::Int(*default),
-                value: value.cloned(),
-                options: Some(serde_json::json!(options)),
-            },
-            ParamDef::FloatInput {
-                name,
-                min,
-                max,
-                default,
-            } => ParamInfo {
-                kind: "floatInput",
-                name,
-                min: Some(*min as f64),
-                max: Some(*max as f64),
-                default: ParamValue::Float(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Icon {
-                name,
-                options,
-                default,
-            } => ParamInfo {
-                kind: "icon",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::String(default.to_string()),
-                value: value.cloned(),
-                options: Some(serde_json::json!(options)),
-            },
-            ParamDef::Color { name, default } => ParamInfo {
-                kind: "color",
-                name,
-                min: None,
-                max: None,
-                default: ParamValue::Color(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::Vec2 { name, max, default } => ParamInfo {
-                kind: "vec2",
-                name,
-                min: None,
-                // For a vec2 the flat `max` field carries the magnitude clamp
-                // (the offset pad's edge radius).
-                max: Some(*max as f64),
-                default: ParamValue::Vec2(*default),
-                value: value.cloned(),
-                options: None,
-            },
-            ParamDef::List {
-                name,
-                item,
-                max_len,
-                ..
-            } => ParamInfo {
-                kind: "list",
-                name,
-                min: None,
+        // `name`, `label`, `description` and `unit` are the same for every
+        // kind, so only the value-shaped part is projected per variant.
+        let (kind, widget, min, max, options) = match &def.kind {
+            ParamKind::Float { min, max, .. } => {
+                ("float", "auto", Some(*min as f64), Some(*max as f64), None)
+            }
+            ParamKind::Int { min, max, .. } => {
+                ("int", "auto", Some(*min as f64), Some(*max as f64), None)
+            }
+            ParamKind::Bool { .. } => ("bool", "auto", None, None, None),
+            ParamKind::String { .. } => ("string", "auto", None, None, None),
+            ParamKind::Curve { .. } => ("curve", "auto", None, None, None),
+            ParamKind::Levels { .. } => ("levels", "auto", None, None, None),
+            ParamKind::Enum { options, .. } => {
+                ("enum", "auto", None, None, Some(serde_json::json!(options)))
+            }
+            ParamKind::FloatInput { min, max, .. } => (
+                "floatInput",
+                "numberInput",
+                Some(*min as f64),
+                Some(*max as f64),
+                None,
+            ),
+            ParamKind::Icon { options, .. } => {
+                ("icon", "icon", None, None, Some(serde_json::json!(options)))
+            }
+            ParamKind::Color { .. } => ("color", "auto", None, None, None),
+            // For a vec2 the flat `max` field carries the magnitude clamp
+            // (the offset pad's edge radius).
+            ParamKind::Vec2 { max, .. } => ("vec2", "auto", None, Some(*max as f64), None),
+            ParamKind::List { item, max_len, .. } => (
+                "list",
+                "auto",
+                None,
                 // For a list the flat `max` field carries the entry cap so the
                 // editor disables "Add" at the limit without an effect-specific
                 // constant.
-                max: Some(*max_len as f64),
-                default: def.default_value(),
-                value: value.cloned(),
+                Some(*max_len as f64),
                 // The item schema rides the same kind-discriminated `options`
-                // channel Enum/Icon use — here a `Vec<ParamInfo>` of the item
-                // defs so the list editor can render each entry's fields.
-                options: Some(serde_json::json!(item
+                // channel Enum/Icon use (here a `Vec<ParamInfo>` of the item
+                // defs) so the list editor can render each entry's fields.
+                Some(serde_json::json!(item
                     .iter()
                     .map(|d| ParamInfo::from_def(d, None))
                     .collect::<Vec<_>>())),
+            ),
+        };
+
+        let default = def.default_value();
+        // Only a scalar range renders: a curve or a list has no single number
+        // to show, and `Vec2`'s `max` is a magnitude rather than a bound.
+        let scalar_default = match &default {
+            ParamValue::Float(f) => Some(*f),
+            ParamValue::Int(i) => Some(*i as f32),
+            _ => None,
+        };
+        let renders_range = matches!(
+            def.kind,
+            ParamKind::Float { .. } | ParamKind::Int { .. } | ParamKind::FloatInput { .. }
+        );
+        let display = ParamDisplay {
+            min: renders_range.then(|| fmt_display(min.unwrap_or(0.0) as f32, def.unit)),
+            max: renders_range.then(|| fmt_display(max.unwrap_or(0.0) as f32, def.unit)),
+            default: scalar_default.map(|d| fmt_display(d, def.unit)),
+            unit: def.unit.suffix(),
+        };
+
+        ParamInfo {
+            kind,
+            name: def.name,
+            label: def.label,
+            description: def.description,
+            widget,
+            unit: def.unit,
+            min,
+            max,
+            default,
+            value: value.cloned(),
+            options,
+            display,
+        }
+    }
+
+    /// Project a declared preference into the same shape an effect parameter
+    /// takes. `Pref` and `ParamDef` are isomorphic once both carry a label, a
+    /// description and a widget hint, so the settings surface and the effect
+    /// panels consume one type rather than two near-identical ones.
+    ///
+    /// `name` is the pref's dot-path key, and `default` comes from the
+    /// editor-agnostic defaults layer: the schema declares type and range, not
+    /// values, so the value has to be read from where it actually lives.
+    pub fn from_pref(pref: &crate::config::schema::Pref) -> Self {
+        use crate::config::schema::{PrefKind, WidgetHint};
+        use crate::config::ConfigValue;
+
+        let (kind, min, max, options) = match &pref.kind {
+            PrefKind::Bool => ("bool", None, None, None),
+            PrefKind::Int { min, max } => ("int", Some(*min as f64), Some(*max as f64), None),
+            PrefKind::Float { min, max } => ("float", Some(*min), Some(*max), None),
+            PrefKind::Str => ("str", None, None, None),
+            PrefKind::Enum { options } => ("enum", None, None, Some(serde_json::json!(options))),
+        };
+
+        // Both producers map into one closed widget set; see `ParamInfo.widget`.
+        let widget = match pref.widget {
+            WidgetHint::Auto => "auto",
+            WidgetHint::NumberInput => "numberInput",
+            WidgetHint::Hotkey => "hotkey",
+            WidgetHint::Color => "color",
+            WidgetHint::Hidden => "hidden",
+        };
+
+        let default = match crate::config::agnostic_default(pref.key) {
+            Some(ConfigValue::Bool(b)) => ParamValue::Bool(b),
+            Some(ConfigValue::Int(i)) => ParamValue::Int(i as i32),
+            Some(ConfigValue::Float(f)) => ParamValue::Float(f as f32),
+            Some(ConfigValue::Str(s)) => ParamValue::String(s),
+            // A pref the agnostic layer does not set is one every editor
+            // overlay is expected to supply; fall back to the kind's zero so
+            // the shape stays total.
+            None => match &pref.kind {
+                PrefKind::Bool => ParamValue::Bool(false),
+                PrefKind::Int { min, .. } => ParamValue::Int(*min as i32),
+                PrefKind::Float { min, .. } => ParamValue::Float(*min as f32),
+                PrefKind::Str | PrefKind::Enum { .. } => ParamValue::String(String::new()),
             },
+        };
+
+        let scalar_default = match &default {
+            ParamValue::Float(f) => Some(*f),
+            ParamValue::Int(i) => Some(*i as f32),
+            _ => None,
+        };
+        let renders_range = matches!(pref.kind, PrefKind::Int { .. } | PrefKind::Float { .. });
+        // Prefs declare no unit; their ranges are already in display space.
+        let unit = UnitType::Raw;
+
+        ParamInfo {
+            kind,
+            name: pref.key,
+            label: Some(pref.display_name),
+            description: pref.description,
+            widget,
+            unit,
+            min,
+            max,
+            display: ParamDisplay {
+                min: renders_range.then(|| fmt_display(min.unwrap_or(0.0) as f32, unit)),
+                max: renders_range.then(|| fmt_display(max.unwrap_or(0.0) as f32, unit)),
+                default: scalar_default.map(|d| fmt_display(d, unit)),
+                unit: unit.suffix(),
+            },
+            default,
+            value: None,
+            options,
         }
     }
 }
@@ -497,7 +504,7 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as raw sRGB RGBA floats (0-1), as picked — the
+        /// Foreground color as raw sRGB RGBA floats (0-1), as picked; the
         /// compositor is display-referred, so no gamma conversion is applied.
         cr: f32,
         cg: f32,
@@ -506,7 +513,7 @@ pub enum StrokeOp {
     },
 }
 
-/// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
+/// Data returned to the WASM bridge on copy/cut: always RGBA pixels regardless
 /// of the internal clipboard variant.
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -527,7 +534,18 @@ pub(crate) fn node_to_layer_info(
     use crate::layer::{Layer, LayerNode};
     let node = doc.find_node(node_id)?;
     let editable = doc.is_node_editable(node_id);
+    let paintable = doc.pixel_buffer(node_id).is_some();
     let kind = node.kind();
+    // Most capability flags are per *kind*, but the thumbnail is a per-layer
+    // question: a void holding a supplied image shows the image, where its
+    // procedural and live siblings show a glyph. `Layer::has_thumbnail`
+    // answers it; a group has no layer to ask, so it keeps the kind flag.
+    let node_has_thumbnail = match node {
+        LayerNode::Layer(layer) => layer.has_thumbnail(void_registry),
+        LayerNode::Group(_) => kind.has_thumbnail,
+    };
+    let can_become_smart_object =
+        crate::engine::smart_object::layer_can_become_smart_object(doc, node_id);
     let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
@@ -536,9 +554,11 @@ pub(crate) fn node_to_layer_info(
                 visible: r.common.visible,
                 locked: r.common.locked,
                 editable,
+                paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
-                has_thumbnail: kind.has_thumbnail,
+                has_thumbnail: node_has_thumbnail,
+                can_become_smart_object,
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: r.blend.opacity,
@@ -564,9 +584,11 @@ pub(crate) fn node_to_layer_info(
                     visible: v.common.visible,
                     locked: v.common.locked,
                     editable,
+                    paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
-                    has_thumbnail: kind.has_thumbnail,
+                    has_thumbnail: node_has_thumbnail,
+                    can_become_smart_object,
                     icon: if subtype_icon.is_empty() {
                         kind.icon
                     } else {
@@ -598,9 +620,11 @@ pub(crate) fn node_to_layer_info(
                     visible: f.common.visible,
                     locked: f.common.locked,
                     editable,
+                    paintable,
                     can_have_mask: kind.can_have_mask,
                     can_rename: kind.can_rename,
-                    has_thumbnail: kind.has_thumbnail,
+                    has_thumbnail: node_has_thumbnail,
+                    can_become_smart_object,
                     icon: if pipeline_icon.is_empty() {
                         kind.icon
                     } else {
@@ -624,9 +648,11 @@ pub(crate) fn node_to_layer_info(
                 visible: v.common.visible,
                 locked: v.common.locked,
                 editable,
+                paintable,
                 can_have_mask: kind.can_have_mask,
                 can_rename: kind.can_rename,
-                has_thumbnail: kind.has_thumbnail,
+                has_thumbnail: node_has_thumbnail,
+                can_become_smart_object,
                 icon: kind.icon,
                 kind_name: kind.display_name,
                 opacity: v.blend.opacity,
@@ -644,9 +670,11 @@ pub(crate) fn node_to_layer_info(
             visible: g.common.visible,
             locked: g.common.locked,
             editable,
+            paintable,
             can_have_mask: kind.can_have_mask,
             can_rename: kind.can_rename,
-            has_thumbnail: kind.has_thumbnail,
+            has_thumbnail: node_has_thumbnail,
+            can_become_smart_object,
             icon: kind.icon,
             kind_name: kind.display_name,
             collapsed: g.collapsed,

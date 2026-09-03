@@ -1,7 +1,7 @@
 //! GPU undo action for brush strokes painted directly on GPU textures.
 //!
 //! Stores an `UndoRegionEntry` whose `EntryPixels` cell owns the action's
-//! pixel data — either an in-flight staging buffer (`Pending`) or a
+//! pixel data: either an in-flight staging buffer (`Pending`) or a
 //! host-side `Vec` (`Ready`). On undo/redo, the engine swaps the entry via
 //! `RegionScratch::restore_region`; the action itself just carries the
 //! metadata and the `Rc<RefCell<EntryPixels>>` handle.
@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Undo action for GPU paint operations (paint, erase, fill, …).
 ///
-/// Owns its pixel data through the entry's `Rc<RefCell<EntryPixels>>` — no
+/// Owns its pixel data through the entry's `Rc<RefCell<EntryPixels>>`: no
 /// shared storage, no ring eviction. The entry's bytes drop when the action
 /// drops (`max_steps` overflow, byte-cap eviction, redo cleared by a fresh
 /// push, or teardown). GPU texture restore is executed by the engine, which
@@ -33,7 +33,7 @@ impl GpuRegionAction {
 impl UndoAction for GpuRegionAction {
     fn undo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         // GPU restore is handled by the engine via gpu_region_entry_mut().
-        // Return empty map — no CPU tiles to mark dirty.
+        // Return empty map: no CPU tiles to mark dirty.
         HashMap::new()
     }
 

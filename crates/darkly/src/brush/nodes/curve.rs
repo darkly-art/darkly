@@ -1,6 +1,6 @@
-//! Curve node — applies an adjustable spline transfer function to a scalar input.
+//! Curve node applies an adjustable spline transfer function to a scalar input.
 //!
-//! Maps 0-1 → 0-1 via a monotone cubic Hermite spline defined by user-placed
+//! Maps 0-1 → 0-1 via a monotone cubic Hermite spline defined by artist-placed
 //! control points.  The spline is precomputed into a 256-entry LUT at graph
 //! compile time (see `BrushGraphRunner`), so per-dab evaluation is a single
 //! O(1) table lookup.
@@ -26,12 +26,12 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "modulate",
             display_name: "Curve",
-            description: "Reshapes a value through an editable response curve — e.g. make pressure ramp up sharply or ease in.",
+            description: "Reshapes a value through an editable response curve (e.g. make pressure ramp up sharply or ease in).",
             ports: vec![
                 PortDef::input("input", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description("Input value (0\u{2013}1) to remap through the curve"),
-                // The spline itself — a compile-time constant baked into a
+                // The spline itself: a compile-time constant baked into a
                 // LUT. Not wirable (the whole curve is fixed per brush);
                 // exposable so a brush author can surface the editor.
                 PortDef::input("curve", BrushWireType::Curve)
@@ -45,7 +45,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
         || Box::new(CurveEvaluator),
     )

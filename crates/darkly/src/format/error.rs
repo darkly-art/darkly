@@ -1,7 +1,7 @@
 //! Error types surfaced by the `.darkly` load path.
 //!
 //! Every refusal carries enough information for the UI's `LoadErrorToast`
-//! (Phase 5) to format a precise diagnostic — "this file needs
+//! (Phase 5) to format a precise diagnostic: "this file needs
 //! `veil/lens_flare`, please update Darkly" rather than "load failed."
 //!
 //! The variants here are the full closed set for load; the save path is
@@ -20,14 +20,14 @@ pub enum LoadError {
 
     /// The file's `requires` inventory names features the binary's
     /// registries don't know about. Each entry is `"<registry>/<type_id>"`
-    /// — e.g. `"veil/lens_flare"`, `"blend_mode/divide"`,
-    /// `"layer_kind/text"`, `"filter/clip"`.
+    /// (e.g. `"veil/lens_flare"`, `"blend_mode/divide"`,
+    /// `"layer_kind/text"`, `"filter/clip"`).
     UnsupportedFeatures { missing: Vec<String> },
 
     /// The `requires` inventory was absent, malformed, or disagreed with
     /// the body (caught by the per-variant safety net during deserialize).
     /// We control the writer; an absent `requires` is malformed, not
-    /// "older format" — there is no older format.
+    /// "older format"; there is no older format.
     CorruptManifest { reason: String },
 
     /// Encountered a `type_id` in the body that isn't in the binary's
@@ -94,14 +94,14 @@ impl From<serde_json::Error> for LoadError {
 
 impl LoadError {
     /// Stable wire shape for the JS-side UI. The UI's `LoadErrorToast`
-    /// switches on `kind` to format the precise diagnostic — "please
+    /// switches on `kind` to format the precise diagnostic: "please
     /// update Darkly" for `containerTooNew` / `unsupportedFeatures`,
     /// "this file is malformed" for `corruptManifest`, raw message for
     /// `io` / `zip` / `json`.
     ///
     /// Returned via the WASM bridge as a JSON string inside the
     /// `JsError` payload (rather than serde-deriving on the enum
-    /// itself — `std::io::Error` doesn't serialize and we'd rather
+    /// itself, since `std::io::Error` doesn't serialize and we'd rather
     /// keep the structured payload narrowly scoped to the UI contract).
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::json;

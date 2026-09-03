@@ -1,9 +1,9 @@
 /**
- * Interactive text-box gizmo — the on-canvas frame for an area-text object.
+ * Interactive text-box gizmo: the on-canvas frame for an area-text object.
  *
- * Structurally a sibling of the transform gizmo ([transform_gizmo.ts]) — it
+ * Structurally a sibling of the transform gizmo ([transform_gizmo.ts]): it
  * reads an object's geometry, draws a frame + handles via the GPU
- * `OverlayBuilder`, and hit-tests handles — but its *edit* is a box resize, not
+ * `OverlayBuilder`, and hit-tests handles, but its *edit* is a box resize, not
  * an affine: dragging a handle changes the object's layout box (`box_size`) and
  * moves its origin, reflowing the text. The opposite edge stays put.
  *
@@ -54,7 +54,7 @@ export function handleLocal(id: HandleId, w: number, h: number): [number, number
  * Resolve a handle drag to a new {@link BoxGeo}. `geo0` is the geometry at
  * drag-start; `(cx, cy)` is the pointer in canvas space. The dragged edges move
  * to the pointer's local coordinate; the opposite edges stay fixed; the box is
- * clamped to {@link MIN_BOX}. `G`'s linear part is preserved — only the origin
+ * clamped to {@link MIN_BOX}. `G`'s linear part is preserved: only the origin
  * (translation) and size change. Pure, so it can be unit-tested directly.
  * Returns `null` only if `geo0.G` is singular.
  */
@@ -74,7 +74,7 @@ export function resizeBox(geo0: BoxGeo, id: HandleId, cx: number, cy: number): B
 
     const w = x1 - x0;
     const h = y1 - y0;
-    // The moved top-left in canvas space — its linear basis is unchanged, so the
+    // The moved top-left in canvas space: its linear basis is unchanged, so the
     // new affine is `G` with a relabelled translation. The fixed corner is
     // therefore pinned (see file header).
     const [ox, oy] = affineTransform(geo0.G, x0, y0);

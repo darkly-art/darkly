@@ -1,9 +1,9 @@
-// Chromatic aberration post-processing veil — the whole-canvas fringe at render
+// Chromatic aberration post-processing veil, the whole-canvas fringe at render
 // resolution. The shared per-pixel math lives in `lib/aberration.wgsl`, which
 // gpu/veils/chromatic_aberration.rs prepends at load time (WGSL has no #include).
 //
 // Offsets/blur are render-target pixels, so they scale with
-// `rendering.veil_scale` — the same convention as other pixel-domain veils.
+// `rendering.veil_scale`, the same convention as other pixel-domain veils.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,

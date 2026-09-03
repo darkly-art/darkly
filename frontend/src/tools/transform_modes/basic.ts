@@ -1,8 +1,8 @@
 /**
- * Basic transform mode — affine pan / scale / rotate via corner/edge/rotate
+ * Basic transform mode: affine pan / scale / rotate via corner/edge/rotate
  * handles. This is the default mode; perspective and warp will be sibling files.
  *
- * Extracted verbatim (logic-wise) from the original floating transform tool —
+ * Extracted verbatim (logic-wise) from the original floating transform tool,
  * but now consumer-agnostic: it operates on a `GizmoGeometry` bbox and returns
  * affine matrices, with no knowledge of what's being transformed.
  */
@@ -123,7 +123,7 @@ function srcCorners(w: number, ht: number): [number, number][] {
 }
 
 /**
- * Least-squares affine fit of `src` corners → `dst` corners — the affine that
+ * Least-squares affine fit of `src` corners → `dst` corners: the affine that
  * minimizes the squared error over the four correspondences (solving the
  * 3-unknown normal equations for `[a, b, tx]` and `[c, d, ty]` independently).
  *
@@ -147,7 +147,7 @@ function leastSquaresAffine(src: [number, number][], dst: [number, number][]): A
     }
     const normal: Mat3 = [s00, s01, s02, s01, s11, s12, s02, s12, s22];
     const inv = mat3Inverse(normal);
-    // Degenerate source (zero extent) — nothing to fit; keep identity.
+    // Degenerate source (zero extent): nothing to fit; keep identity.
     if (!inv) return [1, 0, 0, 0, 1, 0];
     const solve = (b0: number, b1: number, b2: number) =>
         [
@@ -244,7 +244,7 @@ export const basicMode: TransformMode = {
             let angle = Math.atan2(cy - centerCanvas[1], cx - centerCanvas[0]) - startAngle;
             if (shift) {
                 // Snap the content's absolute orientation to 15° marks, not the
-                // rotation delta — otherwise the snap grid is anchored to where
+                // rotation delta, otherwise the snap grid is anchored to where
                 // the gesture began (off by the free rotation already accrued
                 // when Shift is pressed mid-drag). `atan2(c, a)` recovers the
                 // base rotation baked into `initialMatrix`.

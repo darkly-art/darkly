@@ -1,0 +1,8 @@
+name: Misc
+description: Everything that fits nowhere else.
+icon: mdi:dots-horizontal
+palette:
+  chroma: "#4f9e46"
+  refraction: "#a8cc45"
+  surface: "#3f8a361a"
+members: [clone]

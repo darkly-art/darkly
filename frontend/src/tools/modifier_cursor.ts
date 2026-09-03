@@ -1,12 +1,12 @@
 import { app, getActiveInstance } from '../state/app.svelte';
 import { screenToCanvas } from '../canvas/coordinates';
 
-// Shared machinery for modifier-held cursors — chords that temporarily own
+// Shared machinery for modifier-held cursors: chords that temporarily own
 // the pointer pipeline over the active tool (the color picker's dropper,
 // the clone brush's set-source crosshair, …). Each such cursor module keeps
 // its own arming decision (which chord, which preconditions) and registers
 // here when it engages. This module owns everything the engagers would
-// otherwise have to duplicate — and everything they must not fight over:
+// otherwise have to duplicate, and everything they must not fight over:
 //
 // - **Hover suppression.** While any cursor is engaged, CanvasView skips the
 //   active tool's hover dispatch (`isToolHoverSuppressed`), so e.g. the
@@ -22,7 +22,7 @@ import { screenToCanvas } from '../canvas/coordinates';
 //   pointer-down gate (engagers refuse to *first*-engage mid-stroke) and
 //   the last on-canvas pointer position.
 
-/** Engaged cursors, in engagement order — the last entry owns the slot. */
+/** Engaged cursors, in engagement order; the last entry owns the slot. */
 const engagers = new Map<string, string>();
 
 let pointerDown = false;
@@ -30,7 +30,7 @@ let pointerDown = false;
  *  null when off-canvas, so a disengage outside the canvas doesn't
  *  spuriously re-establish a hover overlay. */
 let lastCanvas: { x: number; y: number } | null = null;
-/** A final disengage happened while a pointer was down — restoring the
+/** A final disengage happened while a pointer was down: restoring the
  *  hover mid-drag would draw a preview under the gesture, so it waits for
  *  the release. Cancelled by a re-engagement. */
 let restorePending = false;
@@ -82,7 +82,7 @@ function suspendActiveToolHover(): void {
     if (tool?.suspendHover) {
         tool.suspendHover();
     } else {
-        // Tools without the hook still get their transient overlay cleared —
+        // Tools without the hook still get their transient overlay cleared:
         // `clear_overlay` is generic; we don't know which tool drew it.
         inst?.engine?.api.clearOverlay();
     }
@@ -96,8 +96,8 @@ function restoreActiveToolHover(): void {
     }
 }
 
-/** The current slot owner — the most recently engaged id (Map iterates in
- *  insertion order) — or undefined when nothing is engaged. */
+/** The current slot owner: the most recently engaged id (Map iterates in
+ *  insertion order), or undefined when nothing is engaged. */
 function winnerId(): string | undefined {
     let last: string | undefined;
     for (const id of engagers.keys()) last = id;
@@ -130,7 +130,7 @@ export function updateModifierCursor(id: string, cursor: string): void {
 
 /** Disengage `id`. A surviving engager re-takes the cursor slot; the final
  *  disengage releases the slot and hands the hover pipeline back to the
- *  active tool. `release: false` skips that handoff — for an engager that
+ *  active tool. `release: false` skips that handoff: for an engager that
  *  knows a new owner is taking the cursor directly (e.g. the picker chord
  *  dissolving because the color-picker *tool* just became active). */
 export function disengageModifierCursor(
@@ -195,7 +195,7 @@ export function trackPointer(e: { clientX: number; clientY: number }): void {
 let wired = false;
 
 /** Wire the window-level pointer tracking. Idempotent. `blur` and
- *  `pointercancel` count as releases — the OS can swallow the matching
+ *  `pointercancel` count as releases: the OS can swallow the matching
  *  pointer-up, and a stranded "down" would wedge engagement forever. */
 export function setupModifierCursorTracking(): void {
     if (wired) return;
@@ -206,7 +206,7 @@ export function setupModifierCursorTracking(): void {
     window.addEventListener('pointercancel', notePointerUp);
     window.addEventListener('blur', notePointerUp);
     window.addEventListener('pointermove', trackPointer);
-    // Leaving the window produces no further moves — drop the tracked
+    // Leaving the window produces no further moves; drop the tracked
     // position so a disengage outside the window doesn't re-establish a
     // hover at the last seen edge position (`restoreActiveToolHover`
     // gates on `lastCanvas`).

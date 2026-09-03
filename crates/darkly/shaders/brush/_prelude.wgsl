@@ -16,7 +16,7 @@
 //
 // The per-dab bbox radius (the inflated half-extent the vertex stage
 // emits the quad around, and the fragment stage discards past) lives
-// on the per-dab record as `bbox_radius` — see
+// on the per-dab record as `bbox_radius`, see
 // `wgsl_compile::intrinsic_dab_header`. No `QUAD_R_MAX` const here:
 // the value is computed per-brush by composing each node's
 // `ExtentContribution` and flows through the dab record so the CPU
@@ -50,7 +50,13 @@ struct IntrinsicUniforms {
     // uniforms that follow `intrinsic` in the generated `Uniforms` struct keep
     // their 16-byte alignment. Adding `canvas_origin` above pushed the size to
     // 56; without this pad the node params would misalign and read garbage.
-    _pad0:           u32,
+    // How many dabs land on a given texel as the brush passes over it
+    // once: `diameter / spacing`. Stroke-constant, published by the stroke
+    // engine, which owns the spacing that produced it. A terminal
+    // accumulating a per-dab quantity divides by this to express its rate
+    // per *pass* rather than per dab, otherwise the knob's meaning moves
+    // with the spacing setting and with pressure. 1.0 when unset.
+    dabs_per_pass:   f32,
     _pad1:           u32,
     _pad2:           u32,
 };

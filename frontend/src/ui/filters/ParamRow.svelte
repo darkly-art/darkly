@@ -7,7 +7,8 @@
     import {
         cloneParamValue,
         paramIsResettable,
-        type FilterParam,
+        channelLabel,
+        type ParamInfo,
         type FilterParamValue,
         type ColorValue,
         type Vec2Value,
@@ -15,10 +16,10 @@
 
     // A single generic scalar/atom param row (label + control). Shared by the
     // filter params editor and each list entry's fields. Mutates `param.value`
-    // in place and reports via `oninput` (mid-drag) / `onchange` (commit) — the
+    // in place and reports via `oninput` (mid-drag) / `onchange` (commit), the
     // same contract the channel editors use.
     type Props = {
-        param: FilterParam;
+        param: ParamInfo;
         disabled?: boolean;
         oninput?: () => void;
         onchange?: () => void;
@@ -34,7 +35,7 @@
         oninput?.();
     }
     // A reset-to-default button for params with a neutral center (the offset pad
-    // and the scale slider) — see `paramIsResettable`. Always shown for those so
+    // and the scale slider; see `paramIsResettable`). Always shown for those so
     // it's discoverable even at the default; a no-op click when already there.
     const showReset = $derived(!disabled && paramIsResettable(param));
     function resetToDefault() {
@@ -43,7 +44,9 @@
 </script>
 
 <div class="row">
-    <span class="label">{param.name}</span>
+    <span class="label" title={param.description ?? undefined}
+        >{param.label ?? channelLabel(param.name)}</span
+    >
     {#if param.kind === 'float' || param.kind === 'int'}
         <Slider
             value={(param.value ?? param.default) as number}

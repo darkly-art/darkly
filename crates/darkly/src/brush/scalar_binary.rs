@@ -2,7 +2,7 @@
 //! subtract, divide). Each is `Scalar op Scalar → Scalar`, differing only in
 //! the operator and its identity element; this factors the evaluator, the WGSL
 //! emission, and the port layout so a new operator is one small node file
-//! wiring up a [`ScalarBinaryOp`] — no consumer edits.
+//! wiring up a [`ScalarBinaryOp`], no consumer edits.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
@@ -15,7 +15,7 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 /// `apply` evaluates the operator on the CPU; `wgsl` builds the equivalent WGSL
 /// expression from the inlined `a`/`b` sub-expressions, emitted into compiled
 /// fragment shaders so brushes that route scalars through this node on the way
-/// to a compiled terminal still emit WGSL — every upstream node of a compiled
+/// to a compiled terminal still emit WGSL; every upstream node of a compiled
 /// terminal must. The two must stay in numerical parity (including edge cases
 /// like divide-by-zero), since a brush may be evaluated on either path.
 pub struct ScalarBinaryOp {
@@ -42,7 +42,7 @@ impl BrushNodeEvaluator for ScalarBinaryOp {
     }
 }
 
-/// Static description of one scalar binary-math node — everything that varies
+/// Static description of one scalar binary-math node: everything that varies
 /// between multiply/add/subtract. `identity` is the operator's identity
 /// element, used as both inputs' default so an unconnected port is a no-op.
 pub struct ScalarBinaryNode {
@@ -77,7 +77,7 @@ impl ScalarBinaryNode {
                 is_gpu: false,
                 is_terminal: false,
                 supports_erase: true,
-                preview_fallback_icon: None,
+                preview_staging: None,
             },
             self.evaluator,
         )

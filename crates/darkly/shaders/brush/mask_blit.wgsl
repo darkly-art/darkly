@@ -4,11 +4,11 @@
 //   value into the destination as `(r, r, r, 1)`. Used to populate the
 //   brush's RGBA8 pre-stroke snapshot when the layer is an R8 mask.
 // `fs_passthrough`: sample an RGBA8 source unchanged. Used by liquify's
-//   commit when writing scratch into an R8 mask destination — the GPU
+//   commit when writing scratch into an R8 mask destination: the GPU
 //   silently drops G/B/A on the R8 target so this becomes the "extract
 //   .r" path with no shader-side reduction.
 //
-// Single fullscreen triangle vertex shader — no UV uniforms; the source
+// Single fullscreen triangle vertex shader, no UV uniforms; the source
 // and destination are assumed to share dimensions and orientation.
 
 @group(0) @binding(0) var t_src: texture_2d<f32>;

@@ -1,4 +1,4 @@
-// Black and White — shared RGB → gray transform used by both surfaces of the
+// Black and White: shared RGB → gray transform used by both surfaces of the
 // `black_and_white` type: the veil (`shaders/veils/black_and_white.wgsl`) and
 // the filter (`shaders/filters/black_and_white.wgsl`). Each wrapper declares
 // its own `var<uniform> params: BwParams` at its own binding slot; this file
@@ -33,7 +33,7 @@ fn bw_gray(rgb: vec3f, p: BwParams) -> f32 {
     switch (p.mode) {
         case 0u: { return (hi + lo) / 2.0; } // lightness
         // The two luminosity modes use the standard BT.709 / BT.601 luma
-        // coefficients — the same constants as `lib/colorspace.wgsl` (HCY_R/G/B)
+        // coefficients, the same constants as `lib/colorspace.wgsl` (HCY_R/G/B)
         // and `composite.wgsl` (pd_lum); inlined rather than prepending the
         // colorspace lib for two constants. Intentional sharing, not drift.
         case 1u: { return dot(rgb, vec3f(0.2126, 0.7152, 0.0722)); } // BT.709

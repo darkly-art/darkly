@@ -14,6 +14,7 @@ use crate::nodegraph::{
 
 use super::curve_math::CurveLut;
 use super::nodes::{brush_settings, clone_source, paint_color, pen_input};
+use super::DAB_REFERENCE_SIZE;
 
 use super::gpu_context::BrushGpuContext;
 use super::wgsl::CompiledBrush;
@@ -25,12 +26,12 @@ use super::wire::{BrushWireType, ScalarValue};
 ///
 /// Connected input values arrive as two parallel slices: port name +
 /// metadata in `input_slots`, post-remap value in `input_values`.
-/// [`Self::input`] linearly scans `input_slots` — per-node input count
-/// is small (typically 1–3, never more than ~8), so a `HashMap` would
+/// [`Self::input`] linearly scans `input_slots` since per-node input count
+/// is small (typically 1-3, never more than ~8), so a `HashMap` would
 /// only trade a per-step heap allocation for no real speedup.
 pub struct EvalContext<'a> {
     /// Connected input ports for this step, in the same order as
-    /// `input_values`. Disconnected ports are absent — [`Self::input`]
+    /// `input_values`. Disconnected ports are absent; [`Self::input`]
     /// falls back to the port's default for those.
     pub input_slots: &'a [InputSlot],
     /// Per-port post-remap value, parallel to `input_slots`. `None` when
@@ -45,11 +46,18 @@ pub struct EvalContext<'a> {
     pub stroke_seed: u32,
     /// Index of the current dab within the stroke (0-based).
     pub dab_index: u32,
-    /// Stroke base size — the ambient `pen_input.size` knob value, read
+    /// Stroke base size: the ambient `pen_input.size` knob value, read
     /// out-of-band at stroke start (see [`super::nodes::brush_settings::base_size`]).
     /// Stroke-constant. Terminals multiply their per-touch modulation onto it
     /// via [`Self::base_size`].
     pub base_size: f32,
+    /// How many dabs land on a given texel as the brush passes over it
+    /// once (`diameter / spacing`). Stroke-constant, set out-of-band at
+    /// stroke start by [`super::stroke_engine::StrokeEngine`]. A terminal
+    /// accumulating a per-dab quantity divides by this to express its rate
+    /// per *pass* rather than per dab; see
+    /// [`super::wgsl::IntrinsicUniforms::dabs_per_pass`].
+    pub dabs_per_pass: f32,
     /// This node instance's ID (used to salt PRNG for independence).
     pub node_id: &'a NodeId,
 }
@@ -79,9 +87,15 @@ impl EvalContext<'_> {
         self.input(name).as_f32()
     }
 
-    /// Stroke base size — the ambient `pen_input.size` knob (see the field).
+    /// Stroke base size: the ambient `pen_input.size` knob (see the field).
     pub fn base_size(&self) -> f32 {
         self.base_size
+    }
+
+    /// Dabs landing on one texel per pass of the brush (see the field).
+    /// Never below 1.0, so dividing a rate by it is always well-defined.
+    pub fn dabs_per_pass(&self) -> f32 {
+        self.dabs_per_pass.max(1.0)
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -100,7 +114,7 @@ impl EvalContext<'_> {
     /// seed makes runs reproducible for replays and checkpoint restores.
     ///
     /// Callers pulling multiple independent values on a single dab
-    /// encode that into `index` — e.g. scatter uses `dab_index * 2` and
+    /// encode that into `index`, e.g. scatter uses `dab_index * 2` and
     /// `dab_index * 2 + 1` for its x and y offsets.
     #[inline]
     pub fn prng_at(&self, index: u32) -> f32 {
@@ -124,7 +138,7 @@ pub(crate) fn node_salt(id: &NodeId) -> u32 {
 
 /// Gather a step's connected inputs from the slot table into `scratch`,
 /// applying wire-boundary range remap. The output is parallel to
-/// `input_slots` — index `i` holds the resolved value for `input_slots[i]`,
+/// `input_slots`: index `i` holds the resolved value for `input_slots[i]`,
 /// or `None` when the upstream slot hasn't been written. `scratch` is the
 /// runner's reused buffer; its allocation amortises across dabs.
 ///
@@ -194,7 +208,7 @@ fn remap_for_wire(
     }
 }
 
-/// Affine remap from `src` range to `dst` range. Not clamped — consistent
+/// Affine remap from `src` range to `dst` range. Not clamped, consistent
 /// with the "ranges are UI hints, not enforced" contract; consumers that
 /// need a hard bound clamp inside their own evaluator.
 #[inline]
@@ -202,7 +216,7 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
     let (src_min, src_max) = src;
     let (dst_min, dst_max) = dst;
     let denom = src_max - src_min;
-    // Degenerate source range — collapse to dst_min rather than divide by zero.
+    // Degenerate source range: collapse to dst_min rather than divide by zero.
     if denom == 0.0 {
         return dst_min;
     }
@@ -214,7 +228,7 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
 /// registration. Called from [`BrushGraphRunner::begin_stroke`] before
 /// the per-node `begin_stroke` hook runs. Centralising this here means
 /// adding a new terminal can never silently drift away from the
-/// established lifecycles — the four-way copy-paste that used to live
+/// established lifecycles; the four-way copy-paste that used to live
 /// in `paint`/`watercolor`/`smudge`/`liquify` collapses into one
 /// declaration plus the enum dispatch below.
 fn apply_lifecycle(lifecycle: super::node::Lifecycle, gpu: &mut BrushGpuContext) {
@@ -248,15 +262,15 @@ fn prng_f32(seed: u32, index: u32) -> f32 {
 
 /// Canvas-space positioning info read from the graph's cursor-preview
 /// terminal after a cursor-preview-mode evaluation. Consumed by the
-/// overlay to place the `KIND_MASKED_STAMP` primitive (the cursor halo)
-/// — the cursor-preview mask texture itself is bound to the overlay
+/// overlay to place the `KIND_MASKED_STAMP` primitive (the cursor halo);
+/// the cursor-preview mask texture itself is bound to the overlay
 /// separately. Rotation lives in the mask texture, not on the primitive:
 /// the compiled brush pipeline bakes `circle.rotation_input` and
 /// `view_rotation` into the rendered mask via the skeleton's `theta`,
 /// so the overlay quad samples an already-oriented mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BrushCursorPreviewInfo {
-    /// Half-extent in canvas pixels — the overlay primitive's `p1`.
+    /// Half-extent in canvas pixels: the overlay primitive's `p1`.
     pub half_extent_canvas_px: [f32; 2],
 }
 
@@ -265,13 +279,13 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// Evaluate the node on the CPU and return named output values.
     ///
     /// Called once per dab for each CPU node in topological order.
-    /// GPU nodes return empty from this — they use `evaluate_gpu` instead.
+    /// GPU nodes return empty from this; they use `evaluate_gpu` instead.
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)>;
 
     /// Evaluate the node on the GPU, recording render passes into the
     /// encoder.  Returns named output values (e.g. texture handles).
     ///
-    /// Default implementation is a no-op — CPU-only nodes don't override
+    /// Default implementation is a no-op; CPU-only nodes don't override
     /// this.  GPU nodes (`is_gpu: true`) override this and ignore
     /// `evaluate_cpu`.
     fn evaluate_gpu(
@@ -290,7 +304,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// shape texture sized to the brush's canvas-pixel extent).
     ///
     /// Terminal nodes that own preview rendering (e.g. `color_output`)
-    /// also override this — they read a `brush_preview` input texture and
+    /// also override this: they read a `brush_preview` input texture and
     /// blit it into `gpu.preview.mask_view`, then publish placement info
     /// via `gpu.preview.info`.
     fn render_cursor_preview(
@@ -302,12 +316,12 @@ pub trait BrushNodeEvaluator: Send + Sync {
     }
 
     /// Stroke-scoped setup. Called at stroke start and on every rewind
-    /// boundary (full or partial) — whenever the scratch must be reset
+    /// boundary (full or partial), whenever the scratch must be reset
     /// to this terminal's starting state. Non-terminal nodes default to
     /// no-op.
     ///
     /// The `EvalContext`'s slot-driven inputs are *not* seeded for this
-    /// hook — it runs before any dab, so `ctx.input` will only return
+    /// hook: it runs before any dab, so `ctx.input` will only return
     /// port defaults. That's deliberate: the hook's job is lifecycle,
     /// not per-dab sampling.
     fn begin_stroke(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
@@ -316,7 +330,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// into the scratch. The terminal pushes the scratch onto the layer
     /// however its semantics require. Non-terminal nodes default to no-op.
     ///
-    /// Inputs reflect the LAST dab's evaluated slot values — `commit`
+    /// Inputs reflect the LAST dab's evaluated slot values: `commit`
     /// runs after `execute_gpu`, so the slot table still holds the most
     /// recent dab's results. Ports declared as "applied at commit"
     /// (e.g. `paint.opacity`) read their wired value through
@@ -339,7 +353,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// shader. Used only by brushes that terminate in `paint`
     /// (the compiled execution path); brushes on the per-dab dispatch
     /// path never call this. Returning `Err` makes the whole brush
-    /// fail to load when its terminal asks for compilation — there is
+    /// fail to load when its terminal asks for compilation; there is
     /// no runtime fallback. See [`crate::brush::wgsl`].
     fn compile_wgsl(
         &self,
@@ -351,21 +365,21 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// Preview-mode replacement for the terminal's `compile_wgsl`
     /// body. Default delegates to `compile_wgsl`, which is correct for
     /// terminals whose stroke body doesn't reference `@group(2)` /
-    /// `@group(3)` bindings — the preview skeleton substitutes `sel =
+    /// `@group(3)` bindings: the preview skeleton substitutes `sel =
     /// 1.0` and omits both groups, so the same body works under both
     /// modes.
     ///
     /// Terminals that sample scratch / atlas in their stroke body
     /// (watercolor's pickup atlas, smudge / liquify's `scratch_mirror`)
-    /// override this to emit a body that doesn't need those bindings —
+    /// override this to emit a body that doesn't need those bindings:
     /// typically a neutral-color mask of the brush footprint. Only the
     /// `body` field of the returned `NodeWgsl` is consumed; decls /
     /// dab_fields / uniform_fields / outputs come from the stroke pass
     /// and are shared across both shader variants (helper functions a
-    /// preview body references — e.g. liquify's `falloff_fn` — live in
+    /// preview body references, e.g. liquify's `falloff_fn`, live in
     /// `decls` and are visible to both skeletons).
     ///
-    /// Called for every node in the graph — terminal and non-terminal.
+    /// Called for every node in the graph: terminal and non-terminal.
     /// The default delegates to `compile_wgsl`, so a node that doesn't
     /// override this contributes an identical preview body. `clone_source`
     /// overrides it (a non-terminal) to emit a neutral fill instead of
@@ -385,7 +399,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// layer-clip bbox, ensuring the save-point system tracks exactly
     /// what the shader writes.
     ///
-    /// Default `Identity` — only nodes that change the dab footprint
+    /// Default `Identity`: only nodes that change the dab footprint
     /// (shape masks, displacement / warp) override. See
     /// [`crate::brush::wgsl::ExtentContribution`].
     fn extent(
@@ -399,16 +413,16 @@ pub trait BrushNodeEvaluator: Send + Sync {
 /// Stroke-constant clone uniforms, seeded into a `clone_source` node's
 /// per-node uniform fields once per stroke.
 ///
-/// `source_anchor` is the user-set clone source (the set-source gesture,
+/// `source_anchor` is the artist-set clone source (the set-source gesture,
 /// persisted on the engine across strokes); `dest_anchor` is captured at
 /// the first dab of the stroke (the stabilizer offsets the first rendered
 /// dab, so this is taken from `place_dab`, not the raw engine input).
 /// `source_offset` / `source_size` are the source snapshot's plane-space
-/// frame — the frozen cross-layer / merged snapshot's rect when one
+/// frame: the frozen cross-layer / merged snapshot's rect when one
 /// exists, else the paint target's current extent (refreshed per pen
 /// event so same-layer clone tracks mid-stroke layer growth). All values
 /// are plane / canvas pixels. The aligned-vs-anchored choice lives in the
-/// baked WGSL — this struct carries only points and the frame.
+/// baked WGSL: this struct carries only points and the frame.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct CloneState {
     pub source_anchor: [f32; 2],
@@ -422,20 +436,20 @@ pub struct CloneState {
 /// A compiled, ready-to-run brush graph with pre-allocated slot table.
 ///
 /// The evaluation model is **compile once, evaluate per-dab**.  When the
-/// user edits the brush graph, we compile a new runner (cheap — just a
+/// artist edits the brush graph, we compile a new runner (cheap, just a
 /// topo sort and slot allocation).  During a stroke, each dab reuses the
 /// same runner with zero heap allocation:
 ///
-/// 1. `seed_sensors()` — writes tablet data directly into pre-known slot
+/// 1. `seed_sensors()`: writes tablet data directly into pre-known slot
 ///    indices (no virtual dispatch, no HashMap lookup on the hot path).
-/// 2. `execute_cpu()` — walks the topologically-sorted plan, calling each
+/// 2. `execute_cpu()`: walks the topologically-sorted plan, calling each
 ///    CPU node's evaluator which reads inputs from and writes outputs to
 ///    the flat slot table.
-/// 3. `execute_gpu()` — walks GPU nodes in topological order, calling
+/// 3. `execute_gpu()`: walks GPU nodes in topological order, calling
 ///    `evaluate_gpu()` which records render passes and writes texture
 ///    handles back to the slot table.
 ///
-/// The slot table is a flat `Vec<Option<ScalarValue>>` — one entry per
+/// The slot table is a flat `Vec<Option<ScalarValue>>`: one entry per
 /// output port in the graph, indexed by the compiler-assigned slot number.
 /// This avoids per-node HashMaps and keeps evaluation cache-friendly.
 pub struct BrushGraphRunner {
@@ -445,15 +459,15 @@ pub struct BrushGraphRunner {
     plan: ExecutionPlan,
     /// Per-step evaluator pointer, resolved once at runner build by looking
     /// up `step.type_id` in the supplied evaluator map. `None` for steps
-    /// whose type is unregistered (treated as a no-op during eval — matches
+    /// whose type is unregistered (treated as a no-op during eval, matching
     /// the prior HashMap-lookup-fail behaviour without re-introducing the
     /// per-dab lookup).
     step_evaluators: Vec<Option<Arc<dyn BrushNodeEvaluator>>>,
     /// Flat slot table indexed by compiler-assigned slot number.  Pre-sized
-    /// to `plan.slot_count` and reused across dabs — `clear_slots()` resets
+    /// to `plan.slot_count` and reused across dabs: `clear_slots()` resets
     /// it between evaluations without reallocating.
     slots: Vec<Option<ScalarValue>>,
-    /// Reusable per-step input scratch — parallel to the current step's
+    /// Reusable per-step input scratch: parallel to the current step's
     /// `input_slots`. Cleared and refilled by `gather_inputs_into` before
     /// each evaluator call. Living on the runner amortises the allocation
     /// across all dabs of a stroke (it grows once to the max input count
@@ -464,16 +478,26 @@ pub struct BrushGraphRunner {
     node_data: HashMap<NodeId, NodeData>,
     /// Pre-resolved slot indices for pen_input's output ports.  Stored
     /// separately so `seed_sensors()` can write directly without walking
-    /// the plan or doing any lookups — this is the hottest path (called
+    /// the plan or doing any lookups; this is the hottest path (called
     /// once per dab, potentially hundreds of times per stroke).
     pen_input_slots: Vec<(String, usize)>,
     /// Pre-resolved slot index for paint_color's output.  Same rationale
-    /// as `pen_input_slots` — avoid plan traversal on the hot path.
+    /// as `pen_input_slots`: avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
+    /// Pre-resolved slot index of `brush_settings.size`'s source output.
+    /// Seeded per dab in `seed_sensors` with the base size projected to
+    /// canvas pixels (`base_size * DAB_REFERENCE_SIZE`, the brush
+    /// *diameter*), so the graph signal is a pixel-domain quantity like
+    /// `pen_input.position`. This is why `brush_settings` is skipped in
+    /// `execute_cpu`'s generic settable-source republish (which would
+    /// otherwise overwrite it with the raw normalized knob value): the
+    /// projection lives here, at the one seeding point, keeping the CPU
+    /// slot and the GPU-packed dab field numerically identical.
+    brush_settings_size_slot: Option<usize>,
     /// Node id of the (first) `clone_source` node, resolved at build.
     /// When set alongside [`Self::clone_state`], `build_slot_outputs`
     /// injects the stroke's anchor uniforms under this node's keys so the
-    /// compiled terminal packs them — same channel `paint_color` uses,
+    /// compiled terminal packs them; same channel `paint_color` uses,
     /// but seeded from engine session state rather than a graph output.
     clone_source_node: Option<NodeId>,
     /// Clone anchors for the current stroke, set via
@@ -492,13 +516,17 @@ pub struct BrushGraphRunner {
     stroke_seed: u32,
     /// Index of the current dab, set by `seed_sensors()`.
     dab_index: u32,
-    /// Stroke base size — the ambient `pen_input.size` knob, set once per
+    /// Stroke base size: the ambient `pen_input.size` knob, set once per
     /// stroke by [`Self::set_base_size`] before the first dab. Threaded into
     /// every `EvalContext` (terminals read it via `EvalContext::base_size`)
     /// The terminals read it via `EvalContext::base_size`; the
     /// `brush_settings.size` graph signal is published on its slot by the
     /// runner's generic settable-source seeding, not here.
     base_size: f32,
+    /// Dabs landing on one texel per pass of the brush, set once per stroke
+    /// by [`Self::set_dabs_per_pass`]. Threaded into every `EvalContext`;
+    /// terminals read it via [`EvalContext::dabs_per_pass`].
+    dabs_per_pass: f32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
     /// the graph terminates in `paint`. `None` for per-dab
     /// dispatch brushes. The runner copies this into the
@@ -521,6 +549,7 @@ fn build_eval_ctx<'a>(
     stroke_seed: u32,
     dab_index: u32,
     base_size: f32,
+    dabs_per_pass: f32,
 ) -> EvalContext<'a> {
     let node = node_data.get(&step.node_id);
     EvalContext {
@@ -531,6 +560,7 @@ fn build_eval_ctx<'a>(
         stroke_seed,
         dab_index,
         base_size,
+        dabs_per_pass,
         node_id: &step.node_id,
     }
 }
@@ -540,7 +570,7 @@ impl BrushGraphRunner {
     ///
     /// The evaluator map is consumed: every entry is converted from
     /// `Box<dyn ...>` to `Arc<dyn ...>` (a refcount-only transfer of the
-    /// existing heap pointer — no extra allocation), and one `Arc` is
+    /// existing heap pointer, no extra allocation), and one `Arc` is
     /// stored per `ExecStep` so the per-dab path can index by step
     /// position without a `HashMap` lookup.
     pub fn new(
@@ -606,6 +636,16 @@ impl BrushGraphRunner {
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
+        // Find brush_settings' `size` source output slot: seeded per dab in
+        // pixels (see the field doc). The `size` port is a settable-source, so
+        // the compiler assigns it an output slot even though it's an input.
+        let brush_settings_size_slot = plan
+            .steps
+            .iter()
+            .find(|s| s.type_id == brush_settings::TYPE_ID)
+            .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "size"))
+            .map(|(_, slot)| *slot);
+
         // Find the (first) clone_source node for anchor-uniform seeding.
         let clone_source_node = plan
             .steps
@@ -642,6 +682,7 @@ impl BrushGraphRunner {
             node_data,
             pen_input_slots,
             paint_color_slot,
+            brush_settings_size_slot,
             clone_source_node,
             clone_state: None,
             dab_size_slot,
@@ -652,11 +693,12 @@ impl BrushGraphRunner {
             // base size without a separate call. Live painting refreshes it
             // per stroke via `set_base_size`.
             base_size: brush_settings::base_size(graph),
+            dabs_per_pass: 1.0,
             compiled: None,
         })
     }
 
-    /// Set the stroke's base size — the ambient `pen_input.size` value the
+    /// Set the stroke's base size: the ambient `pen_input.size` value the
     /// stroke engine reads out-of-band at stroke start. Call once before the
     /// first dab; it feeds every terminal's `effective_radius` and seeds
     /// `pen_input`'s `size` source slot in `seed_sensors`.
@@ -664,9 +706,18 @@ impl BrushGraphRunner {
         self.base_size = base_size;
     }
 
+    /// Publish how many dabs land on one texel per pass of the brush. Call
+    /// once before the first dab; the stroke engine derives it from the
+    /// spacing it is about to place dabs with, so a terminal's per-dab
+    /// rates can be stated per pass. See
+    /// [`EvalContext::dabs_per_pass`].
+    pub fn set_dabs_per_pass(&mut self, dabs_per_pass: f32) {
+        self.dabs_per_pass = dabs_per_pass;
+    }
+
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
     /// [`crate::brush::compile_graph`] when the graph terminates in
-    /// `paint`. Idempotent — overwrites any prior value.
+    /// `paint`. Idempotent: overwrites any prior value.
     pub fn set_compiled_brush(&mut self, compiled: Arc<CompiledBrush>) {
         self.compiled = Some(compiled);
     }
@@ -690,17 +741,42 @@ impl BrushGraphRunner {
     /// (has a `clone_source` node requesting the `@group(3)` snapshot).
     /// Drives the engine's no-op gate and the frontend's gesture arming.
     pub fn samples_source(&self) -> bool {
-        self.compiled.as_ref().is_some_and(|c| c.samples_source)
+        use crate::brush::texture_source::{LiveSource, ResolvedSource};
+        self.compiled.as_ref().is_some_and(|c| {
+            c.graph_sources
+                .iter()
+                .any(|s| matches!(s, ResolvedSource::Live(LiveSource::StrokeSnapshot)))
+        })
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
     /// terminal (any node whose registration sets `is_terminal: true`).
-    /// Type-owned dispatch: no central list of terminal type_ids — the
+    /// Type-owned dispatch: no central list of terminal type_ids; the
     /// compiler stamps the flag onto every [`ExecStep`] from the
     /// registry. Used by [`crate::brush::compile_graph`] to decide
     /// whether to run the WGSL compile step.
     pub fn has_terminal(&self) -> bool {
         self.plan.steps.iter().any(|step| step.is_terminal)
+    }
+
+    /// Texel format the stroke scratch must be allocated in for this
+    /// brush: the terminal's declared
+    /// [`scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format).
+    ///
+    /// Type-owned dispatch, same shape as [`Self::has_terminal`]: the
+    /// terminal answers what its scratch holds, and callers
+    /// (`StrokeBuffer::new`, the preview renderer) just pass the answer
+    /// through. A terminal-less graph gets the colour default; it never
+    /// renders anyway.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        let registry = crate::brush::registry();
+        self.plan
+            .steps
+            .iter()
+            .filter(|step| step.is_terminal)
+            .find_map(|step| registry.get(&step.type_id))
+            .map(|reg| reg.scratch_format)
+            .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT)
     }
 
     /// Build a name → value map of every output slot in the graph,
@@ -721,7 +797,7 @@ impl BrushGraphRunner {
         // Inject the clone uniforms under the `clone_source` node's keys
         // (`n{id}_source_anchor`, `n{id}_dest_anchor`, `n{id}_source_offset`,
         // `n{id}_source_size`) so the terminal's uniform packer picks them
-        // up. These aren't graph output slots — they're stroke-constant
+        // up. These aren't graph output slots; they're stroke-constant
         // engine session state, seeded the same way `paint_color` seeds
         // its color uniform.
         if let (Some(node), Some(cs)) = (self.clone_source_node.as_ref(), self.clone_state) {
@@ -747,7 +823,7 @@ impl BrushGraphRunner {
 
     /// Seed sensor output slots directly from pen data.
     ///
-    /// This is the hot path — no virtual dispatch, just memcpy into
+    /// This is the hot path: no virtual dispatch, just memcpy into
     /// pre-known slot indices.  `stroke_seed` and `dab_index` are stored
     /// for random nodes to read during evaluation.
     pub fn seed_sensors(
@@ -786,6 +862,16 @@ impl BrushGraphRunner {
         if let Some(slot) = self.paint_color_slot {
             self.slots[slot] = Some(ScalarValue::Vec4(color));
         }
+
+        // Seed the `brush_settings.size` graph signal in canvas pixels: the
+        // stroke's base size projected to the brush diameter. Downstream nodes
+        // (noise.scale, math) then operate in the same pixel domain as their
+        // sinks, so a `× 1` gain is a true no-op and feature size tracks the
+        // brush directly.
+        if let Some(slot) = self.brush_settings_size_slot {
+            let size_px = self.base_size * DAB_REFERENCE_SIZE as f32;
+            self.slots[slot] = Some(ScalarValue::Scalar(size_px));
+        }
     }
 
     /// Execute all CPU nodes in topological order.
@@ -802,8 +888,13 @@ impl BrushGraphRunner {
             let step = &self.plan.steps[idx];
             if step.type_id == pen_input::TYPE_ID
                 || step.type_id == paint_color::TYPE_ID
+                || step.type_id == brush_settings::TYPE_ID
                 || step.is_gpu
             {
+                // `brush_settings` is seeded bespoke in `seed_sensors` (its
+                // `size` source in pixels); its only other job is publishing
+                // that signal, so the generic republish below must not run and
+                // overwrite it with the raw normalized knob value.
                 continue;
             }
 
@@ -815,7 +906,7 @@ impl BrushGraphRunner {
             // runner's reused scratch buffer, applying wire-boundary
             // range remap where both source and dest ports declare a
             // `natural_range`. Zero per-dab heap allocs on the steady
-            // state — the scratch grows once during the first stroke.
+            // state: the scratch grows once during the first stroke.
             gather_inputs_into(
                 &self.slots,
                 &step.input_slots,
@@ -832,6 +923,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -868,7 +960,7 @@ impl BrushGraphRunner {
 
     /// Execute all GPU nodes in topological order.
     ///
-    /// Call `seed_sensors()` and `execute_cpu()` first — GPU nodes read
+    /// Call `seed_sensors()` and `execute_cpu()` first: GPU nodes read
     /// their scalar inputs (size, opacity, color, position) from the slot
     /// table populated by CPU nodes.  GPU nodes record render passes into
     /// the encoder and write texture handles back to the slot table.
@@ -877,7 +969,7 @@ impl BrushGraphRunner {
     }
 
     /// Walk GPU steps invoking each evaluator's `render_cursor_preview` hook
-    /// instead of `evaluate_gpu`. Same slot-table plumbing — non-terminals
+    /// instead of `evaluate_gpu`. Same slot-table plumbing: non-terminals
     /// produce shape-appropriate outputs (e.g. stamp emits a B&W tip
     /// texture sized to the brush's canvas-pixel extent), terminals
     /// consume them and render into the overlay's preview mask, publishing
@@ -915,7 +1007,7 @@ impl BrushGraphRunner {
             }
             // Every upstream GPU node's contribution is fused into
             // the terminal's fragment shader, so only the terminal
-            // step needs its `evaluate_gpu` invoked per dab — that's
+            // step needs its `evaluate_gpu` invoked per dab: that's
             // where the per-dab record gets queued. Skipping the
             // others is the load-bearing perf win.
             let Some(evaluator) = self.step_evaluators[idx].clone() else {
@@ -945,6 +1037,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
 
             // Pure-math nodes promoted to the GPU phase (because an input
@@ -977,12 +1070,12 @@ impl BrushGraphRunner {
     /// any dab.
     ///
     /// The prologue is driven by the [`crate::brush::node::Lifecycle`]
-    /// each node's registration declares — clearing the scratch to
+    /// each node's registration declares: clearing the scratch to
     /// transparent (paint, watercolor) or seeding it from the
     /// pre-stroke snapshot (smudge, liquify). This lives here, not in
     /// each terminal's `begin_stroke`, so adding a new terminal can't
     /// silently drift from the established lifecycles. The pending-dab
-    /// queue is also reset here for the same reason — every terminal
+    /// queue is also reset here for the same reason: every terminal
     /// needs it cleared at stroke-start; no point copy-pasting that
     /// line per terminal.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
@@ -1015,12 +1108,16 @@ impl BrushGraphRunner {
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
     pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
+        // Live `@group(3)` slots are republished by their owning nodes
+        // during this dispatch; clearing first keeps a stale view from a
+        // previous flush from being bound if its producer drops out.
+        gpu.dab_batch.live_textures.clear();
         self.dispatch_lifecycle(gpu, false, |_id, ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 
     /// Shared walker for lifecycle hooks. When `gather_from_slots` is
-    /// true, each step's inputs are pulled from the live slot table —
-    /// the same plumbing `dispatch_gpu` uses — so commits see the latest
+    /// true, each step's inputs are pulled from the live slot table
+    /// (the same plumbing `dispatch_gpu` uses), so commits see the latest
     /// per-dab wire values. When false, inputs are empty and evaluators
     /// fall back to port defaults (correct for `begin_stroke`, which
     /// runs before any dab populates the table).
@@ -1045,7 +1142,7 @@ impl BrushGraphRunner {
             let Some(evaluator) = self.step_evaluators[idx].clone() else {
                 continue;
             };
-            // `gather_from_slots = false` keeps the input slices empty —
+            // `gather_from_slots = false` keeps the input slices empty:
             // `EvalContext::input` then falls through to port defaults,
             // matching the prior `HashMap::new()` semantics.
             let (input_slots_view, input_values_view): (&[InputSlot], &[Option<ScalarValue>]) =
@@ -1069,6 +1166,7 @@ impl BrushGraphRunner {
                 self.stroke_seed,
                 self.dab_index,
                 self.base_size,
+                self.dabs_per_pass,
             );
             f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }
@@ -1082,7 +1180,7 @@ impl BrushGraphRunner {
     /// Read the terminal's most recently published `dab_size` as a
     /// `(width, height)` pair of canvas pixels, or `None` if the graph
     /// has no terminal that publishes one yet. Each terminal owns the
-    /// unit of dab_size it returns — paint/watercolor/smudge/liquify
+    /// unit of dab_size it returns: paint/watercolor/smudge/liquify
     /// all return the disc diameter for stroke spacing. The stroke
     /// engine uses this to size both dab spacing and save-point bboxes.
     ///
@@ -1096,7 +1194,7 @@ impl BrushGraphRunner {
 
     /// Find the slot index for a named output port on a specific step.
     ///
-    /// Linear scan — intended for tests and debugging, not hot paths.
+    /// Linear scan: intended for tests and debugging, not hot paths.
     pub fn find_output_slot(&self, type_id: &str, port_name: &str) -> Option<usize> {
         self.plan
             .steps
@@ -1112,7 +1210,7 @@ impl BrushGraphRunner {
 
     /// Find the slot index for a specific node's output port.
     ///
-    /// Linear scan — intended for tests and debugging, not hot paths.
+    /// Linear scan: intended for tests and debugging, not hot paths.
     pub fn find_node_output_slot(&self, node_id: &NodeId, port_name: &str) -> Option<usize> {
         self.plan
             .steps
@@ -1179,7 +1277,7 @@ mod tests {
 
     #[test]
     fn remap_unit_to_seed_range() {
-        // 0..1 → 0..1024 — the canonical random → seed case.
+        // 0..1 → 0..1024: the canonical random → seed case.
         assert!((remap_scalar(0.0, (0.0, 1.0), (0.0, 1024.0)) - 0.0).abs() < 1e-4);
         assert!((remap_scalar(0.5, (0.0, 1.0), (0.0, 1024.0)) - 512.0).abs() < 1e-4);
         assert!((remap_scalar(1.0, (0.0, 1.0), (0.0, 1024.0)) - 1024.0).abs() < 1e-4);
@@ -1187,7 +1285,7 @@ mod tests {
 
     #[test]
     fn remap_bipolar_to_seed_range() {
-        // -1..1 → 0..1024 — old random output convention into seed.
+        // -1..1 → 0..1024: old random output convention into seed.
         assert!((remap_scalar(-1.0, (-1.0, 1.0), (0.0, 1024.0)) - 0.0).abs() < 1e-4);
         assert!((remap_scalar(0.0, (-1.0, 1.0), (0.0, 1024.0)) - 512.0).abs() < 1e-4);
         assert!((remap_scalar(1.0, (-1.0, 1.0), (0.0, 1024.0)) - 1024.0).abs() < 1e-4);
@@ -1196,7 +1294,7 @@ mod tests {
     #[test]
     fn remap_unit_to_bipolar_radians() {
         use std::f32::consts::TAU;
-        // 0..1 → -TAU..TAU — random → phase.
+        // 0..1 → -TAU..TAU: random → phase.
         assert!((remap_scalar(0.0, (0.0, 1.0), (-TAU, TAU)) - (-TAU)).abs() < 1e-4);
         assert!((remap_scalar(0.5, (0.0, 1.0), (-TAU, TAU))).abs() < 1e-4);
         assert!((remap_scalar(1.0, (0.0, 1.0), (-TAU, TAU)) - TAU).abs() < 1e-4);
@@ -1204,7 +1302,7 @@ mod tests {
 
     #[test]
     fn remap_degenerate_source_collapses_to_dst_min() {
-        // Source range with zero width can't normalize — collapse cleanly
+        // Source range with zero width can't normalize: collapse cleanly
         // rather than producing NaN.
         assert_eq!(remap_scalar(0.5, (1.0, 1.0), (0.0, 1024.0)), 0.0);
         assert_eq!(remap_scalar(0.5, (1.0, 1.0), (-5.0, 5.0)), -5.0);
@@ -1212,7 +1310,7 @@ mod tests {
 
     #[test]
     fn remap_outside_src_range_is_not_clamped() {
-        // Consistent with the "ranges are UI hints" contract — overshoot
+        // Consistent with the "ranges are UI hints" contract; overshoot
         // passes through. Consumers clamp inside their own evaluator if
         // they need a hard bound.
         let v = remap_scalar(1.5, (0.0, 1.0), (0.0, 100.0));

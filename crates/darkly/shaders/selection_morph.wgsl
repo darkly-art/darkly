@@ -1,4 +1,4 @@
-// Selection morphology — one dilate (max) / erode (min) step over an R8 mask.
+// Selection morphology: one dilate (max) / erode (min) step over an R8 mask.
 //
 // The engine runs N single-pixel steps through the ping-pong textures,
 // alternating 4-/8-connected neighbourhoods each step so the structuring

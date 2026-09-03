@@ -1,4 +1,4 @@
-//! Paint Color node — outputs the current foreground color.
+//! Paint Color node: outputs the current foreground color.
 //!
 //! Like pen_input, this node is special-cased: the runner seeds its
 //! output slot directly with the stroke's foreground color.
@@ -26,13 +26,13 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
         || Box::new(PaintColorEvaluator),
     )
 }
 
-/// No-op evaluator — `seed_sensors()` handles this node directly.
+/// No-op evaluator: `seed_sensors()` handles this node directly.
 pub struct PaintColorEvaluator;
 
 impl BrushNodeEvaluator for PaintColorEvaluator {

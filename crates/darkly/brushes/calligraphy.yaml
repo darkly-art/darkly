@@ -1,5 +1,5 @@
 name: Calligraphy
-category: Basic
+description: A broad elliptical nib held at a fixed angle, so strokes thicken and thin with direction.
 nodes:
   pen_input:
     type: pen_input

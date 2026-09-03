@@ -1,14 +1,14 @@
-//! Selection filter — global single-channel mask for which pixels are
+//! Selection filter: global single-channel mask for which pixels are
 //! affected by edits (paint, fill, transform, clipboard).
 //!
-//! Per the Modularity Principle in [AGENTS.md], the entire selection kind
+//! Per the Modularity Principle in [CONTRIBUTING.md], the entire selection kind
 //! lives in this file: data struct, CPU cache, construction, wire format,
 //! and the `register()` discovery hook.
 //!
 //! The selection is structurally a [`crate::document::Filter`] but, unlike
 //! per-host filters (mask, future filter/transform), it's attached at the
 //! document root rather than on a host's `filters` list. That's the only
-//! thing special about it — pixel storage, growth, dirty tracking, async
+//! thing special about it: pixel storage, growth, dirty tracking, async
 //! readback, and region-pixel undo all share the [`crate::layer::PixelBuffer`]
 //! infrastructure, and the boolean ops sit on the same R8 paint pipeline that
 //! mask painting uses.
@@ -26,7 +26,7 @@ use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 /// readback after each mutating op (combine/invert/upload). Read paths that
 /// need pixel-level access (transform source bounds, copy region masking,
 /// flood-fill intersection) consult this rather than triggering a synchronous
-/// GPU readback (forbidden by AGENTS.md "No Blocking GPU Readbacks").
+/// GPU readback (forbidden by CONTRIBUTING.md "No Blocking GPU Readbacks").
 pub struct SelectionCpuCache {
     pub data: Option<Vec<u8>>,
 }
@@ -51,7 +51,7 @@ impl Default for SelectionCpuCache {
     }
 }
 
-/// Pixel-bearing global selection — kind-attached at `Document.selection`.
+/// Pixel-bearing global selection: kind-attached at `Document.selection`.
 ///
 /// The R8 GPU texture itself lives in the compositor's selection sub-system
 /// (the boolean ops need ping-pong scratch and dedicated bind groups against
@@ -61,7 +61,7 @@ pub struct SelectionFilter {
     pub pixels: PixelBuffer,
     pub cpu_cache: SelectionCpuCache,
     /// Cached tight bounds of non-zero selection pixels in **window-local**
-    /// coords (the selection texture is window-sized — see `crate::coord`).
+    /// coords (the selection texture is window-sized; see `crate::coord`).
     /// Set from rasterization params on `Replace`, cleared after boolean ops
     /// or invert (recomputed from the next readback when needed).
     pub pixel_bounds: Option<WindowRect>,
@@ -91,6 +91,8 @@ pub fn register() -> FilterEntityRegistration {
     FilterEntityRegistration {
         type_id: TYPE_ID,
         display_name: "Selection",
+        icon: "fa6-solid:vector-square",
+        description: "The active marching-ants region that confines edits to part of the canvas.",
         serialize,
         deserialize,
         remap_ids,

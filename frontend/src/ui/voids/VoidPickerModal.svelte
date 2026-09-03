@@ -2,9 +2,8 @@
     import { app } from '../../state/app.svelte';
     import Modal from '../Modal.svelte';
     import EffectPreview from '../EffectPreview.svelte';
-    import Icon from '../../icons/Icon.svelte';
-    import { voidShowsPreview } from '../preview_frames';
     import type { CaptureKind } from '../../lib/frameSource';
+    import { actions } from '../../actions/registry';
 
     let { onclose }: { onclose: () => void } = $props();
 
@@ -15,32 +14,29 @@
         if (!open) onclose();
     });
 
-    let voidTypes = $state<any[]>([]);
-
-    $effect(() => {
-        const engine = app.engine;
-        if (!engine) return;
-        (async () => {
-            try {
-                const list = await engine.api.voidTypes();
-                voidTypes = Array.isArray(list) ? list : [];
-            } catch {
-                voidTypes = [];
-            }
-        })();
-    });
+    let voidTypes = $derived(app.entries?.('voids') ?? []);
 
     async function pick(vt: any) {
         if (!app.engine) return;
+        // An image-sourced void has no empty state to add: it needs the artist
+        // to choose a file first, so hand it straight to the placement action
+        // rather than creating a blank layer here. Keyed on the void's declared
+        // source, so a future ingress is additive at this match.
+        if (vt.source?.kind === 'image') {
+            open = false;
+            actions.dispatch('placeSmartObject', {});
+            return;
+        }
         // For MediaStream-backed voids (camera / screenshare), acquire the
         // MediaStream IN this click gesture, BEFORE the awaitable `add_void`
         // round-trip. `getDisplayMedia` requires transient user activation,
         // which would expire if we acquired only after awaiting add_void. If
-        // the user cancels / denies, we still create the layer and record the
+        // the artist cancels / denies, we still create the layer and record the
         // error so the properties panel can offer Resume. A `stream` void
-        // (Blender) needs no gesture or permission — it connects over localhost
-        // HTTP after the layer exists — so skip acquisition entirely.
-        const captureKind: CaptureKind | undefined = vt.captureKind;
+        // (Blender) needs no gesture or permission: it connects over localhost
+        // HTTP after the layer exists, so skip acquisition entirely.
+        const captureKind: CaptureKind | undefined =
+            vt.source?.kind === 'capture' ? vt.source.capture : undefined;
         let stream: MediaStream | undefined;
         let acquireError: unknown;
         if (captureKind === 'camera' || captureKind === 'display') {
@@ -63,16 +59,16 @@
         if (id != null) {
             app.selectLayer(id);
             // Adding a stream-backed void via the picker is an explicit user
-            // gesture — opt the new layer into this session's allow-list and
+            // gesture: opt the new layer into this session's allow-list and
             // hand it the pre-acquired stream (or the acquire error). Reopening
             // a saved doc does NOT add to this set, which is why loaded
-            // stream voids hold their saved frame until the user clicks Resume.
+            // stream voids hold their saved frame until the artist clicks Resume.
             if (captureKind) {
                 app.markStreamVoidStarted(id);
                 await app.startStreamSource(id, captureKind, stream, acquireError);
             }
         } else if (stream) {
-            // Layer creation failed but we acquired a stream — release it so the
+            // Layer creation failed but we acquired a stream; release it so the
             // OS capture indicator doesn't linger.
             stream.getTracks().forEach((t) => t.stop());
         }
@@ -81,17 +77,11 @@
     }
 </script>
 
-<Modal bind:open title="Add Void" size="md">
+<Modal bind:open title="Add Void" size="lg">
     <div class="grid">
         {#each voidTypes as vt (vt.type)}
             <button class="card" onclick={() => pick(vt)}>
-                {#if voidShowsPreview(vt)}
-                    <EffectPreview kind="void" type={vt.type} />
-                {:else}
-                    <div class="preview preview-icon">
-                        <Icon name={vt.icon} />
-                    </div>
-                {/if}
+                <EffectPreview catalog="voids" entry={vt} />
                 <span class="card-name">{vt.displayName}</span>
             </button>
         {/each}
@@ -124,19 +114,6 @@
     .card:hover {
         background: var(--bg-active);
         border-color: var(--accent);
-    }
-
-    /* Fallback box shown for voids without a rendered preview — a centered
-       iconify glyph declared by the void's registration. */
-    .preview-icon {
-        aspect-ratio: 16 / 9;
-        background: var(--bg);
-        border-radius: var(--radius-sm);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 32px;
-        color: var(--text-dim);
     }
 
     .card-name {

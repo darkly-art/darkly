@@ -1,17 +1,18 @@
-//! Camera void — live webcam as a layer.
+//! Camera void: live webcam as a layer.
 //!
-//! A thin config over the shared [`crate::gpu::video_stream_void`] machinery.
+//! A thin config over the shared [`crate::gpu::textured_void`] machinery.
 //! Everything about the "live video stream → texture" pipeline lives there;
 //! this file only declares what makes the camera *the camera*: its id, display
 //! name, icon, capture kind ([`CaptureKind::Camera`] → `getUserMedia`), and a
 //! seeded horizontal-flip transform so it opens in selfie view.
 
-use crate::gpu::video_stream_void::{self, VideoStreamConfig};
-use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration};
+use crate::gpu::textured_void::ContentFit;
+use crate::gpu::textured_void::{self, TexturedVoidConfig};
+use crate::gpu::void::{CaptureKind, ParamDef, VoidRegistration, VoidSource};
 
 pub const TYPE_ID: &str = "camera";
 
-// Scale / rotation / pan / mirror are NOT params — they're the generic
+// Scale / rotation / pan / mirror are NOT params: they're the generic
 // [`crate::transform::Transform`] on the void layer, edited by the on-canvas
 // gizmo (the Transform tool). Mirroring is a negative scale in that affine, and
 // the camera seeds a horizontal flip at creation (see CONFIG.default_transform).
@@ -20,51 +21,51 @@ const PARAMS: &[ParamDef] = &[
     // Freeze the layer on its last received frame. When on, the void stops
     // accepting external image uploads (`wants_external_input` returns false)
     // so the GPU holds the last frame, and the JS-side `MediaStreamSource`
-    // suppresses uploads — but keeps the stream open so toggling back off
+    // suppresses uploads, but keeps the stream open so toggling back off
     // resumes the live feed instantly (no re-prompt).
-    ParamDef::Bool {
-        name: "freeze",
-        default: false,
-    },
+    ParamDef::boolean("freeze", false)
+        .with_label("Freeze")
+        .with_description("Holds the last captured frame instead of following the live feed."),
     // How many rAF frames to skip between webcam → GPU uploads. 1 = upload
     // every frame (live 60fps), 4 = upload every 4th frame (~15fps at 60Hz
-    // rAF, the default). Higher values trade smoothness for GPU/CPU savings —
+    // rAF, the default). Higher values trade smoothness for GPU/CPU savings:
     // each skipped tick avoids a JS `drawImage` blit, a
     // `copy_external_image_to_texture`, the void's canvas-resolution fragment
     // shader, and the full compositor re-encode that an upload would trigger.
     // The JS-side `MediaStreamSource.tick()` reads this value from the layer
     // params and gates its own upload accordingly; nothing here reads the field
     // at render time.
-    ParamDef::Int {
-        name: "frame_divisor",
-        min: 1,
-        max: 60,
-        default: 4,
-    },
+    ParamDef::int("frame_divisor", 1, 60, 4)
+        .with_label("Frame Skip")
+        .with_description("Capture one frame in this many, to lighten the load."),
 ];
 
-/// Horizontal flip about the canvas center — the selfie view every video-call
-/// app shows, because the webcam points at the user and they expect their
+/// Horizontal flip about the canvas center: the selfie view every video-call
+/// app shows, because the webcam points at the artist and they expect their
 /// reflection, not a backwards view. It's just the affine the shader already
 /// samples through (no extra shader/uniform work), it round-trips through
-/// save/load, and the user can drag a scale handle past the anchor to un-flip.
+/// save/load, and the artist can drag a scale handle past the anchor to un-flip.
 fn selfie_flip(canvas_w: u32, _canvas_h: u32) -> crate::transform::Transform {
     // x' = canvas_w - x, y' = y.
     crate::transform::Transform::from_affine([-1.0, 0.0, canvas_w as f32, 0.0, 1.0, 0.0])
 }
 
-static CONFIG: VideoStreamConfig = VideoStreamConfig {
+static CONFIG: TexturedVoidConfig = TexturedVoidConfig {
     type_id: TYPE_ID,
     display_name: "Camera",
+    description: "Live frames from a connected webcam, mirrored like a selfie.",
     icon: "tabler:camera",
     params: PARAMS,
-    capture_kind: CaptureKind::Camera,
+    source: VoidSource::Capture {
+        capture: CaptureKind::Camera,
+    },
+    fit: ContentFit::Cover,
     default_transform: selfie_flip,
 };
 
 pub fn register() -> VoidRegistration {
-    video_stream_void::registration(&CONFIG, |params, shared| {
-        video_stream_void::build_void(&CONFIG, params, shared)
+    textured_void::registration(&CONFIG, |params, shared| {
+        textured_void::build_void(&CONFIG, params, shared)
     })
 }
 
@@ -81,7 +82,7 @@ mod tests {
 
     #[test]
     fn params_are_freeze_and_divisor() {
-        let names: Vec<_> = PARAMS.iter().map(|p| p.name()).collect();
+        let names: Vec<_> = PARAMS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["freeze", "frame_divisor"]);
     }
 

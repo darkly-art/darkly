@@ -1,22 +1,22 @@
 //! Shared single-pass RGBA8 substrate for *parametric* filters (Curves, Levels,
 //! HSV). One fullscreen fragment pass reads the source texel, transforms it from
-//! a params-derived [`EffectCache`], and writes the result — with a masked
+//! a params-derived [`EffectCache`], and writes the result, with a masked
 //! sibling entry point that keeps the original texel wherever an R8 selection
 //! mask is unselected (`select(orig, filtered, selected)`, exactly like invert's
 //! [`fs_invert_masked`](../../shaders/filters/invert.wgsl)).
 //!
 //! The substrate is parameterized on **whether the shader binds an auxiliary
-//! texture** — more than just "optional aux", it selects between two distinct
+//! texture**: more than just "optional aux", it selects between two distinct
 //! bind-group shapes the shaders declare their binding numbers to match:
 //!
-//! - **aux present** (Curves/Levels — a 256×2 LUT): `[src(0), aux(1), uniform(2)]`,
+//! - **aux present** (Curves/Levels, a 256×2 LUT): `[src(0), aux(1), uniform(2)]`,
 //!   masked adds `mask(3)`.
-//! - **aux absent** (HSV — packed scalars only): `[src(0), uniform(1)]`, masked
+//! - **aux absent** (HSV, packed scalars only): `[src(0), uniform(1)]`, masked
 //!   adds `mask(2)`.
 //!
 //! The LUT family is the aux-carrying specialization built by
 //! [`lut_param_filter`](super::lut_filter::lut_param_filter); HSV builds a no-aux
-//! `ParamFilter` directly. Parameter-free filters (invert) do not use this — they
+//! `ParamFilter` directly. Parameter-free filters (invert) do not use this; they
 //! ride [`MaskedFilterPipeline`](super::effect::MaskedFilterPipeline), which also
 //! serves R8 masks; parametric color filters are RGBA8-only.
 
@@ -24,7 +24,7 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::FilterEffect;
 use crate::gpu::params::ParamValue;
 
-/// Fills an [`EffectCache`] from a filter's params — the per-filter half of the
+/// Fills an [`EffectCache`] from a filter's params: the per-filter half of the
 /// substrate, run from [`FilterEffect::ensure`] (never in the render loop).
 /// Curves/Levels bake a LUT texture + gate uniform; HSV packs a single uniform.
 type Prepare =
@@ -32,7 +32,7 @@ type Prepare =
 
 /// How the shared substrate reads its `src` texel: `Load` is a coordinate-exact
 /// `textureLoad` (no sampler); `Bilinear` binds `src` filterable plus a linear
-/// `Filtering` sampler, so a filter can read fractional offsets — the capability
+/// `Filtering` sampler, so a filter can read fractional offsets, the capability
 /// chromatic aberration's ghost sampling and blur need. The bind-group order is
 /// `[src(0), sampler(1)?, aux(2)?, uniform, mask?]`, each optional binding
 /// shifting the following numbers up.
@@ -57,7 +57,7 @@ fn load_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 
 /// A filterable `textureSample` source binding (paired with a `Filtering`
-/// sampler) — the `Bilinear` source mode.
+/// sampler) for the `Bilinear` source mode.
 fn filterable_tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -99,15 +99,15 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 pub struct ParamFilter {
     plain: wgpu::RenderPipeline,
     masked: wgpu::RenderPipeline,
-    /// `[src(, aux), uniform]` — read by the plain entry point.
+    /// `[src(, aux), uniform]`, read by the plain entry point.
     plain_bgl: wgpu::BindGroupLayout,
-    /// `plain_bgl` + a trailing mask texture — read by the masked entry point.
+    /// `plain_bgl` + a trailing mask texture, read by the masked entry point.
     masked_bgl: wgpu::BindGroupLayout,
     /// Whether the shader binds an aux texture between `src` and the uniform,
     /// which shifts every following binding number by one.
     has_aux: bool,
     /// How `src` is read; `Bilinear` also owns a `Filtering` sampler bound at
-    /// binding 1 (created once here — the compositor's reusable sampler lives on
+    /// binding 1 (created once here; the compositor's reusable sampler lives on
     /// `VeilChain`, the wrong layer to reach from a filter).
     sampling: SrcSampling,
     sampler: Option<wgpu::Sampler>,
@@ -143,8 +143,8 @@ impl ParamFilter {
             + 'static,
     ) -> ParamFilter {
         // Binding layout: `src` is always 0; then, in order, an optional sampler
-        // (Bilinear source mode), an optional aux texture, the uniform, and — in
-        // the masked variant — the mask. Each optional binding shifts the
+        // (Bilinear source mode), an optional aux texture, the uniform, and
+        // (in the masked variant) the mask. Each optional binding shifts the
         // following numbers up by one.
         let bilinear = sampling == SrcSampling::Bilinear;
         let mut next = 1u32;

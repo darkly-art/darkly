@@ -1,13 +1,13 @@
 //! Tests for the compiled `smudge` terminal.
 //!
 //! The load-bearing invariant is that each dab in a phase sees the
-//! *prior* dab's writeback through the scratch read mirror — a single
+//! *prior* dab's writeback through the scratch read mirror; a single
 //! instanced draw can't express that, which is why the terminal runs
 //! a per-dab fragment pass with a `copy_texture_to_texture` between
 //! dabs (the implicit barrier). The discriminator test places two
 //! overlapping dabs where dab 2's smear sample lands *inside* dab 1's
 //! write footprint, and asserts the post-flush pixel under dab 2
-//! reflects dab 1's deposit — not the unmodified pre-stroke. If the
+//! reflects dab 1's deposit, not the unmodified pre-stroke. If the
 //! per-dab barrier ever regresses (or someone collapses the flush
 //! into a single instanced draw), dab 2 would read pre-stroke and
 //! the test would fail.
@@ -60,7 +60,7 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
     [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]]
 }
 
-/// One `(pos, motion)` tuple per dab. Dabs run inside a single phase —
+/// One `(pos, motion)` tuple per dab. Dabs run inside a single phase -
 /// `execute_gpu` queues each, then one `flush_dabs` drives the
 /// per-dab render-pass loop.
 fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<u8> {
@@ -89,7 +89,13 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let mut stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -183,7 +189,7 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
 /// it.
 #[test]
 fn single_smudge_dab_pulls_red_via_motion() {
-    // Dab at (60, 64) with motion (+30, 0) — the pen "moved right by
+    // Dab at (60, 64) with motion (+30, 0): the pen "moved right by
     // 30 px", so the smear sample is at (60-30, 64) = (30, 64), inside
     // the red bar.
     let rgba = render_smudge_dabs(0.1, &[([60.0, 64.0], [30.0, 0.0])]);
@@ -220,7 +226,7 @@ fn smudge_dab2_reads_dab1_deposit_not_pre_stroke() {
     assert!(
         centre_2[0] > 50,
         "dab 2 must read dab 1's red-tinted writeback through the per-dab \
-         barrier — got centre {centre_2:?}. Pre-stroke at (60, 64) was \
+         barrier, got centre {centre_2:?}. Pre-stroke at (60, 64) was \
          BLACK; if dab 2 sees this value it means the inter-dab \
          `copy_texture_to_texture` (and thus the per-dab serialization) \
          is broken."

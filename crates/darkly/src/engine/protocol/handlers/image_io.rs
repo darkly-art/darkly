@@ -9,8 +9,9 @@ use serde_json::json;
 
 use crate::engine::protocol::{bad_payload, ProtocolError, RequestRegistration, Response};
 use crate::engine::SavePurpose;
+use crate::layer::LayerId;
 
-/// `{ snapshot? }` — a `snapshot` save (autosave to OPFS) leaves the dirty flag
+/// `{ snapshot? }`: a `snapshot` save (autosave to OPFS) leaves the dirty flag
 /// set; a file save (the default) clears it.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -19,8 +20,36 @@ pub struct StartSaveDocumentReq {
     pub snapshot: bool,
 }
 
+/// `{ width, height, active_layer_id }`: place decoded image bytes (carried in
+/// the binary side-channel) as a smart object. `active_layer_id` is `-1` when
+/// there is no anchor, matching the paste requests.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct PlaceSmartObjectReq {
+    pub width: u32,
+    pub height: u32,
+    pub active_layer_id: i64,
+}
+
 pub fn registrations() -> Vec<RequestRegistration> {
     vec![
+        RequestRegistration::new("place_smart_object", |engine, payload, bytes| {
+            let r: PlaceSmartObjectReq = serde_json::from_value(payload).map_err(bad_payload)?;
+            let anchor = (r.active_layer_id >= 0)
+                .then(|| LayerId::from_ffi(r.active_layer_id as u64));
+            let id = engine
+                .place_smart_object(r.width, r.height, bytes.to_vec(), anchor)
+                .ok_or_else(|| {
+                    ProtocolError::engine(
+                        "image dimensions do not match the supplied pixel data".to_string(),
+                    )
+                })?;
+            Ok(Response::json(json!({ "id": id.to_ffi() as i64 })))
+        })
+        .send()
+        .bytes_in()
+        .req::<PlaceSmartObjectReq>()
+        .resp_literal("{ id: number }"),
         RequestRegistration::new("poll_export_result", |engine, _payload, _b| {
             let Some(result) = engine.poll_export_result() else {
                 return Ok(Response::json(serde_json::Value::Null));

@@ -1,4 +1,4 @@
-// Noise void — domain-warped FBM rendered into the layer's color buffer.
+// Noise void: domain-warped FBM rendered into the layer's color buffer.
 //
 // The FBM primitive functions (`fbm`, `fbm_warp`, `fbm_warp_offset`, helpers)
 // live in `shaders/lib/fbm.wgsl` and are concatenated ahead of this file at
@@ -21,7 +21,7 @@ struct Params {
     octaves: i32,
     frequency: f32,
     warp: f32,
-    // Tonal contrast exponent offset — output = pow(value, 1.0 + darkness).
+    // Tonal contrast exponent offset: output = pow(value, 1.0 + darkness).
     // 0 = linear (washed grayscale); higher values push midtones toward
     // black for a Watery-style mood.
     darkness: f32,
@@ -34,7 +34,7 @@ struct Params {
     // produces the same feature size in the final output at any aux scale.
     canvas_scale: f32,
     _pad0: f32,
-    // Inverse of the user transform's homography (packed rows [m, _], see
+    // Inverse of the artist transform's homography (packed rows [m, _], see
     // gpu::transform::pack_inv_rows). Applied to the canvas-space coordinate so
     // the field pans / scales / rotates / warps with the gizmo. Affine carries
     // inv_row2 = [0,0,1,_]; identity when untransformed.
@@ -49,7 +49,7 @@ const LACUNARITY: f32 = 2.0;
 const GAIN: f32 = 0.5;
 // Time advances the z-axis of a 3D FBM field. Features morph in place at
 // fixed canvas positions rather than translating; at `evolution = 1.0` and
-// a 60 Hz void clock, one z-cell-cross takes ~7 seconds — visible but not
+// a 60 Hz void clock, one z-cell-cross takes ~7 seconds, visible but not
 // frenetic. Tune to taste.
 const Z_SCALE: f32 = 0.15;
 
@@ -58,9 +58,9 @@ const Z_SCALE: f32 = 0.15;
     // FBM domain is independent of aux-texture resolution. The noise content
     // rect is the canvas (content_origin = 0), so canvas px == content-local.
     let canvas_px = in.position.xy * params.canvas_scale;
-    // Apply the inverse user transform (shared proj_local, perspective divide)
+    // Apply the inverse artist transform (shared proj_local, perspective divide)
     // so the field tracks the gizmo. The field is infinite, so a degenerate
-    // sample (.z == 0) just reads the origin — no special-casing needed.
+    // sample (.z == 0) just reads the origin; no special-casing needed.
     let tp = proj_local(params.inv_row0, params.inv_row1, params.inv_row2, canvas_px).xy;
     let xy = tp * params.frequency;
     let p = vec3f(xy, params.time * Z_SCALE);

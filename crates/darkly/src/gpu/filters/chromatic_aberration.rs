@@ -1,4 +1,4 @@
-//! Chromatic aberration filter — a dynamic list of offset/scale/color/blur
+//! Chromatic aberration filter: a dynamic list of offset/scale/color/blur
 //! "aberrations", each displacing the component of the image along its color's
 //! hue axis over an otherwise-untouched base. One registration serves both
 //! effect surfaces the filter subsystem drives (destructive apply + filter
@@ -10,15 +10,16 @@
 //! premultiplied delta from the base is split by [`analyze_color`] into an
 //! achromatic full-pixel shift (`k1`) and a chromatic shift along the color's
 //! hue `axis` (`k2`). "How much of the entry's hue is in this pixel" is answered
-//! by rotating RGB about the gray diagonal so the hue lands on the red axis —
+//! by rotating RGB about the gray diagonal so the hue lands on the red axis:
 //! a smooth perceptual falloff with hue distance, not per-channel masking. The
 //! transform itself lives in
 //! [`lib/aberration.wgsl`](../../../shaders/lib/aberration.wgsl); this module
 //! declares the schema and packs the params into the shader's 784-byte uniform.
 //!
 //! Unlike the other parametric filters this one reads its source with
-//! [`SrcSampling::Bilinear`] — the ghost/blur taps land on fractional offsets.
+//! [`SrcSampling::Bilinear`]: the ghost/blur taps land on fractional offsets.
 
+use crate::units::UnitType;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ use crate::gpu::effect::EffectCache;
 use crate::gpu::filter::{FilterEffect, FilterPipelineRegistration};
 use crate::gpu::param_filter::{ParamFilter, SrcSampling};
 use crate::gpu::params::{ConstParamValue, ParamDef, ParamValue};
+use crate::gpu::preview::{swing, PreviewAnim};
 
 /// Uniform-array size (and the schema's entry cap). The UI disables "Add" at the
 /// limit; [`pack_uniform`] still clamps defensively.
@@ -35,40 +37,34 @@ pub const MAX_ABERRATIONS: usize = 16;
 
 /// Schema for a single aberration entry.
 const ABERRATION_ITEM: &[ParamDef] = &[
-    ParamDef::Vec2 {
-        name: "offset",
-        max: 64.0,
-        default: [0.0, 0.0],
-    },
-    ParamDef::Float {
-        name: "scale",
-        min: 0.9,
-        max: 1.1,
-        default: 1.0,
-    },
-    ParamDef::Color {
-        name: "color",
-        default: [1.0, 1.0, 1.0],
-    },
-    ParamDef::Float {
-        name: "blur",
-        min: 0.0,
-        // Max blur kept modest so a bounded tap count can't band.
-        max: 6.0,
-        default: 0.0,
-    },
+    ParamDef::vec2("offset", 64.0, [0.0, 0.0])
+        .with_label("Offset")
+        .with_description(
+            "How far this fringe is displaced from the original, and in which direction.",
+        )
+        .with_unit(UnitType::Pixels),
+    ParamDef::float("scale", 0.9, 1.1, 1.0)
+        .with_label("Scale")
+        .with_description("Magnification of this fringe: values below 1 pull it inward."),
+    ParamDef::color("color", [1.0, 1.0, 1.0])
+        .with_label("Color")
+        .with_description("Which color this fringe contributes."),
+    ParamDef::float("blur", 0.0, 6.0, 0.0)
+        .with_label("Blur")
+        .with_description("Softens this fringe so it reads as defocus rather than a hard copy.")
+        .with_unit(UnitType::Pixels),
 ];
 
 /// One `aberrations` list param with the photographic 3-entry default: red
 /// holds at unit magnification while green and blue shrink progressively inward
-/// (1.00 / 0.99 / 0.98), a 1% step per channel — the wavelength-dependent focus
-/// of a real lens fringing the shorter wavelengths inward. Each is softened a
+/// (1.00 / 0.99 / 0.98), a 1% step per channel (the wavelength-dependent focus
+/// of a real lens fringing the shorter wavelengths inward). Each is softened a
 /// touch.
-pub const PARAMS: &[ParamDef] = &[ParamDef::List {
-    name: "aberrations",
-    item: ABERRATION_ITEM,
-    max_len: MAX_ABERRATIONS,
-    default: &[
+pub const PARAMS: &[ParamDef] = &[ParamDef::list(
+    "aberrations",
+    ABERRATION_ITEM,
+    MAX_ABERRATIONS,
+    &[
         &[
             ("scale", ConstParamValue::Float(1.0)),
             ("color", ConstParamValue::Color([1.0, 0.0, 0.0])),
@@ -85,7 +81,44 @@ pub const PARAMS: &[ParamDef] = &[ParamDef::List {
             ("blur", ConstParamValue::Float(0.6)),
         ],
     ],
-}];
+)
+.with_label("Fringes")
+.with_description("The colored copies the lens splits the image into.")];
+
+/// One preview for both surfaces, beside the schema they share. A `static` so
+/// both registrations hold the same address, which is what makes the sharing
+/// structural rather than two copies that happen to agree today.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+
+/// What that preview shows at `t`: the three fringes spread outward from their
+/// photographic resting positions and close again, softening as they go, so it
+/// shows the fringe *forming* rather than a still that could be mistaken for a
+/// blurry image.
+///
+/// The filter reads this off its registration and the veil calls it from
+/// [`Veil::preview_at`](crate::gpu::veil::Veil::preview_at): the two surfaces
+/// share the motion the same way they share the schema.
+pub fn preview_params(t: f32) -> Vec<ParamValue> {
+    let swing = swing(t);
+    // Red holds at unit magnification; the shorter wavelengths step inward,
+    // 1% each at rest and 3% at the far end of the sweep.
+    let fringe = |index: f32, color: [f32; 3]| {
+        BTreeMap::from([
+            ("offset".to_string(), ParamValue::Vec2([0.0, 0.0])),
+            (
+                "scale".to_string(),
+                ParamValue::Float(1.0 - index * (0.01 + 0.02 * swing)),
+            ),
+            ("color".to_string(), ParamValue::Color(color)),
+            ("blur".to_string(), ParamValue::Float(0.6 + 1.2 * swing)),
+        ])
+    };
+    vec![ParamValue::List(vec![
+        fringe(0.0, [1.0, 0.0, 0.0]),
+        fringe(1.0, [0.0, 1.0, 0.0]),
+        fringe(2.0, [0.0, 0.0, 1.0]),
+    ])]
+}
 
 /// One aberration in the shader's uniform (48 B). Field offsets match
 /// `struct Aberration` in `lib/aberration.wgsl` (vec3 `axis` at offset 16). The
@@ -140,8 +173,8 @@ fn entry_color(entry: &BTreeMap<String, ParamValue>, key: &str) -> [f32; 3] {
 /// Analyze an entry color into its hue-rotation `axis` and the achromatic/
 /// chromatic strength split (`k1`, `k2`) the shader applies to the displaced
 /// content delta. Strength is `m = max(color)`; HSV saturation `s` splits it
-/// into `k1 = m·(1−s)` (achromatic — a full-pixel shift) and `k2 = m·s`
-/// (chromatic — a shift along the hue axis), so `k1 + k2 = m` always.
+/// into `k1 = m·(1−s)` (achromatic: a full-pixel shift) and `k2 = m·s`
+/// (chromatic: a shift along the hue axis), so `k1 + k2 = m` always.
 ///
 /// The axis is the red axis rotated by the color's hue `θ` about the gray
 /// diagonal (Rodrigues): `cosθ·(1,0,0) + (sinθ/√3)·(0,1,−1) + ((1−cosθ)/3)·(1,1,1)`.
@@ -213,7 +246,7 @@ pub fn pack_uniform(params: &[ParamValue]) -> GpuAberrationParams {
 }
 
 /// The CA fragment shader: the shared aberration lib prepended to the filter
-/// shader (built at load time — the render shaders have no `#include`).
+/// shader (built at load time: the render shaders have no `#include`).
 fn ca_shader_source() -> String {
     format!(
         "{}\n{}",
@@ -222,7 +255,7 @@ fn ca_shader_source() -> String {
     )
 }
 
-/// Allocate (once) and refresh the 784-byte params uniform — the [`ParamFilter`]
+/// Allocate (once) and refresh the 784-byte params uniform: the [`ParamFilter`]
 /// `prepare` half.
 fn ca_prepare(
     device: &wgpu::Device,
@@ -251,13 +284,13 @@ fn create_pipeline(device: &wgpu::Device) -> Arc<dyn FilterEffect> {
         &ca_shader_source(),
         "fs_ca",
         "fs_ca_masked",
-        false, // no aux texture — packed uniform only
+        false, // no aux texture, packed uniform only
         SrcSampling::Bilinear,
         ca_prepare,
     ))
 }
 
-/// Shared by the filter and veil registrations — like `PARAMS`, the veil
+/// Shared by the filter and veil registrations: like `PARAMS`, the veil
 /// module imports it so both surfaces present one identity.
 pub const DESCRIPTION: &str =
     "Split the color channels apart along their hue axes, like a misaligned lens.";
@@ -268,7 +301,10 @@ pub fn register() -> FilterPipelineRegistration {
         display_name: "Chromatic Aberration",
         icon: "lucide-lab:venn",
         description: DESCRIPTION,
+        hotkey_action: "filterChromatic_aberration",
         params: PARAMS,
+        preview: Some(PREVIEW),
+        preview_at: Some(preview_params),
         create_pipeline,
     }
 }
@@ -288,7 +324,7 @@ mod tests {
 
     /// The photographic R/G/B default packs three fully-saturated primaries:
     /// each is a pure chromatic shift (`k1 = 0`, `k2 = 1`) along its channel's
-    /// exact unit axis — the classic channel split.
+    /// exact unit axis, the classic channel split.
     #[test]
     fn photographic_defaults_pack() {
         let u = packed_default();
@@ -318,7 +354,7 @@ mod tests {
     }
 
     /// A white entry is purely achromatic: `k1 = 1`, `k2 = 0` (it shifts the
-    /// whole pixel — the full-image-shift behavior).
+    /// whole pixel: the full-image-shift behavior).
     #[test]
     fn white_entry_is_full_shift() {
         let (axis, k1, k2) = analyze_color([1.0, 1.0, 1.0]);

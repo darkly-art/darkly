@@ -1,8 +1,8 @@
 <script lang="ts">
-    import type { ActionRegistration } from '../../actions/registry';
+    import type { Action } from '../../actions/registry';
     import TriggerListEditor from './TriggerListEditor.svelte';
 
-    type Props = { action: ActionRegistration; showScope: boolean };
+    type Props = { action: Action; showScope: boolean };
     let { action, showScope }: Props = $props();
 
     const desc = $derived(action.description ?? null);

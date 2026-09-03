@@ -20,7 +20,7 @@ export class OpfsStorage implements DarklyStorage {
     async #getRoot(): Promise<FileSystemDirectoryHandle> {
         if (this.#root) return this.#root;
         if (!opfsAvailable()) {
-            throw new Error('OPFS not available — modern browser required');
+            throw new Error('OPFS not available: modern browser required');
         }
         this.#root = await navigator.storage.getDirectory();
         return this.#root;

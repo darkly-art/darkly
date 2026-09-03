@@ -25,7 +25,7 @@ proc-macro2 = "1"
 # GPU
 wgpu = { version = "29.0", features = ["webgpu"] }
 
-# Vector / text — the Vello family shares one geometry/style vocabulary
+# Vector / text: the Vello family shares one geometry/style vocabulary
 # (kurbo/peniko), so the renderer is a swappable backend behind one data model.
 # vello 0.9 pins wgpu 29.0.3, matching the workspace resolution above; keep the
 # two bumped together (vello's pipelines and our compositor share one device).
@@ -39,10 +39,10 @@ bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Typed-bridge TS codegen only (the `ts-export` feature on `darkly`); never
-# compiled into the wasm/production build — see that feature's comment.
+# compiled into the wasm/production build: see that feature's comment.
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 # serde_yaml_ng, not serde_yml: the original `serde_yaml` (dtolnay) is archived,
-# and the `serde_yml` fork is unmaintained — its 0.0.13 release swapped to a
+# and the `serde_yml` fork is unmaintained: its 0.0.13 release swapped to a
 # `noyalib` backend that can't round-trip integer-keyed maps (`BTreeMap<u64,_>`),
 # which silently breaks the brush portable format. serde_yaml_ng is the faithful
 # maintained fork and a drop-in for the original serde_yaml API.
@@ -81,7 +81,7 @@ console_error_panic_hook = "0.1"
 console_log = "1"
 
 # Full DWARF on every statically-linked test binary is what let `target/` balloon
-# to hundreds of GB (each integration test links the whole engine — ~300 MB apiece,
+# to hundreds of GB (each integration test links the whole engine (~300 MB apiece),
 # and Cargo never GCs stale fingerprints). Line tables keep panics/backtraces useful
 # while cutting each binary well over half; unpacked split-debuginfo keeps the debug
 # data in separate object files out of the linked executables.

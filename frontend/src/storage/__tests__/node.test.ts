@@ -1,7 +1,7 @@
 /**
  * Tests the NodeFsStorage adapter against an in-memory mock of the host
- * bridge. Catches any drift in the bridge contract from the renderer side
- * — if this test breaks, the public/private repos have gotten out of sync
+ * bridge. Catches any drift in the bridge contract from the renderer side:
+ * if this test breaks, the public/private repos have gotten out of sync
  * on the shape of `window.electronAPI.storage`.
  */
 import { describe, it, expect, beforeEach } from 'vitest';

@@ -1,4 +1,4 @@
-// Procedural `r(θ)` shape prelude — shared by compute-path brushes that
+// Procedural `r(θ)` shape prelude: shared by compute-path brushes that
 // stamp the same family of polar-radius silhouettes the `circle` fragment
 // node produces.
 //
@@ -9,7 +9,7 @@
 // its own dab record).
 //
 // **Bit-exact parity with `crates/darkly/src/brush/nodes/circle.rs`** is
-// load-bearing — the CPU-side `integrate_centroid` walks the same `r(θ)`
+// load-bearing: the CPU-side `integrate_centroid` walks the same `r(θ)`
 // at a finer resolution, and per-pixel render tests catch drift as a
 // mismatch. Keep the `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` /
 // `r_superformula` formulas here byte-equivalent to `circle.rs`.
@@ -45,7 +45,7 @@ struct ShapeParams {
     /// Rotation (radians) applied to the shape around its centre.
     /// Subtracted from `θ` so positive values rotate clockwise in
     /// screen-y-down space, matching `pen.drawing_angle`'s
-    /// `atan2(dy, dx)` convention — wiring drawing_angle into the
+    /// `atan2(dy, dx)` convention. Wiring drawing_angle into the
     /// shape node's rotation port orients the silhouette along the stroke.
     rotation: f32,
     /// Perlin fBm amplitude falloff per octave.
@@ -61,16 +61,16 @@ struct ShapeParams {
     /// Anisotropy: squash the tip into an ellipse. `1.0` = round; `< 1.0`
     /// narrows the silhouette along its local x-axis and (area-preservingly)
     /// lengthens it along y. Applied after rotation so the ellipse co-rotates
-    /// with the shape — the basis of the calligraphy nib.
+    /// with the shape (the basis of the calligraphy nib).
     aspect: f32,
 }
 
 const SHAPE_TAU: f32 = 6.28318530717958647692;
 
-/// Integer bit-mix hash — bit-identical to `hash1d` in `shape.rs`.
+/// Integer bit-mix hash, bit-identical to `hash1d` in `shape.rs`.
 /// We avoid `fract(sin(x*K)*M)` because `sin` precision
 /// differs between CPU and GPU and the `*43758` amplification turns
-/// sub-ULP drift into a totally different noise array — which the
+/// sub-ULP drift into a totally different noise array, which the
 /// centroid alignment test would flag.
 fn shape_hash1d(x: f32, seed: f32) -> f32 {
     let xi = u32(x);
@@ -84,7 +84,7 @@ fn shape_hash1d(x: f32, seed: f32) -> f32 {
     return f32(h) / 4294967295.0;
 }
 
-/// Periodic 1D value-noise fBm — mirrors `fbm_1d` in `shape.rs`.
+/// Periodic 1D value-noise fBm, mirroring `fbm_1d` in `shape.rs`.
 fn shape_fbm_1d(t: f32, p: ShapeParams) -> f32 {
     var sum: f32 = 0.0;
     var norm: f32 = 0.0;
@@ -166,8 +166,8 @@ fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
 /// distance-to-edge by the boundary's gradient magnitude
 /// `|∇| = sqrt(1 + (r'/r)²)` converts it to an approximate perpendicular
 /// distance, giving a uniform-width feather along every edge. `r'(θ)` is a
-/// central finite difference of `shape_r_theta` — general across all
-/// algorithms, no per-algorithm derivative. The approximation holds for the
+/// central finite difference of `shape_r_theta` (general across all
+/// algorithms, no per-algorithm derivative). The approximation holds for the
 /// smooth, low-curvature silhouettes this family produces.
 fn shape_coverage(p: ShapeParams, theta: f32, local_dist: f32, band: f32) -> f32 {
     let r_at = shape_r_theta(p, theta);

@@ -5,7 +5,7 @@
  *
  * A binding site is just a DOM node tagged with a name + ctx-producer via
  * the `bindingSite` Svelte action. The DOM is the source of truth: focus
- * decides which site is active, so we don't track focus state ourselves —
+ * decides which site is active, so we don't track focus state ourselves;
  * we just look up `document.activeElement` at dispatch time.
  */
 

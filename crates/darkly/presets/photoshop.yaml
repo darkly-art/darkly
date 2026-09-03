@@ -6,22 +6,24 @@ name: Photoshop
 description: Adobe Photoshop-style keybindings
 
 hotkeys:
+  # placeSmartObject: intentionally unbound. Photoshop states no default for
+  # placing an image as a non-destructive object, and inventing one would
+  # set an expectation Photoshop artists don't have; leave it to the menu and to
+  # explicit user binding. GIMP does state one, so it binds this in
+  # gimp.yaml.
   # Edit / clipboard (non-unanimous slice). PS matches Krita on these but
   # GIMP differs.
   redo: $mod+Shift+KeyZ
   pasteInPlace: $mod+Shift+KeyV
   # Photoshop binds Edit > Preferences to Ctrl+K (Cmd+K on macOS).
   openSettings: $mod+KeyK
-  # Photoshop's File > Export > Export As… is Alt+Shift+Ctrl+W; Darkly
-  # uses the closer Alt+Ctrl+W variant.
-  exportImage: $mod+Alt+KeyW
   # mirrorViewH: intentionally unbound. Photoshop has no native mirror-
-  # view action, and M is already taken by rectSelectTool here. Users
+  # view action, and M is already taken by rectSelectTool here. Artists
   # who want a mirror-view hotkey under the PS preset can set one via
   # the settings UI.
   # View framing. Photoshop binds View > "Fit on Screen" to Ctrl+0
-  # (Cmd+0 on macOS). It has no separate "center in window" command —
-  # centering is folded into the fit — so centerView is left unbound.
+  # (Cmd+0 on macOS). It has no separate "center in window" command;
+  # centering is folded into the fit, so centerView is left unbound.
   fitToScreen: $mod+Digit0
   # Tools.
   brushTool: KeyB
@@ -55,7 +57,7 @@ hotkeys:
   # Colors. Photoshop binds Image > Adjustments > Invert to Ctrl+I (selection
   # invert is the Shift variant above). Krita agrees (Ctrl+I → Invert filter);
   # GIMP does NOT (its Ctrl+I is Invert Selection, Colors > Invert is unbound),
-  # so this is per-overlay, not a default. The action id is `filterInvert` —
+  # so this is per-overlay, not a default. The action id is `filterInvert`:
   # the dynamically-registered id for the `invert` filter (`filter` + type).
   filterInvert: $mod+KeyI
   # Photoshop binds Shift+Ctrl+U to Image > Adjustments > Desaturate (per
@@ -68,7 +70,7 @@ hotkeys:
 mouse_clicks:
   # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).
   sampleColor: canvas@paint:alt+drag
-  # Clone Stamp set-source — Photoshop's canonical Alt+click to set the
+  # Clone Stamp set-source: Photoshop's canonical Alt+click to set the
   # clone origin (same Alt modifier as the eyedropper). Brush-scoped so it
   # out-ranks `sampleColor` only while the Clone brush is active.
   setCloneSource: canvas@paint@clone:alt+drag
@@ -77,9 +79,11 @@ mouse_clicks:
     - layerThumb:alt+click
     - maskThumb:alt+click
   # Photoshop loads a mask as a selection with Ctrl/Cmd+click on the mask
+  # thumbnail, and the layer's transparency with the same chord on the layer
   # thumbnail. $mod maps to Ctrl on Linux/Win, Cmd on macOS. alt+click is
   # taken by isolate above.
   maskToSelection: maskThumb:$mod+click
+  alphaToSelection: layerThumb:$mod+click
 
 settings:
   # Photoshop's eyedropper samples the current layer by default.

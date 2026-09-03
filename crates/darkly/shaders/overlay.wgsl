@@ -1,4 +1,4 @@
-// Tool overlay shader — instanced geometry.
+// Tool overlay shader: instanced geometry.
 //
 // Each overlay primitive (line, circle, rect, etc.) is one GPU instance.
 // The vertex shader generates a tight bounding quad per instance.
@@ -108,7 +108,7 @@ fn maybe_scale(r: f32, flags: u32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Vertex shader — generates bounding quad per instance
+// Vertex shader: generates bounding quad per instance
 // ---------------------------------------------------------------------------
 
 struct VertexOutput {
@@ -336,7 +336,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             dist = sdf_filled_circle(screen_pos, p0, scaled_radius);
         }
         case KIND_ELLIPSE: {
-            // p0 = center, p1 = [rx, ry] — stroked ellipse outline
+            // p0 = center, p1 = [rx, ry]: stroked ellipse outline
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
@@ -347,7 +347,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             }
         }
         case KIND_FILLED_ELLIPSE: {
-            // p0 = center, p1 = [rx, ry] — filled ellipse (signed interior)
+            // p0 = center, p1 = [rx, ry]: filled ellipse (signed interior)
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 let cp = screen_to_plane(screen_pos);
                 let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
@@ -359,7 +359,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         }
         case KIND_MASKED_STAMP: {
             // Coverage comes directly from the mask texture. Bypass the SDF
-            // smoothstep by returning the sampled value — the mask's own
+            // smoothstep by returning the sampled value, since the mask's own
             // falloff (soft brush, hard round, textured tip) is the shape.
             var local: vec2f;
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
@@ -394,7 +394,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Fragment — solid pipeline (standard alpha blending)
+// Fragment: solid pipeline (standard alpha blending)
 // ---------------------------------------------------------------------------
 
 @fragment fn fs_solid(in: VertexOutput) -> @location(0) vec4f {
@@ -407,12 +407,12 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Fragment — snapshot pipeline (samples surface snapshot)
+// Fragment: snapshot pipeline (samples surface snapshot)
 //
 // Two modes, branched on flags:
-//   FLAG_INVERT_COLOR — luminance threshold at 0.5: dark bg → white, light
+//   FLAG_INVERT_COLOR - luminance threshold at 0.5: dark bg → white, light
 //     bg → black. Used by rect-select marching ants.
-//   FLAG_SOFT_CONTRAST — desaturate bg toward its grayscale equivalent.
+//   FLAG_SOFT_CONTRAST - desaturate bg toward its grayscale equivalent.
 //     Strength comes from prim.mode_param: 1.0 = fully grey, 0.5 = half
 //     desaturated. Saturated colors (red, blue, etc.) shift chromatically
 //     rather than in luminance, which reads strongly regardless of hue.
@@ -431,7 +431,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         // Two-part overlay applied as chained mixes:
         //   1. Luminance shift: mix bg toward opposite extreme (black or
         //      white based on bg luminance), strength = mode_param.
-        //      Handles achromatic bgs — shifts grays up/down in brightness.
+        //      Handles achromatic bgs by shifting grays up/down in brightness.
         //      A smoothstep [0.4, 0.6] softens the seam that a hard
         //      threshold produces on gradients crossing lum = 0.5.
         //      Mid-gray (lum ≈ 0.5) gets minimal lum shift as a tradeoff,

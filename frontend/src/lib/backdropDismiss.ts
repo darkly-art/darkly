@@ -1,9 +1,9 @@
 /**
- * Svelte action for backdrop-to-dismiss surfaces — a modal `<dialog>` whose
+ * Svelte action for backdrop-to-dismiss surfaces: a modal `<dialog>` whose
  * `::backdrop` reports `e.target === dialog`, or an overlay `<div>` that is its
  * own backdrop. The surface closes only when a press *originates* on it.
  *
- * The naive approach — close on `click` whose target is the backdrop — fires on
+ * The naive approach (close on `click` whose target is the backdrop) fires on
  * `mouseup`. Selecting text inside a modal and dragging the cursor onto the
  * backdrop before releasing then closes the modal, because the release lands on
  * the backdrop even though the press started on inner content. Gating on

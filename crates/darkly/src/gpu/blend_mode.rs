@@ -1,10 +1,10 @@
-//! Blend-mode registry — the single source of truth for "what blend modes exist."
+//! Blend-mode registry: the single source of truth for "what blend modes exist."
 //!
 //! Each blend mode is one file under [`crate::gpu::blend_modes`] declaring
 //! `type_id`, `display_name`, `category`, and `gpu_value`. The `gpu_value`
 //! is the integer the WGSL composite shader switches on; nothing else in the
 //! Rust process carries that integer as a parallel identity (no enum, no
-//! `#[repr(u32)]` variants — the wire format and the in-memory representation
+//! `#[repr(u32)]` variants; the wire format and the in-memory representation
 //! are both `&'static BlendModeRegistration`).
 //!
 //! Adding a blend mode = one new file + a matching arm in the shader's
@@ -16,21 +16,26 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use super::preview::PreviewAnim;
+
 /// Static metadata for one blend mode. Every layer/group holds a
 /// `&'static BlendModeRegistration` directly; the GPU value is read straight
 /// from `gpu_value`, no enum cast, no extra lookup.
 ///
-/// The WGSL math is co-located via `wgsl_math` — adding a blend mode is one
+/// The WGSL math is co-located via `wgsl_math`; adding a blend mode is one
 /// new file, period. The composite shader's blend dispatch is assembled at
 /// engine init from these fragments (see [`build_composite_source`]).
 pub struct BlendModeRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// One-sentence summary of what this mode does to the colours beneath it:
+    /// the dropdown's tooltip and the reference manual's row for it.
+    pub description: &'static str,
     /// Visual grouping label for the UI dropdown ("Darken", "Lighten", etc.).
     pub category: &'static str,
     /// Integer the composite shader switches on. The shader's blend dispatch
     /// is the single consumer of this number; it is *not* used as identity
-    /// anywhere in Rust — `type_id` is identity.
+    /// anywhere in Rust; `type_id` is identity.
     pub gpu_value: u32,
     /// WGSL body for this blend mode's `case` arm. Receives `fg: vec4f` and
     /// `bg: vec4f` as straight-alpha colors, and must assign the blended
@@ -40,14 +45,61 @@ pub struct BlendModeRegistration {
     pub wgsl_math: &'static str,
 }
 
+/// Id of the catalog this registry projects into.
+pub const CATALOG_ID: &str = "blendModes";
+
+/// How a blend mode's preview plays back: the blended layer rising over an
+/// unchanged backdrop and receding. Modes take no parameters and the motion is
+/// the same for every one of them, so it belongs to the catalog rather than to
+/// any single registration; a seventeenth mode is still one file of five
+/// fields and inherits this for free. It returns to zero, so the loop closes.
+///
+/// A mode is not an effect over an image but a relation between two, so there
+/// is no `src → out` mechanism to write and no `preview_at` to override: the
+/// documentation renderer drives the *host layer's* opacity, which is the one
+/// thing only a consumer holding a document can do. A mode that ever wants
+/// different motion is a `preview` field on [`BlendModeRegistration`] and a
+/// fallback to this in [`BlendModeRegistry::preview`]: a change local to this
+/// file and the one mode that wants the override.
+pub static PREVIEW: PreviewAnim = PreviewAnim::LOOPING;
+
+impl BlendModeRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        // Blend modes have no icons anywhere; the dropdown is text, grouped by
+        // `category`.
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_description(self.description)
+            .with_category(self.category)
+            // Modes carry no `preview` field of their own; the recipe lives on
+            // the catalog, so previewability is the same question put to the
+            // same authority, resolved through the registry rather than a field.
+            .with_supports_preview(registry().preview(self.type_id).is_some())
+    }
+}
+
+/// The blend-mode catalog, in GPU-value order: the conventional
+/// Photoshop / Krita ordering the dropdown lists, not alphabetic.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Blend Modes",
+        registry()
+            .all()
+            .into_iter()
+            .map(BlendModeRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("How a layer's color combines with the composite beneath it.")
+}
+
 pub struct BlendModeRegistry {
     /// Owned storage for every registered mode. Stable addresses while the
-    /// registry lives (and it lives forever — see [`registry`]), so `&'static`
+    /// registry lives (and it lives forever, see [`registry`]), so `&'static`
     /// references handed out by `get`/`default` stay valid forever.
     entries: Vec<BlendModeRegistration>,
     /// `type_id` → index into `entries`.
     by_type_id: HashMap<&'static str, usize>,
-    /// Indices into `entries`, in GPU-value order — drives the dropdown so
+    /// Indices into `entries`, in GPU-value order: drives the dropdown so
     /// the UI lists modes in the conventional Photoshop / Krita ordering
     /// rather than alphabetic.
     ordered: Vec<usize>,
@@ -76,7 +128,7 @@ impl BlendModeRegistry {
     }
 
     /// Look up a registration by stable `type_id`. The returned reference
-    /// is `&'static` because the registry itself is — callers can hold it
+    /// is `&'static` because the registry itself is, so callers can hold it
     /// indefinitely (and `BlendProps` does exactly that).
     pub fn get(&'static self, type_id: &str) -> Option<&'static BlendModeRegistration> {
         self.by_type_id.get(type_id).map(|&i| &self.entries[i])
@@ -84,7 +136,7 @@ impl BlendModeRegistry {
 
     /// The default blend mode (`"normal"`). Panics if `normal` is missing,
     /// which would mean the build system failed to discover its registration
-    /// file — a build-time bug, not a runtime condition worth handling.
+    /// file: a build-time bug, not a runtime condition worth handling.
     pub fn default(&'static self) -> &'static BlendModeRegistration {
         self.get("normal")
             .expect("blend mode 'normal' must be registered")
@@ -94,6 +146,12 @@ impl BlendModeRegistry {
     /// `blend_mode_types()` query to populate the UI dropdown.
     pub fn all(&'static self) -> Vec<&'static BlendModeRegistration> {
         self.ordered.iter().map(|&i| &self.entries[i]).collect()
+    }
+
+    /// How long a mode's preview runs. Every registered mode inherits
+    /// [`PREVIEW`]; an unknown `type_id` gets `None`.
+    pub fn preview(&'static self, type_id: &str) -> Option<PreviewAnim> {
+        self.get(type_id).map(|_| PREVIEW)
     }
 }
 

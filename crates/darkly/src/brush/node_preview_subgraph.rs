@@ -7,25 +7,25 @@
 //! it produces a thumbnail of what the target node currently outputs.
 //!
 //! Previewability is declared, not enumerated: a node previews iff one of its
-//! output ports is flagged [`PortDef::preview_image`] — a spatial coverage or
+//! output ports is flagged [`PortDef::preview_image`], a spatial coverage or
 //! colour field (see [`BrushNodeRegistration::preview_output`]). A new node
 //! type opts into a preview by flagging its image output; there is no per-type
 //! allowlist here or on the frontend. Per-dab constants and sensor/math
-//! outputs (`random.value`, `paint_color.color`) leave the flag off — they'd
+//! outputs (`random.value`, `paint_color.color`) leave the flag off; they'd
 //! render as flat blobs, not images.
 //!
 //! The output is wired into the terminal by **wire type**, never node identity:
 //!
-//! - `Vec4` (a color field — `image.color`, `noise.color`, `stamp.dab`) →
+//! - `Vec4` (a color field: `image.color`, `noise.color`, `stamp.dab`) →
 //!   straight into `paint.rgba`. The dab shows the color.
-//! - `Scalar` (a coverage mask — `circle.mask`) → through the canonical
+//! - `Scalar` (a coverage mask: `circle.mask`) → through the canonical
 //!   `paint_color → stamp.color`, `mask → stamp.tip`, `stamp.dab → paint.rgba`
 //!   chain, so the mask reads as a silhouette in the preview's foreground
-//!   colour — exactly as the brush's own dab thumbnail renders it.
+//!   colour, exactly as the brush's own dab thumbnail renders it.
 //!
 //! This is the WGSL-era successor to the pre-`ff5a2eb` `preview_subgraph.rs`,
 //! which wired a synthesised `preview_terminal` to the target's first
-//! `Texture` output — a wire type the WGSL overhaul deleted.
+//! `Texture` output, a wire type the WGSL overhaul deleted.
 
 use std::collections::HashSet;
 
@@ -35,8 +35,8 @@ use crate::nodegraph::{Graph, NodeId, PortRef};
 
 /// Build a self-contained preview graph rooted at `target`.
 ///
-/// Returns `None` if `target` doesn't exist or has no renderable output port
-/// — those nodes shouldn't render a preview at all.
+/// Returns `None` if `target` doesn't exist or has no renderable output port;
+/// those nodes shouldn't render a preview at all.
 pub fn build_node_preview_graph(
     active: &Graph<BrushWireType>,
     target: &NodeId,
@@ -45,7 +45,7 @@ pub fn build_node_preview_graph(
     build_with_registry(active, target, registry)
 }
 
-/// [`build_node_preview_graph`] with the registry passed explicitly — the
+/// [`build_node_preview_graph`] with the registry passed explicitly, the
 /// seam the unit tests drive.
 fn build_with_registry(
     active: &Graph<BrushWireType>,
@@ -118,7 +118,7 @@ fn build_with_registry(
             .ok()?;
         }
         // A coverage mask goes through the canonical stamp chain, tinted by
-        // the foreground colour — the same path the brush's dab thumbnail uses.
+        // the foreground colour, the same path the brush's dab thumbnail uses.
         BrushWireType::Scalar => {
             let paint_color = sub.add_node("paint_color", ports("paint_color")?);
             let stamp = sub.add_node("stamp", ports("stamp")?);
@@ -222,7 +222,7 @@ mod tests {
     }
 
     /// Targeting a node with a `Vec4` output wires it straight into
-    /// `paint.rgba` — no stamp needed.
+    /// `paint.rgba`, no stamp needed.
     #[test]
     fn vec4_output_wires_directly_into_paint() {
         let mut graph = Graph::new();
@@ -256,7 +256,7 @@ mod tests {
 
     /// `preview_output` reflects each node's declared `preview_image` flag,
     /// not its wire types: nodes with a spatial image output report one;
-    /// per-dab constants and sensor/math/terminal nodes do not — even though
+    /// per-dab constants and sensor/math/terminal nodes do not, even though
     /// `random.value`/`paint_color.color` share the `Scalar`/`Vec4` wire types
     /// with the real image outputs. This is the type-owned gate both the
     /// frontend previewability check and the subgraph builder share.
@@ -269,7 +269,7 @@ mod tests {
                 "{id} declares a spatial image output and should be previewable",
             );
         }
-        // Renderable wire types, but per-dab constants — not spatial images.
+        // Renderable wire types, but per-dab constants rather than spatial images.
         for id in ["random", "paint_color", "multiply", "paint", "pen_input"] {
             assert!(
                 reg.get(id).unwrap().preview_output().is_none(),

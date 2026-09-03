@@ -1,3 +1,4 @@
+pub mod chord;
 pub mod schema;
 pub mod sections;
 
@@ -9,14 +10,14 @@ mod presets_gen {
 pub use presets_gen::{BASE_SETTINGS_OPTIONS, DEFAULTS_YAML, OVERLAYS};
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// On-disk schema version for `user_settings.json`. Bump whenever a change
 /// to the schema or YAML layers cannot be auto-cleaned by
-/// [`super::schema`]-driven validation — e.g. a pref key is renamed, a
+/// [`super::schema`]-driven validation, e.g. a pref key is renamed, a
 /// pref's kind changes shape (str→int, scalar→list), or the file's
-/// envelope itself changes. Pre-release we just discard mismatched files
-/// (per CLAUDE.md "No Migrations"); post-release this is the discriminator
+/// envelope itself changes. Pre-release we just discard mismatched files (per
+/// CONTRIBUTING.md "No Migrations"); post-release this is the discriminator
 /// migrations key off.
 ///
 /// Forward-compatible changes don't need a bump: new prefs get default
@@ -74,12 +75,25 @@ impl Config {
         }
     }
 
-    /// Resolve a key down the layer stack.
-    fn get(&self, key: &str) -> Option<&ConfigValue> {
-        if let Some(v) = self.user.get(key) {
-            return Some(v);
+    /// The one walk down the layer stack: named `overlay` above `defaults`,
+    /// with the user layer consulted only when `include_user` is set.
+    ///
+    /// Every resolution goes through here so the layer order exists in exactly
+    /// one place. `get` and `base_value` differ only in whether the user layer
+    /// participates; the exporter differs only in naming the overlay outright
+    /// rather than reading it from `app.baseSettings`.
+    fn resolve(
+        &self,
+        overlay: Option<&str>,
+        key: &str,
+        include_user: bool,
+    ) -> Option<&ConfigValue> {
+        if include_user {
+            if let Some(v) = self.user.get(key) {
+                return Some(v);
+            }
         }
-        if let Some(ConfigValue::Str(name)) = self.user.get("app.baseSettings") {
+        if let Some(name) = overlay {
             if let Some(v) = self.overlays.get(name).and_then(|m| m.get(key)) {
                 return Some(v);
             }
@@ -87,21 +101,29 @@ impl Config {
         self.defaults.get(key)
     }
 
-    /// What "Reset override on this key" would reveal — the layer below
+    /// The overlay the artist has selected, if any.
+    fn active_overlay(&self) -> Option<&str> {
+        match self.user.get("app.baseSettings") {
+            Some(ConfigValue::Str(name)) => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Resolve a key down the layer stack.
+    fn get(&self, key: &str) -> Option<&ConfigValue> {
+        self.resolve(self.active_overlay(), key, true)
+    }
+
+    /// What "Reset override on this key" would reveal: the layer below
     /// the user layer. Drives the Settings UI's "displayed default" and
     /// the Reset-affordance disabled state.
     fn base_value(&self, key: &str) -> Option<&ConfigValue> {
-        if let Some(ConfigValue::Str(name)) = self.user.get("app.baseSettings") {
-            if let Some(v) = self.overlays.get(name).and_then(|m| m.get(key)) {
-                return Some(v);
-            }
-        }
-        self.defaults.get(key)
+        self.resolve(self.active_overlay(), key, false)
     }
 }
 
 // ---------------------------------------------------------------------------
-// YAML parsing — flattens the `{ hotkeys, mouse_clicks, settings }` shape
+// YAML parsing: flattens the `{ hotkeys, mouse_clicks, settings }` shape
 // into a dot-path key/value map, mirroring the legacy on-disk JSON model.
 // ---------------------------------------------------------------------------
 
@@ -142,7 +164,7 @@ fn parse_yaml_preset(yaml: &str) -> Result<HashMap<String, ConfigValue>, String>
 
 /// `hotkeys` / `mouse_clicks` facets: keys map to either a single string
 /// (one binding) or a list of strings (multiple alternative bindings).
-/// Multi-binding entries are joined with a `|` separator — consumers know
+/// Multi-binding entries are joined with a `|` separator; consumers know
 /// to split on it. (Legacy: the only known multi-binding action is
 /// `isolateLayer` with `[layerThumb:alt+click, maskThumb:alt+click]`.)
 fn collect_string_facet(
@@ -174,7 +196,7 @@ fn collect_string_facet(
                 out.insert(full_key, ConfigValue::Str(parts.join("|")));
             }
             serde_yaml_ng::Value::Null => {
-                // Tolerate `key: ` with no value as "empty string" — a key
+                // Tolerate `key: ` with no value as "empty string": a key
                 // explicitly unbinds the action.
                 out.insert(full_key, ConfigValue::Str(String::new()));
             }
@@ -285,8 +307,8 @@ pub fn reset(key: &str) {
     });
 }
 
-/// Clear every user override **except** `app.baseSettings` — the picker
-/// choice survives a global reset so the user isn't bumped back to the
+/// Clear every user override **except** `app.baseSettings`: the picker
+/// choice survives a global reset so the artist isn't bumped back to the
 /// first-run picker by clicking "Reset everything".
 pub fn reset_all() {
     CONFIG.with(|c| {
@@ -322,13 +344,138 @@ pub fn kind_is_int(key: &str) -> bool {
 
 /// Return the full schema as a serializable view. Used by the WASM bridge to
 /// feed the Settings UI.
-pub fn schema_info() -> Vec<schema::SectionInfo> {
-    let mut out: Vec<_> = sections::registrations()
-        .iter()
-        .map(schema::SectionInfo::from_section)
-        .collect();
-    out.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(b.id)));
+/// The editor-agnostic baseline value for a key: the bottom layer alone, with
+/// no user override and no editor overlay.
+///
+/// Reads `defaults.yaml` directly rather than the process-global config, so a
+/// caller that only wants to describe the schema (the metadata exporter, the
+/// settings projection) needs no initialization and cannot be perturbed by
+/// whatever the running editor has chosen.
+/// One effective binding: the raw preset string, its parsed prefix, and the
+/// chord rendered for both platform conventions.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Binding {
+    /// The binding exactly as the preset YAML declares it.
+    pub raw: String,
+    /// Prefix parts, each absent unless the binding declares it.
+    pub site: Option<String>,
+    pub scope: Option<String>,
+    pub brush: Option<String>,
+    /// The chord rendered with Apple modifier glyphs.
+    pub mac: String,
+    /// The chord rendered with the Windows/Linux modifier names.
+    pub other: String,
+}
+
+impl Binding {
+    fn parse(raw: &str) -> Self {
+        let p = chord::parse_binding(raw);
+        Binding {
+            raw: raw.to_string(),
+            site: p.site,
+            scope: p.scope,
+            brush: p.brush,
+            mac: chord::format_chord(&p.chord, chord::Platform::Mac),
+            other: chord::format_chord(&p.chord, chord::Platform::Other),
+        }
+    }
+}
+
+/// The action id a config key binds, or `None` when the key binds no action.
+///
+/// Bindings live under `hotkeys.` / `mouseclicks.`, with one exception: the
+/// canvas-navigation held modifiers (`hotkeys.nav.trigger` and friends) are
+/// prefs declared by [`sections`], sharing the prefix because that is where an
+/// artist looks for them. Nothing dispatches an action from a pref, so asking the
+/// schema is what separates the two; there is no rule about dots in ids.
+pub fn bound_action_id(key: &str) -> Option<&str> {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static PREF_KEYS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    let prefs = PREF_KEYS.get_or_init(|| {
+        sections::registrations()
+            .iter()
+            .flat_map(|s| s.prefs.iter())
+            .map(|p| p.key)
+            .collect()
+    });
+    let id = key
+        .strip_prefix("hotkeys.")
+        .or_else(|| key.strip_prefix("mouseclicks."))?;
+    (!prefs.contains(key)).then_some(id)
+}
+
+/// Every hotkey and mouse binding a named preset resolves to, with no user
+/// layer. `None` resolves the editor-agnostic baseline alone.
+///
+/// Keys are action ids; every value holds at least one [`Binding`]. An action
+/// the preset binds nothing to is **absent**: the map is already resolved, so
+/// absence is a complete statement rather than an instruction to look in a
+/// lower layer. No empty vector is ever emitted.
+///
+/// Builds from the generated presets directly rather than the process-global
+/// config, so a caller needs no initialization and cannot be perturbed by
+/// whatever the running editor has selected.
+pub fn preset_bindings(overlay: Option<&str>) -> BTreeMap<String, Vec<Binding>> {
+    let defaults = parse_yaml_preset(presets_gen::DEFAULTS_YAML)
+        .unwrap_or_else(|e| panic!("failed to parse defaults.yaml: {e}"));
+    let mut overlays = HashMap::new();
+    for (name, yaml) in presets_gen::OVERLAYS {
+        let map = parse_yaml_preset(yaml)
+            .unwrap_or_else(|e| panic!("failed to parse overlay {name}: {e}"));
+        overlays.insert((*name).to_string(), map);
+    }
+    let config = Config {
+        defaults,
+        overlays,
+        user: HashMap::new(),
+    };
+
+    // The union of keys the agnostic layer and this overlay declare: every key
+    // that could resolve to anything under this preset. Deduped: a key both
+    // layers declare is one key that resolves once, not two.
+    let mut keys: Vec<&String> = config.defaults.keys().collect();
+    if let Some(name) = overlay {
+        if let Some(m) = config.overlays.get(name) {
+            keys.extend(m.keys());
+        }
+    }
+    keys.sort();
+    keys.dedup();
+
+    let mut out: BTreeMap<String, Vec<Binding>> = BTreeMap::new();
+    for key in keys {
+        let Some(action) = bound_action_id(key) else {
+            continue;
+        };
+        let Some(ConfigValue::Str(raw)) = config.resolve(overlay, key, false) else {
+            continue;
+        };
+        // `collect_string_facet` joins a YAML list with `|`, so one id can
+        // carry several chords. Shipping the joined string would push a
+        // splitting rule onto every consumer.
+        let bindings: Vec<Binding> = raw
+            .split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(Binding::parse)
+            .collect();
+        if bindings.is_empty() {
+            continue;
+        }
+        out.entry(action.to_string()).or_default().extend(bindings);
+    }
     out
+}
+
+pub fn agnostic_default(key: &str) -> Option<ConfigValue> {
+    thread_local! {
+        static DEFAULTS: HashMap<String, ConfigValue> =
+            parse_yaml_preset(presets_gen::DEFAULTS_YAML)
+                .unwrap_or_else(|e| panic!("failed to parse defaults.yaml: {e}"));
+    }
+    DEFAULTS.with(|d| d.get(key).cloned())
 }
 
 #[cfg(test)]
@@ -368,7 +515,7 @@ mod tests {
         pick("Krita");
         // Krita-specific override (defined only in krita.yaml).
         assert_eq!(get_str("hotkeys.brushTool"), "KeyB");
-        // Defaults still show through where the overlay is silent —
+        // Defaults still show through where the overlay is silent:
         // addBrushNode is Darkly-original and no overlay defines it.
         assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
 
@@ -376,6 +523,31 @@ mod tests {
         pick("Photoshop");
         assert_eq!(get_str("hotkeys.rectSelectTool"), "KeyM");
         assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
+    }
+
+    /// REGRESSION: `$mod`+click on a thumbnail loads its coverage as the
+    /// selection: the mask half on `maskThumb`, the layer half on
+    /// `layerThumb`. The layer half was unbound, so the gesture fell through
+    /// to the plain-click fallback and silently did nothing. Krita and
+    /// Photoshop both ship the chord (see each overlay's comments); GIMP uses
+    /// alt+click, whose slot is `isolateLayer`, so it stays menu-only there.
+    #[test]
+    fn thumbnail_to_selection_gestures_are_bound_in_krita_and_photoshop() {
+        for editor in ["Krita", "Photoshop"] {
+            reset_state();
+            pick(editor);
+            assert_eq!(
+                get_str("mouseclicks.maskToSelection"),
+                "maskThumb:$mod+click",
+                "{editor}"
+            );
+            assert_eq!(
+                get_str("mouseclicks.alphaToSelection"),
+                "layerThumb:$mod+click",
+                "{editor}"
+            );
+        }
+        reset_state();
     }
 
     #[test]
@@ -406,7 +578,7 @@ mod tests {
         reset_state();
         pick("Krita");
         set("hotkeys.brushTool", ConfigValue::Str("KeyZ".into()));
-        // `base_value` is what a Reset would reveal — the overlay value.
+        // `base_value` is what a Reset would reveal: the overlay value.
         match base_value("hotkeys.brushTool") {
             Some(ConfigValue::Str(s)) => assert_eq!(s, "KeyB"),
             other => panic!("expected overlay value, got {other:?}"),
@@ -430,5 +602,195 @@ mod tests {
         assert!(!kind_is_int("nav.panSensitivity"));
         // Unknown key → false (defensive).
         assert!(!kind_is_int("bogus.key"));
+    }
+
+    /// Resolution never returns a short map: every id the agnostic layer or
+    /// this overlay declares comes back, because both layers are walked. An
+    /// inheritance bug shows up here as a missing key.
+    #[test]
+    fn preset_bindings_covers_every_key_in_every_preset() {
+        let binding_ids = |yaml: &str| -> Vec<String> {
+            parse_yaml_preset(yaml)
+                .unwrap()
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    // A key whose value is an empty string binds nothing.
+                    match v {
+                        ConfigValue::Str(s) if !s.trim().is_empty() => Some(k),
+                        _ => None,
+                    }
+                })
+                .filter_map(|k| bound_action_id(&k).map(str::to_string))
+                .collect()
+        };
+
+        for (name, yaml) in presets_gen::OVERLAYS {
+            let mut expected: Vec<String> = binding_ids(presets_gen::DEFAULTS_YAML);
+            expected.extend(binding_ids(yaml));
+            expected.sort();
+            expected.dedup();
+
+            let got = preset_bindings(Some(name));
+            let mut got_ids: Vec<String> = got.keys().cloned().collect();
+            got_ids.sort();
+            assert_eq!(
+                got_ids, expected,
+                "preset `{name}` resolves a different id set than its layers declare"
+            );
+        }
+
+        let mut expected = binding_ids(presets_gen::DEFAULTS_YAML);
+        expected.sort();
+        expected.dedup();
+        let mut got_ids: Vec<String> = preset_bindings(None).keys().cloned().collect();
+        got_ids.sort();
+        assert_eq!(
+            got_ids, expected,
+            "the agnostic baseline resolves a different id set"
+        );
+    }
+
+    /// An overlay sits *above* the baseline rather than replacing it: every id
+    /// the agnostic layer binds is still bound under every overlay, with the
+    /// overlay's chords where it overrides and the baseline's otherwise.
+    #[test]
+    fn preset_bindings_inherits_the_agnostic_layer() {
+        let base = preset_bindings(None);
+        for (name, yaml) in presets_gen::OVERLAYS {
+            let overlay_map = parse_yaml_preset(yaml).unwrap();
+            let resolved = preset_bindings(Some(name));
+            for (id, base_bindings) in &base {
+                let got = resolved.get(id).unwrap_or_else(|| {
+                    panic!("preset `{name}` dropped `{id}`, which the baseline binds")
+                });
+                let overridden = overlay_map.contains_key(&format!("hotkeys.{id}"))
+                    || overlay_map.contains_key(&format!("mouseclicks.{id}"));
+                if !overridden {
+                    let a: Vec<&String> = base_bindings.iter().map(|b| &b.raw).collect();
+                    let b: Vec<&String> = got.iter().map(|b| &b.raw).collect();
+                    assert_eq!(a, b, "preset `{name}` changed `{id}` without overriding it");
+                }
+            }
+        }
+    }
+
+    /// Absence means "binds nothing"; there is no empty vector to misread as
+    /// "explicitly unbound". No preset mechanism produces one today, and this
+    /// keeps the two-valued design from creeping back without one.
+    #[test]
+    fn preset_bindings_never_emits_an_empty_vec() {
+        let mut presets: Vec<Option<&str>> = vec![None];
+        presets.extend(presets_gen::OVERLAYS.iter().map(|(n, _)| Some(*n)));
+        for preset in presets {
+            for (id, bindings) in preset_bindings(preset) {
+                assert!(
+                    !bindings.is_empty(),
+                    "preset {preset:?} emitted an empty binding list for `{id}`"
+                );
+                for b in &bindings {
+                    assert!(!b.raw.is_empty(), "`{id}` carries an empty raw binding");
+                    assert!(!b.mac.is_empty(), "`{id}` renders empty on mac");
+                    assert!(!b.other.is_empty(), "`{id}` renders empty off mac");
+                }
+            }
+        }
+    }
+
+    /// The new public resolution API and `Config::get` must not drift: with no
+    /// user layer they are the same walk, and this pins that they agree.
+    #[test]
+    fn preset_bindings_matches_config_get_with_no_user_layer() {
+        for (name, _) in presets_gen::OVERLAYS {
+            reset_state();
+            pick(name);
+            for (id, bindings) in preset_bindings(Some(name)) {
+                let got: Vec<String> = bindings.iter().map(|b| b.raw.clone()).collect();
+
+                // An action can be bound in both facets (Krita gives
+                // `isolateLayer` a key *and* two mouse chords), and the
+                // exporter merges them, key-sorted, under the one id. Rebuild
+                // that from `Config::get` and require the same list.
+                let mut expected: Vec<String> = Vec::new();
+                for facet in ["hotkeys", "mouseclicks"] {
+                    let raw = CONFIG.with(|c| c.borrow().get(&format!("{facet}.{id}")).cloned());
+                    if let Some(ConfigValue::Str(raw)) = raw {
+                        expected.extend(
+                            raw.split('|')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty()),
+                        );
+                    }
+                }
+                assert!(
+                    !expected.is_empty(),
+                    "`{id}` resolves through preset_bindings but not through Config::get"
+                );
+                assert_eq!(
+                    got, expected,
+                    "`{id}` differs between the two paths under `{name}`"
+                );
+            }
+        }
+        reset_state();
+    }
+
+    /// Prints the measured id counts per preset. Not an assertion: the counts
+    /// move whenever a preset gains a binding, which is why the tests above
+    /// assert the *rule* that produces them instead.
+    #[test]
+    #[ignore = "reporting only"]
+    fn report_binding_counts() {
+        let mut union: std::collections::BTreeSet<String> = Default::default();
+        let base = preset_bindings(None);
+        union.extend(base.keys().cloned());
+        println!("defaults: {}", base.len());
+        for (name, _) in presets_gen::OVERLAYS {
+            let m = preset_bindings(Some(name));
+            union.extend(m.keys().cloned());
+            println!("{name}: {}", m.len());
+        }
+        println!("union: {}", union.len());
+    }
+
+    /// Every binding in every preset names something that actually exists.
+    ///
+    /// A preset can name any id; one nothing registers is a key that silently
+    /// does nothing: the bug class that once shipped a dead Ctrl+I. Everything
+    /// a chord can reach declares the id that reaches it on its catalog entry
+    /// (`hotkey_action`), so reading the whole of that surface covers the
+    /// actions, the tool selections and the filters in one comparison. The ids
+    /// are deliberately not derivable from a `type_id` (`colorpicker` declares
+    /// `colorPickerTool`), so nothing else catches a typo on either side.
+    ///
+    /// Checked over [`preset_bindings`] rather than the raw YAML so the "which
+    /// keys are bindings" rule has one home.
+    #[test]
+    fn every_preset_binding_names_a_registered_target() {
+        let catalogs = crate::catalog::catalogs();
+        let registered: std::collections::BTreeSet<&'static str> = catalogs
+            .iter()
+            .flat_map(|c| c.entries.iter())
+            .filter_map(|e| e.hotkey_action)
+            .collect();
+
+        let mut presets: Vec<Option<&str>> = vec![None];
+        presets.extend(presets_gen::OVERLAYS.iter().map(|(name, _)| Some(*name)));
+
+        let mut checked = 0usize;
+        for preset in presets {
+            let label = preset.unwrap_or("defaults");
+            for action in preset_bindings(preset).keys() {
+                assert!(
+                    registered.contains(action.as_str()),
+                    "preset `{label}` binds `{action}`, which nothing registers \
+                     (registered: {registered:?})"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no bindings found in any preset: the scan is looking in the wrong place"
+        );
     }
 }

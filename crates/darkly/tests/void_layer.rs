@@ -25,8 +25,11 @@ fn noise_defaults(engine: &DarklyEngine) -> Vec<ParamValue> {
 
 #[test]
 fn noise_void_is_registered() {
-    let engine = test_engine(64, 64);
-    let types: Vec<_> = engine.void_types().into_iter().map(|t| t.type_id).collect();
+    let types: Vec<_> = darkly::gpu::void::catalog()
+        .entries
+        .into_iter()
+        .map(|e| e.type_id)
+        .collect();
     assert!(
         types.contains(&"noise"),
         "noise void must be auto-registered by build.rs; got {types:?}",
@@ -47,7 +50,7 @@ fn noise_void_default_params_match_schema() {
 
 #[test]
 fn fresh_void_is_named_after_its_display_type() {
-    // Default layer names: the panel should show "Noise 1", "Noise 2", … —
+    // Default layer names: the panel should show "Noise 1", "Noise 2", …,
     // not a generic "Void N". Per-type counters give each void kind its own
     // numbering once more types ship.
     let mut engine = test_engine(64, 64);
@@ -94,8 +97,8 @@ fn layer_name(engine: &DarklyEngine, layer_id: darkly::layer::LayerId) -> String
 /// Regression: a void layer must not accept brush strokes. The compositor
 /// regenerates the void's texture from `(void_type, params)` each frame
 /// (or eagerly on param change), so any paint that lands there either
-/// vanishes on the next dirty tick or stays only because the user hasn't
-/// touched a slider yet — both are confusing and neither is the user's
+/// vanishes on the next dirty tick or stays only because the artist hasn't
+/// touched a slider yet; both are confusing and neither is the artist's
 /// intent when they clicked a void in the layer panel and started painting.
 /// `is_node_paintable` rejects voids at every stroke entry point.
 #[test]
@@ -188,7 +191,7 @@ fn update_void_params_is_undoable_and_coalesces() {
         engine.update_void_params(id, next.clone());
     }
 
-    // One undo restores ALL the way back to the original schema defaults —
+    // One undo restores ALL the way back to the original schema defaults:
     // the three edits coalesced.
     engine.undo();
     let restored = void_params_via_tree(&engine, id);
@@ -199,7 +202,7 @@ fn update_void_params_is_undoable_and_coalesces() {
     );
 }
 
-/// The `time` slider must actually scrub the 3D noise field — changing it
+/// The `time` slider must actually scrub the 3D noise field: changing it
 /// has to land at the GPU uniform and produce a visibly different
 /// cross-section. Catches a silent regression where the param is dropped on
 /// the way to the shader (forgotten write in `update_params`, layout drift
@@ -225,7 +228,7 @@ fn noise_void_time_scrub_changes_output() {
     );
 }
 
-/// The `time` slider must scrub *continuously* through the 3D noise volume —
+/// The `time` slider must scrub *continuously* through the 3D noise volume:
 /// a small step in `time` produces a small bounded per-pixel delta, never a
 /// teleport to an uncorrelated field. Catches a regression where `time`
 /// reseeds the field or swaps to a different FBM realization instead of
@@ -244,7 +247,7 @@ fn noise_void_time_scrub_is_continuous() {
     let frame_a = engine.test_readback_canvas();
 
     // Small scrub step. At Z_SCALE=0.15 (see noise shader), dz=0.5 advances
-    // ~0.075 along the noise Z-axis — well under one cell-cross, so deltas
+    // ~0.075 along the noise Z-axis, well under one cell-cross, so deltas
     // stay small but visible.
     set_float_param(&mut params, "time", 0.5);
     engine.update_void_params(id, params);
@@ -285,7 +288,7 @@ fn noise_void_time_scrub_is_continuous() {
     let total_bytes = frame_a.len() as u32;
     assert!(
         changed_bytes * 10 >= total_bytes,
-        "only {changed_bytes}/{total_bytes} bytes changed — `time` may not \
+        "only {changed_bytes}/{total_bytes} bytes changed; `time` may not \
          be reaching the GPU uniform",
     );
 
@@ -298,7 +301,7 @@ fn noise_void_time_scrub_is_continuous() {
 }
 
 /// Regression: the void owns its own "needs re-render" bit. Mutating one
-/// void's params must not cause an unrelated void to re-encode — the
+/// void's params must not cause an unrelated void to re-encode: the
 /// compositor must not flip dirty for every procedural layer on every
 /// param edit. Verified by reading back two voids' textures, mutating
 /// just one, and confirming the *un-mutated* one's pixels are byte-equal.
@@ -307,9 +310,9 @@ fn void_dirty_is_per_instance() {
     let mut engine = test_engine(64, 64);
     let mut params_a = noise_defaults(&engine);
     let mut params_b = noise_defaults(&engine);
-    // Different seeds so the two voids' textures are visibly distinct —
-    // helps catch any accidental aliasing in addition to the dirty-bit
-    // check.
+    // Different seeds so the two voids' textures are visibly distinct,
+    // which helps catch any accidental aliasing in addition to the
+    // dirty-bit check.
     set_int_param(&mut params_a, "seed", 100);
     set_int_param(&mut params_b, "seed", 200);
 
@@ -330,7 +333,7 @@ fn void_dirty_is_per_instance() {
         "two different seeds must produce different textures",
     );
 
-    // Mutate only A. B must not re-encode — its dirty bit was cleared
+    // Mutate only A. B must not re-encode: its dirty bit was cleared
     // above and nothing has touched it since.
     set_float_param(&mut params_a, "time", 5.0);
     engine.update_void_params(id_a, params_a);
@@ -344,7 +347,7 @@ fn void_dirty_is_per_instance() {
     );
     assert_eq!(
         before_b, after_b,
-        "untouched void must not re-encode — its dirty bit is its own state",
+        "untouched void must not re-encode: its dirty bit is its own state",
     );
 }
 
@@ -353,8 +356,8 @@ fn set_int_param(params: &mut [ParamValue], name: &str, value: i32) {
     let defs = engine.void_param_defs("noise");
     let idx = defs
         .iter()
-        .position(|d| match d {
-            darkly::gpu::params::ParamDef::Int { name: n, .. } => *n == name,
+        .position(|d| match d.kind {
+            darkly::gpu::params::ParamKind::Int { .. } => d.name == name,
             _ => false,
         })
         .unwrap_or_else(|| panic!("noise void has no int param '{name}'"));
@@ -369,8 +372,8 @@ fn set_float_param(params: &mut [ParamValue], name: &str, value: f32) {
     let defs = engine.void_param_defs("noise");
     let idx = defs
         .iter()
-        .position(|d| match d {
-            darkly::gpu::params::ParamDef::Float { name: n, .. } => *n == name,
+        .position(|d| match d.kind {
+            darkly::gpu::params::ParamKind::Float { .. } => d.name == name,
             _ => false,
         })
         .unwrap_or_else(|| panic!("noise void has no float param '{name}'"));
@@ -419,7 +422,7 @@ fn void_params_via_tree(
 }
 
 // ---------------------------------------------------------------------------
-// Generic transform on a void (camera) — the void consuming the gizmo helper.
+// Generic transform on a void (camera): the void consuming the gizmo helper.
 // ---------------------------------------------------------------------------
 
 fn camera_defaults(engine: &DarklyEngine) -> Vec<ParamValue> {
@@ -452,7 +455,7 @@ fn transform_capability_reports_live_for_camera() {
 
 /// THE coordinate-frame guard (docs/coordinate-systems.md #1): after a crop,
 /// the gizmo bbox the void reports must be anchored at `canvas_origin`, NOT
-/// (0,0) — otherwise the handles draw in the wrong plane location. The shader
+/// (0,0), otherwise the handles draw in the wrong plane location. The shader
 /// itself works in window-local (origin cancels), so this reporting boundary
 /// is where the origin has to be correct.
 #[test]
@@ -500,7 +503,7 @@ fn update_void_transform_stores_and_renders() {
     assert_eq!(stored, t, "the stored transform reflects the update");
 }
 
-/// Perspective (homography) transforms reach voids now — not just affine. Set a
+/// Perspective (homography) transforms reach voids now, not just affine. Set a
 /// `Perspective` transform via the same `update_void_transform` path, render
 /// (the shared `proj_local` sampler runs in the void shader), and read the mode
 /// back as 1. Regression for the void path being pinned to affine.
@@ -512,7 +515,7 @@ fn update_void_transform_supports_perspective() {
         .add_void_layer("noise", noise_defaults(&engine), None)
         .expect("noise void should be addable");
 
-    // A trapezoid (narrowed top edge) over the 64×64 field — a genuine
+    // A trapezoid (narrowed top edge) over the 64×64 field, a genuine
     // vanishing-point warp, not an affine parallelogram.
     let corners = [(16.0, 0.0), (48.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
     let m = homography_from_corners(64.0, 64.0, corners).expect("non-degenerate");
@@ -538,7 +541,7 @@ fn update_void_transform_supports_perspective() {
 /// Undo restores the layer's PRE-EDIT transform, not identity. A non-coalescing
 /// boundary (a param edit, different `Property` kind) sits between two transform
 /// edits so the second is its own undo step whose `old_value` must be the first
-/// transform — proving `update_void_transform` reads the current transform as
+/// transform, proving `update_void_transform` reads the current transform as
 /// the old value rather than seeding identity.
 #[test]
 fn void_transform_undo_restores_pre_edit_value() {
@@ -566,7 +569,7 @@ fn void_transform_undo_restores_pre_edit_value() {
     );
 }
 
-/// A whole gizmo drag — many `update_void_transform` calls in a row — collapses
+/// A whole gizmo drag (many `update_void_transform` calls in a row) collapses
 /// into a single undo step (coalescing on the `Transform` discriminant).
 #[test]
 fn void_transform_drag_coalesces_to_one_undo_step() {
@@ -583,7 +586,7 @@ fn void_transform_drag_coalesces_to_one_undo_step() {
         );
     }
     // One undo undoes the entire drag back to the camera's seeded initial
-    // transform — a horizontal flip about the canvas center (selfie view), not
+    // transform: a horizontal flip about the canvas center (selfie view), not
     // identity. For a 64-wide canvas that's `x' = 64 - x`.
     engine.undo();
     let (.., after) = engine.void_transform_info(cam).expect("info");
@@ -610,7 +613,7 @@ fn noise_void_transform_changes_output() {
 
     let frame_a = engine.test_readback_canvas();
 
-    // Scale the field ×2 about the origin — a clearly different cross-section.
+    // Scale the field ×2 about the origin: a clearly different cross-section.
     engine.update_void_transform(id, Transform::from_affine([2.0, 0.0, 0.0, 0.0, 2.0, 0.0]));
     let frame_b = engine.test_readback_canvas();
 
@@ -623,7 +626,7 @@ fn noise_void_transform_changes_output() {
 
 /// Regression: straight-alpha storage + linear filtering darkened every alpha
 /// edge in video-stream voids (docs/lessons-learned/compositing-lessons-learned.md
-/// #2 — the dark-halo bug reported on the Blender void). The aux frame texture
+/// #2, the dark-halo bug reported on the Blender void). The aux frame texture
 /// must hold **premultiplied** texels so the hardware bilinear filter
 /// interpolates correctly, and the shader must un-premultiply after sampling so
 /// the void still emits the straight alpha the compositor expects.
@@ -633,12 +636,12 @@ fn noise_void_transform_changes_output() {
 /// it over the 64×64 canvas (16× per axis), so nearly every output pixel is a
 /// filtered blend of adjacent texels:
 ///
-/// - Columns 0–1 opaque red `(255,0,0,255)`, columns 2–3 transparent
-///   `(0,0,0,0)` — byte-identical in both alpha conventions, so the fringe
-///   assertion pins filtering behavior regardless of injection convention.
+/// - Columns 0-1 opaque red `(255,0,0,255)`, columns 2-3 transparent
+///   `(0,0,0,0)` (byte-identical in both alpha conventions, so the fringe
+///   assertion pins filtering behavior regardless of injection convention).
 /// - Texel (1,1) is premultiplied half-alpha red `(128,0,0,128)` (straight
 ///   `(255,0,0)` at α=128). Output pixels near its center sample only
-///   columns 0–1, away from the transparent boundary.
+///   columns 0-1, away from the transparent boundary.
 #[test]
 fn video_stream_void_filtering_keeps_straight_color_at_alpha_edges() {
     let mut engine = test_engine(64, 64);
@@ -686,7 +689,7 @@ fn video_stream_void_filtering_keeps_straight_color_at_alpha_edges() {
     assert_eq!(px(55, 8), [0, 0, 0, 0], "transparent interior stays empty");
 
     // Assertion A (edge fringe): pixel (31, 55) maps to source texel coords
-    // (~1.47, ~2.97) — a near-even filter blend of opaque-red column 1 and
+    // (~1.47, ~2.97): a near-even filter blend of opaque-red column 1 and
     // transparent column 2, in plain rows away from the semi texel. The
     // straight color must stay full-brightness red; unfixed straight-alpha
     // filtering yields r ≈ a (a dark halo).
@@ -698,11 +701,11 @@ fn video_stream_void_filtering_keeps_straight_color_at_alpha_edges() {
     assert!(
         edge[0] >= 240,
         "filtered alpha edge must keep straight red at full brightness \
-         (premultiplied filtering); got {edge:?} — a dark fringe",
+         (premultiplied filtering); got {edge:?}, a dark fringe",
     );
 
-    // Assertion B (storage convention): pixel (23, 23) maps to (~0.97, ~0.97)
-    // — dominated by the semi texel with the remainder from its opaque-red
+    // Assertion B (storage convention): pixel (23, 23) maps to (~0.97, ~0.97),
+    // dominated by the semi texel with the remainder from its opaque-red
     // neighbors (transparent columns contribute nothing). The premultiplied
     // bytes `(128,0,0,128)` must read back as straight `(255,0,0)` at α≈136.
     // This pins the premultiplied-storage half of the fix: with straight
@@ -725,7 +728,7 @@ fn video_stream_void_filtering_keeps_straight_color_at_alpha_edges() {
 /// texture back with `copy_texture_to_buffer`, which requires the texture to
 /// carry `COPY_SRC`; the frame texture was created without it, so the readback
 /// was a wgpu validation error and the frame silently never reached the
-/// `.darkly` — the layer reopened black. This plants a known frame through
+/// `.darkly`; the layer reopened black. This plants a known frame through
 /// `restore_void_pixels` (the load entry point) and reads it back exactly the
 /// way `queue_pixel_readback` does at save time.
 #[test]
@@ -752,5 +755,143 @@ fn camera_void_frame_round_trips_through_save_readback() {
     assert_eq!(
         read_back, known,
         "the camera void's persistent frame must read back byte-for-byte through the save path",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Persistent-source regressions.
+//
+// A void that declares a persistent frame owns bulk pixel data that is not
+// regenerable from its params. Three engine paths predate that fact and treat
+// every void as purely procedural. Each test below plants a known frame on a
+// camera void and asserts on the bytes.
+// ---------------------------------------------------------------------------
+
+/// A 4×4 RGBA pattern standing in for captured external input.
+fn known_frame() -> (u32, u32, Vec<u8>) {
+    let (w, h) = (4u32, 4u32);
+    let bytes = (0..(w * h))
+        .flat_map(|i| {
+            let v = (i * 16) as u8;
+            [v, 255 - v, 128, 255]
+        })
+        .collect();
+    (w, h, bytes)
+}
+
+/// Duplicating a void must carry its persistent source. `duplicate_node` copies
+/// `void_type` / `params` / `transform` on the assumption that a void's output
+/// is reproducible from its params (false for a void holding externally
+/// sourced pixels, which leaves the duplicate blank).
+#[test]
+fn duplicating_a_void_carries_its_persistent_frame() {
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let (w, h, known) = known_frame();
+    engine.test_plant_void_frame(cam, w, h, &known);
+
+    let dup = engine
+        .duplicate_node(cam)
+        .expect("a void layer should be duplicable");
+    assert_ne!(dup, cam, "duplicate must be a distinct node");
+
+    let copied = engine.test_readback_void_frame(dup).expect(
+        "the duplicate of a void with a persistent frame must itself declare \
+         one, otherwise the copy renders blank",
+    );
+    assert_eq!(
+        copied, known,
+        "the duplicate's source must be byte-identical to the original's",
+    );
+}
+
+/// A removed void's source texture must be reclaimed once its undo entry is
+/// evicted. `collect_pixel_node_ids` skips voids on the grounds that their
+/// output is regenerable, so the tombstone never names the node and the
+/// cache (holding the full-resolution source) outlives the undo entry
+/// forever.
+#[test]
+fn evicting_a_removed_void_disposes_its_source() {
+    let mut engine = test_engine(64, 64);
+    // A second layer, so deleting the void isn't refused as "the last layer".
+    engine.add_group(None);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    let (w, h, known) = known_frame();
+    engine.test_plant_void_frame(cam, w, h, &known);
+    assert!(
+        engine.test_readback_void_frame(cam).is_some(),
+        "precondition: the planted frame is readable before removal",
+    );
+
+    engine
+        .remove_layer(cam)
+        .expect("the void should be removable");
+
+    // The engine's undo stack caps at 50 steps; push past it so the removal's
+    // action is evicted and `on_evict` runs.
+    for _ in 0..51 {
+        engine.add_group(None);
+    }
+
+    assert!(
+        engine.test_readback_void_frame(cam).is_none(),
+        "once the removal is no longer undoable the void's source texture must \
+         be disposed, not retained for the lifetime of the document",
+    );
+}
+
+/// A void's sampling uniform must track canvas resizes. `content_extent` (the
+/// gizmo bbox) is computed from the *live* canvas rect while the shader's
+/// uniform is written once at `create_cache` from the canvas dims of that
+/// moment, so after a resize the two disagree: the bbox covers the new canvas
+/// while the sampler still maps the source across the old one.
+#[test]
+fn void_uniform_tracks_canvas_resize() {
+    use darkly::coord::CanvasRect;
+    let mut engine = test_engine(64, 64);
+    let cam = engine
+        .add_void_layer("camera", camera_defaults(&engine), None)
+        .expect("camera void should be addable");
+
+    // Drop the camera's seeded selfie flip, which mirrors about the canvas
+    // width at creation time. That transform is document state and must not
+    // silently follow a resize, so leaving it in would confound this test with
+    // a second, unrelated effect.
+    engine.update_void_transform(cam, darkly::transform::Transform::identity());
+
+    // A fully opaque square source. Cover-fit of a 1:1 source into a 1:1
+    // canvas is the whole canvas, so every canvas pixel must be opaque,
+    // at whatever size the canvas currently is.
+    let (w, h) = (8u32, 8u32);
+    let opaque: Vec<u8> = std::iter::repeat_n([255u8, 0, 0, 255], (w * h) as usize)
+        .flatten()
+        .collect();
+    engine.test_plant_void_frame(cam, w, h, &opaque);
+
+    let before = engine.test_readback_canvas();
+    let px = |buf: &[u8], x: u32, y: u32, stride: u32| {
+        let i = ((y * stride + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+    assert_eq!(
+        px(&before, 32, 32, 64)[3],
+        255,
+        "precondition: the source covers the 64×64 canvas",
+    );
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 128));
+    let after = engine.test_readback_canvas();
+
+    assert_eq!(
+        px(&after, 100, 100, 128)[3],
+        255,
+        "after growing the canvas the source must still cover it; a stale \
+         uniform leaves everything outside the old canvas bounds transparent",
     );
 }

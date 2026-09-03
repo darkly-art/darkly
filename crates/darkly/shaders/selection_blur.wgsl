@@ -1,6 +1,6 @@
-// Separable Gaussian blur of an R8 selection mask — one directional pass.
+// Separable Gaussian blur of an R8 selection mask (one directional pass).
 //
-// Feather (user radius) and antialias (a fixed ~1px radius) both run a
+// Feather (artist radius) and antialias (a fixed ~1px radius) both run a
 // horizontal pass then a vertical pass over this shader. σ and the kernel
 // radius are supplied by the engine, matching `crate::mask::gaussian_kernel`
 // (σ = radius / 2, kernel extent ±ceil(radius)).
