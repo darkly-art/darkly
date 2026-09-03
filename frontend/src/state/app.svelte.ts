@@ -18,6 +18,7 @@ import {
     collapsedAncestorsOf,
     indexLayerTree,
     nextActiveAfterRemoval,
+    type DropRow,
     type LayerTreeIndex,
 } from './layerTree';
 
@@ -330,6 +331,14 @@ export class DarklyInstance {
     // How many of `layerTree`'s leading rows are above the viewport divider.
     // The tree is top-first, so the run is the prefix.
     screenSpaceCount = $state(0);
+
+    /** The rows the panel draws, in panel order, with their indent depth — what
+     *  a drag resolves its drop against. Derived from the live tree rather than
+     *  the reconciler's pre-mutation snapshot, because a drag reads the panel as
+     *  it is currently rendered. */
+    get dropRows(): DropRow[] {
+        return indexLayerTree(this.layerTree).rows;
+    }
 
     // View transform (controlled by canvas navigation)
     panX = $state(0);

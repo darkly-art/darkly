@@ -37,6 +37,18 @@ interface Slot {
     siblings: number[];
 }
 
+/**
+ * One row the layer panel draws, as the drop-target model sees it. Modifiers are
+ * excluded: a mask renders inside its host's row, not as a row of its own, so it
+ * is not a place anything can be dropped between.
+ */
+export interface DropRow {
+    id: number;
+    /** Render depth, matching the panel's `padding-left: 8 + depth * 16`. */
+    depth: number;
+    isGroup: boolean;
+}
+
 export interface LayerTreeIndex {
     /** Every selectable id — nodes at any depth plus their modifiers. */
     ids: Set<number>;
@@ -51,6 +63,12 @@ export interface LayerTreeIndex {
     /** Ids of groups whose children are hidden. */
     collapsed: Set<number>;
     slots: Map<number, Slot>;
+    /**
+     * The rows the panel actually draws, in panel order — `visibleOrder` minus
+     * modifiers, carrying the depth each row is indented to. What the drop-target
+     * model resolves a pointer against.
+     */
+    rows: DropRow[];
 }
 
 /**
@@ -64,15 +82,19 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
     const visibleOrder: number[] = [];
     const collapsed = new Set<number>();
     const slots = new Map<number, Slot>();
+    const rows: DropRow[] = [];
 
-    const walk = (nodes: any[], parent: number | null, visible: boolean) => {
+    const walk = (nodes: any[], parent: number | null, visible: boolean, depth: number) => {
         const siblings = nodes.filter((n) => n?.id !== undefined).map((n) => n.id as number);
         for (const n of nodes) {
             if (n?.id === undefined) continue;
             const id: number = n.id;
             ids.add(id);
             order.push(id);
-            if (visible) visibleOrder.push(id);
+            if (visible) {
+                visibleOrder.push(id);
+                rows.push({ id, depth, isGroup: n.type === 'group' });
+            }
             slots.set(id, { parent, siblings });
 
             if (Array.isArray(n.modifiers) && n.modifiers.length > 0) {
@@ -91,14 +113,14 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
             if (n.type === 'group') {
                 if (n.collapsed) collapsed.add(id);
                 if (Array.isArray(n.children)) {
-                    walk(n.children, id, visible && !n.collapsed);
+                    walk(n.children, id, visible && !n.collapsed, depth + 1);
                 }
             }
         }
     };
-    walk(Array.isArray(tree) ? tree : [], null, true);
+    walk(Array.isArray(tree) ? tree : [], null, true, 0);
 
-    return { ids, order, visibleOrder, collapsed, slots };
+    return { ids, order, visibleOrder, collapsed, slots, rows };
 }
 
 /**

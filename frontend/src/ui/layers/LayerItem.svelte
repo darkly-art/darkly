@@ -8,6 +8,7 @@
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
     import { flattenOffer } from './flatten_offer';
+    import { layerDropTarget } from './dropTarget.svelte';
     import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
@@ -74,7 +75,6 @@
     );
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
-    let dropPos = $state<'none' | 'above' | 'below'>('none');
 
     let layerThumb = $derived(layer.hasThumbnail && app.engine ? getNodeThumbnail(layer.id) : '');
     let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
@@ -318,71 +318,6 @@
 
     let draggable = $state(true);
 
-    function onDragStart(e: DragEvent) {
-        // Grabbed row IS in selection → drag the whole set. Grabbed row
-        // is NOT in selection → drag only it, and replace the selection
-        // with just it (focus commits to what the user grabbed).
-        const ids = app.isSelected(layer.id)
-            ? [...app.selectedLayerIds]
-            : [layer.id];
-        if (!app.isSelected(layer.id)) {
-            app.selectLayer(layer.id);
-        }
-        e.dataTransfer?.setData(
-            'application/x-darkly-layers',
-            JSON.stringify(ids),
-        );
-        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-    }
-
-    function onDragOver(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.dataTransfer) return;
-        e.dataTransfer.dropEffect = 'move';
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        dropPos = ratio < 0.5 ? 'above' : 'below';
-    }
-
-    function onDragLeave(e: DragEvent) {
-        const related = e.relatedTarget as Node | null;
-        if (!related || !(e.currentTarget as HTMLElement).contains(related)) {
-            dropPos = 'none';
-        }
-    }
-
-    async function onDrop(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        dropPos = 'none';
-        const payload = e.dataTransfer?.getData('application/x-darkly-layers');
-        const engine = app.engine;
-        if (!payload || !engine) return;
-        let ids: number[];
-        try { ids = JSON.parse(payload) as number[]; } catch { return; }
-        if (!Array.isArray(ids) || ids.length === 0) return;
-        // Dropping the dragged set onto one of its own members is a no-op
-        // — the engine would reject it as self-referential anyway.
-        if (ids.includes(layer.id)) return;
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        const where = ratio < 0.5 ? 'after' : 'before';
-
-        try {
-            const skipped = await engine.api.moveLayers({
-                ids, target: { target_type: where, target_id: layer.id },
-            });
-            if (skipped > 0) {
-                toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
-            }
-        } catch (e: any) {
-            toast.show('error', e.message ?? String(e));
-        }
-        onupdate();
-    }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -390,19 +325,17 @@
     class="layer-item"
     class:active={isActive}
     class:selected={isSelected}
-    class:drop-above={dropPos === 'above'}
-    class:drop-below={dropPos === 'below'}
     onclick={onLayerClick}
     ondblclick={startRename}
     oncontextmenu={onLayerContextMenu}
     role="button"
     tabindex="-1"
     draggable={draggable && editable ? 'true' : 'false'}
-    ondragstart={onDragStart}
-    ondragover={onDragOver}
-    ondragleave={onDragLeave}
-    ondrop={onDrop}
-    ondragend={() => { dropPos = 'none'; }}
+    use:layerDropTarget={{
+        rowId: layer.id,
+        draggable: draggable && editable,
+        onupdate,
+    }}
     style:padding-left="{8 + depth * 16}px"
 >
     <button
@@ -530,27 +463,7 @@
         background: var(--bg-active);
     }
 
-    .layer-item.drop-above::before {
-        content: '';
-        position: absolute;
-        top: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
-    .layer-item.drop-below::after {
-        content: '';
-        position: absolute;
-        bottom: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
     .vis-btn {
         width: 24px;

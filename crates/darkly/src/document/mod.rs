@@ -560,6 +560,20 @@ impl Document {
         out
     }
 
+    /// Would this node put anything into the present chain if it were above the
+    /// divider? True for an effect, and for a group holding one at any depth.
+    ///
+    /// Distinct from [`LayerNode::supports_screen_space`], which asks whether a
+    /// node may *stay* there. An empty group may: it renders nothing, so there
+    /// is nothing it can render wrongly, and kicking it out the moment its last
+    /// effect is deleted would be obnoxious. But it has no claim on where the
+    /// divider sits, so inserting one must not drag the boundary over it.
+    fn yields_screen_space_effects(&self, id: LayerId) -> bool {
+        let mut found = Vec::new();
+        self.collect_screen_space_effects(id, &mut found);
+        !found.is_empty()
+    }
+
     fn collect_screen_space_effects(&self, id: LayerId, out: &mut Vec<LayerId>) {
         match self.find_node(id) {
             Some(LayerNode::Layer(Layer::Filter(_))) => out.push(id),
@@ -1337,7 +1351,12 @@ impl Document {
         if k == 0 || at < floor {
             return (parent, position);
         }
-        if qualifies {
+        // Growing the run is a claim on where the divider sits, so it takes
+        // more than eligibility: the node has to actually render something up
+        // there. A freshly created group is empty and eligible, and sweeping it
+        // above the divider on that basis is how it would end up holding a
+        // raster a moment later.
+        if qualifies && self.yields_screen_space_effects(child) {
             self.screen_space_count += 1;
             (parent, position)
         } else {

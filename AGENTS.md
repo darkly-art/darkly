@@ -278,7 +278,7 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # `KeyboardEvent` / `PointerEvent` / `window` are undefined. Test against
 # plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code
 # that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
-# fake node — see `src/lib/__tests__/clickOutside.test.ts`.
+# fake node — see `src/lib/__tests__/dismiss.test.ts`.
 (cd frontend && npm test)
 # Reclaim stale build artifacts — Cargo orphans a ~300 MB static test binary on
 # every fingerprint change and never GCs it, so `target/` balloons over time.

@@ -730,12 +730,12 @@ impl LayerNode {
     /// *presence* is what disqualifies, not mask visibility, for the same reason
     /// visibility is ignored.
     ///
-    /// An **empty** group answers `false`. Reading it as vacuously `true` is
-    /// tempting — it composites nothing in either space — but a group is
-    /// created empty and filled afterwards, so a vacuous `true` lets a fresh
-    /// group be swept above the divider and then filled with rasters, leaving
-    /// the run holding something that cannot render there. Nothing is a
-    /// viewport effect until it contains one.
+    /// An **empty** group answers `true`: it composites nothing in either
+    /// space, so there is nothing it could render wrongly. Its contents cannot
+    /// later betray it either, because the placement rules hold on the way in
+    /// rather than on the way out: a move that would put a non-effect inside a
+    /// group above the divider is refused, and an insert is redirected to the
+    /// nearest legal slot outside it.
     pub fn supports_screen_space(&self, doc: &Document) -> bool {
         self.screen_space_blocker(doc).is_none()
     }
@@ -777,9 +777,6 @@ impl LayerNode {
             LayerNode::Group(g) => {
                 if !g.passthrough {
                     return Some((self.id(), "is an isolated group"));
-                }
-                if g.children.is_empty() {
-                    return Some((self.id(), "is empty"));
                 }
                 g.children
                     .iter()

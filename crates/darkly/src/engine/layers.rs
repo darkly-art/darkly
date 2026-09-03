@@ -1293,12 +1293,12 @@ impl DarklyEngine {
         };
         if blocker == id {
             Err(format!(
-                "\"{}\" can't go in viewport space — it {reason}.",
+                "\"{}\" can't go in viewport space: it {reason}.",
                 name(id)
             ))
         } else {
             Err(format!(
-                "\"{}\" can't go in viewport space — it contains \"{}\", which {reason}.",
+                "\"{}\" can't go in viewport space: it contains \"{}\", which {reason}.",
                 name(id),
                 name(blocker)
             ))

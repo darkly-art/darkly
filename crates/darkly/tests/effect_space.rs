@@ -980,3 +980,63 @@ fn adding_into_a_run_group_lands_at_the_nearest_legal_slot() {
     );
     assert_eq!(run_ids(&engine), vec![group], "the group is still the run");
 }
+
+/// Emptiness is not a disqualification. A group whose last effect is deleted
+/// stays where it is, and moving an empty group up is not an error: it renders
+/// nothing, so there is nothing it can render in the wrong space.
+#[test]
+fn an_empty_group_is_allowed_above_the_boundary() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let a = effect(&mut engine, "invert");
+    let group = engine.group_layers(vec![a]).expect("group the effect");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![group]);
+
+    // Delete the only effect it holds. The group is now empty and still in the
+    // run, rather than being evicted the moment it has nothing to do.
+    engine.remove_layers(vec![a]).expect("delete the effect");
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "an emptied group keeps its place above the divider"
+    );
+    assert!(
+        engine.test_screen_space_effects().is_empty(),
+        "and contributes nothing to the present chain"
+    );
+
+    // Undo brings the effect back, and with it the chain.
+    engine.undo();
+    assert_eq!(run_ids(&engine), vec![group]);
+    assert_eq!(engine.test_screen_space_effects(), vec![a]);
+}
+
+/// …but an empty group has no claim on where the divider sits, so creating one
+/// while a run exists must not sweep it above the line. This is the path that
+/// let a fresh group be swept up and then filled with a raster.
+#[test]
+fn a_freshly_created_group_is_never_swept_into_the_run() {
+    let mut engine = test_engine(16, 16);
+    let raster = engine.add_raster_layer(None);
+    let e = effect(&mut engine, "invert");
+    engine.set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![e]);
+
+    let empty = engine.add_group(None);
+    assert!(
+        !in_run(&engine, empty),
+        "a new empty group lands below the divider, not above it"
+    );
+    assert_eq!(run_ids(&engine), vec![e], "and the run is unchanged");
+
+    // The same, through the gesture that actually creates groups.
+    let wrapped = engine.group_layers(vec![raster]).expect("group the raster");
+    assert!(!in_run(&engine, wrapped));
+    assert_eq!(run_ids(&engine), vec![e]);
+    assert_eq!(
+        stored_count(&engine),
+        1,
+        "the stored intent is not polluted"
+    );
+}
