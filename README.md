@@ -14,11 +14,11 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), the home of happy accidents and beautiful catastrophies. Embrace the chaos, and release your hidden masterpiece. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
 Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
-**Try the demo [here](https://demo.darkly.art).**
+**Use it on the web [here](https://demo.darkly.art).**
 
 Documentation [here](https://darkly.art/docs/).
 
@@ -64,13 +64,13 @@ Veils are essentially fancy shaders, and they are fun toys. But they have practi
 
 ### Voids
 
-https://github.com/user-attachments/assets/a9ac3819-7209-442b-a8ba-93f567a7506e
+![blender-void-demo](https://github.com/user-attachments/assets/c4fcb928-f997-4196-9265-50bcf354fb01)
 
 Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
-You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
+You can use the `Noise` void to generate entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
+Voids support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
 ## Feature Roadmap
 
