@@ -45,15 +45,37 @@
      *  center, so a submenu emerges from under its growing parent. */
     const POP = 0.15;
 
-    /** Annular sector outline: outer arc forward, inner arc back. Angles
-     *  increase clockwise on screen (+y down), hence sweep 1 then 0. */
+    /** Transparent gap between adjacent sectors' visual edges. */
+    const GAP = 4;
+    /** Corner radius. Corners are not drawn in the path: the path is inset
+     *  by GAP / 2 + CORNER and stroked with its own fill color at width
+     *  2 * CORNER with round joins, which re-expands it to size with every
+     *  corner rounded (the classic cheap rounded-sector trick). */
+    const CORNER = 6;
+
+    /** Annular sector outline, inset for the gap-and-round stroke. Angles
+     *  increase clockwise on screen (+y down), hence sweep 1 then 0. The
+     *  angular insets are uniform in arc length (divided by radius), so
+     *  gaps have constant width; a sector too narrow at its inner radius
+     *  to fit both insets collapses there to a stroke-rounded tip. */
     function sectorPath(s: SectorGeom, cx: number, cy: number): string {
+        const pad = GAP / 2 + CORNER;
+        const r0 = s.r0 + pad;
+        const r1 = s.r1 - pad;
         const a1 = s.a0 + s.span;
-        const large = s.span > Math.PI ? 1 : 0;
+        const o0 = s.a0 + pad / r1;
+        const o1 = a1 - pad / r1;
+        let i0 = s.a0 + pad / r0;
+        let i1 = a1 - pad / r0;
+        if (i1 < i0) i0 = i1 = s.a0 + s.span / 2;
         const p = (a: number, r: number) =>
             `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
-        return `M ${p(s.a0, s.r1)} A ${s.r1} ${s.r1} 0 ${large} 1 ${p(a1, s.r1)}`
-            + ` L ${p(a1, s.r0)} A ${s.r0} ${s.r0} 0 ${large} 0 ${p(s.a0, s.r0)} Z`;
+        const arc = (from: number, to: number, r: number, sweep: 0 | 1) =>
+            `A ${r} ${r} 0 ${to - from > Math.PI ? 1 : 0} ${sweep} ${p(sweep ? to : from, r)}`;
+        return `M ${p(o0, r1)} ${arc(o0, o1, r1, 1)}`
+            + ` L ${p(i1, r0)}`
+            + (i1 > i0 ? ` ${arc(i0, i1, r0, 0)}` : '')
+            + ' Z';
     }
 
     /** Per-sector anchor vector `--ax/--ay`: the sector's inner-edge
@@ -111,7 +133,7 @@
          config/hotkeys.svelte.ts. Display-only: input never touches it. -->
     <dialog open class="palette-popup" aria-label="Palette popup"
             style:--cx="{cx}px" style:--cy="{cy}px"
-            style:--grow={GROW} style:--pop={POP}>
+            style:--grow={GROW} style:--pop={POP} style:--corner="{CORNER}px">
         <svg>
             {#each drawOrder as s (key(s))}
                 <path
@@ -121,6 +143,9 @@
                     style={sectorVars(s)}
                     d={sectorPath(s, cx, cy)}
                     style:fill={s.node.visual.kind === 'swatch'
+                        ? s.node.visual.color.slice(0, 7)
+                        : undefined}
+                    style:stroke={s.node.visual.kind === 'swatch'
                         ? s.node.visual.color.slice(0, 7)
                         : undefined}
                     onanimationend={() => settled.add(key(s))}
@@ -182,10 +207,14 @@
        its own inner edge, right out of the parent's rim, with the same
        duration and easing, so parent-grow and submenu-pop read as one
        motion. Transform-only: hit-testing stays pure math. */
+    /* The stroke is the sector's own color: it exists only to widen the
+       inset path back to size with round joins (rounded corners + uniform
+       transparent gaps), never as a visible border. */
     .sector {
         fill: var(--bg-raised);
-        stroke: var(--bg);
-        stroke-width: 2;
+        stroke: var(--bg-raised);
+        stroke-width: calc(2 * var(--corner));
+        stroke-linejoin: round;
         transform-origin: var(--cx) var(--cy);
         animation: pop var(--dur) var(--ease);
     }
@@ -199,6 +228,7 @@
     }
     .sector.highlighted {
         fill: var(--bg-active);
+        stroke: var(--bg-active);
         transform: translate(
                 calc(var(--ax) * -1 * var(--grow)),
                 calc(var(--ay) * -1 * var(--grow)))
@@ -207,8 +237,6 @@
     }
     .hub {
         fill: var(--bg-raised);
-        stroke: var(--text-dim);
-        stroke-width: 1;
         transform-origin: var(--cx) var(--cy);
         transition: transform var(--dur) var(--ease);
     }
