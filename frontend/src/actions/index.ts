@@ -17,6 +17,7 @@ import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
+import { registerPalettePopupAction } from './palette_popup';
 import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
 import { registerPackActions } from './pack_actions';
@@ -973,6 +974,9 @@ export function registerActions() {
 
     // -- Modifier-held color picker (Ctrl+drag → sample color) --
     registerSampleColorAction();
+
+    // -- Radial palette popup (right-drag → wheel of colors and brushes) --
+    registerPalettePopupAction();
 
     // -- Clone brush set-source gesture (brush-scoped modifier+drag) --
     registerCloneSourceAction();

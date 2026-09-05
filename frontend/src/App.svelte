@@ -18,6 +18,7 @@
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
+    import PalettePopup from './ui/palette_popup/PalettePopup.svelte';
     import { menuBar } from './state/menuBar.svelte';
     import CanvasOverlay from './multi_tab/CanvasOverlay.svelte';
     import { shell } from './multi_tab/shell.svelte';
@@ -82,6 +83,7 @@
 <RecoveryModal />
 <AboutModal />
 <CommandPalette />
+<PalettePopup />
 
 <style>
     .app-root {
