@@ -64,7 +64,7 @@ Veils are essentially fancy shaders, and they are fun toys. But they have practi
 
 ### Voids
 
-![blender-void-demo](https://github.com/user-attachments/assets/c4fcb928-f997-4196-9265-50bcf354fb01)
+![blender-void-demo](https://github.com/user-attachments/assets/c969122f-5155-403b-af35-8daf5c569a9d)
 
 Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
