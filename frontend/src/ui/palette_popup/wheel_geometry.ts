@@ -12,10 +12,9 @@
  * (-π, 0). Sector angles may exceed ±π when a child fan straddles the seam;
  * containment is wrap-aware via `angularOffset`.
  *
- * Reference scale, cited in docs/plans/palette-popup.md: Krita's popup
- * palette (385 px disc, 72→92 px color donut, `kis_popup_palette.h`) and
- * Blender's pie menus (radius 100, 12 px dead zone, 8-item max,
- * `DNA_userdef_types.h` / `interface_intern.hh`).
+ * Reference scale: Krita's popup palette (385 px disc, 72→92 px color
+ * donut, `kis_popup_palette.h`) and Blender's pie menus (radius 100, 12 px
+ * dead zone, 8-item max, `DNA_userdef_types.h` / `interface_intern.hh`).
  */
 import { angularOffset } from '../../lib/angle';
 import { rootAt, type WheelNode, type WheelTree } from './model';
@@ -71,33 +70,32 @@ export function hitKey(hit: Hit): string {
 /**
  * Every visible sector for the tree under the current expansion `path`.
  *
- * Ring 0 splits each half evenly among its nodes (Krita's
- * `angleSlice = 360 / slotCount`, per half). Ring k+1 fans the children of
+ * Ring 0 splits each section's arc evenly among its nodes (Krita's
+ * `angleSlice = 360 / slotCount`, per arc). Ring k+1 fans the children of
  * `path[k]` about the parent sector's mid-angle with span
  * `min(π, max(n · CHILD_STEP, parentSpan))`: wide enough to land in, never
- * narrower than the parent, never more than a half turn.
+ * narrower than the parent, never more than a half turn. A parent with
+ * `spread: 'full'` instead hands its children the entire circumference.
  */
 export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
     const out: SectorGeom[] = [];
 
-    const halves = [
-        { nodes: tree.bottom, base: 0, start: 0 },
-        { nodes: tree.top, base: tree.bottom.length, start: -Math.PI },
-    ];
-    for (const half of halves) {
-        const n = half.nodes.length;
+    let base = 0;
+    for (const sec of tree.sections) {
+        const n = sec.nodes.length;
         if (n === 0) continue;
-        const span = Math.PI / n;
-        half.nodes.forEach((node, i) => out.push({
+        const span = sec.span / n;
+        sec.nodes.forEach((node, i) => out.push({
             ring: 0,
-            a0: half.start + i * span,
+            a0: sec.a0 + i * span,
             span,
             r0: HUB_R,
             r1: HUB_R + RING_T,
             unbounded: path.length === 0,
-            path: [half.base + i],
+            path: [base + i],
             node,
         }));
+        base += n;
     }
 
     let parentSector = out.find(s => s.ring === 0 && s.path[0] === path[0]);
@@ -106,7 +104,9 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
         if (!parentSector || parent?.kind !== 'branch' || parent.children.length === 0) break;
         const ring = k + 1;
         const n = parent.children.length;
-        const span = Math.min(Math.PI, Math.max(n * CHILD_STEP, parentSector.span));
+        const span = parent.spread === 'full'
+            ? 2 * Math.PI
+            : Math.min(Math.PI, Math.max(n * CHILD_STEP, parentSector.span));
         const child = span / n;
         const a0 = parentSector.a0 + parentSector.span / 2 - span / 2;
         let next: SectorGeom | undefined;

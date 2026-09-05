@@ -17,13 +17,18 @@ const leaf = (id: string): WheelLeaf =>
 const branch = (id: string, children: WheelNode[]): WheelBranch =>
     ({ kind: 'branch', id, label: id, visual: { kind: 'icon', icon: '' }, children });
 
-/** 4 color leaves below; above, a 3-leaf branch and a branch whose first
- *  child is itself a branch (depth 3). Root order: bottom 0-3, top 4-5. */
+/** Two half-arc sections: 4 color leaves below; above, a 3-leaf branch and
+ *  a branch whose first child is itself a branch (depth 3). Root order:
+ *  bottom 0-3, top 4-5. */
+const bottomNodes = [leaf('c0'), leaf('c1'), leaf('c2'), leaf('c3')];
+const topNodes: WheelNode[] = [
+    branch('recent', [leaf('r0'), leaf('r1'), leaf('r2')]),
+    branch('dry', [branch('charcoals', [leaf('k0'), leaf('k1')]), leaf('d1')]),
+];
 const tree: WheelTree = {
-    bottom: [leaf('c0'), leaf('c1'), leaf('c2'), leaf('c3')],
-    top: [
-        branch('recent', [leaf('r0'), leaf('r1'), leaf('r2')]),
-        branch('dry', [branch('charcoals', [leaf('k0'), leaf('k1')]), leaf('d1')]),
+    sections: [
+        { a0: 0, span: Math.PI, nodes: bottomNodes },
+        { a0: -Math.PI, span: Math.PI, nodes: topNodes },
     ],
 };
 
@@ -36,7 +41,7 @@ const at = (theta: number, r: number): [number, number] =>
 describe('layoutWheel ring 0', () => {
     const layout = layoutWheel(tree, []);
 
-    it('splits each half evenly among its nodes', () => {
+    it('splits each section arc evenly among its nodes', () => {
         const bottom = ring(layout, 0).filter(s => s.path[0] < 4);
         const top = ring(layout, 0).filter(s => s.path[0] >= 4);
         expect(bottom).toHaveLength(4);
@@ -48,6 +53,30 @@ describe('layoutWheel ring 0', () => {
         expect(bottom[3].a0 + bottom[3].span).toBeCloseTo(Math.PI, 9);
         expect(top[0].a0).toBeCloseTo(-Math.PI, 9);
         expect(top[1].a0 + top[1].span).toBeCloseTo(0, 9);
+    });
+
+    it('lays out thirds whose arcs cross the ±π seam', () => {
+        // The shipped shape: colors on the bottom-center third, two brush
+        // branches splitting the top two thirds; the brushes arc crosses ±π.
+        const thirds: WheelTree = {
+            sections: [
+                { a0: Math.PI / 6, span: (2 * Math.PI) / 3, nodes: [leaf('c0'), leaf('c1')] },
+                {
+                    a0: (5 * Math.PI) / 6,
+                    span: (4 * Math.PI) / 3,
+                    nodes: [branch('recent', [leaf('r')]), branch('lib', [leaf('l')])],
+                },
+            ],
+        };
+        const l = layoutWheel(thirds, []);
+        const rMid = HUB_R + RING_T / 2;
+        // Screen-left lands on Recent (left third), up-right on lib.
+        const left = sectorAt(l, ...at(Math.PI, rMid));
+        expect(left.kind === 'sector' && left.sector.path).toEqual([2]);
+        const right = sectorAt(l, ...at(-Math.PI / 3, rMid));
+        expect(right.kind === 'sector' && right.sector.path).toEqual([3]);
+        const down = sectorAt(l, ...at(Math.PI / 2, rMid));
+        expect(down.kind === 'sector' && down.sector.path).toEqual([1]);
     });
 
     it('bands ring 0 radially at [HUB_R, HUB_R + RING_T)', () => {
@@ -62,10 +91,14 @@ describe('layoutWheel ring 0', () => {
         for (const s of ring(layoutWheel(tree, [4]), 0)) expect(s.unbounded).toBe(false);
     });
 
-    it('leaves an empty half sectorless', () => {
-        const empties = layoutWheel({ top: tree.top, bottom: [] }, []);
-        expect(ring(empties, 0).every(s => s.path[0] >= 0)).toBe(true);
-        expect(ring(empties, 0)).toHaveLength(2);
+    it('leaves an empty section sectorless without shifting root indices', () => {
+        const empties = layoutWheel({
+            sections: [
+                { a0: 0, span: Math.PI, nodes: [] },
+                { a0: -Math.PI, span: Math.PI, nodes: topNodes },
+            ],
+        }, []);
+        expect(ring(empties, 0).map(s => s.path[0])).toEqual([0, 1]);
     });
 });
 
@@ -90,20 +123,46 @@ describe('layoutWheel child fans', () => {
 
     it('grows with the child count and clamps at π', () => {
         const wide: WheelTree = {
-            bottom: tree.bottom,
-            top: [branch('wide', Array.from({ length: 10 }, (_, i) => leaf(`w${i}`)))],
+            sections: [
+                { a0: 0, span: Math.PI, nodes: bottomNodes },
+                { a0: -Math.PI, span: Math.PI, nodes: [branch('wide', Array.from({ length: 10 }, (_, i) => leaf(`w${i}`)))] },
+            ],
         };
         const fan = ring(layoutWheel(wide, [4]), 1);
         // 10 · 22.5° = 225° clamps to 180°.
         expect(fan[0].span * fan.length).toBeCloseTo(Math.PI, 9);
 
         const six: WheelTree = {
-            bottom: tree.bottom,
-            top: [branch('six', Array.from({ length: 8 }, (_, i) => leaf(`s${i}`))), branch('other', [leaf('o')])],
+            sections: [
+                { a0: 0, span: Math.PI, nodes: bottomNodes },
+                { a0: -Math.PI, span: Math.PI, nodes: [branch('six', Array.from({ length: 8 }, (_, i) => leaf(`s${i}`))), branch('other', [leaf('o')])] },
+            ],
         };
         const fan8 = ring(layoutWheel(six, [4]), 1);
         // 8 · 22.5° = 180°: exactly at the clamp, wider than the 90° parent.
         expect(fan8[0].span * fan8.length).toBeCloseTo(8 * CHILD_STEP, 9);
+    });
+
+    it("spreads a 'full' branch's children around the entire circumference", () => {
+        const packs = Array.from({ length: 5 }, (_, i) => branch(`p${i}`, [leaf(`b${i}`)]));
+        const full: WheelTree = {
+            sections: [
+                { a0: 0, span: Math.PI, nodes: bottomNodes },
+                { a0: -Math.PI, span: Math.PI, nodes: [{ ...branch('lib', packs), spread: 'full' }] },
+            ],
+        };
+        const layout = layoutWheel(full, [4]);
+        const fan = ring(layout, 1);
+        expect(fan).toHaveLength(5);
+        expect(fan[0].span * fan.length).toBeCloseTo(2 * Math.PI, 9);
+        // Centered on the parent mid-angle (-π/2): the fan starts a half
+        // turn before it.
+        expect(fan[0].a0).toBeCloseTo(-Math.PI / 2 - Math.PI, 9);
+        // No angular gaps anywhere on a full ring.
+        const rMid1 = HUB_R + RING_T * 1.5;
+        for (const theta of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 2.9]) {
+            expect(sectorAt(layout, ...at(theta, rMid1)).kind).toBe('sector');
+        }
     });
 
     it('marks only the outermost ring unbounded and bands radii per ring', () => {
@@ -156,8 +215,9 @@ describe('sectorAt', () => {
         expect(sectorAt(layout, x, y)).toEqual({ kind: 'gap', ring: 1 });
     });
 
-    it('resolves an empty half to a gap on ring 0', () => {
-        const layout = layoutWheel({ top: tree.top, bottom: [] }, []);
+    it('resolves an empty section arc to a gap on ring 0', () => {
+        const layout = layoutWheel(
+            { sections: [{ a0: -Math.PI, span: Math.PI, nodes: topNodes }] }, []);
         const [x, y] = at(Math.PI / 2, HUB_R + 10);
         expect(sectorAt(layout, x, y)).toEqual({ kind: 'gap', ring: 0 });
     });
@@ -167,8 +227,10 @@ describe('sectorAt', () => {
         // start angle -5π/4 wraps past the seam, so theta just above +3π/4
         // (the wrapped image of the fan's first slice) must hit child 0.
         const wide: WheelTree = {
-            bottom: tree.bottom,
-            top: [branch('wide', Array.from({ length: 8 }, (_, i) => leaf(`w${i}`))), branch('other', [leaf('o')])],
+            sections: [
+                { a0: 0, span: Math.PI, nodes: bottomNodes },
+                { a0: -Math.PI, span: Math.PI, nodes: [branch('wide', Array.from({ length: 8 }, (_, i) => leaf(`w${i}`))), branch('other', [leaf('o')])] },
+            ],
         };
         const layout = layoutWheel(wide, [4]);
         const [x, y] = at(0.8 * Math.PI, HUB_R + RING_T * 1.5);

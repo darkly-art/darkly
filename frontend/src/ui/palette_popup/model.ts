@@ -1,11 +1,11 @@
 /**
  * The palette popup's data model: the tree of things one gesture can reach.
  *
- * Sections are the unit of contribution. Each one owns a half of the
- * innermost ring (colors below, brushes above) and produces its nodes fresh
- * per open; the tree is snapshotted for the gesture's lifetime, because a
- * gesture lasts around a second and geometry shifting under the pen would be
- * worse than briefly stale content.
+ * Sections are the unit of contribution. Each one owns an arc of the
+ * innermost ring (today: colors the bottom-center third, brushes the top two
+ * thirds) and produces its nodes fresh per open; the tree is snapshotted for
+ * the gesture's lifetime, because a gesture lasts around a second and
+ * geometry shifting under the pen would be worse than briefly stale content.
  *
  * The geometry and the gesture machine consume `WheelNode[]` only and never
  * branch on what a node shows; the popup component's sector renderer is the
@@ -36,23 +36,38 @@ export interface WheelBranch {
     label: string;
     visual: WheelVisual;
     children: WheelNode[];
+    /** Children normally fan about the parent's mid-angle, never wider than
+     *  a half turn; 'full' spreads them around the entire circumference,
+     *  for branches whose child count is unbounded (brush packs). */
+    spread?: 'full';
 }
 
 export type WheelNode = WheelLeaf | WheelBranch;
 
-/** One open's worth of nodes. Root sectors are indexed bottom-half first
- *  (theta in (0, π), screen-down), then top-half; `rootAt` is the sole
- *  owner of that ordering. */
-export interface WheelTree {
-    top: WheelNode[];
-    bottom: WheelNode[];
+/** An arc of ring 0: spans `[a0, a0 + span)` in increasing screen theta
+ *  (+y down), wrap-aware, so it may cross the ±π seam. */
+export interface WheelArc {
+    a0: number;
+    span: number;
 }
 
 export interface WheelSection {
     id: string;
-    half: 'top' | 'bottom';
+    /** The slice of ring 0 this section's nodes subdivide evenly. */
+    arc: WheelArc;
     /** Called once per open; the result is snapshotted for the gesture. */
     nodes(): WheelNode[];
+}
+
+/** One open's worth of nodes, placed. Root sectors are indexed by flattening
+ *  the sections' nodes in registration order; `rootAt` is the sole owner of
+ *  that ordering. */
+export interface PlacedSection extends WheelArc {
+    nodes: WheelNode[];
+}
+
+export interface WheelTree {
+    sections: PlacedSection[];
 }
 
 /** Keyed by id so re-registration replaces rather than duplicates, the same
@@ -66,12 +81,13 @@ class SectionRegistry {
 
     /** Materialize every section's nodes for one open. */
     snapshot(): WheelTree {
-        const top: WheelNode[] = [];
-        const bottom: WheelNode[] = [];
-        for (const s of this.#sections.values()) {
-            (s.half === 'top' ? top : bottom).push(...s.nodes());
-        }
-        return { top, bottom };
+        return {
+            sections: [...this.#sections.values()].map(s => ({
+                a0: s.arc.a0,
+                span: s.arc.span,
+                nodes: s.nodes(),
+            })),
+        };
     }
 }
 
@@ -79,7 +95,11 @@ export const paletteSections = new SectionRegistry();
 
 /** Root node `i` in the canonical ring-0 sector order. */
 export function rootAt(tree: WheelTree, i: number): WheelNode | undefined {
-    return i < tree.bottom.length ? tree.bottom[i] : tree.top[i - tree.bottom.length];
+    for (const sec of tree.sections) {
+        if (i < sec.nodes.length) return sec.nodes[i];
+        i -= sec.nodes.length;
+    }
+    return undefined;
 }
 
 /** The node a geometry path addresses, or undefined for a dangling path. */

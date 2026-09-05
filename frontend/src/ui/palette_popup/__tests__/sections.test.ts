@@ -83,24 +83,36 @@ function brushDeps(over: Partial<BrushDeps> = {}): BrushDeps & { load: ReturnTyp
 }
 
 describe('brushNodes', () => {
-    it('builds Recent first, then packs in order, as branches of brush leaves', () => {
+    it('builds exactly Recent then Library, with packs inside Library', () => {
         const nodes = brushNodes(brushDeps());
-        expect(nodes.map(n => n.id)).toEqual(['brushes:recent', 'pack:p1']);
+        expect(nodes.map(n => n.id)).toEqual(['brushes:recent', 'brushes:library']);
         const recent = nodes[0] as WheelBranch;
         expect(recent.children.map(c => c.label)).toEqual(['Charcoal', 'Ink']);
-        const pack = nodes[1] as WheelBranch;
+        const library = nodes[1] as WheelBranch;
+        expect(library.children.map(c => c.id)).toEqual(['pack:p1']);
+        const pack = library.children[0] as WheelBranch;
         expect(pack.children.map(c => c.label)).toEqual(['Charcoal', 'Wash']);
     });
 
+    it('spreads Library around the full circumference', () => {
+        const library = brushNodes(brushDeps())[1] as WheelBranch;
+        expect(library.spread).toBe('full');
+    });
+
     it('drops dangling member ids and elides empty branches', () => {
-        const nodes = brushNodes(brushDeps());
+        const library = brushNodes(brushDeps())[1] as WheelBranch;
         // p2's only member does not resolve: no branch at all.
-        expect(nodes.some(n => n.id === 'pack:p2')).toBe(false);
+        expect(library.children.some(n => n.id === 'pack:p2')).toBe(false);
     });
 
     it('omits Recent when nothing recent resolves', () => {
         const nodes = brushNodes(brushDeps({ recentIds: () => ['gone'] }));
-        expect(nodes.map(n => n.id)).toEqual(['pack:p1']);
+        expect(nodes.map(n => n.id)).toEqual(['brushes:library']);
+    });
+
+    it('omits Library when no pack resolves', () => {
+        const nodes = brushNodes(brushDeps({ packs: () => [] }));
+        expect(nodes.map(n => n.id)).toEqual(['brushes:recent']);
     });
 
     it('carries the brush icon into the leaf visual for fallback rendering', () => {

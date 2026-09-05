@@ -8,13 +8,20 @@ const leaf = (id: string): WheelLeaf =>
 const branch = (id: string, children: WheelNode[]): WheelBranch =>
     ({ kind: 'branch', id, label: id, visual: { kind: 'icon', icon: '' }, children });
 
-/** Same shape as the geometry suite's fixture: 4 color leaves below, a
- *  3-leaf Recent branch and a depth-3 branch above. Root order 0-3, 4, 5. */
+/** Same shape as the geometry suite's fixture: two half-arc sections, 4
+ *  color leaves below, a 3-leaf Recent branch and a depth-3 branch above.
+ *  Root order 0-3, 4, 5. */
 const tree: WheelTree = {
-    bottom: [leaf('c0'), leaf('c1'), leaf('c2'), leaf('c3')],
-    top: [
-        branch('recent', [leaf('r0'), leaf('r1'), leaf('r2')]),
-        branch('dry', [branch('charcoals', [leaf('k0'), leaf('k1')]), leaf('d1')]),
+    sections: [
+        { a0: 0, span: Math.PI, nodes: [leaf('c0'), leaf('c1'), leaf('c2'), leaf('c3')] },
+        {
+            a0: -Math.PI,
+            span: Math.PI,
+            nodes: [
+                branch('recent', [leaf('r0'), leaf('r1'), leaf('r2')]),
+                branch('dry', [branch('charcoals', [leaf('k0'), leaf('k1')]), leaf('d1')]),
+            ],
+        },
     ],
 };
 

@@ -1,6 +1,9 @@
 /**
- * The brushes half of the palette popup: a Recent branch first, then one
- * branch per pack, each fanning out to brush leaves.
+ * The brushes section of the palette popup: the top two thirds of ring 0,
+ * as exactly two branches. Recent (left third) fans out to the recent
+ * brushes; Library (right third) opens every pack as a full-circumference
+ * submenu (packs can be numerous, so they get the whole circle rather than
+ * a fan), and each pack fans out to its brush leaves.
  *
  * Committing a leaf loads the brush through `brushGraph.loadBrush`, which
  * records recents itself.
@@ -48,17 +51,28 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
             children: recent.map(b => brushLeaf(b, deps.load)),
         });
     }
+    const packs: WheelNode[] = [];
     for (const pack of deps.packs()) {
         // Dangling member ids resolve to nothing; a pack with no resolvable
         // members contributes no branch rather than an empty fan.
         const members = resolve(pack.members);
         if (members.length === 0) continue;
-        out.push({
+        packs.push({
             kind: 'branch',
             id: `pack:${pack.id}`,
             label: pack.name,
             visual: { kind: 'icon', icon: pack.icon },
             children: members.map(b => brushLeaf(b, deps.load)),
+        });
+    }
+    if (packs.length > 0) {
+        out.push({
+            kind: 'branch',
+            id: 'brushes:library',
+            label: 'Library',
+            visual: { kind: 'icon', icon: 'fa6-solid:layer-group' },
+            spread: 'full',
+            children: packs,
         });
     }
     return out;
@@ -67,7 +81,9 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
 export function registerBrushesSection(): void {
     paletteSections.register({
         id: 'brushes',
-        half: 'top',
+        // The top two thirds: Recent lands on the left one, Library on the
+        // right, meeting at screen-up (theta -π/2).
+        arc: { a0: (5 * Math.PI) / 6, span: (4 * Math.PI) / 3 },
         nodes: () => brushNodes({
             recentIds: () => recentBrushes.items,
             brushes: () => brushLibrary.brushes,

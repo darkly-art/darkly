@@ -34,7 +34,7 @@ function equivalent(a: MachineState, b: MachineState): boolean {
 class PalettePopupStore {
     state = $state<MachineState>(CLOSED);
     /** Snapshotted at open; stable for the gesture's lifetime. */
-    tree = $state<WheelTree>({ top: [], bottom: [] });
+    tree = $state<WheelTree>({ sections: [] });
 
     get isOpen(): boolean {
         return this.state.kind === 'engaged';
