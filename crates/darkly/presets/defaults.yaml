@@ -108,6 +108,15 @@ hotkeys:
   #     can't live here per rule #3). Also reachable via the mask context
   #     menu and the command palette.
 
+mouse_clicks:
+  # Darkly-original (rule #2): the single-gesture cascading radial palette
+  # has no reference-editor prior art (Krita's popup palette is the closest,
+  # and it is flat, click-to-open / click-to-select). Its right-click
+  # binding does agree with this default: a pen's barrel button reaches the
+  # browser as the right button, so barrel-hold + pen-tap summons the wheel.
+  # Verified free: no preset binds rightDrag or any right-button chord.
+  palettePopup: canvas:rightDrag
+
 settings:
   # Canvas defaults.
   canvas.width: 1920
