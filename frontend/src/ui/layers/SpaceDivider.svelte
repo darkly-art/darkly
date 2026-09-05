@@ -2,6 +2,8 @@
     import { app } from '../../state/app.svelte';
     import { pointerDrag } from '../workspace/pointerDrag';
     import { gapAt, maxEligible } from './spaceDivider';
+    import { layerDropTarget } from './dropTarget.svelte';
+    import { rootGapIndex } from './dropTarget';
     import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate?: () => void } = $props();
@@ -48,6 +50,10 @@
         onStart: (e) => { dragCount = countAt(e.clientY); },
         onMove: (_dx, _dy, e) => { dragCount = countAt(e.clientY); },
         onEnd,
+    }}
+    use:layerDropTarget={{
+        gap: rootGapIndex(app.dropRows, app.screenSpaceCount),
+        onupdate: () => onupdate?.(),
     }}
 >
     <span class="rule"></span>

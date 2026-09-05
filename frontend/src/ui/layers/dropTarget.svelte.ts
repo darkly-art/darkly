@@ -46,9 +46,12 @@ export function layerDropTarget(node: HTMLElement, params: LayerDropParams) {
     function resolve(e: DragEvent): { band: Band['band']; drop: DropResolution | null } | null {
         const rows = app.dropRows;
         if (current.gap !== undefined) {
+            // A gap site spans the panel's width, so X reads the same way it
+            // does on a row unless the site pins a depth outright.
+            const rect = node.getBoundingClientRect();
             return {
                 band: 'above',
-                drop: resolveGapDrop(rows, current.gap, 0, current.pin ?? 'min'),
+                drop: resolveGapDrop(rows, current.gap, e.clientX - rect.left, current.pin),
             };
         }
         if (current.rowId === undefined) return null;

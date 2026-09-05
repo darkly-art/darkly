@@ -5,6 +5,7 @@ import {
     bandToGap,
     gapDepthRange,
     resolveGapDrop,
+    rootGapIndex,
 } from '../dropTarget';
 import type { DropRow } from '../../../state/layerTree';
 
@@ -72,9 +73,9 @@ describe('gapDepthRange', () => {
 });
 
 describe('bandToGap', () => {
-    it('splits a leaf row at its midpoint', () => {
-        expect(bandToGap(2, false, 0.1)).toEqual({ band: 'above', gap: 2, pin: 'min' });
-        expect(bandToGap(2, false, 0.9)).toEqual({ band: 'below', gap: 3, pin: 'max' });
+    it('splits a leaf row at its midpoint, naming no depth', () => {
+        expect(bandToGap(2, false, 0.1)).toEqual({ band: 'above', gap: 2 });
+        expect(bandToGap(2, false, 0.9)).toEqual({ band: 'below', gap: 3 });
     });
 
     it('gives a group header a third band for its interior', () => {
@@ -155,26 +156,49 @@ describe('resolveGapDrop', () => {
 });
 
 /**
- * The band pins reproduce the panel's pre-existing edge semantics exactly: an
- * edge drop lands next to the row it was gestured at, never reparenting on its
- * own. Only the X reading, which the bands do not use, can change parent.
+ * The reported bug, end to end through the two functions the action composes:
+ * one group holding one layer, and the user drags that layer down and out.
  */
-describe('band pins preserve edge semantics', () => {
-    it('a leaf lower edge stays a sibling of that leaf', () => {
+describe('the reported gesture', () => {
+    it('drags the only child out of the only group', () => {
+        // Lower half of l2 (row index 1), pointer swung left to the root indent.
         const band = bandToGap(1, false, 0.9);
-        const res = resolveGapDrop(singleGroup, band.gap, xFor(0), band.pin);
-        expect(res).toEqual({ depth: 1, target: { target_type: 'before', target_id: 2 } });
+        expect(resolveGapDrop(singleGroup, band.gap, xFor(0), band.pin)).toEqual({
+            depth: 0,
+            target: { target_type: 'before', target_id: 1 },
+        });
     });
 
-    it('a leaf upper edge stays a sibling of that leaf', () => {
-        const band = bandToGap(1, false, 0.1);
-        const res = resolveGapDrop(singleGroup, band.gap, xFor(0), band.pin);
-        expect(res).toEqual({ depth: 1, target: { target_type: 'into_top', target_id: 1 } });
+    it('keeps it in the group when the pointer stays at the child indent', () => {
+        const band = bandToGap(1, false, 0.9);
+        expect(resolveGapDrop(singleGroup, band.gap, xFor(1), band.pin)).toEqual({
+            depth: 1,
+            target: { target_type: 'before', target_id: 2 },
+        });
     });
 
-    it('a group upper edge lands above the group', () => {
-        const band = bandToGap(0, true, 0.1);
-        const res = resolveGapDrop(singleGroup, band.gap, xFor(9), band.pin);
-        expect(res).toEqual({ depth: 0, target: { target_type: 'after', target_id: 1 } });
+    it('a group into-band still names the deep end whatever X says', () => {
+        const band = bandToGap(0, true, 0.5);
+        expect(resolveGapDrop(singleGroup, band.gap, xFor(0), band.pin)).toEqual({
+            depth: 1,
+            target: { target_type: 'into_top', target_id: 1 },
+        });
+    });
+});
+
+describe('rootGapIndex', () => {
+    it('counts past nested rows to the nth root child', () => {
+        // nested: g1(0) g2(1) l3(2) l4(0) — root children are indices 0 and 3.
+        expect(rootGapIndex(nested, 0)).toBe(0);
+        expect(rootGapIndex(nested, 1)).toBe(3);
+    });
+
+    it('lands at the end of the list for a trailing divider', () => {
+        expect(rootGapIndex(nested, 2)).toBe(nested.length);
+        expect(rootGapIndex(nested, 99)).toBe(nested.length);
+    });
+
+    it('is the end of an empty list', () => {
+        expect(rootGapIndex([], 0)).toBe(0);
     });
 });

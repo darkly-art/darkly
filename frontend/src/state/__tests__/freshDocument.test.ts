@@ -13,6 +13,8 @@ function fakeEngine() {
         addFilter: vi.fn((_req: { pipeline: string }) => Promise.resolve(nextId++)),
         setLayerVisible: vi.fn(),
         setScreenSpaceBoundary: vi.fn(),
+        groupLayers: vi.fn((_req: { ids: number[] }) => Promise.resolve(nextId++)),
+        setLayerName: vi.fn(),
     };
     return { engine: { api } as unknown as Engine, api };
 }
@@ -55,6 +57,32 @@ describe('freshDocument recipes', () => {
             // never crosses the divider on its own.
             expect(api.setScreenSpaceBoundary).toHaveBeenCalledTimes(1);
             expect(api.setScreenSpaceBoundary).toHaveBeenCalledWith({ count: 4 });
+        });
+
+        // The four are one named group, so the starter document reads as a
+        // single row. Grouped after the boundary moves, because the new group
+        // inherits the topmost source's side of the divider — group first and
+        // the whole arrangement lands in canvas space.
+        it('wraps the four effects in one named group, after the boundary moves', async () => {
+            const { engine, api } = fakeEngine();
+            const { inst } = fakeInstance(engine);
+            await RECIPES.demo.seedViewportEffects(inst, 800, 600);
+
+            expect(api.groupLayers).toHaveBeenCalledTimes(1);
+            const grouped = api.groupLayers.mock.calls[0][0].ids;
+            const seeded = await Promise.all(
+                api.addFilter.mock.results.map((r: any) => r.value),
+            );
+            expect(grouped).toEqual(seeded);
+
+            expect(api.setLayerName).toHaveBeenCalledWith({
+                id: await api.groupLayers.mock.results[0].value,
+                name: 'Viewport Effects',
+            });
+
+            const boundaryOrder = api.setScreenSpaceBoundary.mock.invocationCallOrder[0];
+            const groupOrder = api.groupLayers.mock.invocationCallOrder[0];
+            expect(boundaryOrder).toBeLessThan(groupOrder);
         });
 
         // Regression: the demo booted with all four effects applied, because

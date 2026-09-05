@@ -48,6 +48,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             // run never grows on its own: adding a layer always lands it below
             // the line, whatever it is.
             const api = instance.engine!.api;
+            const ids: number[] = [];
             for (const [pipeline, params] of [
                 ['rainy_glass', { direction: 135 }],
                 ['grain', { speed: 0.05 }],
@@ -55,9 +56,22 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                 ['vhs', {}],
             ] as const) {
                 const id = await api.addFilter({ pipeline, params, anchor: null });
-                if (id != null) api.setLayerVisible({ id, visible: false });
+                if (id != null) {
+                    api.setLayerVisible({ id, visible: false });
+                    ids.push(id);
+                }
             }
             api.setScreenSpaceBoundary({ count: 4 });
+            // Wrapped in one group, so the starter document shows the stack as
+            // a single tidy row rather than four, and demonstrates that a group
+            // of effects is itself a viewport-space citizen. Grouped *after*
+            // the boundary moves: the new group takes over the topmost source's
+            // side of the divider, so it inherits the run rather than dropping
+            // the whole arrangement into canvas space.
+            if (ids.length > 0) {
+                const groupId = await api.groupLayers({ ids });
+                if (groupId != null) api.setLayerName({ id: groupId, name: 'Viewport Effects' });
+            }
             // The panel read the tree when it mounted, which is before any of
             // this existed. Nothing else refreshes it — these layers are added
             // straight through the API rather than through an app-state method.

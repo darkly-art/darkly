@@ -35,7 +35,8 @@ export interface DropResolution {
 export interface Band {
     band: 'above' | 'below' | 'into';
     gap: number;
-    pin: 'min' | 'max';
+    /** Set only when the band names a depth outright; otherwise cursor X picks. */
+    pin?: 'min' | 'max';
 }
 
 /**
@@ -61,27 +62,44 @@ export function gapDepthRange(rows: DropRow[], gap: number): { min: number; max:
 }
 
 /**
- * Which gap a pointer in row `rowIndex` is addressing, and at what depth, from
- * how far down the row it sits.
- *
- * The upper band addresses the gap above the row and pins to the shallow end of
- * it; the lower band addresses the gap below and pins deep. Those two pins are
- * what make a drop stay in the parent it was gestured at, so an edge drop reads
- * as "next to this row" rather than as a reparent the pointer never asked for.
+ * Which gap a pointer in row `rowIndex` is addressing, from how far down the row
+ * it sits. The upper band addresses the gap above the row, the lower band the gap
+ * below it; neither names a depth, because that is what cursor X is for.
  *
  * A group has a third band: 25%–75% means "drop inside me", the only way to
  * reach a *collapsed* group's interior, since an expanded one is reachable
- * through the gap below its header. It resolves to that same gap, pinned deep.
+ * through the gap below its header. That band does name a depth — the deepest
+ * the gap allows — because "inside me" is a statement about parentage, not a
+ * position the pointer is gesturing at.
  */
 export function bandToGap(rowIndex: number, isGroup: boolean, yRatio: number): Band {
     if (isGroup) {
-        if (yRatio < 0.25) return { band: 'above', gap: rowIndex, pin: 'min' };
-        if (yRatio > 0.75) return { band: 'below', gap: rowIndex + 1, pin: 'max' };
+        if (yRatio < 0.25) return { band: 'above', gap: rowIndex };
+        if (yRatio > 0.75) return { band: 'below', gap: rowIndex + 1 };
         return { band: 'into', gap: rowIndex + 1, pin: 'max' };
     }
     return yRatio < 0.5
-        ? { band: 'above', gap: rowIndex, pin: 'min' }
-        : { band: 'below', gap: rowIndex + 1, pin: 'max' };
+        ? { band: 'above', gap: rowIndex }
+        : { band: 'below', gap: rowIndex + 1 };
+}
+
+/**
+ * The gap that sits directly above the `n`th root child — where the viewport
+ * divider physically is, given it renders before that row.
+ *
+ * `rows` is a depth-first flatten, so a root child is a `depth === 0` entry and
+ * counting those to `n` walks past every nested row in between. `n` at or past
+ * the number of root children lands at the end of the list, which is the
+ * trailing divider's position.
+ */
+export function rootGapIndex(rows: DropRow[], n: number): number {
+    let seen = 0;
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i].depth !== 0) continue;
+        if (seen === n) return i;
+        seen++;
+    }
+    return rows.length;
 }
 
 /**

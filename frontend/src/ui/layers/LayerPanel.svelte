@@ -5,6 +5,7 @@
     import LayerFooter from './LayerFooter.svelte';
     import SpaceDivider from './SpaceDivider.svelte';
     import { bindingSite } from '../../actions/binding_site';
+    import { layerDropTarget } from './dropTarget.svelte';
 
     function refresh() {
         app.refreshLayerTree();
@@ -15,13 +16,6 @@
         if (app.engine) refresh();
     });
 
-    function onDragOver(e: DragEvent) {
-        e.preventDefault();
-    }
-
-    function onDrop(e: DragEvent) {
-        e.preventDefault();
-    }
 </script>
 
 <!-- The panel is the binding site for `layerPanel`-scoped hotkeys (e.g.
@@ -37,7 +31,14 @@
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
+    <!-- The list's own drop target is the empty space under the last row: a
+         drop there means "below everything, at root", which is the one place
+         the row gestures cannot reach when the bottom row is nested. Rows stop
+         their own drag events, so this only ever sees the gap beneath them. -->
+    <div
+        class="layer-list"
+        use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
+    >
         <!-- The divider is a row in the flow, not an overlay: rows are not a
              fixed height (groups nest, modifiers add sub-rows), so anything
              positioned by arithmetic on a row count lands mid-row. Its index in
