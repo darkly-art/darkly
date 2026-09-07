@@ -271,8 +271,12 @@ impl DarklyEngine {
         // Composite cache is rebuilt on demand — same forcing the export
         // readback does, so the capture sees the current document state
         // even when no surface present has happened (headless / tests).
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        );
 
         let rec = &mut self.recorder;
         let (fw, fh) = (rec.frame_w, rec.frame_h);

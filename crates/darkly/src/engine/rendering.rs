@@ -755,6 +755,7 @@ impl DarklyEngine {
             surface,
             surface_config,
             &mut self.doc,
+            self.isolated_node,
         );
         let compositor_us = t_comp.elapsed().as_micros() as u64;
 

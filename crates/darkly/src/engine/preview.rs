@@ -258,8 +258,12 @@ impl DarklyEngine {
             // Refresh the composite so the preview reflects the current
             // document, even with no surface present yet (mirrors
             // `start_export`).
-            self.compositor
-                .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+            self.compositor.render_offscreen(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut self.doc,
+                self.isolated_node,
+            );
         }
         let (w, h) = (
             self.compositor.canvas_width(),

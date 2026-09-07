@@ -840,6 +840,11 @@ impl DarklyEngine {
             engine.brush_pipelines.selection_bind_group_layout(),
         );
 
+        // Push the persisted pixel-filter preference so a fresh session
+        // presents through it. The compositor starts at auto and never reads
+        // config itself; the engine owns the push path.
+        engine.set_pixel_filter(&crate::config::get_str("display.pixelFilter"));
+
         engine
     }
 }
@@ -1033,6 +1038,12 @@ impl DarklyEngine {
         self.compositor.test_node_texture_count()
     }
 
+    /// Number of compositor `GroupState`s currently allocated. Test-only
+    /// metric for the bake-leak regression test.
+    pub fn test_group_state_count(&self) -> usize {
+        self.compositor.test_group_state_count()
+    }
+
     /// Force-drain both undo stacks and run `on_evict` on every entry,
     /// releasing any tombstoned GPU textures the actions own. Test-only
     /// hook for leak-cycle assertions that need to observe the post-
@@ -1146,8 +1157,12 @@ impl DarklyEngine {
     /// assert that a steady frame stays quiescent.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_render_offscreen(&mut self) -> bool {
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc)
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        )
     }
 
     /// Blocking readback of the root composited canvas. For test assertions
@@ -1156,8 +1171,12 @@ impl DarklyEngine {
     /// compositor (no surface to present to).
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_canvas(&mut self) -> Vec<u8> {
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        );
         let texture = self.compositor.composited_texture();
         let w = self.compositor.canvas_width();
         let h = self.compositor.canvas_height();
@@ -1179,8 +1198,12 @@ impl DarklyEngine {
     /// pre-present composite cache.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_present(&mut self) -> Vec<u8> {
-        self.compositor
-            .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
+        self.compositor.test_present_to_canvas(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        )
     }
 
     /// Blocking readback of the present pass through the **production** view
@@ -1197,6 +1220,7 @@ impl DarklyEngine {
             &mut self.doc,
             viewport_w,
             viewport_h,
+            self.isolated_node,
         )
     }
 
@@ -1212,6 +1236,7 @@ impl DarklyEngine {
             &mut self.doc,
             viewport_w,
             viewport_h,
+            self.isolated_node,
         )
     }
 

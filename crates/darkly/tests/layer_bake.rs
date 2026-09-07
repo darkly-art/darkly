@@ -666,3 +666,39 @@ fn merge_layers_refuses_a_screen_space_source() {
     assert!(engine.has_layer(viewport_effect));
     assert!(engine.has_layer(keep));
 }
+
+/// Regression: `bake_subtree_to_layer` must not leave its transient bake
+/// `GroupState` (three canvas-sized textures) allocated after the merge —
+/// it once stashed one under the sentinel null id for the rest of the
+/// session, and each entry survived every subsequent merge.
+#[test]
+fn merge_down_leaks_no_group_state() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 64.0, [1.0, 0.0, 0.0]);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, upper, 96.0, 64.0, [0.0, 0.0, 1.0]);
+
+    let before = engine.test_group_state_count();
+    engine.merge_down(upper).expect("merge_down should succeed");
+    assert_eq!(
+        engine.test_group_state_count(),
+        before,
+        "merge must not leave the transient bake GroupState allocated"
+    );
+
+    // Repeat with fresh layers: the count must stay flat across merges.
+    let a = engine.add_raster_layer(None);
+    paint_dot(&mut engine, a, 64.0, 32.0, [0.0, 1.0, 0.0]);
+    let b = engine.add_raster_layer(None);
+    paint_dot(&mut engine, b, 64.0, 96.0, [1.0, 1.0, 0.0]);
+    engine
+        .merge_down(b)
+        .expect("second merge_down should succeed");
+    assert_eq!(
+        engine.test_group_state_count(),
+        before,
+        "repeated merges must not accumulate group state"
+    );
+}

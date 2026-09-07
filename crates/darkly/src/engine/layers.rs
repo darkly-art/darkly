@@ -1576,11 +1576,11 @@ impl DarklyEngine {
             return self.isolated_node;
         }
         self.isolated_node = id;
-        // Mirror to the compositor so the render walk can filter off-path
-        // subtrees, then resync host uniforms — the `isolated` flag on a
-        // host flips depending on whether one of its filters is the new
-        // target.
-        self.compositor.set_isolated_node(id);
+        // Resync host uniforms — the `isolated` flag on a host flips
+        // depending on whether one of its filters is the new target — and
+        // mark dirty so the next frame recomposites: the render walk reads
+        // `engine.isolated_node` per frame, but nothing else tells the
+        // compositor a frame is owed.
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.isolated_node
@@ -1589,11 +1589,6 @@ impl DarklyEngine {
     /// Read the current isolated-node id, if any.
     pub fn isolated_node(&self) -> Option<LayerId> {
         self.isolated_node
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_compositor_isolated_node(&self) -> Option<LayerId> {
-        self.compositor.test_isolated_node()
     }
 
     /// True when the host's `isolated` blend uniform should fire — i.e. the

@@ -142,8 +142,12 @@ impl DarklyEngine {
         // Force an offscreen composite so the composite texture is fresh,
         // even when this engine is headless (no surface present has run
         // since the last doc mutation).
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        );
 
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();

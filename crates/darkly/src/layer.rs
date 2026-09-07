@@ -730,9 +730,9 @@ impl LayerNode {
     /// delegates back through `ctx` into a compositor-private method that
     /// owns the GPU work — variant *knows itself*, compositor *does the
     /// work*.
-    pub fn compose_into(&self, ctx: &mut crate::gpu::compositor::CompositionContext<'_>) {
+    pub fn compose_into(&self, ctx: &mut crate::gpu::compose_walk::CompositionContext<'_>) {
         match self {
-            LayerNode::Layer(layer) => ctx.compose_layer(layer),
+            LayerNode::Layer(layer) => layer.compose_into(ctx),
             LayerNode::Group(group) => ctx.compose_group(group),
         }
     }
@@ -886,6 +886,23 @@ impl Layer {
             Layer::Vector(_) => TransformCapability::None,
             // The divider has nothing to transform.
             Layer::Divider(_) => TransformCapability::None,
+        }
+    }
+
+    /// Composite this layer into its parent group's accumulators. The
+    /// variant dispatch is owned by `Layer` — sibling of
+    /// [`LayerNode::compose_into`], one level down — so the compositor never
+    /// asks which kind it received; each arm delegates back through `ctx`
+    /// into a compositor-private method that owns the GPU work. A new
+    /// in-place layer kind slots in here, editing this file only.
+    pub fn compose_into(&self, ctx: &mut crate::gpu::compose_walk::CompositionContext<'_>) {
+        match self {
+            // An effect layer transforms the running group accumulator in
+            // place (everything composited below it) rather than blending a
+            // texture in, so it takes a separate arm from the raster/void
+            // blend path.
+            Layer::Filter(f) => ctx.compose_effect(f),
+            _ => ctx.compose_layer(self),
         }
     }
 

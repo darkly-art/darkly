@@ -61,7 +61,7 @@ impl DarklyEngine {
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &visible_ids,
             result_id,
         );
@@ -232,7 +232,7 @@ impl DarklyEngine {
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &[node_id],
             result_id,
         );

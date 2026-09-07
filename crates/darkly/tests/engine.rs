@@ -4839,7 +4839,6 @@ fn isolation_change_commits_active_linked_transform_before_switching_policy() {
     assert_ne!(engine.test_readback_layer(host), host_before);
     assert_ne!(engine.test_readback_mask(host), mask_before);
     assert_eq!(engine.isolated_node(), Some(mask));
-    assert_eq!(engine.test_compositor_isolated_node(), Some(mask));
 }
 
 #[test]
@@ -4864,7 +4863,6 @@ fn failed_transform_commit_rejects_isolation_change() {
     assert_eq!(engine.set_isolated_node(Some(mask)), None);
 
     assert_eq!(engine.isolated_node(), None);
-    assert_eq!(engine.test_compositor_isolated_node(), None);
     assert!(engine.has_floating());
     assert_eq!(engine.test_transform_target_ids(), vec![host, mask]);
     engine.test_set_transform_commit_failure(None);

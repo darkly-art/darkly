@@ -110,9 +110,9 @@ impl Compositor {
     /// floating creates the layer before its texture).
     fn target_format_and_dims(&self, target_layer: LayerId) -> (wgpu::TextureFormat, u32, u32) {
         match self.node_textures.get(&target_layer) {
-            Some(t) => {
-                let ext = t.layer_extent();
-                (t.format(), ext.width, ext.height)
+            Some(s) => {
+                let ext = s.texture.layer_extent();
+                (s.texture.format(), ext.width, ext.height)
             }
             None => (
                 wgpu::TextureFormat::Rgba8Unorm,
@@ -174,7 +174,7 @@ impl Compositor {
         target_layer: LayerId,
         semantics: &'static crate::document::PixelTransformSemantics,
     ) -> Option<crate::gpu::transform::TransformState> {
-        let layer = self.node_textures.get(&target_layer)?;
+        let layer = &self.node_textures.get(&target_layer)?.texture;
         let target_format = layer.format();
         if target_format != semantics.format {
             return None;
@@ -184,10 +184,11 @@ impl Compositor {
         // Re-borrow `layer` after `allocate_preview_resources` — the helper
         // doesn't take `&mut self`, but rust-analyzer prefers the explicit
         // re-fetch over keeping the borrow live across the helper call.
-        let layer = self
+        let layer = &self
             .node_textures
             .get(&target_layer)
-            .expect("layer present after preview allocation");
+            .expect("layer present after preview allocation")
+            .texture;
         self.transform_pass.set_floating_content_from_gpu(
             device,
             queue,
@@ -351,7 +352,7 @@ impl Compositor {
         let origin = self.canvas_origin;
         let canvas_rect = self.canvas_rect();
         for (param, state) in params.iter().zip(&session.targets) {
-            let Some(live) = self.node_textures.get(&param.node_id) else {
+            let Some(live) = self.node_textures.get(&param.node_id).map(|s| &s.texture) else {
                 return false;
             };
             self.transform_pass.update_state_uniforms(
@@ -473,7 +474,7 @@ impl Compositor {
             return;
         };
         let live = match self.node_textures.get(&state.target_layer) {
-            Some(t) => t,
+            Some(s) => &s.texture,
             None => return,
         };
 
@@ -624,7 +625,7 @@ impl Compositor {
             return;
         };
         let live = match self.node_textures.get(&state.target_layer) {
-            Some(t) => t,
+            Some(s) => &s.texture,
             None => return,
         };
 
@@ -689,9 +690,9 @@ impl Compositor {
             None => return,
         };
         let uniforms = BlendUniforms {
-            opacity: cache.opacity,
-            blend_mode: cache.blend_mode,
-            isolated: cache.isolated as u32,
+            opacity: cache.last_uniforms.opacity,
+            blend_mode: cache.last_uniforms.blend_mode,
+            isolated: cache.last_uniforms.isolated,
             _pad1: 0.0,
             // The preview texture is window-sized and window-anchored, so it
             // composites as a "layer" occupying the canvas window in the plane:

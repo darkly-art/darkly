@@ -981,8 +981,12 @@ impl DarklyEngine {
             // which conflicts with the immutable texture borrows held
             // from there on.
             if sample_merged {
-                self.compositor
-                    .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+                self.compositor.render_offscreen(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut self.doc,
+                    self.isolated_node,
+                );
             }
 
             // Create the stroke buffer and save the pre-stroke snapshot.

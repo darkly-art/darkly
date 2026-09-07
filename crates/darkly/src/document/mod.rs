@@ -447,6 +447,16 @@ impl Document {
         self.find_filter(self.mask_filter_id(host_id)?)
     }
 
+    /// The host's mask filter id when that mask is *visible* — the one
+    /// derivation every masked compose / uniform / snapshot path keys off.
+    /// `None` for a missing mask and a hidden one alike, so consumers never
+    /// re-check visibility themselves.
+    pub fn visible_mask_of(&self, host: LayerId) -> Option<LayerId> {
+        self.mask_filter(host)
+            .filter(|m| m.common.visible)
+            .map(|m| m.id)
+    }
+
     pub fn has_mask(&self, host_id: LayerId) -> bool {
         self.mask_filter_id(host_id).is_some()
     }
@@ -795,12 +805,7 @@ impl Document {
             let Some(node) = self.find_node(child_id) else {
                 continue;
             };
-            if node.needs_before_snapshot()
-                && self
-                    .mask_filter(child_id)
-                    .map(|m| m.common.visible)
-                    .unwrap_or(false)
-            {
+            if node.needs_before_snapshot() && self.visible_mask_of(child_id).is_some() {
                 out.push(child_id);
             }
             if matches!(node, LayerNode::Group(_)) {
