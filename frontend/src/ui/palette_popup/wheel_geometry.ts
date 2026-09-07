@@ -29,6 +29,15 @@ export const HUB_R = 28;
  *  radius at ring 1's midline. */
 export const RING_T = 68;
 
+/** Fraction of its ring's depth a highlighted or expanded sector grows
+ *  radially outward: inner and angular edges stay fixed, only the outer
+ *  edge extends. Expansion is permanent while a branch stays on the path,
+ *  which is why the growth is part of layout, not presentation: rings are
+ *  strided `RING_STRIDE` apart so each submenu ring begins exactly at its
+ *  expanded parent's grown outer edge. */
+export const GROW = 0.2;
+export const RING_STRIDE = RING_T * (1 + GROW);
+
 /** Angular step per child sector, 22.5°: Blender's 8-item pie gives 45°
  *  slots at radius ~100; at ring 1's midline (~130 px) 22.5° subtends about
  *  the same arc length. */
@@ -115,8 +124,8 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
                 ring,
                 a0: a0 + i * child,
                 span: child,
-                r0: HUB_R + ring * RING_T,
-                r1: HUB_R + (ring + 1) * RING_T,
+                r0: HUB_R + ring * RING_STRIDE,
+                r1: HUB_R + ring * RING_STRIDE + RING_T,
                 unbounded: ring === path.length,
                 path: [...parentSector!.path, i],
                 node,
@@ -134,8 +143,11 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
  *
  * Radius bands pick the ring, clamped to the deepest expanded one (that ring
  * is unbounded outward); angle picks the sector within it, or `gap` between
- * fans. Pure polar math, the way Krita's `calculateColorIndex` resolves its
- * color donut: the DOM is never consulted.
+ * fans. Bands are `RING_STRIDE` wide: the zone between a ring's nominal
+ * depth and the next ring's start is the expanded parent's grown flesh and
+ * resolves to its own ring. Pure polar math, the way Krita's
+ * `calculateColorIndex` resolves its color donut: the DOM is never
+ * consulted.
  */
 export function sectorAt(layout: SectorGeom[], dx: number, dy: number): Hit {
     const r = Math.hypot(dx, dy);
@@ -143,7 +155,7 @@ export function sectorAt(layout: SectorGeom[], dx: number, dy: number): Hit {
     const theta = Math.atan2(dy, dx);
     let deepest = 0;
     for (const s of layout) if (s.ring > deepest) deepest = s.ring;
-    const k = Math.min(Math.floor((r - HUB_R) / RING_T), deepest);
+    const k = Math.min(Math.floor((r - HUB_R) / RING_STRIDE), deepest);
     for (const s of layout) {
         if (s.ring !== k) continue;
         if (angularOffset(theta, s.a0) < s.span) return { kind: 'sector', sector: s };

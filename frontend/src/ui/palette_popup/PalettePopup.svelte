@@ -4,6 +4,7 @@
     import {
         layoutWheel,
         hitKey,
+        GROW,
         HUB_R,
         type SectorGeom,
     } from './wheel_geometry';
@@ -38,15 +39,27 @@
         if (!palettePopup.isOpen) settled.clear();
     });
 
-    /** A highlighted sector scales up about the wheel center by this
-     *  fraction; badges shift outward the matching distance. */
-    const GROW = 0.2;
     /** Newly expanded rings pop outward from this fraction closer to the
      *  center, so a submenu emerges from under its growing parent. */
     const POP = 0.15;
 
+    /** The grown shape: same inner and angular edges, outer edge extended
+     *  by GROW of the ring's depth. Purely geometric, so gaps, corner
+     *  radii, and the inner edge stay pixel-identical to the rest shape. */
+    const grownGeom = (s: SectorGeom): SectorGeom =>
+        ({ ...s, r1: s.r1 + (s.r1 - s.r0) * GROW });
+
+    /** A branch stays grown for as long as its subtree is open: expansion
+     *  is permanent while the sector is a prefix of the current path (the
+     *  submenu ring starts at the grown outer edge, see RING_STRIDE). */
+    const isExpanded = (s: SectorGeom) =>
+        engaged !== null &&
+        s.path.length <= engaged.path.length &&
+        s.path.every((v, i) => engaged!.path[i] === v);
+    const isGrown = (s: SectorGeom) => key(s) === highlightKey || isExpanded(s);
+
     /** Transparent gap between adjacent sectors' visual edges. */
-    const GAP = 4;
+    const GAP = 2;
     /** Corner radius. Corners are not drawn in the path: the path is inset
      *  by GAP / 2 + CORNER and stroked with its own fill color at width
      *  2 * CORNER with round joins, which re-expands it to size with every
@@ -78,18 +91,16 @@
             + ' Z';
     }
 
-    /** Per-sector anchor vector `--ax/--ay`: the sector's inner-edge
-     *  midpoint relative to the wheel center (mid-angle unit vector times
-     *  r0). The grow and pop transforms pair a scale about the wheel center
-     *  with a compensating translate along this vector, which holds the
-     *  inner edge still while the outer edge moves: growth is radially
-     *  outward from the sector's own anchor, not a drift of the whole
-     *  slice. Exact at the mid-angle; toward the corners the inner edge
-     *  slides tangentially by up to a few px on the widest sectors (the
-     *  price of staying a single affine transform), masked by the motion. */
-    function sectorVars(s: SectorGeom): string {
+    /** Per-sector style: the rest and grown outlines as CSS `d` values
+     *  (growth animates by interpolating the path itself, which is what
+     *  keeps the inner edge exactly still), plus the anchor vector
+     *  `--ax/--ay` (inner-edge midpoint relative to the wheel center) that
+     *  the entrance pop's compensated transform springs out along. */
+    function sectorStyle(s: SectorGeom, cx: number, cy: number): string {
         const mid = s.a0 + s.span / 2;
-        return `--ax: ${(Math.cos(mid) * s.r0).toFixed(1)}px;`
+        return `--d: path('${sectorPath(s, cx, cy)}');`
+            + ` --d-grown: path('${sectorPath(grownGeom(s), cx, cy)}');`
+            + ` --ax: ${(Math.cos(mid) * s.r0).toFixed(1)}px;`
             + ` --ay: ${(Math.sin(mid) * s.r0).toFixed(1)}px;`;
     }
 
@@ -110,6 +121,14 @@
     }
 
     const key = (s: SectorGeom) => `sector:${s.path.join('.')}`;
+
+    /** Cursor marker: half-diagonal of the diamond drawn at the pointer. */
+    const DIAMOND_R = 6;
+    const diamond = (x: number, y: number) =>
+        `M ${x.toFixed(1)} ${(y - DIAMOND_R).toFixed(1)}`
+        + ` L ${(x + DIAMOND_R).toFixed(1)} ${y.toFixed(1)}`
+        + ` L ${x.toFixed(1)} ${(y + DIAMOND_R).toFixed(1)}`
+        + ` L ${(x - DIAMOND_R).toFixed(1)} ${y.toFixed(1)} Z`;
 
     // The gesture belongs to the pointer, but Escape / focus loss must still
     // bail out mid-thread. Window-level because the overlay never has focus.
@@ -138,10 +157,11 @@
             {#each drawOrder as s (key(s))}
                 <path
                     class="sector"
+                    class:grown={isGrown(s)}
                     class:highlighted={key(s) === highlightKey}
                     class:settled={settled.has(key(s))}
-                    style={sectorVars(s)}
-                    d={sectorPath(s, cx, cy)}
+                    style={sectorStyle(s, cx, cy)}
+                    d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
                     style:fill={s.node.visual.kind === 'swatch'
                         ? s.node.visual.color.slice(0, 7)
                         : undefined}
@@ -161,7 +181,7 @@
         </svg>
         {#each layout as s (key(s))}
             {#if s.node.visual.kind !== 'swatch'}
-                <div class="badge" class:highlighted={key(s) === highlightKey}
+                <div class="badge" class:grown={isGrown(s)}
                      class:settled={settled.has(key(s))}
                      style={badgeStyle(s, cx, cy)}>
                     <div class="glyph">
@@ -175,6 +195,15 @@
                 </div>
             {/if}
         {/each}
+        <!-- Topmost layer (after the badges, which paint above the main
+             svg): the gesture's cursor, a thin thread back to the wheel's
+             origin and a diamond at the pointer. -->
+        <svg class="cursor-overlay">
+            <line class="thread"
+                  x1={cx} y1={cy}
+                  x2={engaged.cursor.x} y2={engaged.cursor.y} />
+            <path class="cursor-marker" d={diamond(engaged.cursor.x, engaged.cursor.y)} />
+        </svg>
     </dialog>
 {/if}
 
@@ -196,9 +225,20 @@
         --dur: 120ms;
     }
     svg {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
-        display: block;
+    }
+    .thread {
+        stroke: white;
+        stroke-width: 1;
+    }
+    .cursor-marker {
+        fill: var(--text);
+        stroke: var(--bg);
+        stroke-width: 1.5;
+        stroke-linejoin: round;
     }
     /* Selection is indicated by growth, not a border: the highlighted
        sector grows radially outward while its inner edge stays anchored
@@ -215,7 +255,9 @@
         stroke: var(--bg-raised);
         stroke-width: calc(2 * var(--corner));
         stroke-linejoin: round;
+        d: var(--d);
         transform-origin: var(--cx) var(--cy);
+        transition: d var(--dur) var(--ease);
         animation: pop var(--dur) var(--ease);
     }
     /* Highlighting re-sorts the sector to the end of the document (see
@@ -226,13 +268,15 @@
     .sector.settled {
         animation: none;
     }
+    /* Growth is the grown outline, not a transform: only the outer edge
+       moves. An expanded branch keeps it for as long as its subtree is
+       open; collapsing shrinks back through the d transition (no remount). */
+    .sector.grown {
+        d: var(--d-grown);
+    }
     .sector.highlighted {
         fill: var(--bg-active);
         stroke: var(--bg-active);
-        transform: translate(
-                calc(var(--ax) * -1 * var(--grow)),
-                calc(var(--ay) * -1 * var(--grow)))
-            scale(calc(1 + var(--grow)));
         animation: grow var(--dur) var(--ease);
     }
     .hub {
@@ -257,7 +301,7 @@
     .badge.settled {
         animation: none;
     }
-    .badge.highlighted {
+    .badge.grown {
         transform: translate(-50%, -50%) translate(var(--gx), var(--gy))
             scale(calc(1 + var(--grow)));
         animation: badge-grow var(--dur) var(--ease);
@@ -296,7 +340,7 @@
     }
     @keyframes grow {
         from {
-            transform: none;
+            d: var(--d);
         }
     }
     @keyframes badge-grow {

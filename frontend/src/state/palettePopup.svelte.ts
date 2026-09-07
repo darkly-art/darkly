@@ -17,7 +17,8 @@ import { hitKey } from '../ui/palette_popup/wheel_geometry';
 import { nodeAt, paletteSections, type WheelTree } from '../ui/palette_popup/model';
 
 /** Pointermove arrives at display rate; skip the reactive write when the
- *  sample changed nothing the wheel shows. */
+ *  sample changed nothing the wheel shows. The cursor marker tracks every
+ *  sample, so this only ever elides exact-duplicate positions. */
 function equivalent(a: MachineState, b: MachineState): boolean {
     if (a === b) return true;
     if (a.kind !== 'engaged' || b.kind !== 'engaged') return false;
@@ -25,6 +26,8 @@ function equivalent(a: MachineState, b: MachineState): boolean {
         a.pointerId === b.pointerId &&
         a.center.x === b.center.x &&
         a.center.y === b.center.y &&
+        a.cursor.x === b.cursor.x &&
+        a.cursor.y === b.cursor.y &&
         a.path.length === b.path.length &&
         a.path.every((v, i) => b.path[i] === v) &&
         hitKey(a.highlight) === hitKey(b.highlight)

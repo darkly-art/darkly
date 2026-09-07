@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reduce, CLOSED, type MachineState } from '../machine';
-import { HUB_R, RING_T } from '../wheel_geometry';
+import { HUB_R, RING_STRIDE, RING_T } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
 
 const leaf = (id: string): WheelLeaf =>
@@ -41,7 +41,7 @@ const down = (pointerId = PID, x = CENTER.x, y = CENTER.y) =>
 const up = (pointerId = PID) => ({ kind: 'up' as const, pointerId });
 
 const RING0_MID = HUB_R + RING_T / 2;
-const RING1_MID = HUB_R + RING_T * 1.5;
+const RING1_MID = HUB_R + RING_STRIDE + RING_T / 2;
 /** Middle of the Recent branch's ring-0 sector (top half, first sector). */
 const RECENT_MID = -3 * Math.PI / 4;
 /** Middle of the first color leaf's ring-0 sector (bottom half). */
@@ -58,6 +58,7 @@ describe('opening', () => {
         const { state } = reduce(CLOSED, down(PID, 3, 2), tree);
         const e = engaged(state);
         expect(e.center).toEqual({ x: 3, y: 2 });
+        expect(e.cursor).toEqual({ x: 3, y: 2 });
         expect(e.path).toEqual([]);
         expect(e.highlight).toEqual({ kind: 'hub' });
         expect(e.pointerId).toBe(PID);
@@ -96,6 +97,14 @@ describe('threading', () => {
         // Back inward onto a different ring-0 branch: subtree swaps in one step.
         s = reduce(s, moveAt(-Math.PI / 4, RING0_MID), tree).state;
         expect(engaged(s).path).toEqual([5]);
+    });
+
+    it('tracks the latched pointer as the cursor', () => {
+        const s1 = engaged(reduce(CLOSED, down(), tree).state);
+        expect(s1.cursor).toEqual(CENTER);
+        const s2 = engaged(
+            reduce(s1, { kind: 'move', pointerId: PID, x: 700, y: 400 }, tree).state);
+        expect(s2.cursor).toEqual({ x: 700, y: 400 });
     });
 
     it('ignores MOVE and UP from non-latched pointers', () => {

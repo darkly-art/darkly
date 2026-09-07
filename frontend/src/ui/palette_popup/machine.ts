@@ -31,6 +31,8 @@ export type MachineState =
         kind: 'engaged';
         pointerId: number;
         center: { x: number; y: number };
+        /** The latched pointer's last sample; drives the cursor marker. */
+        cursor: { x: number; y: number };
         path: number[];
         highlight: Hit;
     };
@@ -60,6 +62,7 @@ export function reduce(
                 kind: 'engaged',
                 pointerId: event.pointerId,
                 center: { x: event.x, y: event.y },
+                cursor: { x: event.x, y: event.y },
                 path: [],
                 highlight: { kind: 'hub' },
             },
@@ -78,7 +81,14 @@ export function reduce(
                 event.x - state.center.x,
                 event.y - state.center.y,
             );
-            return { state: { ...state, path: advance(state.path, hit), highlight: hit } };
+            return {
+                state: {
+                    ...state,
+                    cursor: { x: event.x, y: event.y },
+                    path: advance(state.path, hit),
+                    highlight: hit,
+                },
+            };
         }
         case 'up': {
             if (event.pointerId !== state.pointerId) return { state };
