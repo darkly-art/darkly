@@ -382,11 +382,11 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDir = "Input" | "Output";
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type NodeRegistration = { 
 /**
@@ -463,35 +463,6 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -527,6 +498,35 @@ supportsPreview: boolean,
  * than sources of one.
  */
 source: VoidSource | null, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -587,13 +587,18 @@ export type LayerTree = {
 /**
  * Root children, top-first — panel order.
  */
-layers: Array<LayerInfo>, 
+layers: Array<LayerInfo>, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
 /**
- * How many of `layers`' *leading* entries render in screen space. The
- * list is top-first and the run is the top of the stack, so the run is
- * the prefix here even though it is the suffix in the document.
+ * Whether this modifier participates in transforms with its host.
  */
-screenSpaceCount: number, };
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`] — a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -610,14 +615,7 @@ editable: boolean,
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
-/**
- * May this node sit above the viewport divider? Root children only —
- * `false` everywhere else, since the boundary partitions the root's
- * children and nothing deeper. The panel reads it to clamp the
- * divider drag; the engine clamps authoritatively when it lands.
- */
-screenSpaceEligible: boolean, icon: string, kindName: string, opacity: number, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, 
 /**
  * Stable `type_id` from the blend-mode registry (snake_case, e.g.
  * `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -640,13 +638,6 @@ bounds: { origin: { x: number, y: number }, width: number, height: number }, } |
  */
 paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
 /**
- * May this node sit above the viewport divider? Root children only —
- * `false` everywhere else, since the boundary partitions the root's
- * children and nothing deeper. The panel reads it to clamp the
- * divider drag; the engine clamps authoritatively when it lands.
- */
-screenSpaceEligible: boolean, 
-/**
  * Iconify icon for this void kind (e.g. `"tabler:galaxy"`), resolved
  * per-subtype from the void's registration. The layer panel renders
  * it as the void layer's thumbnail.
@@ -668,14 +659,7 @@ params: Array<ParamInfo>, } | { "type": "filter", id: number, name: string, visi
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
-/**
- * May this node sit above the viewport divider? Root children only —
- * `false` everywhere else, since the boundary partitions the root's
- * children and nothing deeper. The panel reads it to clamp the
- * divider drag; the engine clamps authoritatively when it lands.
- */
-screenSpaceEligible: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, 
 /**
  * Stable filter `type_id` (e.g. `"invert"`) — UI resolves to a
  * display label via `filter_types()`.
@@ -694,39 +678,14 @@ params: Array<ParamInfo>, } | { "type": "vector", id: number, name: string, visi
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
-/**
- * May this node sit above the viewport divider? Root children only —
- * `false` everywhere else, since the boundary partitions the root's
- * children and nothing deeper. The panel reads it to clamp the
- * divider drag; the engine clamps authoritatively when it lands.
- */
-screenSpaceEligible: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, } | { "type": "group", id: number, name: string, visible: boolean, locked: boolean, editable: boolean, 
 /**
  * Whether paint ops have somewhere to land on this node — mirrors
  * `DarklyEngine::is_node_paintable`. False for kinds whose pixels are
  * generated (void, filter, vector) and for groups; the panel reads it
  * to offer "Rasterize" instead of branching on `type`.
  */
-paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, 
-/**
- * May this node sit above the viewport divider? Root children only —
- * `false` everywhere else, since the boundary partitions the root's
- * children and nothing deeper. The panel reads it to clamp the
- * divider drag; the engine clamps authoritatively when it lands.
- */
-screenSpaceEligible: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
-
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
-/**
- * Whether this modifier participates in transforms with its host.
- */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`] — a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
+paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, } | { "type": "divider", id: number, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -831,8 +790,6 @@ export type SetPixelFilterReq = { mode: string, };
 export type SetPreviewThemeReq = { fg: [number, number, number, number], bg: [number, number, number, number], };
 
 export type SetRecordingParamsReq = { enabled: boolean, minIntervalSecs: number, width: number, height: number, baseWidth: number, baseHeight: number, };
-
-export type SetScreenSpaceBoundaryReq = { count: number, };
 
 export type SetTextBoxReq = { id: number, object: number, 
 /**
@@ -1055,7 +1012,6 @@ export type RequestKind =
     | 'set_pixel_filter'
     | 'set_preview_theme'
     | 'set_recording_params'
-    | 'set_screen_space_boundary'
     | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
@@ -1240,7 +1196,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_pixel_filter',
     'set_preview_theme',
     'set_recording_params',
-    'set_screen_space_boundary',
     'set_text_box',
     'set_text_content',
     'set_text_style',
@@ -1276,7 +1231,7 @@ export interface EngineApi {
     activeBrushNeedsSource(): Promise<boolean>;
     addFilter(req: AddFilterReq): Promise<number | null>;
     addGroup(req: AddGroupReq): Promise<number>;
-    addMask(req: AddMaskReq): void;
+    addMask(req: AddMaskReq): Promise<null>;
     addRaster(req: AddRasterReq): Promise<number>;
     addText(req: AddTextReq): Promise<{ id: number, object: number }>;
     addTextObject(req: AddTextObjectReq): Promise<{ object: number }>;
@@ -1433,7 +1388,6 @@ export interface EngineApi {
     setPixelFilter(req: SetPixelFilterReq): void;
     setPreviewTheme(req: SetPreviewThemeReq): void;
     setRecordingParams(req: SetRecordingParamsReq): void;
-    setScreenSpaceBoundary(req: SetScreenSpaceBoundaryReq): void;
     setTextBox(req: SetTextBoxReq): void;
     setTextContent(req: SetTextContentReq): void;
     setTextStyle(req: SetTextStyleReq): void;
@@ -1463,7 +1417,7 @@ export function makeApi(t: Transport): EngineApi {
         activeBrushNeedsSource: () => t.request('active_brush_needs_source'),
         addFilter: (req) => t.request('add_filter', req),
         addGroup: (req) => t.request('add_group', req),
-        addMask: (req) => t.postFF('add_mask', req),
+        addMask: (req) => t.request('add_mask', req),
         addRaster: (req) => t.request('add_raster', req),
         addText: (req) => t.request('add_text', req),
         addTextObject: (req) => t.request('add_text_object', req),
@@ -1620,7 +1574,6 @@ export function makeApi(t: Transport): EngineApi {
         setPixelFilter: (req) => t.postFF('set_pixel_filter', req),
         setPreviewTheme: (req) => t.postFF('set_preview_theme', req),
         setRecordingParams: (req) => t.postFF('set_recording_params', req),
-        setScreenSpaceBoundary: (req) => t.postFF('set_screen_space_boundary', req),
         setTextBox: (req) => t.postFF('set_text_box', req),
         setTextContent: (req) => t.postFF('set_text_content', req),
         setTextStyle: (req) => t.postFF('set_text_style', req),

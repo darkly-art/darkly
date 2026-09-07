@@ -325,12 +325,10 @@ export class DarklyInstance {
         return installed;
     }
 
-    // Layer tree (read from WASM, refreshed after mutations/undo/redo).
+    // Layer tree (read from WASM, refreshed after mutations/undo/redo). The
+    // viewport divider is one of the rows; everything above it is
+    // viewport-only.
     layerTree = $state<any[]>([]);
-
-    // How many of `layerTree`'s leading rows are above the viewport divider.
-    // The tree is top-first, so the run is the prefix.
-    screenSpaceCount = $state(0);
 
     /** The rows the panel draws, in panel order, with their indent depth — what
      *  a drag resolves its drop against. Derived from the live tree rather than
@@ -971,23 +969,10 @@ export class DarklyInstance {
      *  passed by undo/redo so undoing a delete lands on the layer it brought
      *  back, matching both GIMP (which selects the restored layer) and Krita
      *  (which restores the pre-delete selection set). */
-    /** Move the viewport divider. `count` is how many of the topmost rows
-     *  become viewport-only; the engine clamps it to what the tree supports
-     *  and pushes one undo step. */
-    async setScreenSpaceBoundary(count: number): Promise<void> {
-        if (!this.engine) return;
-        this.engine.api.setScreenSpaceBoundary({ count });
-        await this.refreshLayerTree();
-        this.requestFrame();
-    }
-
     async refreshLayerTree(opts?: { adoptAppeared?: boolean }): Promise<void> {
         if (!this.engine) return;
         const parsed = await this.engine.api.layerTree();
         const next: any[] = Array.isArray(parsed?.layers) ? parsed.layers : [];
-        this.screenSpaceCount = typeof parsed?.screenSpaceCount === 'number'
-            ? parsed.screenSpaceCount
-            : 0;
         // Stream-backed voids (camera / screenshare) own a MediaStream +
         // <video>; reconcile the live set against the new tree so deleted /
         // frozen / undone voids tear down (turning off the OS capture

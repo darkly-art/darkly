@@ -108,7 +108,7 @@ fn paste_in_place_floating_writes_into_active_mask() {
     let src = e.add_raster_layer(None);
     paint_dot(&mut e, src, 32.0, 32.0, (0.25, 0.78, 0.13));
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
@@ -158,7 +158,7 @@ fn paste_in_place_committed_writes_into_active_mask() {
     let src = e.add_raster_layer(None);
     paint_dot(&mut e, src, 32.0, 32.0, (0.25, 0.78, 0.13));
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
@@ -198,7 +198,7 @@ fn repro_rgba_paste_into_mask_converts_by_luminance_not_red() {
     let src = e.add_raster_layer(None);
     paint_dot(&mut e, src, 32.0, 32.0, (0.0, 1.0, 0.0));
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
@@ -244,7 +244,7 @@ fn floating_paste_box_is_the_content_not_the_copied_region() {
     let src = e.add_raster_layer(None);
     paint_dot(&mut e, src, 32.0, 32.0, (0.0, 1.0, 0.0));
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
@@ -285,7 +285,7 @@ fn floating_paste_into_mask_lands_where_it_was_moved_to() {
     let src = e.add_raster_layer(None);
     paint_dot(&mut e, src, 16.0, 16.0, (0.0, 1.0, 0.0));
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.test_mask_id(host).expect("host has a mask filter");
     settle(&mut e);
 
@@ -339,7 +339,7 @@ fn region_copy_of_masked_layer_pastes_without_mask() {
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
     paint_dot(&mut source, layer, 16.0, 16.0, (1.0, 0.0, 0.0));
-    source.add_mask(layer);
+    source.add_mask(layer).expect("add mask");
 
     // Active selection ⇒ this is a region copy, not a whole-layer copy.
     source.select_rect(0.0, 0.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
@@ -368,7 +368,7 @@ fn paste_does_not_seed_mask_from_active_selection() {
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
     paint_dot(&mut source, layer, 16.0, 16.0, (1.0, 0.0, 0.0));
-    source.add_mask(layer);
+    source.add_mask(layer).expect("add mask");
     source.copy_layer_rich(layer);
     let json = drain_rich_copy(&mut source);
     assert!(

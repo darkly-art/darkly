@@ -5,7 +5,6 @@ import {
     bandToGap,
     gapDepthRange,
     resolveGapDrop,
-    rootGapIndex,
 } from '../dropTarget';
 import type { DropRow } from '../../../state/layerTree';
 
@@ -184,21 +183,70 @@ describe('the reported gesture', () => {
             target: { target_type: 'into_top', target_id: 1 },
         });
     });
+
+    it('the below band of an expanded group header lands inside the group', () => {
+        // Dropping on the lower edge of an expanded header once issued
+        // `before group` — the slot below the entire block, which reads as
+        // "the bottom of the group". The gap below the header is pinned to the
+        // group's interior by the child row beneath it, whatever X says.
+        const band = bandToGap(0, true, 0.9);
+        expect(resolveGapDrop(singleGroup, band.gap, xFor(0), band.pin)).toEqual({
+            depth: 1,
+            target: { target_type: 'into_top', target_id: 1 },
+        });
+    });
+
+    it('the below band of a collapsed group header still means below the group', () => {
+        // With no visible child row beneath it, the gap genuinely is the
+        // sibling slot, and X at the group's own indent asks for it.
+        const collapsed: DropRow[] = [row(1, 0, true), row(4, 0)];
+        const band = bandToGap(0, true, 0.9);
+        expect(resolveGapDrop(collapsed, band.gap, xFor(0), band.pin)).toEqual({
+            depth: 0,
+            target: { target_type: 'before', target_id: 1 },
+        });
+    });
 });
 
-describe('rootGapIndex', () => {
-    it('counts past nested rows to the nth root child', () => {
-        // nested: g1(0) g2(1) l3(2) l4(0) — root children are indices 0 and 3.
-        expect(rootGapIndex(nested, 0)).toBe(0);
-        expect(rootGapIndex(nested, 1)).toBe(3);
+/**
+ * Regression for the cross-divider drag bugs (`docs/plans/divider-as-a-node.md`).
+ * The divider is a row, so the gap above it and the gap below it are distinct —
+ * the user's reported panel: a veil in Viewport Effects → Group 2, then the
+ * divider, then a canvas raster.
+ *
+ *   ve(1)       depth 0, group   (screen space)
+ *     g2(2)     depth 1, group
+ *       vhs(3)  depth 2
+ *   D(4)        depth 0, the divider row
+ *   r(5)        depth 0          (canvas space)
+ */
+describe('dragging across the divider row', () => {
+    const panel: DropRow[] = [row(1, 0, true), row(2, 1, true), row(3, 2), row(4, 0), row(5, 0)];
+    const aboveDivider = 3; // between vhs and the divider row
+    const belowDivider = 4; // between the divider row and the raster
+
+    it('resolves the gaps above and below the divider to distinct targets', () => {
+        const above = resolveGapDrop(panel, aboveDivider, xFor(0))!;
+        const below = resolveGapDrop(panel, belowDivider, xFor(0))!;
+        expect(above.target).toEqual({ target_type: 'before', target_id: 1 });
+        expect(below.target).toEqual({ target_type: 'before', target_id: 4 });
+        expect(above.target).not.toEqual(below.target);
     });
 
-    it('lands at the end of the list for a trailing divider', () => {
-        expect(rootGapIndex(nested, 2)).toBe(nested.length);
-        expect(rootGapIndex(nested, 99)).toBe(nested.length);
+    it('never resolves the below-divider gap into the dragged subtree', () => {
+        // The reported gesture: dragging g2 (with its veil inside) to just
+        // below the viewport threshold. Under the count model this gap did not
+        // exist — the resolution walked into g2's ancestor or descendants and
+        // the move was self-referential or side-inherited.
+        const drop = resolveGapDrop(panel, belowDivider, xFor(0))!;
+        expect([2, 3]).not.toContain(drop.target.target_id);
+        expect(drop.target).toEqual({ target_type: 'before', target_id: 4 });
     });
 
-    it('is the end of an empty list', () => {
-        expect(rootGapIndex([], 0)).toBe(0);
+    it('addresses the bottom of screen space without referencing the divider', () => {
+        // Dropping at the gap above the divider is a screen-space statement:
+        // it lands the mover below ve, above the divider.
+        const drop = resolveGapDrop(panel, aboveDivider, xFor(0))!;
+        expect(drop.target).toEqual({ target_type: 'before', target_id: 1 });
     });
 });

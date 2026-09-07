@@ -10,7 +10,7 @@ use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
     CompoundAction, EntityAddAction, EntityRemoveAction, LayerMoveAction, PropertyAction,
-    ScreenSpaceBoundaryAction, UndoAction,
+    UndoAction,
 };
 
 /// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
@@ -622,6 +622,15 @@ impl DarklyEngine {
             if !self.doc.is_node_editable(id) {
                 continue;
             }
+            // The boundary is never grouped — a selection that includes the
+            // divider groups everything else, like the locked-layer skip.
+            if self
+                .doc
+                .find_node(id)
+                .is_some_and(|n| n.is_screen_space_boundary())
+            {
+                continue;
+            }
             // Drop any id whose ancestor is also in the batch — moving
             // the ancestor brings the descendant along; processing both
             // would yank the descendant out of its group.
@@ -645,12 +654,6 @@ impl DarklyEngine {
         let topmost = *editable.last().expect("non-empty");
         let topmost_parent = self.doc.parent_of(topmost);
         let topmost_pos = self.doc.position_in_parent(topmost).unwrap_or(0);
-        // The group takes over the topmost source's slot, and that includes its
-        // side of the divider — grouping viewport effects is how the user builds
-        // a viewport effect group, so it must not drop the arrangement into
-        // canvas space. Sampled before the sources are moved, which detaches
-        // them and collapses the run.
-        let topmost_screen_space = self.doc.renders_in_screen_space(topmost);
 
         // Create the group at the top of root — a stable spot that
         // can't accidentally land it inside one of the sources (which
@@ -687,17 +690,18 @@ impl DarklyEngine {
         // above topmost in panel order. Inserting the group there
         // lands it exactly where topmost used to be.
         let group_pre_move_slot = self.doc.slot_of(group_id).unwrap_or_default();
-        self.doc.detach_for_undo(group_id);
-        let clamped_pos = topmost_pos.min(match topmost_parent {
-            Some(p) => self.doc.children_of(p).len(),
-            None => self.doc.children_of(self.doc.root_id()).len(),
-        });
-        self.doc.reinsert_entity(
+        // Through the placement policy, not verbatim: the slot is derived from
+        // the topmost source's old index, and a group holding canvas-only
+        // content must be redirected below the divider rather than landed
+        // above it. A group of viewport effects goes exactly where asked —
+        // taking the topmost source's side of the divider with it. Positions
+        // clamp on attach, so an index left dangling by the detached sources
+        // lands at the end of the list.
+        self.doc.place_at_slot(
             group_id,
             TreeSlot {
                 parent: topmost_parent,
-                position: clamped_pos,
-                screen_space: topmost_screen_space,
+                position: topmost_pos,
             },
         );
         let group_final_slot = self.doc.slot_of(group_id).unwrap_or_default();
@@ -1135,10 +1139,10 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids, filter, and vector layers store no pixels — their "bounds"
-            // concept is the canvas itself, which callers can ask for directly
-            // via `canvas_dimensions`.
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            // Voids, filter, vector, and divider layers store no pixels —
+            // their "bounds" concept is the canvas itself, which callers can
+            // ask for directly via `canvas_dimensions`.
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
@@ -1164,6 +1168,11 @@ impl DarklyEngine {
         }
         if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
+        }
+        if let Some(node) = self.doc.find_node(id) {
+            if !node.kind().can_delete {
+                return Err(format!("{} cannot be deleted", node.kind().display_name));
+            }
         }
         // A modifier is a selectable row, so the delete hotkey forwards its id
         // here — but it hangs off a host rather than occupying a slot in the
@@ -1197,6 +1206,12 @@ impl DarklyEngine {
         }
         if self.doc.is_filter(id) {
             return self.detach_modifier_for_remove(id);
+        }
+        // A kind that cannot be deleted (the viewport divider) is refused at
+        // the mutation chokepoint, so every removal path — single, batch,
+        // merge cleanup — gets the gate without repeating it.
+        if self.doc.find_node(id).is_some_and(|n| !n.kind().can_delete) {
+            return None;
         }
         let slot = self.doc.slot_of(id).unwrap_or_default();
         // Collect tombstones before detaching — `detach_for_undo` severs
@@ -1291,7 +1306,20 @@ impl DarklyEngine {
                 .map(|node| node.common().name.clone())
                 .unwrap_or_else(|| "That layer".to_string())
         };
-        if blocker == id {
+        let moving_divider = self
+            .doc
+            .find_node(id)
+            .is_some_and(|n| n.is_screen_space_boundary());
+        if moving_divider {
+            if blocker == id {
+                Err(format!("The viewport boundary {reason}."))
+            } else {
+                Err(format!(
+                    "The viewport boundary can't go below \"{}\": it {reason}.",
+                    name(blocker)
+                ))
+            }
+        } else if blocker == id {
             Err(format!(
                 "\"{}\" can't go in viewport space: it {reason}.",
                 name(id)
@@ -1763,30 +1791,7 @@ impl DarklyEngine {
                     )
                 })
                 .collect(),
-            screen_space_count: self.doc.screen_space_run().len(),
         }
-    }
-
-    /// Move the viewport divider: `count` is how many of the root's topmost
-    /// children become viewport-only.
-    ///
-    /// The request is clamped to what the tree can actually support, so a drag
-    /// that overshoots a raster stops at it rather than being rejected — the
-    /// panel clamps for responsiveness, this clamps for correctness, and they
-    /// agree because both ask the document the same question.
-    #[handler]
-    pub fn set_screen_space_boundary(&mut self, count: usize) {
-        let clamped = self.doc.clamp_screen_space_count(count);
-        let old = self.doc.screen_space_count;
-        if clamped == old {
-            return;
-        }
-        self.doc.screen_space_count = clamped;
-        self.push_undo(Box::new(ScreenSpaceBoundaryAction::new(old, clamped)));
-        // Members leaving the run rejoin the canvas composite and members
-        // entering it stop being part of the image, so both sides are stale.
-        self.compositor.mark_dirty();
-        self.compositor.mark_needs_present();
     }
 }
 

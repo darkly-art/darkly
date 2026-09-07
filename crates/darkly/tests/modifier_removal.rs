@@ -47,7 +47,7 @@ fn remove_layer_on_a_mask_id_detaches_the_mask() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
     let _other = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     e.remove_layer(mask).expect("removing a mask must succeed");
@@ -58,8 +58,8 @@ fn remove_layer_on_a_mask_id_detaches_the_mask() {
     );
     assert_eq!(
         e.layer_tree().layers.len(),
-        2,
-        "only the two raster layers remain as rows"
+        3,
+        "only the two raster layers and the divider remain as rows"
     );
 }
 
@@ -69,7 +69,7 @@ fn undoing_a_mask_removal_restores_it_on_its_host() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
     let _other = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     e.remove_layer(mask).expect("removing a mask must succeed");
@@ -86,7 +86,7 @@ fn undoing_a_mask_removal_restores_it_on_its_host() {
     );
     assert_eq!(
         e.layer_tree().layers.len(),
-        2,
+        3,
         "undo must not add a row — the mask belongs to its host, not the root"
     );
 }
@@ -97,7 +97,7 @@ fn remove_layers_handles_a_modifier_id_in_the_batch() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
     let victim = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     let skipped = e
@@ -118,7 +118,7 @@ fn a_single_undo_restores_both_a_batched_mask_and_layer() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
     let victim = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     e.remove_layers(vec![mask, victim])
@@ -146,7 +146,7 @@ fn a_single_undo_restores_both_a_batched_mask_and_layer() {
 fn removing_the_only_mask_of_the_only_layer_is_allowed() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     e.remove_layer(mask)
@@ -175,7 +175,7 @@ fn merge_down_rejects_a_modifier_id() {
     let mut e = test_engine(32, 32);
     let host = e.add_raster_layer(None);
     let _below = e.add_raster_layer(None);
-    e.add_mask(host);
+    e.add_mask(host).expect("add mask");
     let mask = e.host_mask_id(host).expect("mask present");
 
     assert_eq!(

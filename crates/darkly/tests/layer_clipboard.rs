@@ -128,7 +128,7 @@ fn rich_paste_records_mask_presence_v1() {
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
     paint_dot(&mut source, layer, 16.0, 16.0);
-    source.add_mask(layer);
+    source.add_mask(layer).expect("add mask");
 
     source.copy_layer_rich(layer);
     let json = drain_rich_copy(&mut source);

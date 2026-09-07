@@ -12,7 +12,8 @@ function fakeEngine() {
         resize: vi.fn(),
         addFilter: vi.fn((_req: { pipeline: string }) => Promise.resolve(nextId++)),
         setLayerVisible: vi.fn(),
-        setScreenSpaceBoundary: vi.fn(),
+        layerTree: vi.fn(() => Promise.resolve({ layers: [{ type: 'divider', id: 999 }] })),
+        moveLayer: vi.fn(() => Promise.resolve(null)),
         groupLayers: vi.fn((_req: { ids: number[] }) => Promise.resolve(nextId++)),
         setLayerName: vi.fn(),
     };
@@ -42,7 +43,7 @@ describe('freshDocument recipes', () => {
             expect(api.fillBackgroundColor).not.toHaveBeenCalled();
         });
 
-        it('seeds four effect layers and puts the divider above all of them', async () => {
+        it('seeds four effect layers and moves the divider below all of them', async () => {
             const { engine, api } = fakeEngine();
             const { inst } = fakeInstance(engine);
             await RECIPES.demo.seedViewportEffects(inst, 800, 600);
@@ -53,17 +54,22 @@ describe('freshDocument recipes', () => {
                 'lens_blur',
                 'vhs',
             ]);
-            // One boundary call at the end, not one per layer: adding a layer
-            // never crosses the divider on its own.
-            expect(api.setScreenSpaceBoundary).toHaveBeenCalledTimes(1);
-            expect(api.setScreenSpaceBoundary).toHaveBeenCalledWith({ count: 4 });
+            // One divider move at the end, not one per layer: adding a layer
+            // never crosses the divider on its own. The divider goes below the
+            // bottom-most seeded effect, putting all four in viewport space.
+            expect(api.moveLayer).toHaveBeenCalledTimes(1);
+            const firstSeeded = await api.addFilter.mock.results[0].value;
+            expect(api.moveLayer).toHaveBeenCalledWith({
+                id: 999,
+                target: { target_type: 'before', target_id: firstSeeded },
+            });
         });
 
         // The four are one named group, so the starter document reads as a
         // single row. Grouped after the boundary moves, because the new group
         // inherits the topmost source's side of the divider — group first and
         // the whole arrangement lands in canvas space.
-        it('wraps the four effects in one named group, after the boundary moves', async () => {
+        it('wraps the four effects in one named group, after the divider moves', async () => {
             const { engine, api } = fakeEngine();
             const { inst } = fakeInstance(engine);
             await RECIPES.demo.seedViewportEffects(inst, 800, 600);
@@ -80,7 +86,7 @@ describe('freshDocument recipes', () => {
                 name: 'Viewport Effects',
             });
 
-            const boundaryOrder = api.setScreenSpaceBoundary.mock.invocationCallOrder[0];
+            const boundaryOrder = api.moveLayer.mock.invocationCallOrder[0];
             const groupOrder = api.groupLayers.mock.invocationCallOrder[0];
             expect(boundaryOrder).toBeLessThan(groupOrder);
         });
@@ -133,7 +139,7 @@ describe('freshDocument recipes', () => {
             const inst = { engine } as unknown as DarklyInstance;
             RECIPES.app.seedViewportEffects(inst, 800, 600);
             expect(api.addFilter).not.toHaveBeenCalled();
-            expect(api.setScreenSpaceBoundary).not.toHaveBeenCalled();
+            expect(api.moveLayer).not.toHaveBeenCalled();
         });
     });
 });

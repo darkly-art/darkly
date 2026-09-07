@@ -402,7 +402,7 @@ fn deleted_source_falls_back_to_painted_layer() {
 fn mask_source_broadcasts_r8() {
     let mut e = test_engine(W, W);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
     e.render(0.0);
 

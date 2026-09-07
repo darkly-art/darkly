@@ -1588,7 +1588,7 @@ fn mid_stroke_growth_invalidates_mask_bind_group() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     engine.render(0.0);
 
     // Paint past the right edge — triggers grow which must rebuild the
@@ -2224,7 +2224,7 @@ fn engine_brush_stroke_paints_on_mask() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
 
@@ -2250,7 +2250,7 @@ fn engine_mask_brush_unstroked_pixels_unchanged() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     paint_mask_dab(&mut engine, layer_id, 10.0, 10.0, 0.0);
 
@@ -2272,7 +2272,7 @@ fn engine_mask_brush_undo_restores_mask() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
     // Brush-stroke commit is async (diff-rect compute). Flush so the
@@ -2303,7 +2303,7 @@ fn engine_mask_brush_respects_selection() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     // add_mask ran with no selection, so the mask starts all-white (255);
     // selection-seeding is bypassed. Then select the left half.
@@ -2360,7 +2360,7 @@ fn engine_add_mask_seeds_from_active_selection() {
         0.0,
     );
 
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     let pixels = engine.test_readback_mask(layer_id);
     let inside = mask_byte_at(&pixels, w, w / 4, h / 2);
@@ -2384,7 +2384,7 @@ fn engine_add_mask_without_selection_is_all_white() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
 
     let pixels = engine.test_readback_mask(layer_id);
     assert!(
@@ -2434,7 +2434,7 @@ fn engine_mask_flood_fill() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).unwrap();
 
     engine.begin_stroke(mask_id).unwrap();
@@ -2481,7 +2481,7 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
         false,
         0.0,
     );
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).unwrap();
 
     // Magic wand seeded inside the left (revealed) half with tolerance 0.
@@ -2725,7 +2725,7 @@ fn floating_preview_respects_layer_mask() {
         false,
         0.0,
     );
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     engine.clear_selection();
     engine.render(0.0);
 
@@ -2815,7 +2815,7 @@ fn passthrough_sub_canvas_group_mask_samples_own_space() {
     engine.end_stroke();
     engine.render(0.0);
 
-    engine.add_mask(group_id);
+    engine.add_mask(group_id).expect("add mask");
     // A black brush dab on the mask at plane (40, 40) — a localized hidden spot.
     paint_mask_dab(&mut engine, group_id, 40.0, 40.0, 0.0);
     engine.test_flush_readbacks();
@@ -2862,7 +2862,7 @@ fn growing_host_leaves_mask_bounds_unchanged() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine
         .host_mask_id(layer_id)
         .expect("just-added mask must be reachable via host_mask_id");
@@ -2924,7 +2924,7 @@ fn painting_mask_past_bounds_grows_mask_independently() {
     engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
 
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask exists");
 
     let host_before = engine.layer_bounds(layer_id).expect("host bounds");
@@ -3016,7 +3016,7 @@ fn add_paint_apply_undo_round_trip_preserves_mask() {
 
     // Add a mask, then paint a black dab on the mask at the probe — the
     // alpha at that point will become near 0 after apply.
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
     paint_mask_dab(&mut engine, layer_id, probe_x as f32, probe_y as f32, 0.0);
 
@@ -3100,7 +3100,7 @@ fn apply_mask_bakes_in_mask_frame_after_crop() {
     // localized black spot on that line. Both textures span the full canvas at
     // origin (0, 0), so pre-crop all three frames coincide.
     paint_full_stroke(&mut engine, layer_id, cw, ch);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
     paint_mask_dab(&mut engine, layer_id, 64.0, (ch / 2) as f32, 0.0);
     engine.test_flush_readbacks();
@@ -3190,7 +3190,7 @@ fn apply_mask_reveals_host_outside_mask_footprint() {
 
     // Mask created at the small (100×100) canvas; paint a black spot at its
     // center so a stretched (buggy) sample there reads ~0.
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
     paint_mask_dab(&mut engine, layer_id, 50.0, 50.0, 0.0);
     engine.test_flush_readbacks();
@@ -3286,7 +3286,7 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
 
     // Add a mask on the GROUP, then black-out a dab so the group's mask
     // visibly hides part of the child's contribution.
-    engine.add_mask(group_id);
+    engine.add_mask(group_id).expect("add mask");
     let group_mask_id = engine.host_mask_id(group_id).expect("group has mask");
     engine.begin_stroke(group_mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
@@ -3408,6 +3408,7 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
             LayerNode::Layer(Layer::Void(_)) => {}
             LayerNode::Layer(Layer::Filter(_)) => {}
             LayerNode::Layer(Layer::Vector(_)) => {}
+            LayerNode::Layer(Layer::Divider(_)) => {}
             LayerNode::Group(_) => {}
         }
     }
@@ -3503,7 +3504,7 @@ fn engine_alpha_to_selection_on_a_mask_matches_mask_to_selection() {
 
     // Seed a mask from a rectangular selection, then clear the selection.
     engine.select_rect(4.0, 4.0, 20.0, 16.0, SelectionMode::Replace, false, 0.0);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask attached");
     engine.clear_selection();
     engine.test_flush_readbacks();
@@ -3560,7 +3561,7 @@ fn selection_to_mask_round_trip_preserves_pixels() {
 
     // Selection → mask. Adds a mask filter to the layer and seeds it from
     // the selection via `clone_filter_pixels`.
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     engine.selection_to_mask(layer_id);
     engine.render(0.0);
 
@@ -3620,7 +3621,7 @@ fn selection_to_sub_canvas_mask_covers_whole_selection() {
     // offset from the canvas window.
     let mut engine = test_engine(64, 64);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
 
     let canvas = CanvasRect::from_xywh(20, 16, 128, 96);
@@ -3668,7 +3669,7 @@ fn mask_to_selection_from_sub_canvas_mask_does_not_crash() {
 
     let mut engine = test_engine(64, 64);
     let layer_id = engine.add_raster_layer(None);
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     let mask_id = engine.host_mask_id(layer_id).expect("mask just added");
 
     // Paint a dab on the mask so it carries real content.
@@ -3719,7 +3720,7 @@ fn masked_leaf_composites_through_projection_cropped() {
     engine.end_stroke();
     engine.render(0.0);
 
-    engine.add_mask(layer_id);
+    engine.add_mask(layer_id).expect("add mask");
     // Black dab on the mask near the window's top-left → hides the host there.
     paint_mask_dab(
         &mut engine,
@@ -3759,7 +3760,7 @@ fn transform_masked_sub_canvas_layer_previews_without_crash() {
     let mut engine = test_engine(64, 64);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 0, 200, 0); // opaque green
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0); // black dab on the mask
     engine.test_flush_readbacks();
     engine.resize_canvas(CanvasRect::from_xywh(20, 16, 128, 96));
@@ -3799,7 +3800,7 @@ fn copy_selected_mask_region_populates_clipboard() {
     let mut engine = test_engine(64, 64);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 0, 200, 0);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     // White mask everywhere, black dab at (20,20).
     paint_mask_dab(&mut engine, host, 20.0, 20.0, 0.0);
     engine.test_flush_readbacks();
@@ -3839,7 +3840,7 @@ fn paste_while_editing_mask_places_layer_at_top_level() {
 
     let mut engine = test_engine(64, 64);
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask_id = engine.host_mask_id(host).expect("host has a mask");
 
     let rgba = vec![255u8; 8 * 8 * 4];
@@ -4152,7 +4153,7 @@ fn repeated_identity_transforms_on_mask_are_idempotent() {
     let mut engine = test_engine(cw, ch);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask_id = engine.host_mask_id(host).expect("host has mask");
 
     // Mid-gray fill on the mask. Cleanly tests the multiplicative bug:
@@ -4214,7 +4215,7 @@ fn isolating_mask_modifier_renders_grayscale() {
     let layer = engine.add_raster_layer(None);
     fill_layer(&mut engine, layer, 255, 0, 0); // Red host.
 
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     let mask_id = engine.host_mask_id(layer).expect("layer has a mask");
 
     // Fill the mask with mid-gray (~50% coverage). With a normal render
@@ -4297,7 +4298,7 @@ fn empty_async_transform_setup_is_terminal() {
 fn unsupported_linked_endpoint_reports_structured_capability_error() {
     let mut engine = test_engine(32, 32);
     let group = engine.add_group(None);
-    engine.add_mask(group);
+    engine.add_mask(group).expect("add mask");
     let mask = engine.host_mask_id(group).unwrap();
 
     assert!(!engine.begin_transform(mask));
@@ -4324,7 +4325,7 @@ fn unsupported_linked_endpoint_reports_structured_capability_error() {
 fn linked_transform_membership_is_symmetric_and_fixed_across_modes() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).unwrap();
 
     engine.select_all();
@@ -4358,7 +4359,7 @@ fn linked_transform_commit_and_undo_are_atomic_for_both_targets() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 220, 30, 10);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).unwrap();
     fill_mask_value(&mut engine, mask, 96);
     let host_before = engine.test_readback_layer(host);
@@ -4425,7 +4426,7 @@ fn linked_host_ellipse_transform_preserves_mask_outside_selection() {
     paint_at(&mut engine, host, 13.0, 9.0, 10.0, 40.0, 1.0);
     paint_at(&mut engine, host, 20.0, 18.0, 0.0, 1.0, 0.0);
 
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).expect("host has mask");
     engine.begin_stroke(mask).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
@@ -4544,7 +4545,7 @@ fn linked_ellipse_transform_is_independent_of_initiator_order() {
         let mut engine = test_engine(32, 32);
         let host = engine.add_raster_layer(None);
         fill_layer(&mut engine, host, 220, 30, 10);
-        engine.add_mask(host);
+        engine.add_mask(host).expect("add mask");
         let mask = engine.host_mask_id(host).expect("host has mask");
         fill_mask_value(&mut engine, mask, 96);
         engine.select_ellipse(4.0, 8.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
@@ -4581,7 +4582,7 @@ fn linked_feathered_ellipse_uses_coverage_for_mask_clear_and_commit() {
     let mut engine = test_engine(cw, ch);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 220, 30, 10);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).expect("host has mask");
     fill_mask_value(&mut engine, mask, 255);
 
@@ -4651,7 +4652,7 @@ fn transform_commit_preparation_failures_leave_no_delayed_or_published_state() {
         let mut engine = test_engine(32, 32);
         let host = engine.add_raster_layer(None);
         fill_layer(&mut engine, host, 200, 20, 20);
-        engine.add_mask(host);
+        engine.add_mask(host).expect("add mask");
         let mask = engine.host_mask_id(host).unwrap();
         fill_mask_value(&mut engine, mask, 80);
         engine.select_all();
@@ -4707,7 +4708,7 @@ fn linked_transform_second_target_failure_publishes_nothing() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 200, 20, 20);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).unwrap();
     fill_mask_value(&mut engine, mask, 80);
     let host_before = engine.test_readback_layer(host);
@@ -4767,7 +4768,7 @@ fn defect_regression_transform_growth_undo_restores_exact_extent() {
 fn defect_regression_public_transform_capability_accepts_mask() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).expect("host has mask");
 
     assert_eq!(engine.layer_transform_capability(mask), "destructive");
@@ -4778,7 +4779,7 @@ fn isolated_transform_treats_incident_mask_link_as_temporarily_unlinked() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 0, 0);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).expect("host has mask");
     let unrelated = engine.add_raster_layer(None);
     engine.select_all();
@@ -4820,7 +4821,7 @@ fn isolation_change_commits_active_linked_transform_before_switching_policy() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 220, 30, 10);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).unwrap();
     fill_mask_value(&mut engine, mask, 96);
     let host_before = engine.test_readback_layer(host);
@@ -4849,7 +4850,7 @@ fn failed_transform_commit_rejects_isolation_change() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 220, 30, 10);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).unwrap();
     engine.select_all();
     assert!(engine.begin_transform(host));
@@ -4877,7 +4878,7 @@ fn transform_translate_on_mask_moves_pixels() {
     let mut engine = test_engine(cw, ch);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask_id = engine.host_mask_id(host).expect("host has mask");
 
     // Distinct fill so we can spot the moved pattern.
@@ -4972,7 +4973,7 @@ fn mask_visible_during_transform_drag() {
     let mut engine = test_engine(cw, ch);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 0, 0);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask_id = engine.host_mask_id(host).expect("host has mask");
 
     // Fresh masks default to fully visible (255). Black out the whole
@@ -5079,7 +5080,7 @@ fn cancel_transform_on_mask_leaves_texture_pristine() {
     let mut engine = test_engine(cw, ch);
     let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask_id = engine.host_mask_id(host).expect("host has mask");
     engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
@@ -5134,7 +5135,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
             0.0,
             0.0,
         );
-        engine.add_mask(host);
+        engine.add_mask(host).expect("add mask");
         let mask_id = engine.host_mask_id(host).expect("host has mask");
         engine.set_mask_linked_to_host(mask_id, linked);
 
@@ -5258,7 +5259,7 @@ fn isolated_selected_mask_transform_commit_uses_canvas_window_frame() {
     let mut engine = test_engine(cw, ch);
     engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.host_mask_id(host).expect("host has mask");
     engine.begin_stroke(mask).unwrap();
     engine.stroke_to(StrokeOp::FloodFill {
@@ -6139,6 +6140,7 @@ fn multi_move_preserves_relative_order() {
             LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
+            LayerInfo::Divider { id } => *id,
         })
         .collect();
     assert_eq!(
@@ -6211,6 +6213,7 @@ fn group_layers_wraps_selection_at_topmost_slot() {
             LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
+            LayerInfo::Divider { id } => *id,
         })
         .collect();
     assert_eq!(
@@ -6257,6 +6260,7 @@ fn group_layers_cross_parent() {
             LayerInfo::Filter { id, .. } => *id,
             LayerInfo::Vector { id, .. } => *id,
             LayerInfo::Group { id, .. } => *id,
+            LayerInfo::Divider { id } => *id,
         })
         .collect();
     assert_eq!(child_ids.len(), 2);
@@ -6424,12 +6428,14 @@ fn multi_duplicate_each_lands_above_its_source() {
         .layer_tree()
         .layers
         .iter()
-        .map(|n| match n {
-            LayerInfo::Raster { id, .. } => *id,
-            LayerInfo::Void { id, .. } => *id,
-            LayerInfo::Filter { id, .. } => *id,
-            LayerInfo::Vector { id, .. } => *id,
-            LayerInfo::Group { id, .. } => *id,
+        .filter_map(|n| match n {
+            LayerInfo::Raster { id, .. } => Some(*id),
+            LayerInfo::Void { id, .. } => Some(*id),
+            LayerInfo::Filter { id, .. } => Some(*id),
+            LayerInfo::Vector { id, .. } => Some(*id),
+            LayerInfo::Group { id, .. } => Some(*id),
+            // The divider row carries no content position to assert on.
+            LayerInfo::Divider { .. } => None,
         })
         .collect();
     tree_ids.reverse();
@@ -6494,7 +6500,7 @@ fn projected_mask_link(engine: &DarklyEngine, host: LayerId) -> bool {
 fn mask_link_state_is_projected_and_undoable_on_the_mask_entity() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.test_mask_id(host).expect("mask present");
 
     assert!(projected_mask_link(&engine, host));
@@ -6511,7 +6517,7 @@ fn mask_link_state_is_projected_and_undoable_on_the_mask_entity() {
 fn duplicate_preserves_mask_link_state() {
     let mut engine = test_engine(32, 32);
     let host = engine.add_raster_layer(None);
-    engine.add_mask(host);
+    engine.add_mask(host).expect("add mask");
     let mask = engine.test_mask_id(host).expect("mask present");
     engine.set_mask_linked_to_host(mask, false);
 

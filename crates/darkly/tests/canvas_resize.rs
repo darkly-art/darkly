@@ -827,7 +827,7 @@ fn effect_layer_survives_crossing_the_divider() {
     fill(&mut engine, red, 255, 0, 0);
     let _inv = effect_layer(&mut engine, "invert");
 
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     engine.test_flush_readbacks();
     engine.render(0.0);
     let screen = engine.test_readback_screen_run(cw, ch);
@@ -837,7 +837,7 @@ fn effect_layer_survives_crossing_the_divider() {
         "prepared against the run's pair"
     );
 
-    engine.set_screen_space_boundary(0);
+    engine.test_set_screen_space_boundary(0);
     engine.test_flush_readbacks();
     engine.render(0.0);
     assert_eq!(
@@ -857,7 +857,7 @@ fn screen_space_effect_survives_viewport_resize() {
     let red = engine.add_raster_layer(None);
     fill(&mut engine, red, 255, 0, 0);
     let _inv = effect_layer(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     let first = engine.test_readback_screen_run(cw, ch);
     assert_eq!(rgba_at(&first, cw, 8, 8), [0, 255, 255, 255]);

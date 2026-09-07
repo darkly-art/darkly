@@ -81,6 +81,23 @@ pub struct LayerKindRegistration {
     /// double-click-to-rename gate.
     pub can_rename: bool,
 
+    /// May instances of this kind be removed from the document? Consulted by
+    /// the remove ops and by merge (which consumes its sources). `false` for
+    /// structural singletons the document cannot lose — the viewport divider.
+    pub can_delete: bool,
+
+    /// May instances of this kind be duplicated? `false` for kinds whose
+    /// instance is a structural singleton.
+    pub can_duplicate: bool,
+
+    /// Is this kind's single instance the screen-space boundary — the node
+    /// among the root's children that splits canvas space (below it) from
+    /// screen space (above it)? Implies root-only placement, `can_delete:
+    /// false`, and `can_duplicate: false`. Consult through
+    /// [`crate::layer::LayerNode::is_screen_space_boundary`]; no consumer
+    /// compares `type_id`.
+    pub screen_space_boundary: bool,
+
     /// Does the panel show a live pixel thumbnail for this kind (vs the
     /// static [`Self::icon`])? `true` only for kinds with a GPU texture the
     /// thumbnail renderer can sample (raster today).

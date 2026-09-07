@@ -884,6 +884,40 @@ impl DarklyEngine {
         self.frame_needs_more()
     }
 
+    /// Put the viewport divider above the top `count` root children — the
+    /// count-era vocabulary many tests set their stage in, expressed as the
+    /// ordinary divider move it now is. Panics when the tree cannot support
+    /// the request, so a mis-built stage fails loudly at the call site.
+    /// Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_set_screen_space_boundary(&mut self, count: usize) {
+        let divider = self.doc.divider_id();
+        let children: Vec<crate::layer::LayerId> = self
+            .doc
+            .children_of(self.doc.root_id())
+            .iter()
+            .copied()
+            .filter(|&c| c != divider)
+            .collect();
+        assert!(
+            count <= children.len(),
+            "test_set_screen_space_boundary({count}) with only {} children",
+            children.len()
+        );
+        let target = if count == 0 {
+            crate::document::MoveTarget::IntoGroupTop(self.doc.root_id())
+        } else {
+            crate::document::MoveTarget::Before(children[children.len() - count])
+        };
+        self.move_layer(divider, target)
+            .expect("test boundary move must be legal");
+        assert_eq!(
+            self.doc.screen_space_run().len(),
+            count,
+            "boundary landed at the requested position"
+        );
+    }
+
     /// Mark a present as owed, mimicking the compositor's `Lost`/`Outdated`
     /// early-return that reconfigures without presenting. Test-only.
     #[cfg(any(test, feature = "testing"))]

@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use super::DarklyEngine;
 use crate::document::filter;
 use crate::document::layer_kind::{self, IdMap};
-use crate::document::{Document, Entity};
+use crate::document::{Document, Entity, TreeSlot};
 use crate::format::error::LoadError;
 use crate::format::manifest::{Manifest, ManifestPixelRef, ManifestRequires};
 use crate::format::unzip::unzip_entries;
@@ -201,6 +201,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 ///    source of truth, and the `parent` SecondaryMap is derived from it.
 fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
+    // The manifest root's children replace the fresh root's wholesale below,
+    // orphaning the divider `Document::new` created. Remember it so the
+    // normalization pass can adopt the file's divider or re-link this one.
+    let fresh_divider = doc.divider_id();
     doc.name = manifest.name.clone();
     doc.canvas_origin =
         crate::coord::CanvasPoint::new(manifest.canvas.origin_x, manifest.canvas.origin_y);
@@ -364,14 +368,87 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         }
     }
 
-    // The one place the screen-space invariant is established by hand. Load
-    // builds the tree from the manifest and derives the parent map directly,
-    // so `link` — where every other path enforces this — is never called.
-    // Clamping rather than trusting means a hand-edited or truncated file
-    // cannot ask for a raster to be rendered after the view transform.
-    doc.screen_space_count = doc.clamp_screen_space_count(manifest.screen_space_count);
+    // The one place the divider invariant is established by hand. Load builds
+    // the tree from the manifest and derives the parent map directly, so
+    // `link` — where every other path holds the invariant — is never called.
+    normalize_divider(&mut doc, fresh_divider)?;
 
     Ok((doc, id_map))
+}
+
+/// Re-establish "the root holds exactly one divider" on a freshly loaded tree,
+/// and degrade rather than trust a hand-edited file: nothing may sit above the
+/// divider that cannot render in screen space.
+///
+/// - The manifest carries exactly one root-level divider → adopt it and purge
+///   the orphaned fresh one.
+/// - No divider (an older or hand-edited file) → the fresh one re-links at the
+///   top, so nothing is viewport-only.
+/// - A nested divider, or more than one → `CorruptManifest`; neither is a
+///   state any producer writes.
+fn normalize_divider(doc: &mut Document, fresh_divider: LayerId) -> Result<(), LoadError> {
+    let root = doc.root_id();
+    let dividers: Vec<LayerId> = doc
+        .all_node_ids_in_order()
+        .into_iter()
+        .filter(|&id| {
+            doc.find_node(id)
+                .is_some_and(|n| n.is_screen_space_boundary())
+        })
+        .collect();
+    match dividers.as_slice() {
+        [] => {
+            let top = doc.children_of(root).len();
+            doc.reinsert_entity(
+                fresh_divider,
+                TreeSlot {
+                    parent: None,
+                    position: top,
+                },
+            );
+        }
+        [one] if doc.parent_of(*one) == Some(root) => {
+            doc.remove_entity(fresh_divider);
+        }
+        _ => {
+            return Err(LoadError::CorruptManifest {
+                reason: "the viewport divider must appear exactly once, at the root".to_string(),
+            });
+        }
+    }
+
+    // Degrade on load, refuse on move: relink the divider above the longest
+    // qualifying suffix if the file put something ineligible above it, so a
+    // hand-edited file cannot ask for a raster to be rendered after the view
+    // transform — and still opens.
+    let div = doc.divider_id();
+    let run_blocked = doc.screen_space_run().iter().any(|&c| {
+        doc.find_node(c)
+            .is_some_and(|n| !n.supports_screen_space(doc))
+    });
+    if run_blocked {
+        let qualifying = doc
+            .children_of(root)
+            .iter()
+            .rev()
+            .take_while(|&&c| {
+                c != div
+                    && doc
+                        .find_node(c)
+                        .is_some_and(|n| n.supports_screen_space(doc))
+            })
+            .count();
+        doc.detach_for_undo(div);
+        let pos = doc.children_of(root).len() - qualifying;
+        doc.reinsert_entity(
+            div,
+            TreeSlot {
+                parent: None,
+                position: pos,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Walk every group node's `children` and every host node's `filters`,
@@ -688,10 +765,14 @@ mod tests {
         // We don't go through save here — we just hand-build a manifest
         // shape that mirrors what a real save would produce, then assert
         // the staging doc's structure.
-        let root_id: u64 = 1;
-        let group_id: u64 = 2;
-        let raster_id: u64 = 3;
-        let mask_id: u64 = 4;
+        // Manifest ids are `LayerId::to_ffi` outputs (generation in the high
+        // bits) — a bare small integer is not a valid wire id and would only
+        // resolve by slot-index coincidence.
+        let ffi = |idx: u64| (1u64 << 32) | idx;
+        let root_id: u64 = ffi(1);
+        let group_id: u64 = ffi(2);
+        let raster_id: u64 = ffi(3);
+        let mask_id: u64 = ffi(4);
 
         let manifest = Manifest {
             format: crate::format::manifest::FORMAT_TAG.to_string(),
@@ -777,7 +858,6 @@ mod tests {
                 }),
             }],
             selection_id: None,
-            screen_space_count: 0,
             fonts: Vec::new(),
         };
 

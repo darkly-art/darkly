@@ -1,58 +1,29 @@
 <script lang="ts">
-    import { app } from '../../state/app.svelte';
-    import { pointerDrag } from '../workspace/pointerDrag';
-    import { gapAt, maxEligible } from './spaceDivider';
     import { layerDropTarget } from './dropTarget.svelte';
-    import { rootGapIndex } from './dropTarget';
     import Icon from '../../icons/Icon.svelte';
 
-    let { onupdate }: { onupdate?: () => void } = $props();
-
-    let el = $state<HTMLElement | null>(null);
-    /** Live count during a drag; `null` when resting on the engine's value. */
-    let dragCount = $state<number | null>(null);
-
-    let count = $derived(dragCount ?? app.screenSpaceCount);
-
-    let maxCount = $derived(maxEligible(app.layerTree));
-
-    /** Which gap the pointer is nearest, measured against the rows that are
-     *  actually on screen. Rows are siblings in the list; this one is too, so
-     *  it skips itself. */
-    function countAt(clientY: number): number {
-        const list = el?.parentElement;
-        if (!list) return count;
-        const rows = [...list.children]
-            .filter(child => child !== el)
-            .map(child => {
-                const rect = child.getBoundingClientRect();
-                return { top: rect.top, height: rect.height };
-            });
-        return gapAt(clientY, rows, maxCount);
-    }
-
-    function onEnd(aborted: boolean) {
-        const landed = dragCount;
-        dragCount = null;
-        if (aborted || landed === null || landed === app.screenSpaceCount) return;
-        app.setScreenSpaceBoundary(landed);
-        onupdate?.();
-    }
+    /** The divider row. An ordinary tree node: dragging it issues the same
+     *  `moveLayers` call as any row (an illegal drop surfaces the engine's
+     *  refusal as a toast), and its two halves are drop targets for the two
+     *  spaces it separates — above it is viewport-only, below it is canvas.
+     *  `select: false` keeps a grab from touching the layer selection. */
+    let {
+        divider,
+        empty = false,
+        onupdate,
+    }: { divider: { id: number }; empty?: boolean; onupdate?: () => void } = $props();
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-    bind:this={el}
     class="divider"
-    class:empty={count === 0}
+    class:empty
     title="Effects above this line change how the canvas looks on screen. They are not part of the image — exports, Flatten and Merge ignore them."
-    use:pointerDrag={{
-        onStart: (e) => { dragCount = countAt(e.clientY); },
-        onMove: (_dx, _dy, e) => { dragCount = countAt(e.clientY); },
-        onEnd,
-    }}
+    draggable="true"
     use:layerDropTarget={{
-        gap: rootGapIndex(app.dropRows, app.screenSpaceCount),
+        rowId: divider.id,
+        draggable: true,
+        select: false,
         onupdate: () => onupdate?.(),
     }}
 >

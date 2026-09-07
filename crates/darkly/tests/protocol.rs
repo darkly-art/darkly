@@ -107,14 +107,13 @@ fn layer_tree_query_round_trips_with_the_boundary() {
     let resp = reg
         .dispatch(&mut engine, "layer_tree", json!(null), &[])
         .expect("layer_tree dispatch");
-    assert!(
-        resp.value["layers"].is_array(),
-        "layer_tree carries a rows array"
-    );
+    let rows = resp.value["layers"]
+        .as_array()
+        .expect("layer_tree carries a rows array");
     assert_eq!(
-        resp.value["screenSpaceCount"],
-        json!(0),
-        "a fresh document has an empty screen-space run"
+        rows.first().map(|r| r["type"].clone()),
+        Some(json!("divider")),
+        "a fresh document's topmost row is the viewport divider — nothing is viewport-only"
     );
 }
 

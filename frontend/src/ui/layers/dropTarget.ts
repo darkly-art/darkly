@@ -84,25 +84,6 @@ export function bandToGap(rowIndex: number, isGroup: boolean, yRatio: number): B
 }
 
 /**
- * The gap that sits directly above the `n`th root child — where the viewport
- * divider physically is, given it renders before that row.
- *
- * `rows` is a depth-first flatten, so a root child is a `depth === 0` entry and
- * counting those to `n` walks past every nested row in between. `n` at or past
- * the number of root children lands at the end of the list, which is the
- * trailing divider's position.
- */
-export function rootGapIndex(rows: DropRow[], n: number): number {
-    let seen = 0;
-    for (let i = 0; i < rows.length; i++) {
-        if (rows[i].depth !== 0) continue;
-        if (seen === n) return i;
-        seen++;
-    }
-    return rows.length;
-}
-
-/**
  * The drop the pointer is asking for, or `null` when there is nothing to drop
  * against.
  *

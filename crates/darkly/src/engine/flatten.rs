@@ -79,7 +79,6 @@ impl DarklyEngine {
                 slot: TreeSlot {
                     parent: Some(root_id),
                     position: idx,
-                    screen_space: false,
                 },
             });
         }
@@ -98,7 +97,6 @@ impl DarklyEngine {
             TreeSlot {
                 parent: Some(root_id),
                 position: 0,
-                screen_space: false,
             },
         );
 

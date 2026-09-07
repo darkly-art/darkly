@@ -34,6 +34,10 @@ export interface LayerDropParams {
     isGroup?: boolean;
     /** May this row start a drag? Locked rows are droppable but not draggable. */
     draggable?: boolean;
+    /** Whether grabbing this row commits the layer selection to it (the
+     *  default). The divider row is draggable but never selectable, so it
+     *  opts out. */
+    select?: boolean;
     /** Refresh the panel after a completed move. */
     onupdate: () => void;
 }
@@ -84,6 +88,13 @@ export function layerDropTarget(node: HTMLElement, params: LayerDropParams) {
     function onDragStart(e: DragEvent) {
         if (current.rowId === undefined || current.draggable === false) return;
         const id = current.rowId;
+        if (current.select === false) {
+            // A draggable-but-unselectable row (the divider) drags alone and
+            // leaves the layer selection untouched.
+            e.dataTransfer?.setData(MIME, JSON.stringify([id]));
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+            return;
+        }
         // Grabbed row IS in selection → drag the whole set. Grabbed row is NOT
         // in selection → drag only it, and replace the selection with just it
         // (focus commits to what the user grabbed).

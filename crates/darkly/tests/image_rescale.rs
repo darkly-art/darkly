@@ -193,7 +193,7 @@ fn mask_scales_with_layer() {
     let (w, h) = (32u32, 32u32);
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     let mask = engine.test_mask_id(layer).expect("mask filter present");
 
     assert_eq!(

@@ -346,7 +346,6 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<S
         nodes,
         modifiers: filters,
         selection_id: doc.selection_id().map(LayerId::to_ffi),
-        screen_space_count: doc.screen_space_count,
         fonts,
     };
     (manifest, blobs, font_blobs)

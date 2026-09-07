@@ -79,39 +79,40 @@ fn row_id(row: &serde_json::Value) -> LayerId {
     LayerId::from_ffi(row["id"].as_f64().expect("row carries an id") as u64)
 }
 
-/// Run members, bottom-to-top. The response is top-first and the run is its
-/// prefix, so this reverses.
+/// Run members, bottom-to-top. The response is top-first with the divider as
+/// one of its rows, so the run is everything before the divider row, reversed.
 fn run_ids(engine: &DarklyEngine) -> Vec<LayerId> {
     let tree = tree_json(engine);
-    let count = tree["screenSpaceCount"].as_u64().expect("count") as usize;
-    tree["layers"]
+    let mut ids: Vec<LayerId> = tree["layers"]
         .as_array()
         .expect("rows")
         .iter()
-        .take(count)
+        .take_while(|row| row["type"] != "divider")
         .map(row_id)
-        .rev()
-        .collect()
+        .collect();
+    ids.reverse();
+    ids
 }
 
 fn stored_count(engine: &DarklyEngine) -> usize {
-    tree_json(engine)["screenSpaceCount"]
-        .as_u64()
-        .expect("count") as usize
+    run_ids(engine).len()
 }
 
 fn in_run(engine: &DarklyEngine, id: LayerId) -> bool {
     run_ids(engine).contains(&id)
 }
 
-fn eligible(engine: &DarklyEngine, id: LayerId) -> bool {
-    tree_json(engine)["layers"]
+/// The divider's id, read off the same layer-tree response the panel consumes.
+fn divider_row_id(engine: &DarklyEngine) -> LayerId {
+    let tree = tree_json(engine);
+    let row = tree["layers"]
         .as_array()
         .expect("rows")
         .iter()
-        .find(|row| row_id(row) == id)
-        .and_then(|row| row["screenSpaceEligible"].as_bool())
-        .unwrap_or(false)
+        .find(|r| r["type"] == "divider")
+        .expect("the tree always carries the divider row")
+        .clone();
+    row_id(&row)
 }
 
 /// The id of a row's mask modifier, read out of the same serialized tree.
@@ -134,6 +135,43 @@ fn root_row_count(engine: &DarklyEngine) -> usize {
     tree_json(engine)["layers"].as_array().expect("rows").len()
 }
 
+/// Root rows, top-first — the panel's order.
+fn root_rows(engine: &DarklyEngine) -> Vec<LayerId> {
+    tree_json(engine)["layers"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(row_id)
+        .collect()
+}
+
+/// Children of a root-level group row, top-first — the panel's order.
+fn group_children(engine: &DarklyEngine, group: LayerId) -> Vec<LayerId> {
+    tree_json(engine)["layers"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row_id(row) == group)
+        .expect("group row")["children"]
+        .as_array()
+        .expect("children")
+        .iter()
+        .map(row_id)
+        .collect()
+}
+
+/// A root-level group row's stored passthrough flag, as the panel sees it.
+fn passthrough_flag(engine: &DarklyEngine, group: LayerId) -> bool {
+    tree_json(engine)["layers"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row_id(row) == group)
+        .expect("group row")["passthrough"]
+        .as_bool()
+        .expect("passthrough flag")
+}
+
 // ---------------------------------------------------------------------------
 // What the boundary is
 // ---------------------------------------------------------------------------
@@ -147,7 +185,7 @@ fn boundary_partitions_the_root_into_two_spaces() {
     let a = effect(&mut engine, "invert");
     let b = effect(&mut engine, "grain");
 
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
     assert_eq!(
         run_ids(&engine),
         vec![a, b],
@@ -155,15 +193,15 @@ fn boundary_partitions_the_root_into_two_spaces() {
     );
     assert!(!in_run(&engine, raster));
 
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![b], "only the topmost stays above");
 
-    engine.set_screen_space_boundary(0);
+    engine.test_set_screen_space_boundary(0);
     assert!(run_ids(&engine).is_empty(), "the run empties");
     assert_eq!(
         root_row_count(&engine),
-        3,
-        "and everything is canvas-space again"
+        4,
+        "and everything is canvas-space again — three nodes plus the divider row"
     );
 }
 
@@ -186,7 +224,7 @@ fn screen_space_effect_is_absent_from_the_composite() {
         "a canvas-space invert turns the red below it cyan"
     );
 
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     settle(&mut engine);
     assert_eq!(
         px(&engine.test_readback_canvas(), cw, 8, 8),
@@ -206,7 +244,7 @@ fn screen_space_effect_is_visible_only_after_the_present_pass() {
     fill_layer(&mut engine, red, 255, 0, 0);
 
     let _inv = effect(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     settle(&mut engine);
 
     // The surface is sRGB-encoded, so this asserts the *ordering* of channels
@@ -241,7 +279,7 @@ fn a_raster_can_never_be_placed_above_the_boundary() {
     let e1 = effect(&mut engine, "invert");
     let e2 = effect(&mut engine, "grain");
     let e3 = effect(&mut engine, "vhs");
-    engine.set_screen_space_boundary(3);
+    engine.test_set_screen_space_boundary(3);
     let expected = vec![e1, e2, e3];
     assert_eq!(run_ids(&engine), expected);
 
@@ -280,35 +318,44 @@ fn a_raster_can_never_be_placed_above_the_boundary() {
     assert!(!in_run(&engine, anchored));
 }
 
-/// The structural clauses of the eligibility predicate, and the read clamp that
-/// catches the changes insertion cannot see.
+/// The structural clauses of the boundary rules, enforced loudly at mutation
+/// time: an overshooting divider move is refused naming its blocker, and a
+/// mask cannot attach to a run member at all. (The count design's read clamp
+/// degraded both cases silently; the divider node refuses instead.)
 #[test]
 fn masked_or_isolated_nodes_cannot_be_above_the_boundary() {
     let mut engine = test_engine(16, 16);
     let raster = engine.add_raster_layer(None);
     let e = effect(&mut engine, "invert");
+    let divider = divider_row_id(&engine);
 
-    // A raster is never eligible, so the boundary clamps to the one effect.
-    engine.set_screen_space_boundary(2);
-    assert_eq!(run_ids(&engine), vec![e], "clamped past the raster");
-    assert!(!eligible(&engine, raster));
-
-    // A mask on a run member drops it to canvas space without discarding the
-    // user's stated intent…
-    engine.add_mask(e);
+    // A raster can never sit above the boundary, so the divider move that
+    // would put it there is refused, naming it.
+    let err = engine
+        .move_layer(divider, MoveTarget::Before(raster))
+        .expect_err("moving the divider below a raster is refused");
+    assert!(
+        err.contains("viewport boundary"),
+        "the refusal explains itself: {err}"
+    );
     assert!(
         run_ids(&engine).is_empty(),
-        "a masked node cannot be realized after the view transform"
-    );
-    assert_eq!(
-        stored_count(&engine),
-        0,
-        "the run reads empty while the host is disqualified"
+        "the refused move moved nothing"
     );
 
-    // …and removing it restores the run from that same stored intent.
-    engine.remove_mask(e);
-    assert_eq!(run_ids(&engine), vec![e], "the run comes back");
+    // Over the effect alone it is an ordinary move.
+    engine.test_set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![e]);
+
+    // A mask cannot attach to a run member: attaching is what would have
+    // disqualified the host in place, so it refuses loudly.
+    let err = engine
+        .add_mask(e)
+        .expect_err("a mask on a run member is refused");
+    assert!(err.contains("mask"), "the refusal explains itself: {err}");
+    assert_eq!(run_ids(&engine), vec![e], "the run is untouched");
+    // On a canvas-space host the same call still works.
+    engine.add_mask(raster).expect("mask on a canvas layer");
 }
 
 /// A group crosses the line whole, and only when everything inside it can.
@@ -319,27 +366,22 @@ fn a_group_is_eligible_exactly_when_its_contents_are() {
     let e = effect(&mut engine, "invert");
     let group = engine.group_layers(vec![e]).expect("group of one effect");
 
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(
         run_ids(&engine),
         vec![group],
-        "a passthrough group of effects is eligible"
+        "a group of effects is eligible"
     );
 
-    // Isolating it gives it a canvas-space accumulator, which has no
-    // screen-space counterpart.
+    // Isolation is a canvas-space notion; above the divider the run is
+    // consumed flattened, so the flag changes nothing up there.
     engine.set_group_passthrough(group, false);
-    assert!(
-        run_ids(&engine).is_empty(),
-        "an isolated group cannot be above the line"
-    );
-
-    engine.set_group_passthrough(group, true);
     assert_eq!(
         run_ids(&engine),
         vec![group],
-        "passthrough again, run again"
+        "the passthrough flag does not gate eligibility"
     );
+    engine.set_group_passthrough(group, true);
 
     // A group in the run may only hold what can render there, and a move into
     // it is refused rather than silently emptying the run.
@@ -364,9 +406,9 @@ fn visibility_never_changes_which_space_a_node_is_in() {
     let mut engine = test_engine(16, 16);
     let raster = engine.add_raster_layer(None);
     let canvas_effect = effect(&mut engine, "invert");
-    engine.add_mask(canvas_effect);
+    engine.add_mask(canvas_effect).expect("add mask");
     let run_effect = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     let before = run_ids(&engine);
     assert_eq!(before, vec![run_effect]);
 
@@ -402,7 +444,7 @@ fn boundary_move_is_one_undo_step() {
     let a = effect(&mut engine, "invert");
     let b = effect(&mut engine, "grain");
 
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
     assert_eq!(run_ids(&engine), vec![a, b]);
 
     engine.undo();
@@ -425,7 +467,7 @@ fn undo_restores_run_membership_exactly() {
     let ex = effect(&mut engine, "invert");
     let ea = effect(&mut engine, "grain");
     let eb = effect(&mut engine, "vhs");
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
     assert_eq!(run_ids(&engine), vec![ea, eb]);
 
     // Deleting the lowest run member and undoing must bring it back *into* the
@@ -460,7 +502,7 @@ fn boundary_survives_save_load_round_trip() {
     let _raster = engine.add_raster_layer(None);
     let _a = effect(&mut engine, "invert");
     let _b = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
 
     let bytes = save_to_zip(&mut engine, None);
 
@@ -477,7 +519,7 @@ fn boundary_survives_save_load_round_trip() {
     let mut engine = test_engine(16, 16);
     let _raster = engine.add_raster_layer(None);
     let _one = effect(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     let overreaching = save_to_zip(&mut engine, Some(99));
 
     let mut reloaded = test_engine(16, 16);
@@ -529,7 +571,7 @@ fn effect_instances_are_not_rebuilt_every_frame() {
     fill_layer(&mut engine, raster, 255, 0, 0);
     let _canvas_effect = effect(&mut engine, "invert");
     let _screen_effect = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     // Settle: the first frames legitimately build both instances.
     for _ in 0..4 {
@@ -582,7 +624,7 @@ fn dragging_a_run_member_below_the_divider_takes_it_out_of_the_run() {
     let bottom = effect(&mut engine, "rainy_glass");
     let middle = effect(&mut engine, "grain");
     let top = effect(&mut engine, "vhs");
-    engine.set_screen_space_boundary(3);
+    engine.test_set_screen_space_boundary(3);
     assert_eq!(run_ids(&engine), vec![bottom, middle, top]);
 
     // The gesture: drop the lowest run member just above the raster — the slot
@@ -610,7 +652,7 @@ fn dragging_an_effect_above_the_divider_puts_it_in_the_run() {
     let _raster = engine.add_raster_layer(None);
     let below = effect(&mut engine, "rainy_glass");
     let above = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![above]);
 
     engine
@@ -733,7 +775,7 @@ fn screen_space_animated_effect_animates() {
     let base = engine.add_raster_layer(None);
     fill_layer(&mut engine, base, 128, 128, 128);
     let fx = animated_grain(&mut engine);
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![fx], "the effect is viewport-only");
 
     quiesce(&mut engine);
@@ -766,7 +808,7 @@ fn reordering_inside_the_run_keeps_every_member() {
     let a = effect(&mut engine, "rainy_glass");
     let b = effect(&mut engine, "grain");
     let c = effect(&mut engine, "vhs");
-    engine.set_screen_space_boundary(3);
+    engine.test_set_screen_space_boundary(3);
 
     engine
         .move_layers(vec![c], MoveTarget::Before(a))
@@ -797,7 +839,7 @@ fn an_effect_inside_a_run_group_still_runs_on_the_presented_image() {
 
     let inv = effect(&mut engine, "invert");
     let group = engine.group_layers(vec![inv]).expect("group of one effect");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![group], "the group is the run");
     settle(&mut engine);
 
@@ -830,7 +872,7 @@ fn a_run_group_flattens_into_the_chain_in_document_order() {
         .group_layers(vec![nested])
         .expect("group of one effect");
     let sibling = effect(&mut engine, "invert");
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
     assert_eq!(
         run_ids(&engine),
         vec![group, sibling],
@@ -854,7 +896,7 @@ fn grouping_run_members_keeps_the_group_in_the_run() {
     let _raster = engine.add_raster_layer(None);
     let a = effect(&mut engine, "invert");
     let b = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(2);
+    engine.test_set_screen_space_boundary(2);
     assert_eq!(
         run_ids(&engine),
         vec![a, b],
@@ -883,7 +925,7 @@ fn moving_a_group_holding_a_raster_into_viewport_space_is_refused() {
     let mut engine = test_engine(16, 16);
     let raster = engine.add_raster_layer(None);
     let e = effect(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![e]);
 
     // A group of an effect *and* a raster — eligible but for the raster.
@@ -916,7 +958,7 @@ fn a_legal_viewport_arrangement_survives_undo_and_redo() {
     let a = effect(&mut engine, "invert");
     let b = effect(&mut engine, "grain");
     let group = engine.group_layers(vec![a, b]).expect("group both effects");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     let arranged = run_ids(&engine);
     let chain = engine.test_screen_space_effects();
@@ -924,7 +966,7 @@ fn a_legal_viewport_arrangement_survives_undo_and_redo() {
     assert_eq!(chain, vec![a, b]);
 
     // Move the group down and back through undo.
-    engine.set_screen_space_boundary(0);
+    engine.test_set_screen_space_boundary(0);
     assert!(run_ids(&engine).is_empty());
     engine.undo();
     assert_eq!(run_ids(&engine), arranged, "undo restores the run");
@@ -951,7 +993,7 @@ fn adding_into_a_run_group_lands_at_the_nearest_legal_slot() {
     let _raster = engine.add_raster_layer(None);
     let a = effect(&mut engine, "invert");
     let group = engine.group_layers(vec![a]).expect("group the effect");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![group]);
 
     // Anchored on the effect inside the group — the slot asked for is above
@@ -990,7 +1032,7 @@ fn an_empty_group_is_allowed_above_the_boundary() {
     let _raster = engine.add_raster_layer(None);
     let a = effect(&mut engine, "invert");
     let group = engine.group_layers(vec![a]).expect("group the effect");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![group]);
 
     // Delete the only effect it holds. The group is now empty and still in the
@@ -1020,7 +1062,7 @@ fn a_freshly_created_group_is_never_swept_into_the_run() {
     let mut engine = test_engine(16, 16);
     let raster = engine.add_raster_layer(None);
     let e = effect(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![e]);
 
     let empty = engine.add_group(None);
@@ -1038,5 +1080,272 @@ fn a_freshly_created_group_is_never_swept_into_the_run() {
         stored_count(&engine),
         1,
         "the stored intent is not polluted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Drag placement — a move is a statement about position, and the engine
+// honors it verbatim
+// ---------------------------------------------------------------------------
+
+/// A group of effects dragged from canvas space to a slot inside the run lands
+/// at that slot.
+#[test]
+fn dragging_a_group_into_the_run_lands_where_dropped() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let g_eff = effect(&mut engine, "invert");
+    let e1 = effect(&mut engine, "grain");
+    let e2 = effect(&mut engine, "vhs");
+    engine.test_set_screen_space_boundary(2);
+    assert_eq!(run_ids(&engine), vec![e1, e2]);
+
+    let group = engine.group_layers(vec![g_eff]).expect("group the effect");
+    assert_eq!(run_ids(&engine), vec![e1, e2], "grouping changed nothing");
+
+    // Panel gesture: drop the group directly above e1's row (below e2).
+    engine
+        .move_layers(vec![group], MoveTarget::After(e1))
+        .expect("move into the run");
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![e1, group, e2],
+        "the group lands between e1 and e2, where it was dropped"
+    );
+}
+
+/// The same drop with an *empty* group. Emptiness gives it no claim on the
+/// divider, but the drop's reference already states the side, and the position
+/// is the user's — it must not be redirected to the run's floor.
+#[test]
+fn dragging_an_empty_group_into_the_run_lands_where_dropped() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e1 = effect(&mut engine, "grain");
+    let e2 = effect(&mut engine, "vhs");
+    engine.test_set_screen_space_boundary(2);
+    assert_eq!(run_ids(&engine), vec![e1, e2]);
+
+    let group = engine.add_group(None);
+    assert!(!in_run(&engine, group), "a new group starts below");
+
+    // Panel gesture: drop the empty group above e2's row, the run's top.
+    engine
+        .move_layers(vec![group], MoveTarget::After(e2))
+        .expect("move into the run");
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![e1, e2, group],
+        "the empty group lands above e2, where it was dropped"
+    );
+}
+
+/// Undo and redo of that drop restore the recorded slot exactly — redo must
+/// not replay through any placement guess.
+#[test]
+fn empty_group_run_move_round_trips_through_undo_and_redo() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e1 = effect(&mut engine, "grain");
+    let e2 = effect(&mut engine, "vhs");
+    engine.test_set_screen_space_boundary(2);
+    let group = engine.add_group(None);
+    engine
+        .move_layers(vec![group], MoveTarget::After(e2))
+        .expect("move into the run");
+    assert_eq!(run_ids(&engine), vec![e1, e2, group]);
+
+    engine.undo();
+    assert_eq!(run_ids(&engine), vec![e1, e2], "undo puts the run back");
+    assert!(!in_run(&engine, group));
+
+    engine.redo();
+    assert_eq!(
+        run_ids(&engine),
+        vec![e1, e2, group],
+        "redo lands at the recorded slot, not a redirected one"
+    );
+}
+
+/// An effect dropped at a slot inside a run group lands at that slot.
+#[test]
+fn dragging_an_effect_into_a_run_group_lands_where_dropped() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "grain");
+    let e_b = effect(&mut engine, "vhs");
+    let group = engine.group_layers(vec![e_a, e_b]).expect("group");
+    engine.test_set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![group]);
+    assert_eq!(group_children(&engine, group), vec![e_b, e_a]);
+
+    let e_c = effect(&mut engine, "invert");
+    // Panel gesture: drop above e_b's row, the group's top.
+    engine
+        .move_layers(vec![e_c], MoveTarget::After(e_b))
+        .expect("move into the group");
+
+    assert_eq!(
+        group_children(&engine, group),
+        vec![e_c, e_b, e_a],
+        "e_c lands above e_b, where it was dropped"
+    );
+}
+
+/// Dropping onto a group header's body targets the group's top.
+#[test]
+fn dropping_onto_a_run_group_header_lands_on_top() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "grain");
+    let e_b = effect(&mut engine, "vhs");
+    let group = engine.group_layers(vec![e_a, e_b]).expect("group");
+    engine.test_set_screen_space_boundary(1);
+
+    let e_c = effect(&mut engine, "invert");
+    engine
+        .move_layers(vec![e_c], MoveTarget::IntoGroupTop(group))
+        .expect("move into the group");
+
+    assert_eq!(
+        group_children(&engine, group),
+        vec![e_c, e_b, e_a],
+        "into-top means the panel top"
+    );
+}
+
+/// `before group` is a sibling slot below the whole group — never a slot
+/// inside it. The panel's collapsed-header below-zone means exactly this.
+#[test]
+fn before_group_is_a_sibling_below_the_whole_group() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "grain");
+    let e_b = effect(&mut engine, "vhs");
+    let group = engine.group_layers(vec![e_a, e_b]).expect("group");
+    engine.test_set_screen_space_boundary(1);
+
+    let e_c = effect(&mut engine, "invert");
+    engine
+        .move_layers(vec![e_c], MoveTarget::Before(group))
+        .expect("move before the group");
+
+    assert!(
+        !group_children(&engine, group).contains(&e_c),
+        "before-group lands outside the group"
+    );
+    let rows = root_rows(&engine);
+    let gi = rows.iter().position(|&r| r == group).unwrap();
+    assert_eq!(rows[gi + 1], e_c, "e_c sits directly below the group block");
+}
+
+/// A paste is an add, not a move: anchored on a run member, the new raster is
+/// placed at the nearest legal slot — the canvas floor — and the run survives.
+#[test]
+fn pasting_with_a_run_member_anchor_preserves_the_run() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e = effect(&mut engine, "invert");
+    engine.test_set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![e]);
+
+    let pasted = engine.paste_image(4, 4, &[255u8; 4 * 4 * 4], 0, 0, Some(e));
+
+    assert_eq!(run_ids(&engine), vec![e], "the run is untouched");
+    assert!(!in_run(&engine, pasted));
+    // Rows top-first: the effect, the divider row, then the redirected paste.
+    assert_eq!(
+        root_rows(&engine)[2],
+        pasted,
+        "the pasted raster sits directly below the divider"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Passthrough above the divider
+// ---------------------------------------------------------------------------
+
+/// A group's passthrough flag is meaningless above the divider — the run is
+/// consumed flattened — so unchecking it must not silently drop the group's
+/// effects out of the present chain.
+#[test]
+fn unchecking_passthrough_on_a_run_group_keeps_effects_running() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "grain");
+    let group = engine.group_layers(vec![e_a]).expect("group");
+    engine.test_set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![group]);
+    assert_eq!(engine.test_screen_space_effects(), vec![e_a]);
+
+    engine.set_group_passthrough(group, false);
+
+    assert_eq!(
+        run_ids(&engine),
+        vec![group],
+        "the group stays in the run when passthrough is unchecked"
+    );
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        vec![e_a],
+        "and its effects keep contributing to the present chain"
+    );
+}
+
+/// The flag being irrelevant up there cuts both ways: an isolated group of
+/// effects may be dragged into the run, where it renders flattened.
+#[test]
+fn an_isolated_group_of_effects_may_enter_the_run() {
+    let mut engine = test_engine(16, 16);
+    let _raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "invert");
+    let group = engine.group_layers(vec![e_a]).expect("group");
+    engine.set_group_passthrough(group, false);
+    let e_top = effect(&mut engine, "grain");
+    engine.test_set_screen_space_boundary(1);
+    assert_eq!(run_ids(&engine), vec![e_top]);
+
+    engine
+        .move_layers(vec![group], MoveTarget::Before(e_top))
+        .expect("an isolated group of effects is allowed above the line");
+
+    assert_eq!(run_ids(&engine), vec![group, e_top]);
+    assert_eq!(
+        engine.test_screen_space_effects(),
+        vec![e_a, e_top],
+        "its effects flatten into the chain"
+    );
+}
+
+/// The stored flag is intent, not state the divider owns: it survives the trip
+/// through the run untouched and re-applies isolation below the line.
+#[test]
+fn passthrough_flag_survives_the_run_and_reapplies_below() {
+    let mut engine = test_engine(16, 16);
+    let raster = engine.add_raster_layer(None);
+    let e_a = effect(&mut engine, "invert");
+    let group = engine.group_layers(vec![e_a]).expect("group");
+    engine.set_group_passthrough(group, false);
+    let e_top = effect(&mut engine, "grain");
+    engine.test_set_screen_space_boundary(1);
+
+    engine
+        .move_layers(vec![group], MoveTarget::Before(e_top))
+        .expect("move into the run");
+    assert!(in_run(&engine, group));
+    assert!(
+        !passthrough_flag(&engine, group),
+        "the flag is ignored above the divider, not cleared"
+    );
+
+    engine
+        .move_layers(vec![group], MoveTarget::After(raster))
+        .expect("move back below the divider");
+    assert!(!in_run(&engine, group));
+    assert!(
+        !passthrough_flag(&engine, group),
+        "back in canvas space the group is isolated again, as stored"
     );
 }

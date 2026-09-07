@@ -303,7 +303,7 @@ fn flatten_node_on_layer_with_mask_applies_it() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
     paint_dot(&mut engine, layer, 32.0, 32.0, [1.0, 0.0, 0.0]);
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     assert!(engine.flatten_node(layer).is_ok());
     assert!(
         engine.host_mask_id(layer).is_none(),
@@ -349,13 +349,13 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let group = engine.add_group(None);
     let child_a = engine.add_raster_layer(Some(group));
     paint_dot(&mut engine, child_a, 16.0, 32.0, [1.0, 0.0, 0.0]);
-    engine.add_mask(child_a);
+    engine.add_mask(child_a).expect("add mask");
     paint_mask_dot(&mut engine, child_a, 16.0, 16.0);
 
     let child_b = engine.add_raster_layer(Some(group));
     paint_dot(&mut engine, child_b, 48.0, 32.0, [0.0, 1.0, 0.0]);
 
-    engine.add_mask(group);
+    engine.add_mask(group).expect("add mask");
     paint_mask_dot(&mut engine, group, 8.0, 8.0);
 
     // Snapshot every pixel buffer we expect to survive the round-trip.
@@ -622,7 +622,7 @@ fn flatten_image_leaves_the_screen_space_run_in_the_tree() {
     let upper = engine.add_raster_layer(None);
     paint_dot(&mut engine, upper, 40.0, 32.0, [0.0, 0.0, 1.0]);
     let viewport_effect = effect_layer(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     let result = engine.flatten_image().expect("flatten succeeds");
 
@@ -645,7 +645,7 @@ fn merge_down_refuses_a_screen_space_source() {
     let lower = engine.add_raster_layer(None);
     paint_dot(&mut engine, lower, 32.0, 32.0, [1.0, 0.0, 0.0]);
     let viewport_effect = effect_layer(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     let result = engine.merge_down(viewport_effect);
     assert!(result.is_err(), "a viewport-only source must refuse");
@@ -659,7 +659,7 @@ fn merge_layers_refuses_a_screen_space_source() {
     let mut engine = test_engine(64, 64);
     let keep = engine.add_raster_layer(None);
     let viewport_effect = effect_layer(&mut engine, "invert");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     let result = engine.merge_layers(vec![keep, viewport_effect]);
     assert!(result.is_err(), "a viewport-only source must refuse");

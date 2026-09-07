@@ -394,6 +394,9 @@ impl LayerKindGpu for Layer {
             // this is never reached, but the arm keeps the match total.
             Layer::Filter(_) => {}
             Layer::Vector(v) => v.realize_in(compositor, device, queue),
+            // The divider composites nothing and owns no GPU resource; like a
+            // filter it is excluded by `Layer::is_blend_content`.
+            Layer::Divider(_) => {}
         }
     }
 }

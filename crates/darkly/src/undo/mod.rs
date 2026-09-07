@@ -7,7 +7,6 @@ mod layer;
 mod mask_property;
 mod pixel_bounds;
 pub mod property;
-mod screen_space;
 mod selection;
 mod selection_metadata;
 mod tombstones;
@@ -24,7 +23,6 @@ pub use layer::{
 pub use mask_property::MaskLinkedToHostAction;
 pub use pixel_bounds::PixelBoundsAction;
 pub use property::PropertyAction;
-pub use screen_space::ScreenSpaceBoundaryAction;
 pub use selection::SelectionAction;
 pub use selection_metadata::SelectionMetadataAction;
 

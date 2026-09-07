@@ -24,7 +24,7 @@ function instanceServing(treeRef: { current: any[] }) {
         // The response is an envelope: rows plus where the viewport divider
         // sits among them. These tests are about the rows.
         layerTree: () =>
-            Promise.resolve({ layers: treeRef.current, screenSpaceCount: 0 }),
+            Promise.resolve({ layers: treeRef.current }),
         setIsolatedNode: vi.fn().mockResolvedValue(null),
         setGroupCollapsed: vi.fn(),
     };

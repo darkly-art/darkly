@@ -271,8 +271,11 @@ impl DarklyEngine {
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
         // it — the same anchor resolution the document's `add_*` helpers use.
+        // A paste is an add, not a move: `place_layer` takes the boundary
+        // policy, so an anchor above the viewport divider cannot pull a raster
+        // into the run.
         let target = self.doc.resolve_anchor_target(active_layer_id);
-        self.doc.move_layer(new_id, target);
+        self.doc.place_layer(new_id, target);
 
         // Upload RGBA to floating source texture; the compositor renders it
         // as a preview overlay until commit.

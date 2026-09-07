@@ -136,7 +136,7 @@ fn both_spaces_render_at_the_same_scale() {
     fill_layer(&mut engine, base, 128, 128, 128);
     let canvas_fx = effect(&mut engine, "invert");
     let screen_fx = effect(&mut engine, "grain");
-    engine.set_screen_space_boundary(1);
+    engine.test_set_screen_space_boundary(1);
 
     // Realize both: the canvas instance through a composite, the screen one
     // through the run, which a headless engine only sizes on demand.

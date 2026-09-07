@@ -23,24 +23,35 @@ impl DarklyEngine {
     /// Attach a mask filter to a host layer or group, allocating its GPU
     /// texture in the unified node-texture pool. If a selection is active,
     /// the mask is seeded from the selection (one-click "selection → mask").
+    ///
+    /// Refuses loudly when the host is above the viewport divider: a mask is
+    /// canvas-space data, so acquiring one would disqualify the host from the
+    /// space it is in. Kind cannot change in place and moves are validated, so
+    /// this is the only in-place disqualifier.
     #[handler]
-    pub fn add_mask(&mut self, id: LayerId) {
+    pub fn add_mask(&mut self, id: LayerId) -> Result<(), String> {
         if !self.doc.is_node_editable(id) {
-            return;
+            return Ok(());
         }
         // UI invariant: at most one mask per host. The model supports N; we
         // refuse here so that `add_mask_filter` doesn't silently create a
         // second one.
         // host unknown → bail (true keeps the existing semantics).
-        if self.doc.find_node(id).is_none() {
-            return;
-        }
+        let Some(node) = self.doc.find_node(id) else {
+            return Ok(());
+        };
         if self.doc.has_mask(id) {
-            return;
+            return Ok(());
+        }
+        if self.doc.in_screen_space_region(id) {
+            return Err(format!(
+                "\"{}\" can't take a mask in viewport space: a mask only exists in canvas space.",
+                node.common().name
+            ));
         }
 
         let Some(mod_id) = self.add_mask_unseeded(id) else {
-            return;
+            return Ok(());
         };
 
         // If a selection is active, seed the mask pixels from the selection.
@@ -61,6 +72,7 @@ impl DarklyEngine {
 
         let slot = self.doc.slot_of(mod_id).unwrap_or_default();
         self.push_undo(Box::new(EntityAddAction::new(mod_id, slot)));
+        Ok(())
     }
 
     /// Allocate an empty (unseeded) mask filter on `id`: create the filter,
@@ -418,8 +430,9 @@ impl DarklyEngine {
 
         if !already_had_mask {
             // add_mask itself seeds from the active selection (see above), so
-            // we're done after that single call.
-            self.add_mask(id);
+            // we're done after that single call. A refusal (viewport-space
+            // host) leaves nothing to seed.
+            let _ = self.add_mask(id);
             return;
         }
 

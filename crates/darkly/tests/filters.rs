@@ -212,7 +212,7 @@ fn invert_mask_negates_r8_and_round_trips() {
     let (w, h) = (16u32, 16u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
 
     // Make the mask non-uniform: a black dab on the default-white mask.
@@ -243,7 +243,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
     let (w, h) = (12u32, 12u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
     let before = e.test_readback_layer(mask);
 
@@ -361,7 +361,7 @@ fn invert_mask_with_selection_after_crop() {
     let (w, h) = (32u32, 32u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
 
     // Non-uniform mask so the selection clip is meaningful.
@@ -554,7 +554,7 @@ fn masked_filter_layer_confines_inversion() {
         false,
         0.0,
     );
-    engine.add_mask(filter);
+    engine.add_mask(filter).expect("add mask");
     let mask = engine.test_mask_id(filter).expect("mask present on filter");
     engine.clear_selection();
     engine.test_flush_readbacks();
@@ -620,7 +620,7 @@ fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
         false,
         0.0,
     );
-    engine.add_mask(filter);
+    engine.add_mask(filter).expect("add mask");
     engine.clear_selection();
     engine.test_flush_readbacks();
     engine.render(0.0);

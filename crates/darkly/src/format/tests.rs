@@ -453,7 +453,7 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // Mask filter on one of the rasters — exercises mask kind +
     // its parent-host wiring.
     if let Some(target) = raster_ids.get(1).copied() {
-        engine.add_mask(target);
+        engine.add_mask(target).expect("add mask");
     }
 
     // Selection mask — `select_all` flips selection.active and
@@ -478,9 +478,9 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
             .add_filter_layer(type_id, defaults, None)
             .expect("registered effect is addable");
     }
-    // Half of them viewport-only, so `screen_space_count` is a value the
+    // Half of them viewport-only, so the divider's position is a value the
     // round-trip has to carry rather than a default that survives by accident.
-    engine.set_screen_space_boundary(effect_count / 2);
+    engine.test_set_screen_space_boundary(effect_count / 2);
 
     // One of every void type — adds a void layer at root for each
     // registered void kind, with schema defaults. Closes the kitchen-sink
@@ -758,7 +758,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
     original.end_stroke();
     original.render(0.0);
 
-    original.add_mask(host);
+    original.add_mask(host).expect("add mask");
     let mask_id = original.host_mask_id(host).expect("mask");
     // Black dab on the mask → a distinct hidden region.
     original.begin_stroke(mask_id).unwrap();
@@ -1058,7 +1058,6 @@ fn synth_minimal_manifest() -> Manifest {
         }],
         modifiers: Vec::new(),
         selection_id: None,
-        screen_space_count: 0,
         fonts: Vec::new(),
     }
 }

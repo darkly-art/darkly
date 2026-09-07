@@ -85,10 +85,20 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
     const rows: DropRow[] = [];
 
     const walk = (nodes: any[], parent: number | null, visible: boolean, depth: number) => {
-        const siblings = nodes.filter((n) => n?.id !== undefined).map((n) => n.id as number);
+        const siblings = nodes
+            .filter((n) => n?.id !== undefined && n.type !== 'divider')
+            .map((n) => n.id as number);
         for (const n of nodes) {
             if (n?.id === undefined) continue;
             const id: number = n.id;
+            // The viewport divider is a drop row — the gaps above and below it
+            // are the two sides of the boundary — but never a selectable node:
+            // it stays out of `ids`/`order`, so selection, reselection after a
+            // delete, and keyboard navigation can't land on it.
+            if (n.type === 'divider') {
+                if (visible) rows.push({ id, depth, isGroup: false });
+                continue;
+            }
             ids.add(id);
             order.push(id);
             if (visible) {

@@ -52,6 +52,15 @@ impl DarklyEngine {
         if self.doc.renders_in_screen_space(source_id) {
             return Err(VIEWPORT_ONLY_REFUSAL.into());
         }
+        // Merge consumes its participants; a kind that cannot be deleted (the
+        // viewport divider) cannot be one.
+        if self
+            .doc
+            .find_node(source_id)
+            .is_some_and(|n| !n.kind().can_delete)
+        {
+            return Err("The viewport boundary cannot be merged".into());
+        }
         let parent = self.doc.parent_of(source_id);
         let pos = self
             .doc
@@ -63,6 +72,13 @@ impl DarklyEngine {
         let parent_id = parent.ok_or("Layer has no parent")?;
         let target_id = self.doc.children_of(parent_id)[pos - 1];
 
+        if self
+            .doc
+            .find_node(target_id)
+            .is_some_and(|n| !n.kind().can_delete)
+        {
+            return Err("Nothing below to merge into".into());
+        }
         if !self.doc.is_node_editable(target_id) {
             return Err("Target layer is locked".into());
         }
@@ -146,7 +162,6 @@ impl DarklyEngine {
             TreeSlot {
                 parent,
                 position: target_pos_before,
-                screen_space: false,
             },
         );
 
@@ -197,8 +212,11 @@ impl DarklyEngine {
             return Err("Merge needs at least two layers".into());
         }
         for &id in &unique {
-            if self.doc.find_node(id).is_none() {
+            let Some(node) = self.doc.find_node(id) else {
                 return Err("Layer not in tree".into());
+            };
+            if !node.kind().can_delete {
+                return Err("The viewport boundary cannot be merged".into());
             }
             if !self.doc.is_node_editable(id) {
                 return Err("A selected layer is locked".into());

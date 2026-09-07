@@ -14,7 +14,7 @@ pub use pixel_transform::{
     TransformCapabilityError, TransformLinkPolicy, TransformMembershipSnapshot, TransformPlanError,
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use slotmap::{SecondaryMap, SlotMap};
 
@@ -31,14 +31,9 @@ pub enum SelectionMode {
     Intersect,
 }
 
-/// Where an entity sat in the tree: its container, its index within it, and
-/// which side of the screen-space boundary it was on.
-///
-/// Undo restores absolute indices, and an index alone cannot distinguish "the
-/// lowest member of the screen-space run" from "the topmost canvas-space child"
-/// — the two are the same number. Carrying the side makes deleting an effect
-/// adjacent to the divider and undoing it land back where it was, rather than
-/// silently crossing into the exported image.
+/// Where an entity sat in the tree: its container and its index within it.
+/// The viewport divider is a node among the root's children, so an index says
+/// everything — including which side of the boundary the slot is on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TreeSlot {
     /// Container the entity was linked under. `None` means the root group.
@@ -46,9 +41,6 @@ pub struct TreeSlot {
     /// Index within the container's `children` (tree node) or `filters`
     /// (modifier) list.
     pub position: usize,
-    /// Whether the entity rendered in screen space — always `false` for
-    /// anything that is not a root child.
-    pub screen_space: bool,
 }
 
 /// Where a move/group operation drops its payload, relative to an anchor node.
@@ -71,9 +63,7 @@ pub enum MoveTarget {
 }
 
 impl MoveTarget {
-    /// The node this target is stated relative to. Every variant names one —
-    /// which is what lets a move inherit its reference's side of the viewport
-    /// divider instead of being told which side it meant.
+    /// The node this target is stated relative to. Every variant names one.
     pub fn reference(&self) -> LayerId {
         match *self {
             MoveTarget::Before(id)
@@ -188,24 +178,6 @@ pub struct Document {
     /// toggling whether ops respect the selection.
     pub selection: Option<LayerId>,
 
-    /// How many of the root group's trailing children sit **above the
-    /// screen-space boundary** — the divider the layer panel draws across the
-    /// stack. Those children are realized after the view transform, on the
-    /// presented image; everything below is composited in canvas space and is
-    /// what the document exports. `0` in a fresh document, so the divider rests
-    /// at the top of the list and nothing is viewport-only until the user drags
-    /// it down.
-    ///
-    /// Root children are stored bottom-to-top, so the screen-space region is
-    /// the suffix of the list and a count from the top is the representation
-    /// that does not shift under every insert below it. It records the user's
-    /// *intent*, and stays put when a member is temporarily disqualified — see
-    /// [`Self::screen_space_run`], which clamps on read.
-    ///
-    /// Document state: serialized, undoable via `ScreenSpaceBoundaryAction`,
-    /// and reasonable-about without a GPU.
-    pub screen_space_count: usize,
-
     /// Monotonic per-base-name counters for default display names. A fresh
     /// add yields `"{base} 1"`, `"{base} 2"`, … keyed by whatever base label
     /// the caller passes ([`Self::next_name`]). Counters survive deletes
@@ -230,7 +202,7 @@ impl Document {
         let root = entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Group(LayerGroup::new(key, "Root".to_string())))
         });
-        Document {
+        let mut doc = Document {
             name: "Untitled".to_string(),
             width,
             height,
@@ -241,9 +213,16 @@ impl Document {
             parent: SecondaryMap::new(),
             root,
             selection: None,
-            screen_space_count: 0,
             name_counters: HashMap::new(),
-        }
+        };
+        // The viewport divider is born with the document: the root always
+        // holds exactly one, and a fresh document's divider sits at the top —
+        // nothing is viewport-only until the user drags it down.
+        let divider = doc.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Divider(DividerLayer::new(key))))
+        });
+        doc.link(divider, root, None);
+        doc
     }
 
     /// Produce the next default display name for a given base label,
@@ -489,63 +468,55 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // The screen-space boundary. `screen_space_count` is the stored
-    // intent; everything here reads it through a clamp, so a member that
-    // is disqualified in place degrades to canvas space instead of being
-    // rendered in a frame it cannot be rendered in.
+    // The screen-space boundary. The divider is a node among the root's
+    // children; its index *is* the boundary. Screen space is everything
+    // above it, canvas space everything below.
     // ---------------------------------------------------------------
 
-    /// May this node sit above the boundary? Structural only — see
-    /// [`LayerNode::supports_screen_space`]. Non-root-children answer `false`:
-    /// the boundary partitions the root's children and nothing else.
-    pub fn screen_space_eligible(&self, id: LayerId) -> bool {
-        if self.parent_of(id) != Some(self.root) {
-            return false;
-        }
-        self.find_node(id)
-            .is_some_and(|n| n.supports_screen_space(self))
+    /// Index of the divider among the root's children, or `None` when the
+    /// tree does not hold one — a state that exists only inside load staging,
+    /// before normalization re-establishes the invariant. Every public
+    /// boundary query degrades to "nothing is viewport-only" in that window.
+    fn divider_position(&self) -> Option<usize> {
+        self.children_of(self.root).iter().position(|&c| {
+            self.find_node(c)
+                .is_some_and(|n| n.is_screen_space_boundary())
+        })
     }
 
-    /// Length of the longest trailing run of root children that are *all*
-    /// eligible. The ceiling [`Self::screen_space_run`] clamps to.
-    fn qualifying_screen_space_suffix(&self) -> usize {
-        self.children_of(self.root)
-            .iter()
-            .rev()
-            .take_while(|id| {
-                self.find_node(**id)
-                    .is_some_and(|n| n.supports_screen_space(self))
-            })
-            .count()
+    /// The divider's id. The root always holds exactly one — established by
+    /// [`Document::new`], defended by the kind's capability flags and the move
+    /// validation, normalized on load.
+    pub fn divider_id(&self) -> LayerId {
+        let i = self
+            .divider_position()
+            .expect("document invariant: the root always holds the divider");
+        self.children_of(self.root)[i]
     }
 
-    /// The root children realized in screen space, bottom-to-top.
-    ///
-    /// Under the [`Self::link`] / [`Self::unlink`] invariant this is exactly
-    /// `screen_space_count` entries. The clamp is a safety net for the changes
-    /// that invariant cannot see — attaching a mask to a run member, isolating a
-    /// group inside the run, a hand-edited save — and it degrades into "fewer
-    /// things are viewport-only" rather than "a raster is being rendered after
-    /// the view transform". The stored count is left alone, so undoing the
-    /// disqualifying change restores the run.
+    /// The root children realized in screen space, bottom-to-top — everything
+    /// above the divider.
     pub fn screen_space_run(&self) -> &[LayerId] {
         let children = self.children_of(self.root);
-        let k = self
-            .screen_space_count
-            .min(self.qualifying_screen_space_suffix());
-        &children[children.len() - k..]
+        match self.divider_position() {
+            Some(i) => &children[i + 1..],
+            None => &children[children.len()..],
+        }
     }
 
     /// The effect layers realized in screen space, bottom-to-top — the run,
     /// flattened.
     ///
-    /// A group above the divider is passthrough, unmasked and holds only nodes
-    /// that themselves qualify ([`LayerNode::supports_screen_space`]), so it
-    /// contributes no compositing of its own: it has no accumulator, no mask to
-    /// project through, and a passthrough group's opacity and blend mode are
-    /// discarded in canvas space too. Its effects are therefore siblings of the
-    /// run's leaves as far as the present chain is concerned, and that chain
-    /// consumes this list rather than the run's root-level members.
+    /// A group above the divider is treated as passthrough whatever its stored
+    /// flag says: it is unmasked and holds only nodes that themselves qualify
+    /// ([`LayerNode::supports_screen_space`]), so it contributes no compositing
+    /// of its own — no accumulator, no mask to project through — and its
+    /// passthrough flag, opacity and blend mode are read only in canvas space.
+    /// The flag itself is left untouched so it re-applies isolation the moment
+    /// the group moves back below the divider. Its effects are therefore
+    /// siblings of the run's leaves as far as the present chain is concerned,
+    /// and that chain consumes this list rather than the run's root-level
+    /// members.
     ///
     /// Structure only — visibility is not consulted here. An invisible ancestor
     /// group is handled by the caller's `effective_visible` filter, which walks
@@ -560,20 +531,6 @@ impl Document {
         out
     }
 
-    /// Would this node put anything into the present chain if it were above the
-    /// divider? True for an effect, and for a group holding one at any depth.
-    ///
-    /// Distinct from [`LayerNode::supports_screen_space`], which asks whether a
-    /// node may *stay* there. An empty group may: it renders nothing, so there
-    /// is nothing it can render wrongly, and kicking it out the moment its last
-    /// effect is deleted would be obnoxious. But it has no claim on where the
-    /// divider sits, so inserting one must not drag the boundary over it.
-    fn yields_screen_space_effects(&self, id: LayerId) -> bool {
-        let mut found = Vec::new();
-        self.collect_screen_space_effects(id, &mut found);
-        !found.is_empty()
-    }
-
     fn collect_screen_space_effects(&self, id: LayerId, out: &mut Vec<LayerId>) {
         match self.find_node(id) {
             Some(LayerNode::Layer(Layer::Filter(_))) => out.push(id),
@@ -586,19 +543,16 @@ impl Document {
         }
     }
 
-    /// The largest boundary the current tree supports — what a requested
-    /// count is held to. The panel clamps its drag against
-    /// `screen_space_eligible` for responsiveness; this is the authority.
-    pub fn clamp_screen_space_count(&self, count: usize) -> usize {
-        count.min(self.qualifying_screen_space_suffix())
-    }
-
     /// The root children composited in canvas space, bottom-to-top — the
     /// document's content, and the complement of [`Self::screen_space_run`].
-    /// What export, flatten and merge operate on.
+    /// What export, flatten and merge operate on. The divider itself is in
+    /// neither list.
     pub fn canvas_space_children(&self) -> &[LayerId] {
         let children = self.children_of(self.root);
-        &children[..children.len() - self.screen_space_run().len()]
+        match self.divider_position() {
+            Some(i) => &children[..i],
+            None => children,
+        }
     }
 
     /// Is this node currently realized in screen space? Root-level membership
@@ -611,31 +565,82 @@ impl Document {
     /// Is `id` anywhere inside the screen-space region — a run member itself,
     /// or held by one? The question [`Self::renders_in_screen_space`] cannot
     /// answer, and the one that matters for "may this land here".
-    fn in_screen_space_region(&self, id: LayerId) -> bool {
+    pub fn in_screen_space_region(&self, id: LayerId) -> bool {
         let run = self.screen_space_run();
         std::iter::successors(Some(id), |&n| self.parent_of(n)).any(|n| run.contains(&n))
     }
 
+    /// Would `target` land a node in the screen-space region? Resolved against
+    /// the current tree, with the prospective mover still in place — the mover
+    /// is never the divider or the reference, so unlinking it cannot change
+    /// which side of the divider the slot is on.
+    fn target_in_screen_space(&self, target: MoveTarget) -> bool {
+        let (parent, position) = self.resolve_target_slot(target);
+        if parent != self.root {
+            return self.in_screen_space_region(parent);
+        }
+        let Some(div) = self.divider_position() else {
+            return false;
+        };
+        let children = self.children_of(self.root);
+        let at = position.map_or(children.len(), |p| p.min(children.len()));
+        // Inserting *at* the divider's index pushes the divider up and lands
+        // below it; only a strictly higher index is above the boundary.
+        at > div
+    }
+
     /// The node that would stop `id` from being moved to `target` — `id`
-    /// itself, or a descendant of it — or `None` if the move is legal.
+    /// itself, or a descendant of it — paired with why, or `None` if the move
+    /// is legal.
     ///
-    /// Legal covers two cases: the destination is in canvas space, where
-    /// nothing is disqualifying; or it is above the boundary and everything
-    /// `id` carries can render after the view transform.
-    ///
-    /// Both of `MoveTarget`'s shapes reduce to the same question about the
-    /// reference node. `Before`/`After` land `id` as the reference's sibling,
-    /// so they inherit its region; `IntoGroup*` lands `id` inside the
-    /// reference, which is in the same region as the group itself.
+    /// Two rules, both answered here so [`Self::move_layer`]'s debug assert
+    /// covers every illegal shape:
+    /// - an ordinary node moving into the screen-space region must
+    ///   [`LayerNode::supports_screen_space`];
+    /// - the divider itself may only move among the root's children, and only
+    ///   to an index that leaves nothing above it that cannot render there.
     pub fn screen_space_move_blocker(
         &self,
         id: LayerId,
         target: MoveTarget,
     ) -> Option<(LayerId, &'static str)> {
-        if !self.in_screen_space_region(target.reference()) {
+        let node = self.find_node(id)?;
+        if node.is_screen_space_boundary() {
+            return self.divider_move_blocker(target);
+        }
+        if !self.target_in_screen_space(target) {
             return None;
         }
-        self.find_node(id)?.screen_space_blocker(self)
+        node.screen_space_blocker(self)
+    }
+
+    /// What stops the divider itself from moving to `target`, if anything.
+    /// The prospective run — every other root child that would end up above
+    /// the divider — must consist of nodes that can render in screen space.
+    fn divider_move_blocker(&self, target: MoveTarget) -> Option<(LayerId, &'static str)> {
+        let (parent, _) = self.resolve_target_slot(target);
+        if parent != self.root {
+            return Some((self.divider_id(), "can only live among the root's children"));
+        }
+        let div = self.divider_id();
+        let others: Vec<LayerId> = self
+            .children_of(self.root)
+            .iter()
+            .copied()
+            .filter(|&c| c != div)
+            .collect();
+        // Where the divider lands in the list without it: `Before` takes the
+        // reference's slot (the reference ends up above), `After` the next.
+        let landing = match target {
+            MoveTarget::Before(r) => others.iter().position(|&c| c == r),
+            MoveTarget::After(r) => others.iter().position(|&c| c == r).map(|i| i + 1),
+            MoveTarget::IntoGroupTop(_) => Some(others.len()),
+            MoveTarget::IntoGroupBottom(_) => Some(0),
+        };
+        let landing = landing?;
+        others[landing..]
+            .iter()
+            .find_map(|&c| self.find_node(c)?.screen_space_blocker(self))
     }
 
     /// Where `id` sits in the tree, for undo to restore verbatim.
@@ -644,7 +649,6 @@ impl Document {
         Some(TreeSlot {
             parent: self.parent_of(id),
             position,
-            screen_space: self.renders_in_screen_space(id),
         })
     }
 
@@ -666,6 +670,9 @@ impl Document {
         };
         for &child_id in &g.children {
             match self.find_node(child_id) {
+                // The divider composites nothing; a "flat layers" view has no
+                // row for it.
+                Some(node) if node.is_screen_space_boundary() => {}
                 Some(LayerNode::Layer(l)) => out.push(l),
                 Some(LayerNode::Group(child)) if !child.common.visible => {}
                 Some(LayerNode::Group(_)) => {
@@ -837,15 +844,20 @@ impl Document {
         }
     }
 
-    /// Count of all tree nodes (layers + groups, excluding the root and
-    /// filters). Walks the tree; intended for tests and rare diagnostics.
+    /// Count of the user's tree nodes (layers + groups, excluding the root,
+    /// filters, and structural singletons the user cannot delete — the
+    /// divider). Backs the "cannot delete the last layer" floor, so it counts
+    /// exactly the nodes deletion could take.
     pub fn node_count(&self) -> usize {
         fn walk(doc: &Document, group_id: LayerId, counter: &mut usize) {
             let Some(LayerNode::Group(g)) = doc.find_node(group_id) else {
                 return;
             };
             for &child_id in &g.children {
-                *counter += 1;
+                match doc.find_node(child_id) {
+                    Some(n) if n.kind().can_delete => *counter += 1,
+                    _ => continue,
+                }
                 if matches!(doc.find_node(child_id), Some(LayerNode::Group(_))) {
                     walk(doc, child_id, counter);
                 }
@@ -1150,44 +1162,50 @@ impl Document {
         if self.is_filter(layer_id) {
             return;
         }
-        // A move is stated relative to another node, and that node's side of
-        // the viewport divider is the side the moved node lands on. Nothing has
-        // to be told to the move: "drop this next to that" already says it.
-        //
-        // This is the only thing that *can* say it. Crossing the divider does
-        // not change a node's index — the lowest viewport-only child and the
-        // topmost canvas child are the same position — so the order of the
-        // children cannot express the difference and the reference node has to.
-        let mut members: HashSet<LayerId> = self.screen_space_run().iter().copied().collect();
-        let wants_screen = members.contains(&target.reference());
-        members.remove(&layer_id);
+        // A move is a statement about position, applied verbatim. The engine
+        // refuses illegal ones before they get here
+        // (`check_screen_space_move`); this assert catches a caller that
+        // skipped it. The divider is a node in the children list, so the slot
+        // alone says which side of the boundary the mover lands on.
+        debug_assert!(
+            self.screen_space_move_blocker(layer_id, target).is_none(),
+            "illegal screen-space move reached Document::move_layer"
+        );
+        if self.unlink(layer_id).is_none() {
+            return;
+        }
+        let (parent, position) = self.resolve_target_slot(target);
+        self.link(layer_id, parent, position);
+    }
 
+    /// Place an entity that carries no placement statement of its own — a
+    /// paste landing relative to an anchor — at `target`, through the same
+    /// boundary policy as any add: the nearest legal slot, never a failure.
+    /// The move twin is [`Self::move_layer`], which applies a user-stated
+    /// position verbatim.
+    pub fn place_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        if self.is_filter(layer_id) {
+            return;
+        }
         if self.unlink(layer_id).is_none() {
             return;
         }
         self.attach_at_target(layer_id, target);
-
-        if wants_screen {
-            members.insert(layer_id);
-        }
-        self.set_screen_space_members(&members);
     }
 
-    /// Re-derive the boundary from a set of intended members: the run becomes
-    /// the longest trailing suffix all of whose entries are in the set.
-    ///
-    /// Total by construction. A node dropped into the middle of the run while
-    /// not a member simply stops the suffix there — everything above it stays
-    /// viewport-only and the divider comes to rest directly above it, which is
-    /// what dropping a canvas-space layer at that spot means.
-    fn set_screen_space_members(&mut self, members: &HashSet<LayerId>) {
-        let k = self
-            .children_of(self.root)
-            .iter()
-            .rev()
-            .take_while(|id| members.contains(*id))
-            .count();
-        self.screen_space_count = k.min(self.qualifying_screen_space_suffix());
+    /// Detach `id` and re-link it at `slot`, through the placement policy —
+    /// for callers that *derive* a position (grouping, rearranges) rather than
+    /// restore a recorded one. The undo twin is [`Self::reinsert_entity`],
+    /// which attaches verbatim because it restores a previously-legal state.
+    pub fn place_at_slot(&mut self, id: LayerId, slot: TreeSlot) {
+        if self.unlink(id).is_none() {
+            return;
+        }
+        let parent = match slot.parent {
+            Some(p) if self.find_node(p).is_some() => p,
+            _ => self.root,
+        };
+        self.link_placed(id, parent, Some(slot.position));
     }
 
     /// Detach an entity — tree node or filter — from its parent, leaving it
@@ -1211,34 +1229,9 @@ impl Document {
             Some(p) if self.find_node(p).is_some() => p,
             _ => self.root,
         };
-        // The boundary index is ambiguous by construction: inserting *at* it
-        // lands a node either as the lowest run member or as the topmost
-        // canvas-space child, and the index is the same number either way. So
-        // the insertion rule's guess is discarded and the recorded side is
-        // applied instead — which is the whole reason `TreeSlot` carries one.
-        let before = self.screen_space_count;
+        // Verbatim position restore. The divider is a node in the same list,
+        // so the index alone says which side of the boundary this is.
         self.link(id, parent_id, Some(slot.position));
-        self.screen_space_count = before;
-        if slot.screen_space {
-            self.restore_to_screen_space(id);
-        }
-    }
-
-    /// Grow the run so `id` is back inside it, if it can be. Insertion alone
-    /// cannot do this: a node landing at the boundary index is below the
-    /// divider by default (§ [`Self::enforce_boundary_on_insert`]), which is the
-    /// right default for a *new* layer and the wrong one for a node undo is
-    /// putting back where it was.
-    fn restore_to_screen_space(&mut self, id: LayerId) {
-        let children = self.children_of(self.root);
-        let n = children.len();
-        let Some(i) = children.iter().position(|c| *c == id) else {
-            return;
-        };
-        // Never past the qualifying suffix, so restoring a node that sat below
-        // an ineligible sibling cannot drag that sibling into the run.
-        let wanted = (n - i).min(self.qualifying_screen_space_suffix());
-        self.screen_space_count = self.screen_space_count.max(wanted);
     }
 
     /// Permanently remove an entity — tree node or filter — from `entities`,
@@ -1277,13 +1270,16 @@ impl Document {
     /// filter joins `parent`'s modifiers, a tree node joins its children — at
     /// `position` (clamped) or at the end. No-op when `parent` can't hold the
     /// child, so a leaf layer never acquires tree children.
+    ///
+    /// Verbatim: the slot is attached exactly as given. A caller with no
+    /// placement statement of its own — an add, a paste — goes through
+    /// [`Self::link_placed`] instead, which applies the boundary policy first.
     fn link(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
         let slot = if self.is_filter(child) {
             ChildSlot::Filter
         } else {
             ChildSlot::Child
         };
-        let (parent, position) = self.enforce_boundary_on_insert(child, parent, slot, position);
         let Some(node) = self.find_node_mut(parent) else {
             return;
         };
@@ -1292,32 +1288,37 @@ impl Document {
         }
     }
 
-    /// Hold the screen-space invariant across an insertion: nothing above the
-    /// boundary that cannot render there.
+    /// [`Self::link`], preceded by the screen-space placement policy: the
+    /// child lands at the nearest slot to the requested one that keeps the
+    /// boundary invariant — nothing above the divider that cannot render
+    /// there.
     ///
-    /// An insertion lands at the **nearest slot to the one requested that does
-    /// not violate the rules**. A child that qualifies goes exactly where it
-    /// was asked to go — and the run grows to keep it, so the divider stays put
-    /// over the nodes it was over. A child that does not is redirected to the
-    /// topmost canvas-space slot, which is the closest position to "above the
-    /// divider" that it is allowed to occupy. Returns the parent and position
-    /// to actually insert at.
+    /// This is why an add or a paste never fails. Landing a new layer is not a
+    /// statement about placement, so a child that does not qualify for a
+    /// screen-space slot is redirected to the topmost canvas-space slot —
+    /// directly below the divider — which is the closest position it is
+    /// allowed to occupy. A *move* is such a statement, and the engine refuses
+    /// those outright rather than quietly putting the node somewhere else.
     ///
     /// The redirect crosses parents because it has to: every position inside a
     /// run group is above the divider, so for a disqualified child there is no
     /// legal slot anywhere in that subtree and the nearest one is out at the
-    /// root's floor.
-    ///
-    /// This is why an add or a paste never fails. Landing a new layer is not a
-    /// statement about placement, so it is placed as close as the rules allow;
-    /// a *move* is such a statement, and the engine refuses those outright
-    /// rather than quietly putting the node somewhere else.
-    ///
-    /// This is the only place the rule is written. Every add, paste, duplicate,
-    /// group, drag-reorder and undo path reaches it through
-    /// [`Self::link`], so none of them carries a copy of it.
-    fn enforce_boundary_on_insert(
-        &mut self,
+    /// root, below the divider.
+    fn link_placed(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
+        let slot = if self.is_filter(child) {
+            ChildSlot::Filter
+        } else {
+            ChildSlot::Child
+        };
+        let (parent, position) = self.redirect_ineligible_insert(child, parent, slot, position);
+        self.link(child, parent, position);
+    }
+
+    /// The placement policy behind [`Self::link_placed`]: the requested slot,
+    /// or — for a child that cannot render in screen space asked to land there
+    /// — the topmost canvas-space slot, directly below the divider.
+    fn redirect_ineligible_insert(
+        &self,
         child: LayerId,
         parent: LayerId,
         slot: ChildSlot,
@@ -1328,40 +1329,27 @@ impl Document {
         if slot != ChildSlot::Child {
             return (parent, position);
         }
-        let qualifies = self
+        if self
             .find_node(child)
-            .is_some_and(|node| node.supports_screen_space(self));
-
+            .is_some_and(|node| node.supports_screen_space(self))
+        {
+            return (parent, position);
+        }
+        let Some(div) = self.divider_position() else {
+            return (parent, position);
+        };
         if parent != self.root {
-            // Inside a run group there is no legal slot for a child that does
-            // not qualify — the whole subtree is above the divider.
-            if !qualifies && self.in_screen_space_region(parent) {
-                return (self.root, Some(self.canvas_space_children().len()));
+            if self.in_screen_space_region(parent) {
+                return (self.root, Some(div));
             }
             return (parent, position);
         }
-
         let n = self.children_of(self.root).len();
-        let k = self.screen_space_count.min(n);
-        let floor = n - k;
         let at = position.map_or(n, |p| p.min(n));
-        // With an empty run no index is inside it, so appending at the top of
-        // an undivided stack leaves the divider where it is rather than
-        // sweeping the new node above it.
-        if k == 0 || at < floor {
-            return (parent, position);
+        if at > div {
+            return (parent, Some(div));
         }
-        // Growing the run is a claim on where the divider sits, so it takes
-        // more than eligibility: the node has to actually render something up
-        // there. A freshly created group is empty and eligible, and sweeping it
-        // above the divider on that basis is how it would end up holding a
-        // raster a moment later.
-        if qualifies && self.yields_screen_space_effects(child) {
-            self.screen_space_count += 1;
-            (parent, position)
-        } else {
-            (parent, Some(floor))
-        }
+        (parent, position)
     }
 
     /// Unlink an entity from its parent, whichever of the parent's two lists
@@ -1375,11 +1363,6 @@ impl Document {
         if id == self.root {
             return None;
         }
-        // Removing a run member shrinks the run, so the divider stays over the
-        // survivors instead of drifting down onto one of them.
-        if self.renders_in_screen_space(id) {
-            self.screen_space_count -= 1;
-        }
         let parent_id = self.parent.remove(id)?;
         if let Some(parent) = self.find_node_mut(parent_id) {
             parent.detach_child(id);
@@ -1391,64 +1374,74 @@ impl Document {
     /// layers panel) into a [`MoveTarget`] that places a newly-created node
     /// where the user expects.
     ///
-    /// - `None` / unknown / stale id → top of root.
+    /// - `None` / unknown / stale id → top of canvas space.
     /// - Filter id → recurse against the filter's host.
     /// - Group id → top of that group's children.
     /// - Layer id → sibling immediately above the anchor.
     pub fn resolve_anchor_target(&self, anchor: Option<LayerId>) -> MoveTarget {
+        // One shared fallback for every case with no usable anchor: the top of
+        // canvas space, directly below the divider. "Top of root" would mean
+        // the top of *screen* space, which no anchorless add is asking for.
+        let fallback = || MoveTarget::Before(self.divider_id());
         let Some(id) = anchor else {
-            return MoveTarget::IntoGroupTop(self.root);
+            return fallback();
         };
         if self.is_filter(id) {
             return match self.parent.get(id).copied() {
                 Some(host) => self.resolve_anchor_target(Some(host)),
-                None => MoveTarget::IntoGroupTop(self.root),
+                None => fallback(),
             };
         }
         match self.find_node(id) {
+            // An add anchored on the divider itself is not asking for screen
+            // space; it gets the same top-of-canvas default.
+            Some(n) if n.is_screen_space_boundary() => fallback(),
             Some(LayerNode::Group(_)) => MoveTarget::IntoGroupTop(id),
             Some(LayerNode::Layer(_)) => MoveTarget::After(id),
-            None => MoveTarget::IntoGroupTop(self.root),
+            None => fallback(),
         }
     }
 
-    /// Apply a [`MoveTarget`] to a node already unlinked from the tree.
-    fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
+    /// Where a [`MoveTarget`] points right now: the parent to attach under
+    /// and the position within it, `None` meaning "at the end". Resolved
+    /// against the current tree, so a mover must unlink first.
+    fn resolve_target_slot(&self, target: MoveTarget) -> (LayerId, Option<usize>) {
         match target {
-            MoveTarget::Before(ref_id) => {
-                if let Some(parent_id) = self.parent_of(ref_id) {
+            MoveTarget::Before(ref_id) => match self.parent_of(ref_id) {
+                Some(parent_id) => {
                     let pos = self
                         .children_of(parent_id)
                         .iter()
                         .position(|c| *c == ref_id)
                         .unwrap_or(0);
-                    self.link(node, parent_id, Some(pos));
-                } else {
-                    self.link(node, self.root, None);
+                    (parent_id, Some(pos))
                 }
-            }
-            MoveTarget::After(ref_id) => {
-                if let Some(parent_id) = self.parent_of(ref_id) {
+                None => (self.root, None),
+            },
+            MoveTarget::After(ref_id) => match self.parent_of(ref_id) {
+                Some(parent_id) => {
                     let pos = self
                         .children_of(parent_id)
                         .iter()
                         .position(|c| *c == ref_id)
-                        .map(|p| p + 1)
-                        .unwrap_or_else(|| self.children_of(parent_id).len());
-                    self.link(node, parent_id, Some(pos));
-                } else {
-                    self.link(node, self.root, None);
+                        .map(|p| p + 1);
+                    (parent_id, pos)
                 }
-            }
-            MoveTarget::IntoGroupTop(group_id) => {
-                let group = self.resolve_parent_group(Some(group_id));
-                self.link(node, group, None);
-            }
+                None => (self.root, None),
+            },
+            MoveTarget::IntoGroupTop(group_id) => (self.resolve_parent_group(Some(group_id)), None),
             MoveTarget::IntoGroupBottom(group_id) => {
-                let group = self.resolve_parent_group(Some(group_id));
-                self.link(node, group, Some(0));
+                (self.resolve_parent_group(Some(group_id)), Some(0))
             }
         }
+    }
+
+    /// Apply a [`MoveTarget`] to a node already unlinked from the tree, through
+    /// the placement policy — the add/paste path, for callers with no placement
+    /// statement of their own.
+    fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
+        let (parent, position) = self.resolve_target_slot(target);
+        self.link_placed(node, parent, position);
     }
 
     /// Recursively remove a subtree (the node, its descendants, and every
@@ -1816,7 +1809,7 @@ mod tests {
         let _l1 = doc.add_raster_layer(None);
         let _l2 = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(None);
-        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+        assert_eq!(doc.canvas_space_children().last().copied(), Some(new_id));
     }
 
     #[test]
@@ -1826,7 +1819,7 @@ mod tests {
         let l2 = doc.add_raster_layer(None);
         let l3 = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(Some(l1));
-        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2, l3]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_id, l2, l3]);
     }
 
     #[test]
@@ -1858,7 +1851,7 @@ mod tests {
         let mask = doc.add_mask_filter(l1).unwrap();
         let new_id = doc.add_raster_layer(Some(mask));
         // Filter resolves to its host layer → After(host) in root.
-        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_id, l2]);
     }
 
     #[test]
@@ -1868,7 +1861,7 @@ mod tests {
         doc.remove_entity(stale);
         let _other = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(Some(stale));
-        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+        assert_eq!(doc.canvas_space_children().last().copied(), Some(new_id));
     }
 
     #[test]
@@ -1877,7 +1870,7 @@ mod tests {
         let l1 = doc.add_raster_layer(None);
         let l2 = doc.add_raster_layer(None);
         let new_g = doc.add_group(Some(l1));
-        assert_eq!(doc.children_of(doc.root), &[l1, new_g, l2]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_g, l2]);
     }
 
     #[test]

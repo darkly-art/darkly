@@ -44,9 +44,9 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             // discovered, not to redecorate the canvas before the user has
             // touched anything.
             //
-            // Then the divider moves above all four in one call, because the
-            // run never grows on its own: adding a layer always lands it below
-            // the line, whatever it is.
+            // Then the divider moves below all four in one ordinary layer
+            // move, because the run never grows on its own: adding a layer
+            // always lands it below the line, whatever it is.
             const api = instance.engine!.api;
             const ids: number[] = [];
             for (const [pipeline, params] of [
@@ -61,7 +61,19 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                     ids.push(id);
                 }
             }
-            api.setScreenSpaceBoundary({ count: 4 });
+            if (ids.length > 0) {
+                const tree = await api.layerTree();
+                const divider = (tree.layers as any[]).find((r) => r.type === 'divider');
+                // The effects stacked up directly below the divider, bottom
+                // first — moving the divider below the bottom-most one puts
+                // all of them in viewport space.
+                if (divider) {
+                    await api.moveLayer({
+                        id: divider.id,
+                        target: { target_type: 'before', target_id: ids[0] },
+                    });
+                }
+            }
             // Wrapped in one group, so the starter document shows the stack as
             // a single tidy row rather than four, and demonstrates that a group
             // of effects is itself a viewport-space citizen. Grouped *after*

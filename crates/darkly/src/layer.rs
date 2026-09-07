@@ -483,6 +483,32 @@ impl VectorLayer {
     }
 }
 
+/// The viewport divider — the screen-space boundary as a node among the root's
+/// children. Canvas space is everything below it, screen space everything
+/// above. It has no content of its own and never composites; its entire
+/// document meaning is its index in the root's children list.
+///
+/// `blend` and `filters` exist only to keep [`Layer`]'s uniform accessors
+/// total — nothing ever reads them (the compositor skips the divider, and
+/// `can_have_mask` is false).
+pub struct DividerLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    pub filters: Vec<LayerId>,
+}
+
+impl DividerLayer {
+    pub fn new(id: LayerId) -> Self {
+        DividerLayer {
+            id,
+            common: NodeCommon::new("Viewport Divider".to_string()),
+            blend: BlendProps::new(),
+            filters: Vec::new(),
+        }
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -674,14 +700,22 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{filter, group, raster, vector, void};
+        use crate::document::layer_kinds::{divider, filter, group, raster, vector, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Filter(_)) => registry().get(filter::TYPE_ID).unwrap(),
             LayerNode::Layer(Layer::Vector(_)) => registry().get(vector::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Divider(_)) => registry().get(divider::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
+    }
+
+    /// Whether this node is the screen-space boundary — the divider among the
+    /// root's children. Read off the kind registration, so no consumer ever
+    /// compares `type_id`.
+    pub fn is_screen_space_boundary(&self) -> bool {
+        self.kind().screen_space_boundary
     }
 
     /// Convenience for the wire format / save file — just the stable `type_id`
@@ -755,8 +789,8 @@ impl LayerNode {
     ///
     /// The conditions are the ones documented on
     /// [`Self::supports_screen_space`]: a mask disqualifies whatever the kind,
-    /// a leaf answers from its kind's registration, and a group must be
-    /// passthrough, non-empty, and hold only nodes that themselves qualify.
+    /// a leaf answers from its kind's registration, and a group qualifies
+    /// exactly when its children do.
     pub fn screen_space_blocker(&self, doc: &Document) -> Option<(LayerId, &'static str)> {
         if doc.has_mask(self.id()) {
             return Some((self.id(), "has a mask, which only exists in canvas space"));
@@ -771,17 +805,15 @@ impl LayerNode {
                     Some((self.id(), "can only be composited onto the canvas"))
                 }
             }
-            // An isolated group owns a canvas-space accumulator that has no
-            // screen-space counterpart. A passthrough group has no image of its
-            // own, so it is eligible exactly when everything it inlines is.
-            LayerNode::Group(g) => {
-                if !g.passthrough {
-                    return Some((self.id(), "is an isolated group"));
-                }
-                g.children
-                    .iter()
-                    .find_map(|c| doc.find_node(*c)?.screen_space_blocker(doc))
-            }
+            // A group is eligible exactly when everything it holds is. Above
+            // the divider the run is consumed flattened, so a group composites
+            // nothing of its own there — its passthrough flag, opacity and
+            // blend mode are read only in canvas space, and cross the divider
+            // untouched so they re-apply when the group moves back down.
+            LayerNode::Group(g) => g
+                .children
+                .iter()
+                .find_map(|c| doc.find_node(*c)?.screen_space_blocker(doc)),
         }
     }
 
@@ -821,6 +853,7 @@ pub enum Layer {
     Void(VoidLayer),
     Filter(FilterLayer),
     Vector(VectorLayer),
+    Divider(DividerLayer),
 }
 
 impl Layer {
@@ -851,6 +884,8 @@ impl Layer {
             // `frontend/src/tools/transform.svelte.ts`) rather than this
             // layer-level capability — so a vector layer reports `None` here.
             Layer::Vector(_) => TransformCapability::None,
+            // The divider has nothing to transform.
+            Layer::Divider(_) => TransformCapability::None,
         }
     }
 
@@ -860,7 +895,7 @@ impl Layer {
     /// running group accumulator instead of contributing a texture of its own,
     /// so it is realized by `compose_filter_arm`, not the content walk.
     pub fn is_blend_content(&self) -> bool {
-        !matches!(self, Layer::Filter(_))
+        !matches!(self, Layer::Filter(_) | Layer::Divider(_))
     }
 
     /// Whether this layer's own GPU texture holds data that cannot be
@@ -878,7 +913,7 @@ impl Layer {
             Layer::Raster(_) => true,
             // Document-side fact, so this needs no GPU query.
             Layer::Void(v) => v.frame.is_some(),
-            Layer::Filter(_) | Layer::Vector(_) => false,
+            Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => false,
         }
     }
 
@@ -888,6 +923,7 @@ impl Layer {
             Layer::Void(v) => v.id,
             Layer::Filter(f) => f.id,
             Layer::Vector(v) => v.id,
+            Layer::Divider(d) => d.id,
         }
     }
 
@@ -897,6 +933,7 @@ impl Layer {
             Layer::Void(v) => &v.common,
             Layer::Filter(f) => &f.common,
             Layer::Vector(v) => &v.common,
+            Layer::Divider(d) => &d.common,
         }
     }
 
@@ -906,6 +943,7 @@ impl Layer {
             Layer::Void(v) => &mut v.common,
             Layer::Filter(f) => &mut f.common,
             Layer::Vector(v) => &mut v.common,
+            Layer::Divider(d) => &mut d.common,
         }
     }
 
@@ -915,6 +953,7 @@ impl Layer {
             Layer::Void(v) => &v.blend,
             Layer::Filter(f) => &f.blend,
             Layer::Vector(v) => &v.blend,
+            Layer::Divider(d) => &d.blend,
         }
     }
 
@@ -924,6 +963,7 @@ impl Layer {
             Layer::Void(v) => &mut v.blend,
             Layer::Filter(f) => &mut f.blend,
             Layer::Vector(v) => &mut v.blend,
+            Layer::Divider(d) => &mut d.blend,
         }
     }
 
@@ -933,6 +973,7 @@ impl Layer {
             Layer::Void(v) => &v.filters,
             Layer::Filter(f) => &f.filters,
             Layer::Vector(v) => &v.filters,
+            Layer::Divider(d) => &d.filters,
         }
     }
 
@@ -942,6 +983,7 @@ impl Layer {
             Layer::Void(v) => &mut v.filters,
             Layer::Filter(f) => &mut f.filters,
             Layer::Vector(v) => &mut v.filters,
+            Layer::Divider(d) => &mut d.filters,
         }
     }
 
@@ -952,14 +994,14 @@ impl Layer {
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
@@ -979,7 +1021,7 @@ impl Layer {
     pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
-            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 }

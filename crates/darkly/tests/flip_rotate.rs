@@ -534,7 +534,7 @@ fn rotate_canvas_carries_layer_mask_in_lockstep() {
     let (w, h) = (8u32, 6u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
     assert_eq!(
         e.test_node_pixel_bounds(mask),

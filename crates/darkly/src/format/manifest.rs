@@ -66,11 +66,6 @@ pub struct Manifest {
     /// pointer so the loader can find it without scanning the list.
     #[serde(default)]
     pub selection_id: Option<u64>,
-    /// How many of the root's trailing children render in screen space —
-    /// viewport-only, and absent from this file's composite. Clamped on load
-    /// against what the restored tree actually supports.
-    #[serde(default)]
-    pub screen_space_count: usize,
     /// Fonts embedded in this document so it renders self-contained on any
     /// machine — one entry per `font_family` a text object actually uses that
     /// the engine has runtime bytes for. Several families may share one blob
@@ -300,7 +295,6 @@ mod tests {
             }],
             modifiers: vec![],
             selection_id: None,
-            screen_space_count: 0,
             fonts: vec![ManifestFontRef {
                 family: "Inter".into(),
                 hash: "0123456789abcdef".into(),

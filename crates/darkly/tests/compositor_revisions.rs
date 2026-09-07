@@ -137,7 +137,7 @@ fn fixture() -> Fixture {
 
     let masked = engine.add_raster_layer(None);
     fill_layer(&mut engine, masked, 200, 30, 30);
-    engine.add_mask(masked);
+    engine.add_mask(masked).expect("add mask");
 
     let group = engine.add_group(None);
     let in_group = engine.add_raster_layer(Some(group));
@@ -271,11 +271,11 @@ stale_composite_battery! {
     }
 
     adding_a_mask, "add mask", |f| {
-        f.engine.add_mask(f.bottom);
+        f.engine.add_mask(f.bottom).expect("add mask");
     }
 
     removing_a_mask, "remove mask", |f| {
-        f.engine.add_mask(f.bottom);
+        f.engine.add_mask(f.bottom).expect("add mask");
         settle(&mut f.engine);
         f.engine.remove_mask(f.bottom);
     }
@@ -322,7 +322,7 @@ stale_composite_battery! {
         // the divider over it — it leaves the canvas composite entirely.
         f.engine.move_layer(f.fx, MoveTarget::After(f.top)).expect("move succeeds");
         settle(&mut f.engine);
-        f.engine.set_screen_space_boundary(1);
+        f.engine.test_set_screen_space_boundary(1);
     }
 
     undoing, "undo", |f| {

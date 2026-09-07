@@ -39,27 +39,21 @@
         class="layer-list"
         use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
     >
-        <!-- The divider is a row in the flow, not an overlay: rows are not a
-             fixed height (groups nest, modifiers add sub-rows), so anything
-             positioned by arithmetic on a row count lands mid-row. Its index in
-             the list *is* the boundary. -->
+        <!-- The divider is a tree node like any other; its slot in the list
+             *is* the boundary, and dragging it is an ordinary layer move. -->
         {#each app.layerTree as node, i (node.id)}
-            {#if i === app.screenSpaceCount}
-                <SpaceDivider onupdate={refresh} />
-            {/if}
-            {#if node.type === 'group'}
+            {#if node.type === 'divider'}
+                <SpaceDivider divider={node} empty={i === 0} onupdate={refresh} />
+            {:else if node.type === 'group'}
                 <LayerGroup group={node} onupdate={refresh} />
             {:else}
                 <LayerItem layer={node} onupdate={refresh} />
             {/if}
         {/each}
 
-        <!-- Every row is above the line, so the divider sits at the bottom. -->
-        {#if app.screenSpaceCount >= app.layerTree.length && app.layerTree.length > 0}
-            <SpaceDivider onupdate={refresh} />
-        {/if}
-
-        {#if app.layerTree.length === 0}
+        <!-- The divider is always in the tree, so "no layers" means no rows
+             besides it. -->
+        {#if app.layerTree.filter((n) => n.type !== 'divider').length === 0}
             <div class="empty-message">No layers</div>
         {/if}
     </div>
