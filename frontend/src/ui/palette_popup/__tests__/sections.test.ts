@@ -11,7 +11,7 @@ vi.mock('../../../state/brush_graph.svelte', () => ({ brushGraph: {} }));
 vi.mock('../../../state/brush_library.svelte', () => ({ brushLibrary: {} }));
 
 import { colorNodes, SWATCH_COUNT, type ColorDeps } from '../sections/colors';
-import { brushNodes, type BrushDeps } from '../sections/brushes';
+import { brushNodes, RECENT_COUNT, type BrushDeps } from '../sections/brushes';
 import type { Color } from '../../../state/app.svelte';
 import type { WheelBranch, WheelLeaf } from '../model';
 
@@ -103,6 +103,19 @@ describe('brushNodes', () => {
         const library = brushNodes(brushDeps())[1] as WheelBranch;
         // p2's only member does not resolve: no branch at all.
         expect(library.children.some(n => n.id === 'pack:p2')).toBe(false);
+    });
+
+    it('caps Recent at RECENT_COUNT resolvable brushes', () => {
+        const many = Array.from({ length: 9 }, (_, i) =>
+            ({ id: `m${i}`, name: `M${i}`, icon: null }));
+        const nodes = brushNodes(brushDeps({
+            brushes: () => many,
+            // A dangling id up front must not cost a shown slot.
+            recentIds: () => ['gone', ...many.map(b => b.id)],
+        }));
+        const recent = nodes[0] as WheelBranch;
+        expect(recent.children.map(c => c.label))
+            .toEqual(many.slice(0, RECENT_COUNT).map(b => b.name));
     });
 
     it('omits Recent when nothing recent resolves', () => {

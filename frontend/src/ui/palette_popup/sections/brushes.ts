@@ -13,6 +13,10 @@ import { brushLibrary } from '../../../state/brush_library.svelte';
 import { recentBrushes } from '../../../state/recents.svelte';
 import { paletteSections, type WheelNode } from '../model';
 
+/** Brushes shown in the Recent fan, of the 12 recents stored: the tail of
+ *  the recency list is cold, and a short fan keeps its sectors wide. */
+export const RECENT_COUNT = 5;
+
 /** The fields the wheel needs from `BrushInfo` / `BrushPackInfo`, so tests
  *  can hand in plain objects. */
 export interface BrushLike { id: string; name: string; icon: string | null }
@@ -41,7 +45,8 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
         ids.map(id => byId.get(id)).filter((b): b is BrushLike => b !== undefined);
 
     const out: WheelNode[] = [];
-    const recent = resolve(deps.recentIds());
+    // Resolve before capping, so dangling ids never cost a shown slot.
+    const recent = resolve(deps.recentIds()).slice(0, RECENT_COUNT);
     if (recent.length > 0) {
         out.push({
             kind: 'branch',
