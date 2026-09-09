@@ -247,18 +247,24 @@ input[type="range"]::-moz-range-thumb {
 /* Tool-options bar control: the black rounded button shared by the scrubs
    (Scrub.svelte) and the brush picker (BrushOptions.svelte), and available to
    any tool that embeds a custom control in its options bar. Consumers layer on
-   their own behavior (cursor, active/selected state, value formatting). */
+   their own behavior (cursor, active/selected state, value formatting).
+
+   The fill is a token so a control carrying an identity of its own (the brush
+   trigger, wearing its brush's pack) can hand this rule a different one, rather
+   than overriding a shared look from a stylesheet whose order relative to this
+   file it does not control. It is a whole `background` value, not a colour, so
+   a consumer can pass layers: `var(--pack-still), var(--bg)`. */
 .bar-control {
     display: flex;
     align-items: center;
     gap: 6px;
     padding: 4px 10px;
     border-radius: var(--radius-md);
-    background: var(--bg);
+    background: var(--bar-control-fill, var(--bg));
     transition: background var(--transition-fast);
 }
 .bar-control:hover {
-    background: var(--bg-hover);
+    background: var(--bar-control-fill-hover, var(--bg-hover));
 }
 /* Two-line label/value stack: a small uppercase caption over the value. */
 .bar-control-text {

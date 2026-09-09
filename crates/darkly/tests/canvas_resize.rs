@@ -49,6 +49,276 @@ fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1:
     engine.end_stroke();
 }
 
+/// Alpha of the plane pixel `(x, y)` in a node readback laid out over `ext`.
+/// A node texture is neither canvas-sized nor plane-origin-anchored once it has
+/// grown, so its stride and origin come from the extent rather than the canvas.
+fn alpha_at_plane(pixels: &[u8], ext: CanvasRect, x: i32, y: i32) -> u8 {
+    channel_at_plane(pixels, ext, x, y, 3)
+}
+
+/// Channel `c` (0=R, 3=A) of the plane pixel `(x, y)` in an RGBA node readback.
+fn channel_at_plane(pixels: &[u8], ext: CanvasRect, x: i32, y: i32, c: usize) -> u8 {
+    assert!(
+        ext.contains(CanvasRect::from_xywh(x, y, 1, 1)),
+        "plane ({x}, {y}) is outside the node extent {ext:?}"
+    );
+    let lx = (x - ext.x0()) as usize;
+    let ly = (y - ext.y0()) as usize;
+    pixels[(ly * ext.width as usize + lx) * 4 + c]
+}
+
+/// Apply a linear gradient along the plane-space axis `(x0, y0) → (x1, y1)`.
+fn apply_gradient(
+    engine: &mut DarklyEngine,
+    layer_id: LayerId,
+    (x0, y0): (f32, f32),
+    (x1, y1): (f32, f32),
+    c0: [u8; 4],
+    c1: [u8; 4],
+) {
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(StrokeOp::LinearGradient {
+        x0,
+        y0,
+        x1,
+        y1,
+        r0: c0[0],
+        g0: c0[1],
+        b0: c0[2],
+        a0: c0[3],
+        r1: c1[0],
+        g1: c1[1],
+        b1: c1[2],
+        a1: c1[3],
+    });
+    engine.end_stroke();
+}
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+/// GRADIENT-EXTENT regression (the reported bug): after growing the canvas, a
+/// gradient must fill the **new** canvas window, not the old one.
+///
+/// `resize_canvas` is document-only: layer textures are plane-anchored and stay
+/// at whatever extent they were allocated with, which for a layer created before
+/// the resize is the *pre-resize canvas rect*. The gradient took its quad from
+/// that texture extent instead of `doc.canvas_rect()`, so it reproduced the old
+/// canvas exactly. Fixing it needs both halves: the op has to be handed the
+/// canvas rect, and the layer has to grow to cover it (a generative op
+/// manufactures pixels where the layer had none).
+#[test]
+fn gradient_covers_the_grown_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    assert_eq!(
+        engine.test_node_extent(layer_id),
+        CanvasRect::from_xywh(0, 0, w, h),
+        "a fresh layer is allocated at the canvas rect; test premise"
+    );
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 96));
+
+    apply_gradient(&mut engine, layer_id, (0.0, 48.0), (128.0, 48.0), RED, BLUE);
+
+    // Assert the extent first: a layer that never grew makes every pixel probe
+    // below an out-of-bounds index rather than a legible failure.
+    let ext = engine.test_node_extent(layer_id);
+    assert!(
+        ext.contains(engine.canvas_rect()),
+        "the gradient must grow its target to cover the canvas {:?}; extent is {ext:?}",
+        engine.canvas_rect()
+    );
+
+    let px = engine.test_readback_layer(layer_id);
+    assert!(
+        alpha_at_plane(&px, ext, 100, 80) > 0,
+        "the canvas area exposed by the resize must receive paint"
+    );
+    assert!(
+        alpha_at_plane(&px, ext, 2, 2) > 0,
+        "the pre-resize canvas area must still receive paint"
+    );
+
+    // The axis spans the NEW canvas: near-red at its left edge, near-blue at its
+    // right. A gradient stretched over the old 64-wide rect would already be
+    // fully blue by x=63.
+    assert!(
+        channel_at_plane(&px, ext, 2, 48, 0) > 150 && channel_at_plane(&px, ext, 2, 48, 2) < 100,
+        "left edge of the new canvas should be near the start color"
+    );
+    assert!(
+        channel_at_plane(&px, ext, 125, 48, 2) > 150
+            && channel_at_plane(&px, ext, 125, 48, 0) < 100,
+        "right edge of the new canvas should be near the end color"
+    );
+}
+
+/// GRADIENT-EXTENT regression, converse direction: after a crop, a gradient must
+/// not paint **outside** the canvas window.
+///
+/// A layer texture is routinely larger than the canvas (after a crop, a paste of
+/// an oversized image, or brush growth's 256px chunk rounding). Deriving the quad
+/// from the texture extent deposited paint on off-window plane pixels, which
+/// survive in the document and resurface on un-crop or export. Uses a NON-ZERO
+/// `canvas_origin`: a fix that used `from_xywh(0, 0, w, h)` would pass the grow
+/// case and fail here.
+#[test]
+fn gradient_does_not_paint_outside_the_cropped_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.resize_canvas(CanvasRect::from_xywh(16, 16, 32, 32));
+
+    apply_gradient(&mut engine, layer_id, (16.0, 16.0), (48.0, 16.0), RED, BLUE);
+
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+
+    assert!(
+        alpha_at_plane(&px, ext, 20, 20) > 0,
+        "a plane pixel inside the canvas window must be painted"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 4, 4),
+        0,
+        "a plane pixel before the window origin must stay untouched"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 60, 60),
+        0,
+        "a plane pixel past the window's far edge must stay untouched"
+    );
+}
+
+/// GRADIENT-SELECTION regression: a gradient must respect the active marquee.
+///
+/// The engine passed `None` for the selection bind group, so the op fell back to
+/// the 1x1 all-white default selection texture and painted straight through the
+/// marquee, unlike every other paint path.
+#[test]
+fn gradient_respects_the_active_selection() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Left half of the canvas.
+    engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
+
+    apply_gradient(
+        &mut engine,
+        layer_id,
+        (0.0, 32.0),
+        (w as f32, 32.0),
+        RED,
+        BLUE,
+    );
+
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+
+    assert!(
+        alpha_at_plane(&px, ext, 10, 32) > 0,
+        "a selected pixel must be painted"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 50, 32),
+        0,
+        "an unselected pixel must be left untouched (the shader multiplies alpha \
+         by selection coverage, so masked-out fragments composite as a no-op)"
+    );
+}
+
+/// Undo across the growth a gradient triggers restores the pre-stroke pixels,
+/// including in the area the layer did not cover before the op. Guards the
+/// ordering the fix depends on: growth happens *before* the lazy scratch
+/// snapshot, so the snapshot spans the grown extent and records the newly
+/// allocated pixels' transparent fill as their pre-stroke value.
+#[test]
+fn gradient_after_resize_undo_restores_pixels() {
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 96));
+    apply_gradient(&mut engine, layer_id, (0.0, 48.0), (128.0, 48.0), RED, BLUE);
+    for _ in 0..4 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    engine.undo();
+    for _ in 0..4 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    // Growth itself is not undone (there is no bounds-undo op, matching brush
+    // growth), so the extent stays and the assertion is about pixels.
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        alpha_at_plane(&px, ext, 100, 80),
+        0,
+        "undo must clear paint from the area the gradient grew into"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 2, 2),
+        0,
+        "undo must clear paint from the originally-covered area"
+    );
+}
+
+/// A gradient while mask-editing covers the canvas, even when the host layer is
+/// smaller than it. `grow_filter`'s contract is that a filter grows itself "fully
+/// decoupled from its host", which is already how a brush stroke on a mask
+/// behaves; the gradient follows the same rule rather than clamping to the host.
+#[test]
+fn gradient_on_a_mask_covers_the_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+
+    // Host is a 16x16 paste-extent layer: far smaller than the canvas.
+    let rgba = vec![255u8; 16 * 16 * 4];
+    let host = engine.paste_image(16, 16, &rgba, 0, 0, None);
+    engine.add_mask(host);
+    let mask = engine.test_mask_id(host).expect("host has a mask filter");
+
+    // Black to white across the full canvas width: a fresh mask is uniform, so
+    // both ends of the axis are distinguishable from the initial value.
+    apply_gradient(
+        &mut engine,
+        mask,
+        (0.0, 32.0),
+        (w as f32, 32.0),
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+    );
+
+    let ext = engine.test_node_extent(mask);
+    assert!(
+        ext.contains(engine.canvas_rect()),
+        "a gradient on a mask must grow it to the canvas {:?}; extent is {ext:?}",
+        engine.canvas_rect()
+    );
+
+    // R8: one byte per pixel, indexed through the mask's own extent.
+    let px = engine.test_readback_mask(host);
+    let stride = ext.width as usize;
+    let at = |x: i32, y: i32| px[(y - ext.y0()) as usize * stride + (x - ext.x0()) as usize];
+    assert!(
+        at(2, 32) < 60,
+        "mask start of the axis should be near black, got {}",
+        at(2, 32)
+    );
+    assert!(
+        at(60, 32) > 195,
+        "mask end of the axis, well outside the 16x16 host, should be near white, got {}",
+        at(60, 32)
+    );
+}
+
 /// MARQUEE regression: a selection made before a crop must keep masking the
 /// **same plane pixels** afterward. This exercises the selection-mask
 /// re-realization (overlap copy preserving the plane anchor) and the brush

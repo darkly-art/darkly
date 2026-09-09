@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { DarklyStorage, DirEntry } from '../../storage/types';
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
 import { BrushLibraryStore } from '../brush_library.svelte';
-import type { PackPalette } from '../../lib/packPalette';
+import { NEUTRAL_PALETTE, type PackPalette } from '../../lib/packPalette';
 
 /** A shape-valid palette. Which colours a pack wears is not what any of these
  *  tests are about, so there is one fixture rather than four literals a dozen
@@ -362,6 +362,34 @@ describe('brush library persistence', () => {
         await store.flush();
 
         expect(s.json('packs/p-new.json')?.palette).toEqual(PALETTE);
+    });
+
+    // ---- what a brush is drawn in ----
+
+    it('a_brush_wears_the_palette_of_the_first_pack_holding_it', async () => {
+        s.put('brushes/b1.json', { id: 'b1', name: 'Mine', yaml: 'nodes: {}' });
+        await store.hydrate();
+        // In two packs at once, which is allowed: packs are groupings, not
+        // folders. The engine lists shipped packs before the painter's, so
+        // Basic is the one it wears.
+        const favorites = store.packs.find(p => p.name === 'Favorites')!;
+        await fake.api.packAddBrush({ pack: 'basic', brush: 'b1' });
+        await fake.api.packAddBrush({ pack: favorites.id, brush: 'b1' });
+        await store.refresh();
+
+        expect(store.paletteForBrush('Mine')).toEqual(PALETTE);
+        expect(favorites.palette).not.toEqual(PALETTE);
+        expect(store.paletteForBrush('Ink Pen')).toEqual(PALETTE);
+    });
+
+    it('a_brush_no_pack_holds_wears_the_neutral_palette', async () => {
+        s.put('brushes/b1.json', { id: 'b1', name: 'Loose', yaml: 'nodes: {}' });
+        await store.hydrate();
+
+        expect(store.paletteForBrush('Loose')).toEqual(NEUTRAL_PALETTE);
+        // The unnamed graph a painter has edited into their own is no brush at
+        // all, and gets the same answer rather than nothing to paint with.
+        expect(store.paletteForBrush(null)).toEqual(NEUTRAL_PALETTE);
     });
 
     it('deleting_a_brush_removes_its_file_and_rewrites_the_packs_that_held_it', async () => {

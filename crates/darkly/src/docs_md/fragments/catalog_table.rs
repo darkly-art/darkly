@@ -9,6 +9,13 @@
 //! owns it. Fixing a typo visible in a generated table means editing
 //! `crates/darkly/src/**` and re-running the sync; editing the markdown only
 //! survives until the next run.
+//!
+//! **No markdown currently opens a `catalog-table` region.** The README's veils
+//! section, which was the first, now shows the rendered picture that
+//! [`catalog_graphic`](super::catalog_graphic) links instead. This is kept
+//! because it is not veil-specific and a described table is the right shape for
+//! a manual page (`docs/manual/`), where a decorative card is not; it is not
+//! load-bearing for anything today.
 
 use crate::catalog::catalogs;
 use crate::docs_md::{FragmentCtx, FragmentError, FragmentRegistration, STILLS_DIR};

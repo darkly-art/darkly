@@ -14,11 +14,11 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Finally craft your chaotic masterpiece. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
 Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
-**Try the demo [here](https://demo.darkly.art).**
+**Use it on the web [here](https://demo.darkly.art).**
 
 Documentation [here](https://darkly.art/docs/).
 
@@ -45,24 +45,13 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special layer that shrouds your canvas in a mysterious way, inviting you to see something that maybe wasn't there before.
 
-![veil-demo](https://github.com/user-attachments/assets/df05c881-4572-46a1-9a31-366236fabbd3)
+![veil-demo](https://github.com/user-attachments/assets/d30a72e2-a613-4f57-bcb0-671feea08b8d)
 
 Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
 
-<!-- darkly:catalog-table catalog=veils -->
-|  | Name | What it does |
-| :-: | --- | --- |
-| <img src="docs/images/previews/veils/black_and_white.jpg" width="200" alt="Black and White"> | **Black and White** | Desaturate to black and white: six grayscale formulas or custom channel weights, with an optional color tint. |
-| <img src="docs/images/previews/veils/chromatic_aberration.jpg" width="200" alt="Chromatic Aberration"> | **Chromatic Aberration** | Split the color channels apart along their hue axes, like a misaligned lens. |
-| <img src="docs/images/previews/veils/frozen.jpg" width="200" alt="Frozen"> | **Frozen** | Frost the view behind a pane of refracting ice. |
-| <img src="docs/images/previews/veils/grain.jpg" width="200" alt="Grain"> | **Grain** | Film grain noise over the view, optionally animated. |
-| <img src="docs/images/previews/veils/lens_blur.jpg" width="200" alt="Lens Blur"> | **Lens Blur** | Defocus the view with a soft camera-lens blur. |
-| <img src="docs/images/previews/veils/painting.jpg" width="200" alt="Painting"> | **Painting** | Smooth the view into painterly, brush-like daubs. |
-| <img src="docs/images/previews/veils/pixelate.jpg" width="200" alt="Pixelate"> | **Pixelate** | Downsample the view into a blocky pixel mosaic. |
-| <img src="docs/images/previews/veils/rainy_glass.jpg" width="200" alt="Rainy Glass"> | **Rainy Glass** | Raindrops run down a pane of glass over the view. |
-| <img src="docs/images/previews/veils/vhs.jpg" width="200" alt="VHS"> | **VHS** | Analog VHS tape artifacts: scanlines, noise, and color bleed. |
-| <img src="docs/images/previews/veils/watercolor.jpg" width="200" alt="Watercolor"> | **Watercolor** | Bleed the view outward into soft watercolor washes. |
-<!-- /darkly:catalog-table -->
+<!-- darkly:catalog-graphic catalog=veils -->
+<img src="docs/images/graphics/veils.jpg" alt="Veils: Black and White, Chromatic Aberration, Frozen, Grain, Lens Blur, Painting, Pixelate, Rainy Glass, VHS, Watercolor">
+<!-- /darkly:catalog-graphic -->
 
 Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:
 
@@ -75,13 +64,13 @@ Veils are essentially fancy shaders, and they are fun toys. But they have practi
 
 ### Voids
 
-https://github.com/user-attachments/assets/a9ac3819-7209-442b-a8ba-93f567a7506e
+![blender-void-demo](https://github.com/user-attachments/assets/c969122f-5155-403b-af35-8daf5c569a9d)
 
 Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
-You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
+You can use the `Noise` void to generate entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
+Voids support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
 ## Feature Roadmap
 
