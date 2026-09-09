@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { registerPanel, resolvePanel, isPanelRegistered } from '../panelTypes';
-import { isAnchorGroup, type PanelType } from '../tree';
+import { registerPanel, resolvePanel, isPanelRegistered, registeredPanels } from '../panelTypes';
+import { isAnchorGroup, KNOWN_PANEL_TYPES, type PanelType } from '../tree';
 
 /**
  * The anchor rule is stated in `tree.ts` rather than read off `PanelMeta.movable`
@@ -18,6 +18,7 @@ const PANELS: { type: PanelType; movable: boolean }[] = [
     { type: 'document', movable: false },
     { type: 'layers', movable: true },
     { type: 'properties', movable: true },
+    { type: 'color', movable: true },
 ];
 
 for (const { type, movable } of PANELS) {
@@ -37,5 +38,13 @@ describe('the anchor rule agrees with the panel registry', () => {
         expect(isAnchorGroup(['layers', 'document'])).toBe(true);
         expect(isAnchorGroup(['layers', 'properties'])).toBe(false);
         expect(isAnchorGroup([])).toBe(false);
+    });
+});
+
+describe('the known-panel list agrees with the panel registry', () => {
+    // `stripUnknownTabs` drops persisted tabs the list does not name, so a
+    // panel registered but missing here would vanish from every saved layout.
+    it('names exactly the registered panels', () => {
+        expect([...KNOWN_PANEL_TYPES].sort()).toEqual(registeredPanels().sort());
     });
 });

@@ -41,10 +41,24 @@
         menu = { x: e.clientX, y: e.clientY, tab };
     }
 
+    // Both entries read the panel's own declaration; this view never knows
+    // which panel it is looking at. A closed panel reopens from its
+    // `panel.<type>` action in the Window menu.
     let menuItems = $derived<ContextMenuItem[]>(
-        menu && resolvePanel(menu.tab).poppable && popOutSupported()
-            ? [{ label: 'Pop Out', onclick: () => menu && workspaces.popOut(workspaceId, group.id, menu.tab) }]
-            : [{ label: 'Pop Out', disabled: true, onclick: () => {} }],
+        menu
+            ? [
+                  {
+                      label: 'Pop Out',
+                      disabled: !(resolvePanel(menu.tab).poppable && popOutSupported()),
+                      onclick: () => menu && workspaces.popOut(workspaceId, group.id, menu.tab),
+                  },
+                  {
+                      label: 'Close',
+                      disabled: !resolvePanel(menu.tab).closable,
+                      onclick: () => menu && workspaces.closePanel(menu.tab),
+                  },
+              ]
+            : [],
     );
 </script>
 

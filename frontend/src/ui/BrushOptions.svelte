@@ -8,7 +8,8 @@
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
     import Icon from '../icons/Icon.svelte';
-    import { tooltipForAction } from '../config/store.svelte';
+    import LinkToggle from './LinkToggle.svelte';
+    import { config, tooltipForAction } from '../config/store.svelte';
     import BrushExplorer from './brush_explorer/BrushExplorer.svelte';
 
     /** The explorer's open flag. Local: the trigger owns the dialog, and
@@ -61,6 +62,11 @@
         brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
     }
 
+    /** Whether each brush keeps its own foreground/background pair (see
+     *  `state/brushColors.svelte.ts`). A painter preference, so it lives in
+     *  config beside the other `colors.*` prefs and also appears in Settings. */
+    const lockColors = $derived(config.get('colors.lockToBrush') === true);
+
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
         app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
@@ -87,6 +93,17 @@
              explorer, which takes the screen and closes again as soon as a
              brush is picked. -->
         <div class="brush-picker-section">
+            <!-- The chain sits in the gap between the toolbar's color swatches
+                 (pinned at the bottom of the rail, immediately left of this
+                 bar) and the brush picker, joining the two controls it ties
+                 together: engaged, each brush carries the color pair it was
+                 last used with, so switching brushes switches colors with it. -->
+            <LinkToggle
+                linked={lockColors}
+                onchange={(v) => config.set('colors.lockToBrush', v)}
+                label="colors to brush"
+                bracket
+            />
             <button
                 class="brush-picker-button bar-control"
                 onclick={() => { ensureInit(); explorerOpen = true; }}
@@ -189,9 +206,14 @@
 </ToolBarLayout>
 
 <style>
-    /* Anchor for the dropdown menu; the button itself sizes to content so it
-     * wraps in the scrub row like any other control. */
+    /* The chain leads, so it lands in the gap between the rail's color
+     * swatches and the picker: the two controls it ties together. The 7px gap
+     * is what its connector stub spans. Sizes to content so the group wraps in
+     * the scrub row like any other control. */
     .brush-picker-section {
+        display: flex;
+        align-items: center;
+        gap: 7px;
         flex-shrink: 0;
     }
 

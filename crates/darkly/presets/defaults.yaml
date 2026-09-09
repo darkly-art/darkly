@@ -155,3 +155,4 @@ settings:
   # Colors.
   colors.defaultForeground: "#ffffff"
   colors.defaultBackground: "#000000"
+  colors.lockToBrush: false

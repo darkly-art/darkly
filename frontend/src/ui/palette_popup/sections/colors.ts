@@ -11,10 +11,11 @@ import { recentColors } from '../../../state/recents.svelte';
 import { colorToHex, hexToColor } from '../../../lib/color';
 import { paletteSections, type WheelNode } from '../model';
 
-/** Swatches shown, of the 16 recents stored: 8 keeps sectors of the 120°
- *  third at 15°, about Krita's color-history slice width at its donut
- *  radii. */
-export const SWATCH_COUNT = 8;
+/** Swatches shown, of the 16 recents stored. Five for the same reason the
+ *  brush fan shows five: the tail of a recency list is cold, and a short fan
+ *  keeps its sectors wide. Five across the 120° third puts each at 24°, well
+ *  above Krita's color-history slice width at its donut radii. */
+export const SWATCH_COUNT = 5;
 
 /** Injected reads/writes, so the node builder is testable with plain fakes. */
 export interface ColorDeps {

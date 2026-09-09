@@ -61,3 +61,48 @@ export function rgb01ToHex(rgb: [number, number, number]): string {
     const hx = (c: number) => to255(c).toString(16).padStart(2, '0');
     return `#${hx(rgb[0])}${hx(rgb[1])}${hx(rgb[2])}`;
 }
+
+/** Hue in degrees `[0, 360)`, saturation and value in `[0, 1]`. */
+export interface Hsv {
+    h: number;
+    s: number;
+    v: number;
+}
+
+/** HSV for a byte `Color`. Achromatic input (any gray) has no hue and reads
+ *  as `h = 0`; a caller that needs to keep a previous hue across grays does
+ *  that itself (see `ui/color/wheel_model.ts`). Alpha is ignored. */
+export function rgbToHsv(c: Color): Hsv {
+    const r = c.r / 255, g = c.g / 255, b = c.b / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    if (d !== 0) {
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+        else if (max === g) h = ((b - r) / d + 2) * 60;
+        else h = ((r - g) / d + 4) * 60;
+    }
+    return { h, s: max === 0 ? 0 : d / max, v: max };
+}
+
+/** A byte `Color` for HSV plus the given alpha. Components are rounded to
+ *  bytes, so the round trip through {@link rgbToHsv} is lossy. */
+export function hsvToRgb(hsv: Hsv, a: number): Color {
+    const h = (((hsv.h % 360) + 360) % 360) / 60;
+    const c = hsv.v * hsv.s;
+    const x = c * (1 - Math.abs((h % 2) - 1));
+    const m = hsv.v - c;
+    let r = 0, g = 0, b = 0;
+    if (h < 1) { r = c; g = x; }
+    else if (h < 2) { r = x; g = c; }
+    else if (h < 3) { g = c; b = x; }
+    else if (h < 4) { g = x; b = c; }
+    else if (h < 5) { r = x; b = c; }
+    else { r = c; b = x; }
+    return {
+        r: Math.round((r + m) * 255),
+        g: Math.round((g + m) * 255),
+        b: Math.round((b + m) * 255),
+        a,
+    };
+}
