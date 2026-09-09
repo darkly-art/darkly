@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { reduce, CLOSED, type MachineState } from '../machine';
 import { HUB_R, RING_STRIDE, RING_T } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
+import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
+const paint = { visual: { kind: 'icon', icon: '' }, palette: NEUTRAL_PALETTE } as const;
 const leaf = (id: string): WheelLeaf =>
-    ({ kind: 'leaf', id, label: id, visual: { kind: 'icon', icon: '' }, select: () => {} });
+    ({ kind: 'leaf', id, label: id, ...paint, select: () => {} });
 const branch = (id: string, children: WheelNode[]): WheelBranch =>
-    ({ kind: 'branch', id, label: id, visual: { kind: 'icon', icon: '' }, children });
+    ({ kind: 'branch', id, label: id, ...paint, children });
 
 /** Same shape as the geometry suite's fixture: two half-arc sections, 4
  *  color leaves below, a 3-leaf Recent branch and a depth-3 branch above.

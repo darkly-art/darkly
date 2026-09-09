@@ -4,6 +4,7 @@ import {
     sectorAt,
     advance,
     hitKey,
+    midAngle,
     HUB_R,
     RING_T,
     RING_STRIDE,
@@ -13,11 +14,13 @@ import {
     type Hit,
 } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
+import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
+const paint = { visual: { kind: 'icon', icon: '' }, palette: NEUTRAL_PALETTE } as const;
 const leaf = (id: string): WheelLeaf =>
-    ({ kind: 'leaf', id, label: id, visual: { kind: 'icon', icon: '' }, select: () => {} });
+    ({ kind: 'leaf', id, label: id, ...paint, select: () => {} });
 const branch = (id: string, children: WheelNode[]): WheelBranch =>
-    ({ kind: 'branch', id, label: id, visual: { kind: 'icon', icon: '' }, children });
+    ({ kind: 'branch', id, label: id, ...paint, children });
 
 /** Two half-arc sections: 4 color leaves below; above, a 3-leaf branch and
  *  a branch whose first child is itself a branch (depth 3). Root order:
@@ -39,6 +42,49 @@ const ring = (layout: SectorGeom[], k: number) => layout.filter(s => s.ring === 
 /** A point inside sector geometry: polar at the sector's angular middle. */
 const at = (theta: number, r: number): [number, number] =>
     [r * Math.cos(theta), r * Math.sin(theta)];
+
+describe('midAngle', () => {
+    /** Probe along a sector's mid-angle and ask the wheel what is there. A
+     *  round trip through `sectorAt` rather than a restatement of
+     *  `a0 + span / 2`: it fails on a sign error, a degrees/radians slip, or
+     *  an off-by-half-span, which is what would point a rotated chip the
+     *  wrong way. */
+    const landsOnItself = (layout: SectorGeom[]) => {
+        for (const s of layout) {
+            const hit = sectorAt(layout, ...at(midAngle(s), (s.r0 + s.r1) / 2));
+            expect(hit.kind).toBe('sector');
+            expect((hit as { sector: SectorGeom }).sector.path).toEqual(s.path);
+        }
+    };
+
+    it('points into its own sector, on every ring and in every quadrant', () => {
+        landsOnItself(layoutWheel(tree, [5, 0]));
+    });
+
+    it('points into its own sector across the ±π seam', () => {
+        // The shipped shape: the brushes arc starts past π and wraps.
+        const seam: WheelTree = {
+            sections: [
+                { a0: Math.PI / 6, span: (2 * Math.PI) / 3, nodes: [leaf('c0'), leaf('c1')] },
+                {
+                    a0: (5 * Math.PI) / 6,
+                    span: (4 * Math.PI) / 3,
+                    nodes: [branch('recent', [leaf('r0'), leaf('r1')]), branch('lib', [leaf('l')])],
+                },
+            ],
+        };
+        landsOnItself(layoutWheel(seam, [2, 1]));
+    });
+
+    it('is the quantity the sector paths are built from', () => {
+        // Pins the de-duplication: the component's placement math and this
+        // function are the same number, so a chip cannot drift off the badge
+        // it is drawn in.
+        for (const s of layoutWheel(tree, [5])) {
+            expect(midAngle(s)).toBeCloseTo(s.a0 + s.span / 2, 12);
+        }
+    });
+});
 
 describe('layoutWheel ring 0', () => {
     const layout = layoutWheel(tree, []);

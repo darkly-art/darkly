@@ -11,6 +11,7 @@
 import { brushGraph } from '../../../state/brush_graph.svelte';
 import { brushLibrary } from '../../../state/brush_library.svelte';
 import { recentBrushes } from '../../../state/recents.svelte';
+import { NEUTRAL_PALETTE, type PackPalette } from '../../../lib/packPalette';
 import { paletteSections, type WheelNode } from '../model';
 
 /** Brushes shown in the Recent fan, of the 12 recents stored: the tail of
@@ -20,21 +21,34 @@ export const RECENT_COUNT = 5;
 /** The fields the wheel needs from `BrushInfo` / `BrushPackInfo`, so tests
  *  can hand in plain objects. */
 export interface BrushLike { id: string; name: string; icon: string | null }
-export interface PackLike { id: string; name: string; icon: string; members: string[] }
+export interface PackLike {
+    id: string;
+    name: string;
+    icon: string;
+    members: string[];
+    palette: PackPalette;
+}
 
 export interface BrushDeps {
     recentIds(): string[];
     brushes(): BrushLike[];
     packs(): PackLike[];
     load(name: string, id: string): void;
+    /** The colours a brush wears when it is not being shown under a pack. */
+    paletteFor(name: string): PackPalette;
 }
 
-function brushLeaf(b: BrushLike, load: BrushDeps['load']): WheelNode {
+/** A brush under a pack takes *that* pack's colours, not the library's answer
+ *  for which pack holds it: a brush may be in several (packs are groupings,
+ *  not folders), and the one the painter navigated through is the one they
+ *  are looking at. Only the Recent fan, which has no pack above it, asks. */
+function brushLeaf(b: BrushLike, palette: PackPalette, load: BrushDeps['load']): WheelNode {
     return {
         kind: 'leaf',
         id: `brush:${b.id}`,
         label: b.name,
         visual: { kind: 'brush', name: b.name, icon: b.icon },
+        palette,
         select: () => load(b.name, b.id),
     };
 }
@@ -53,7 +67,8 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
             id: 'brushes:recent',
             label: 'Recent',
             visual: { kind: 'icon', icon: 'fa6-solid:clock-rotate-left' },
-            children: recent.map(b => brushLeaf(b, deps.load)),
+            palette: NEUTRAL_PALETTE,
+            children: recent.map(b => brushLeaf(b, deps.paletteFor(b.name), deps.load)),
         });
     }
     const packs: WheelNode[] = [];
@@ -67,7 +82,8 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
             id: `pack:${pack.id}`,
             label: pack.name,
             visual: { kind: 'icon', icon: pack.icon },
-            children: members.map(b => brushLeaf(b, deps.load)),
+            palette: pack.palette,
+            children: members.map(b => brushLeaf(b, pack.palette, deps.load)),
         });
     }
     if (packs.length > 0) {
@@ -76,6 +92,7 @@ export function brushNodes(deps: BrushDeps): WheelNode[] {
             id: 'brushes:library',
             label: 'Library',
             visual: { kind: 'icon', icon: 'fa6-solid:layer-group' },
+            palette: NEUTRAL_PALETTE,
             spread: 'full',
             children: packs,
         });
@@ -94,6 +111,7 @@ export function registerBrushesSection(): void {
             brushes: () => brushLibrary.brushes,
             packs: () => brushLibrary.packs,
             load: (name, id) => { void brushGraph.loadBrush(name, id); },
+            paletteFor: name => brushLibrary.paletteForBrush(name),
         }),
     });
 }

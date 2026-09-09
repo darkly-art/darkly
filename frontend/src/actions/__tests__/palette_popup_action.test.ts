@@ -21,6 +21,7 @@ vi.mock('../../state/brush_library.svelte', () => ({
     brushLibrary: {
         brushes: [{ id: 'b1', name: 'Ink', icon: null }],
         packs: [],
+        paletteForBrush: () => ({ chroma: '#000', refraction: '#000', surface: '#000' }),
     },
 }));
 

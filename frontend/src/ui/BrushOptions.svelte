@@ -271,10 +271,8 @@
      *
      * The pack is worn as a rim in its vivid pair and a wash of its surface,
      * which is the order a pack card spends its palette in: the pair on the
-     * edge, the surface on the body. The pair runs as a gradient because
-     * refraction is chroma bent and is drawn with it, never alone
-     * (`brush/pack.rs`), at half strength, so the chip carries the pack without
-     * outranking the scrubs it sits in a row with.
+     * edge, the surface on the body. The pair is `--pack-rim-fill`, the same
+     * edge every surface outside the explorer's field states a pack with.
      *
      * A gradient cannot be a border colour, so the border is transparent and
      * the ring is painted as the bottom background layer: clipped to the border
@@ -291,12 +289,6 @@
      * The padding gives back what the border takes, so the chip stands exactly
      * as tall as the borderless scrubs it wraps alongside. */
     .brush-picker-button {
-        --pack-rim-fill:
-            linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--pack-chroma) 50%, transparent),
-                color-mix(in srgb, var(--pack-refraction) 50%, transparent))
-            border-box;
         --bar-control-fill:
             linear-gradient(var(--pack-surface) 0 0) padding-box,
             linear-gradient(var(--bg) 0 0) padding-box,

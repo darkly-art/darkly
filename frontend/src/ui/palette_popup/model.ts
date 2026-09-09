@@ -14,12 +14,27 @@
  * a whole new registered section) and nothing else.
  */
 
+import type { PackPalette } from '../../lib/packPalette';
+
 export type WheelVisual =
     | { kind: 'swatch'; color: string }
     | { kind: 'brush'; name: string; icon: string | null }
     | { kind: 'icon'; icon: string };
 
-export interface WheelLeaf {
+/** The colours a node is drawn in: its pack's, or `NEUTRAL_PALETTE` for one
+ *  no pack stands behind (Recent, Library, a color swatch).
+ *
+ *  Resolved when the tree is snapshotted, not at render time, because the
+ *  snapshot is frozen for the gesture and a component reaching back into the
+ *  library store would be reading live state through a frozen tree. It is a
+ *  property of the node rather than of its `WheelVisual` so that a new visual
+ *  kind stays purely additive: the visual says what a node shows, this says
+ *  whose it is, and the renderer applies it once without consulting either. */
+export interface WheelPainted {
+    palette: PackPalette;
+}
+
+export interface WheelLeaf extends WheelPainted {
     kind: 'leaf';
     /** Stable within one open: keys sectors and labels test expectations. */
     id: string;
@@ -30,7 +45,7 @@ export interface WheelLeaf {
     select(): void;
 }
 
-export interface WheelBranch {
+export interface WheelBranch extends WheelPainted {
     kind: 'branch';
     id: string;
     label: string;

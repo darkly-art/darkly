@@ -9,8 +9,8 @@
  * owner destroys the poller. Byte length keys the churn guard: identical
  * payload length is treated as a cache hit.
  *
- * Extracted from `BrushPreviewStrip.svelte`; the palette popup's brush
- * leaves are the second consumer.
+ * Owned by `BrushThumb.svelte`, the one component that shows a baked brush
+ * thumbnail; everything that wants one goes through it.
  */
 import { app } from '../state/app.svelte';
 import { SignalCompressor } from './signal_compressor';

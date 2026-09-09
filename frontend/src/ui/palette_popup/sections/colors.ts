@@ -9,6 +9,7 @@
 import { app, type Color } from '../../../state/app.svelte';
 import { recentColors } from '../../../state/recents.svelte';
 import { colorToHex, hexToColor } from '../../../lib/color';
+import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 import { paletteSections, type WheelNode } from '../model';
 
 /** Swatches shown, of the 16 recents stored. Five for the same reason the
@@ -41,6 +42,9 @@ export function colorNodes(deps: ColorDeps): WheelNode[] {
         id: `color:${hex}`,
         label: hex.slice(0, 7),
         visual: { kind: 'swatch', color: hex },
+        // A colour has no provenance to state: it wears the neutral palette
+        // for the same reason a derived group in the explorer does.
+        palette: NEUTRAL_PALETTE,
         select() {
             // Stored recents are canonical `#rrggbbaa`, so the null arm is
             // unreachable in practice; handled rather than defaulted because

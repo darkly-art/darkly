@@ -14,6 +14,7 @@ import { colorNodes, SWATCH_COUNT, type ColorDeps } from '../sections/colors';
 import { brushNodes, RECENT_COUNT, type BrushDeps } from '../sections/brushes';
 import type { Color } from '../../../state/app.svelte';
 import type { WheelBranch, WheelLeaf } from '../model';
+import { NEUTRAL_PALETTE, type PackPalette } from '../../../lib/packPalette';
 
 const RED: Color = { r: 255, g: 0, b: 0, a: 255 };
 const BLUE: Color = { r: 0, g: 0, b: 255, a: 255 };
@@ -62,7 +63,19 @@ describe('colorNodes', () => {
         (nodes[0] as WheelLeaf).select();
         expect(deps.set).toHaveBeenCalledWith({ r: 0x12, g: 0x34, b: 0x56, a: 0x78 });
     });
+
+    it('paints swatches neutral: a color has no pack behind it', () => {
+        const nodes = colorNodes(colorDeps(['#112233ff', '#445566ff']));
+        expect(nodes.every(n => n.palette === NEUTRAL_PALETTE)).toBe(true);
+    });
 });
+
+const palette = (chroma: string): PackPalette =>
+    ({ chroma, refraction: chroma, surface: chroma });
+const P1 = palette('#p1');
+const P2 = palette('#p2');
+/** What the library store answers for a brush shown outside any pack. */
+const STORE = palette('#store');
 
 function brushDeps(over: Partial<BrushDeps> = {}): BrushDeps & { load: ReturnType<typeof vi.fn> } {
     const load = vi.fn();
@@ -74,9 +87,10 @@ function brushDeps(over: Partial<BrushDeps> = {}): BrushDeps & { load: ReturnTyp
             { id: 'b3', name: 'Wash', icon: null },
         ],
         packs: () => [
-            { id: 'p1', name: 'Dry Media', icon: 'fa6-solid:box', members: ['b2', 'b3'] },
-            { id: 'p2', name: 'Empty', icon: 'fa6-solid:box', members: ['gone'] },
+            { id: 'p1', name: 'Dry Media', icon: 'fa6-solid:box', members: ['b2', 'b3'], palette: P1 },
+            { id: 'p2', name: 'Empty', icon: 'fa6-solid:box', members: ['gone'], palette: P2 },
         ],
+        paletteFor: () => STORE,
         ...over,
         load,
     };
@@ -132,6 +146,33 @@ describe('brushNodes', () => {
         const nodes = brushNodes(brushDeps());
         const charcoal = (nodes[0] as WheelBranch).children[0] as WheelLeaf;
         expect(charcoal.visual).toEqual({ kind: 'brush', name: 'Charcoal', icon: 'fa6-solid:pen' });
+    });
+
+    it('paints a pack member in that pack\'s colours, not the store\'s answer', () => {
+        // Charcoal (b2) sits in two packs. Each fan must show its own, which
+        // a `paletteFor`-everywhere implementation would get wrong: the store
+        // answers with whichever pack it finds first, for both.
+        const nodes = brushNodes(brushDeps({
+            packs: () => [
+                { id: 'p1', name: 'Dry', icon: '', members: ['b2'], palette: P1 },
+                { id: 'p2', name: 'Wet', icon: '', members: ['b2'], palette: P2 },
+            ],
+        }));
+        const packs = (nodes[1] as WheelBranch).children as WheelBranch[];
+        expect(packs.map(p => p.palette)).toEqual([P1, P2]);
+        expect(packs.map(p => (p.children[0] as WheelLeaf).palette)).toEqual([P1, P2]);
+    });
+
+    it('paints a Recent leaf in the palette the library answers with', () => {
+        const recent = brushNodes(brushDeps())[0] as WheelBranch;
+        expect((recent.children[0] as WheelLeaf).palette).toBe(STORE);
+    });
+
+    it('paints the derived branches neutral', () => {
+        // Identity, not shape: Recent and Library must keep tracking the same
+        // constant the explorer's derived groups wear.
+        const nodes = brushNodes(brushDeps());
+        expect(nodes.map(n => n.palette)).toEqual([NEUTRAL_PALETTE, NEUTRAL_PALETTE]);
     });
 
     it('select() loads by name and id', () => {

@@ -139,6 +139,22 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
 }
 
 /**
+ * A sector's angular midpoint.
+ *
+ * Everything anchored to a sector is placed or oriented along it: the badge
+ * sits on it, the growth and pop vectors run down it, and a landscape
+ * thumbnail rotated by it lies along the outward radial direction.
+ *
+ * Angles are screen space with +y down, and CSS `rotate()` is positive
+ * clockwise in that same frame, so the value serves as a rotation with no
+ * sign juggling. It may exceed ±π where a fan straddles the seam; rotation
+ * and direction are inherently mod 2π, so nothing normalizes it.
+ */
+export function midAngle(s: SectorGeom): number {
+    return s.a0 + s.span / 2;
+}
+
+/**
  * Resolve a pointer offset from the wheel center to what it is over.
  *
  * Radius bands pick the ring, clamped to the deepest expanded one (that ring

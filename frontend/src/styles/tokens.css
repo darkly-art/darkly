@@ -60,6 +60,27 @@
        evenly, `transparent` holds the whole pack to an outline. Sampled in
        field coordinates like everything else, so the three columns share one
        ramp rather than each restarting it at its own left edge. */
+    /* The pack's edge, away from the explorer's field.
+
+       Inside the explorer a pack's rim is the beam at full strength, sampled
+       from the one field its three columns share (`--pack-beam` below). A
+       surface outside that field has no beam to carve a rim out of, and every
+       such surface still has to state the pack the same way, so the pair is
+       carried here as two stops rather than being mixed again wherever it is
+       needed: the toolbar's brush picker paints them as a CSS gradient across
+       its border box, the palette popup as an SVG gradient along a sector's
+       edge, and both are the same two colours at the same strength.
+
+       Half strength, and the two together: refraction is chroma bent and is
+       drawn with it, never alone (`brush/pack.rs`), so a rim that carries the
+       pack does not outrank whatever it sits beside. */
+    --pack-rim-a: color-mix(in srgb, var(--pack-chroma) 50%, transparent);
+    --pack-rim-b: color-mix(in srgb, var(--pack-refraction) 50%, transparent);
+    /* The pair as a paint, for a consumer that can use a CSS gradient. Clipped
+       to the border box, so a transparent border shows exactly the ring. */
+    --pack-rim-fill: linear-gradient(90deg, var(--pack-rim-a), var(--pack-rim-b))
+        border-box;
+
     --pack-prism-x: -18%;
     --pack-beam-spread: 16deg;
     --pack-beam-tilt: 0deg;
@@ -195,6 +216,51 @@
     mask-size: var(--field-w) var(--field-h), auto, auto;
     mask-position: var(--pack-field-offset, 0 0), 0 0, 0 0;
     mask-repeat: no-repeat;
+}
+
+/* The envelope every miniature brush preview sits in: the picker's baked
+ * strips, the brush builder's live strip, and the palette popup's chip. One
+ * rounded field with no internal gap or per-slot border, so the slots inside
+ * it read as a single image.
+ *
+ * The field is the theme's own neutral, not a pack role. A `var(--pack-surface)`
+ * here would be inherited by every strip in the picker grid (which sits inside
+ * `use:packPalette` on its section) and show through wherever a slot is cold or
+ * holds a fallback glyph, spending colour in the one place the grid is supposed
+ * not to. A site that wants its pack's field says so itself: the popup's chip
+ * does, because a badge has nothing behind it to state the pack for it. */
+.brush-thumbs {
+    display: flex;
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover);
+    overflow: hidden;
+}
+
+/* The dab slot is square and the stroke takes what is left: the bake is 8:3,
+ * so a strip holding both is 11:3. `min-width: 0` lets the stroke shrink
+ * inside a flex row rather than pushing the dab out of the envelope. */
+.brush-thumbs > .dab {
+    aspect-ratio: 1;
+    height: 100%;
+    flex: none;
+    overflow: hidden;
+}
+
+.brush-thumbs > .stroke {
+    flex: 1;
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* `cover` so a slot whose box is not exactly the bake's aspect crops rather
+ * than stretches: the stroke bake is 8:3 and the dab square, but a chip sized
+ * to fit a ring band lands near those ratios, not on them. */
+.brush-thumbs img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 /* Icon button reset: used by toolbar, panel actions, layer controls, etc. */

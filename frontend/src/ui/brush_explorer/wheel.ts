@@ -26,7 +26,7 @@
  * bound (half a card, never more) is what keeps the highlighted card the
  * nearest one to the line at every scroll position.
  */
-import type { PackPalette } from '../../lib/packPalette';
+import { PACK_RIM, type PackPalette } from '../../lib/packPalette';
 
 /** One group's vertical extent within the list's scroll content, measured from
  *  the rendered DOM by the component. */
@@ -241,16 +241,7 @@ export interface PackBand {
     opacity: number;
 }
 
-/**
- * How thick the pack's rim of light is, px.
- *
- * Lives here rather than in the stylesheet because the three columns carve the
- * rim two different ways (the card and the section as a border width, the band
- * as a clip-path computed from this file), and one number reaching CSS through
- * `--pack-rim-width` is one number, where a token beside the palette and a
- * constant here would be the same number written twice.
- */
-export const PACK_RIM = 2;
+export { PACK_RIM };
 
 /** One of the ribbon's edges, displaced. Positive offsets move down the
  *  screen, so a rim inside the bottom edge is a negative one. */

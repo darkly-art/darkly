@@ -4,11 +4,13 @@
     import {
         layoutWheel,
         hitKey,
+        midAngle,
         GROW,
         HUB_R,
         type SectorGeom,
     } from './wheel_geometry';
-    import BrushLeafThumb from './BrushLeafThumb.svelte';
+    import BrushThumb from '../brush_library/BrushThumb.svelte';
+    import { packPaletteStyle, PACK_RIM, PALETTE_CLASS } from '../../lib/packPalette';
     import Icon from '../../icons/Icon.svelte';
 
     const engaged = $derived(
@@ -95,13 +97,15 @@
      *  (growth animates by interpolating the path itself, which is what
      *  keeps the inner edge exactly still), plus the anchor vector
      *  `--ax/--ay` (inner-edge midpoint relative to the wheel center) that
-     *  the entrance pop's compensated transform springs out along. */
+     *  the entrance pop's compensated transform springs out along, and the
+     *  node's palette, which its rim is drawn in. */
     function sectorStyle(s: SectorGeom, cx: number, cy: number): string {
-        const mid = s.a0 + s.span / 2;
+        const mid = midAngle(s);
         return `--d: path('${sectorPath(s, cx, cy)}');`
             + ` --d-grown: path('${sectorPath(grownGeom(s), cx, cy)}');`
             + ` --ax: ${(Math.cos(mid) * s.r0).toFixed(1)}px;`
-            + ` --ay: ${(Math.sin(mid) * s.r0).toFixed(1)}px;`;
+            + ` --ay: ${(Math.sin(mid) * s.r0).toFixed(1)}px;`
+            + ` ${packPaletteStyle(s.node.palette)}`;
     }
 
     /** Badge placement plus the per-badge motion vectors: `--gx/--gy` is
@@ -110,17 +114,21 @@
      *  `--px/--py` is the inward offset the pop animation starts from
      *  (matching the sector keyframe's compression toward its inner edge). */
     function badgeStyle(s: SectorGeom, cx: number, cy: number): string {
-        const mid = s.a0 + s.span / 2;
+        const mid = midAngle(s);
         const r = (s.r0 + s.r1) / 2;
         const ux = Math.cos(mid);
         const uy = Math.sin(mid);
         const d = r - s.r0;
         return `left: ${(cx + r * ux).toFixed(1)}px; top: ${(cy + r * uy).toFixed(1)}px;`
             + ` --gx: ${(ux * d * GROW).toFixed(1)}px; --gy: ${(uy * d * GROW).toFixed(1)}px;`
-            + ` --px: ${(-ux * d * POP).toFixed(1)}px; --py: ${(-uy * d * POP).toFixed(1)}px;`;
+            + ` --px: ${(-ux * d * POP).toFixed(1)}px; --py: ${(-uy * d * POP).toFixed(1)}px;`
+            + ` --rot: ${mid.toFixed(4)}rad;`;
     }
 
     const key = (s: SectorGeom) => `sector:${s.path.join('.')}`;
+    /** SVG id for a sector's rim paint. Ids share one document-wide namespace,
+     *  so it is the sector's path, not its key, spelled for an id. */
+    const rimId = (s: SectorGeom) => `palette-rim-${s.path.join('-')}`;
 
     /** Cursor marker: half-diagonal of the diamond drawn at the pointer. */
     const DIAMOND_R = 6;
@@ -152,24 +160,54 @@
          config/hotkeys.svelte.ts. Display-only: input never touches it. -->
     <dialog open class="palette-popup" aria-label="Palette popup"
             style:--cx="{cx}px" style:--cy="{cy}px"
-            style:--grow={GROW} style:--pop={POP} style:--corner="{CORNER}px">
+            style:--grow={GROW} style:--pop={POP} style:--corner="{CORNER}px"
+            style:--pack-rim-width="{PACK_RIM}px">
         <svg>
             {#each drawOrder as s (key(s))}
-                <path
-                    class="sector"
-                    class:grown={isGrown(s)}
-                    class:highlighted={key(s) === highlightKey}
-                    class:settled={settled.has(key(s))}
-                    style={sectorStyle(s, cx, cy)}
-                    d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
-                    style:fill={s.node.visual.kind === 'swatch'
-                        ? s.node.visual.color.slice(0, 7)
-                        : undefined}
-                    style:stroke={s.node.visual.kind === 'swatch'
-                        ? s.node.visual.color.slice(0, 7)
-                        : undefined}
-                    onanimationend={() => settled.add(key(s))}
-                />
+                {@const swatch = s.node.visual.kind === 'swatch' ? s.node.visual : null}
+                <!-- The sector's own shape twice: the rim beneath at full
+                     size, the body over it narrower by the rim's width, so the
+                     sector is outlined in its pack's colours without its
+                     silhouette or the gaps between sectors moving. A swatch skips the
+                     rim: it already paints the sector its own colour, and a
+                     second edge would be stating provenance it has none of. -->
+                <!-- `PALETTE_CLASS` alongside the roles, never one without the
+                     other: the derived rim tokens are declared in that class's
+                     rule, and a custom property whose value contains `var()`
+                     is substituted where it is declared. -->
+                <g class={PALETTE_CLASS} style={sectorStyle(s, cx, cy)}>
+                    {#if !swatch}
+                        <!-- `--pack-rim-fill` is a CSS gradient, and CSS
+                             gradients cannot paint an SVG stroke, so the pair
+                             is spelled here as the paint server SVG needs. The
+                             colours are not restated: both stops are the
+                             palette's own rim tokens, so this edge and the
+                             toolbar picker's are the same two mixes. -->
+                        <linearGradient id={rimId(s)}>
+                            <stop offset="0" style:stop-color="var(--pack-rim-a)" />
+                            <stop offset="1" style:stop-color="var(--pack-rim-b)" />
+                        </linearGradient>
+                        <path
+                            class="sector rim"
+                            class:grown={isGrown(s)}
+                            class:settled={settled.has(key(s))}
+                            style:fill="url(#{rimId(s)})"
+                            style:stroke="url(#{rimId(s)})"
+                            d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
+                        />
+                    {/if}
+                    <path
+                        class="sector"
+                        class:rimmed={!swatch}
+                        class:grown={isGrown(s)}
+                        class:highlighted={key(s) === highlightKey}
+                        class:settled={settled.has(key(s))}
+                        d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
+                        style:fill={swatch ? swatch.color.slice(0, 7) : undefined}
+                        style:stroke={swatch ? swatch.color.slice(0, 7) : undefined}
+                        onanimationend={() => settled.add(key(s))}
+                    />
+                </g>
             {/each}
             <circle
                 class="hub"
@@ -180,18 +218,25 @@
             />
         </svg>
         {#each layout as s (key(s))}
-            {#if s.node.visual.kind !== 'swatch'}
-                <div class="badge" class:grown={isGrown(s)}
+            {@const visual = s.node.visual}
+            {#if visual.kind !== 'swatch'}
+                {@const brush = visual.kind === 'brush' ? visual : null}
+                <div class="badge" class:leaf={brush} class:grown={isGrown(s)}
                      class:settled={settled.has(key(s))}
                      style={badgeStyle(s, cx, cy)}>
-                    <div class="glyph">
-                        {#if s.node.visual.kind === 'brush'}
-                            <BrushLeafThumb name={s.node.visual.name} icon={s.node.visual.icon} />
-                        {:else}
-                            <Icon name={s.node.visual.icon} />
+                    <div class="chip brush-thumbs" class:stroke-chip={brush}>
+                        {#if brush}
+                            <BrushThumb name={brush.name} icon={brush.icon} />
+                        {:else if visual.kind === 'icon'}
+                            <Icon name={visual.icon} />
                         {/if}
                     </div>
-                    <div class="label">{s.node.label}</div>
+                    <!-- A brush is identified by its stroke; a branch's icon is
+                         generic (packs ship a handful of shared marks), so a
+                         branch keeps its name and a leaf drops it. -->
+                    {#if !brush}
+                        <div class="label">{s.node.label}</div>
+                    {/if}
                 </div>
             {/if}
         {/each}
@@ -279,6 +324,26 @@
         stroke: var(--bg-active);
         animation: grow var(--dur) var(--ease);
     }
+    /* The rim is the same path at the full stroke width, so it keeps the
+       silhouette and the gaps; the body over it gives up `--pack-rim-width` on
+       every side, which is what leaves the rim showing all the way round. The
+       rim never takes `.highlighted`, so a sector brightens inside its pack's
+       edge rather than washing it out. A pack with nothing behind it (Recent,
+       Library) rims in the neutral palette's greys.
+
+       The rim's paint is set inline in the markup, not by a rule here, and it
+       has to be inline twice over: a paint server is referenced by a per-sector
+       id, and `fill`/`stroke` as SVG *attributes* would lose to `.sector`'s own
+       fill and stroke above, because a presentation attribute ranks below every
+       author rule. The gradient's stops are inline for the second half of the
+       same reason: `var()` resolves in a CSS declaration and not in a
+       presentation attribute.
+
+       Only a rimmed sector gives up the stroke; a swatch keeps the full width,
+       so its silhouette and its gaps stay exactly what they were. */
+    .sector.rimmed {
+        stroke-width: calc(2 * var(--corner) - 2 * var(--pack-rim-width));
+    }
     .hub {
         fill: var(--bg-raised);
         transform-origin: var(--cx) var(--cy);
@@ -298,6 +363,13 @@
         color: var(--text);
         animation: badge-pop var(--dur) var(--ease);
     }
+    /* A leaf has no label to size for, so it is exactly its chip wide: that
+       is what makes the rotated chip cost less arc than the badge it
+       replaces, in the fans where arc is scarcest. */
+    .badge.leaf {
+        width: auto;
+        gap: 0;
+    }
     .badge.settled {
         animation: none;
     }
@@ -306,13 +378,32 @@
             scale(calc(1 + var(--grow)));
         animation: badge-grow var(--dur) var(--ease);
     }
-    .glyph {
-        width: 44px;
-        height: 26px;
+    /* The badge's face: the same envelope the brush picker's strips wear.
+       It carries no colour and no edge of its own; the pack is stated by the
+       sector's rim beneath it, which is the shape a painter is actually
+       aiming at. */
+    .chip {
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 15px;
+        width: 26px;
+        height: 26px;
+        box-sizing: border-box;
+        /* Sizes the fallback glyph, which `BrushPreviewFallback` measures in
+           `em` because a percentage cannot resolve against an aspect-derived
+           box. */
+        font-size: 13px;
+    }
+    /* A brush's chip holds the 8:3 stroke bake, laid along the sector's
+       outward radial direction so the ring's depth carries the stroke's
+       length instead of cropping it. No `transition`: re-sorting a
+       highlighted badge remounts it, and a transition would sweep the
+       rotation across the wheel. */
+    .stroke-chip {
+        width: 60px;
+        height: 22px;
+        font-size: 9px;
+        transform: rotate(var(--rot));
     }
     .label {
         max-width: 60px;
