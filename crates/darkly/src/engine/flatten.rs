@@ -226,7 +226,7 @@ impl DarklyEngine {
 
         // Bake the source as the single child of the transient bake accum. For
         // a group, `compose_children` recursively composes its children into
-        // its composite_cache first; either way the node's own texture is
+        // its own accumulator first; either way the node's own texture is
         // blended into the accum with our Normal/1 uniforms, and its mask, if
         // any, is applied as part of that blend.
         self.compositor.bake_subtree_to_layer(

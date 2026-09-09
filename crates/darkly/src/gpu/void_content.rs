@@ -392,7 +392,10 @@ impl Compositor {
         }
         proc.void
             .upload_external_image(device, queue, &mut proc.cache, source);
-        self.mark_dirty();
+        // A camera frame is advanced appearance, not an authored pixel write
+        // or a document edit: the composite must re-run, but thumbnails and
+        // content bounds have no reason to churn at frame rate.
+        self.revisions.bump_animation(layer_id);
     }
 
     /// Re-render every dirty procedural layer's texture. Runs at the top of

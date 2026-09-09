@@ -136,6 +136,61 @@ fn is_in_isolation_path(doc: &Document, isolated: Option<LayerId>, id: LayerId) 
     false
 }
 
+/// The first child index at which two stamp lists disagree, or `None` when
+/// they are identical. A length change diverges at the shorter length, since
+/// everything from there on is a different walk.
+fn first_divergence(cached: &[ChildStamp], fresh: &[ChildStamp]) -> Option<usize> {
+    let common = cached.len().min(fresh.len());
+    (0..common)
+        .find(|&i| cached[i] != fresh[i])
+        .or((cached.len() != fresh.len()).then_some(common))
+}
+
+/// What the walk's cache remembers about one child of a group, in document
+/// order. Plain-equality comparison, no hashing: this decides whether pixels
+/// destined for an exported file may be reused, and a hash would trade that
+/// certainty for a collision probability.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct ChildStamp {
+    id: LayerId,
+    /// Whether the walk actually drew this child — the skip chain plus the
+    /// node's own [`LayerNode::compose_ready`]. A child that flips between
+    /// drawing and not changes the group's output as surely as an edit does.
+    included: bool,
+    /// Latest content revision anywhere in this child's subtree, filters
+    /// included. Zero when `included` is false: an excluded subtree
+    /// contributes nothing, and whatever later includes it bumps `document`.
+    rev: crate::gpu::revisions::Tick,
+}
+
+/// One group's memory of its last walk: what its children were, and how far up
+/// the stack a reusable composite was captured.
+///
+/// Compositor-owned derived state, rebuilt freely — losing it costs one full
+/// walk and nothing else.
+pub(super) struct WalkCache {
+    /// Per-child stamps from the last walk, in document order.
+    stamps: Vec<ChildStamp>,
+    /// Registry ticks the stamps were taken under. Any drift and no reuse is
+    /// attempted at all — which is what makes every coarse `mark_dirty()` in
+    /// the codebase safe without auditing it.
+    built_document: crate::gpu::revisions::Tick,
+    built_targets: crate::gpu::revisions::Tick,
+    /// The composite of `children[..=through]`, captured mid-walk.
+    prefix: Option<Prefix>,
+    /// First-dirty index of the previous walk. The snapshot only advances
+    /// when the same depth is dirty twice running, so alternating edit depths
+    /// leave the prefix pinned below both instead of thrashing.
+    last_d: Option<usize>,
+}
+
+/// A captured composite of a group's lower children.
+pub(super) struct Prefix {
+    texture: wgpu::Texture,
+    /// Child index this prefix includes through.
+    through: usize,
+}
+
 /// Lean per-host projection for a leaf layer (raster / void) that carries a
 /// visible mask filter. The host's content composites into this isolated
 /// window-sized buffer; the mask modulates it (`apply_mask`); the finished
@@ -293,11 +348,14 @@ impl Compositor {
     }
 
     /// Cached entry point for `create_blend_bind_group`. The key
-    /// `(parent_group, child, src_accum_idx)` uniquely identifies the bg+layer
+    /// `(parent_group, child, halves)` uniquely identifies the bg+layer
     /// view pair for a given composite — view handles and uniform buffers
     /// are stable across frames, so caching by key avoids the per-frame
-    /// allocator round-trip. Caller is responsible for bypassing the cache
-    /// when the inputs are not stable (e.g. floating-target preview swap).
+    /// allocator round-trip. `halves` is bit 0 = the parent's source
+    /// accumulator index, bit 1 = the child group's output half (always 0
+    /// for a leaf, whose texture does not ping-pong). Caller is responsible
+    /// for bypassing the cache when the inputs are not stable (e.g.
+    /// floating-target preview swap).
     ///
     /// Takes the cache field directly rather than `&mut self` so the caller
     /// can keep other immutable field borrows live across this call. Returns
@@ -341,37 +399,277 @@ impl Compositor {
         scissor: (u32, u32, u32, u32),
         isolated: Option<LayerId>,
     ) {
-        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
-
-        // Reset group's accum state for a fresh composite.
-        {
-            let gs = self
-                .group_state
-                .get_mut(&group_id)
-                .expect("GroupState missing");
-            gs.current_accum = 0;
-            clear_view_transparent(encoder, &gs.accum.views[0], "clear-accum");
-        }
-
-        // Inline children into this group's accumulators. Clone the child
-        // ids so the borrow on `doc` doesn't outlive the call into
-        // `compose_children`, which itself re-borrows `doc`. `SmallVec`
+        // Clone the child ids so the borrow on `doc` doesn't outlive the call
+        // into `compose_children`, which itself re-borrows `doc`. `SmallVec`
         // absorbs the typical single-digit-children case on the stack.
         let children: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
-        self.compose_children(encoder, device, doc, group_id, &children, scissor, isolated);
+        let fresh = self.build_child_stamps(doc, &children, isolated);
 
-        // Copy final accum to this group's composite cache.
-        let gs = self.group_state.get(&group_id).expect("GroupState missing");
-        let src_accum = gs.current_accum;
-        blit_region(
+        // Reuse is gated on the coarse sources first. Every `mark_dirty()` in
+        // the codebase bumps `document`, so a mutation nobody narrowed
+        // invalidates every walk cache without anyone auditing the call site:
+        // forgetting to narrow costs a full walk, never a stale pixel.
+        let valid = self.walk_cache_valid(group_id) && !self.histogram_forces_full_walk();
+        // Read everything the decision needs out of the cache before touching
+        // it, so the branches below are free to mutate the group state.
+        let (had_cache, d, prefix, last_d) = match self
+            .group_state
+            .get(&group_id)
+            .and_then(|gs| gs.walk_cache.as_ref())
+        {
+            Some(c) => (
+                true,
+                first_divergence(&c.stamps, &fresh),
+                c.prefix.as_ref().map(|p| (p.through, p.texture.clone())),
+                c.last_d,
+            ),
+            None => (false, None, None, None),
+        };
+
+        // Nothing below this group changed: its accumulators still hold the
+        // answer, so the walk draws nothing at all. Krita's `N_BELOW_FILTHY`
+        // "nothing to do", reached from the far side.
+        if valid && had_cache && d.is_none() {
+            #[cfg(any(test, feature = "testing"))]
+            {
+                self.walk_all_clean += 1;
+            }
+            self.record_walk_cache(group_id, fresh, None);
+            return;
+        }
+
+        // Everything below `start` is already in accumulator half 0 once the
+        // prefix is restored; `None` means compose from a cleared one.
+        let resume = match (valid, d, prefix) {
+            (true, Some(d), Some((through, texture))) if through < d => {
+                Some((through + 1, texture))
+            }
+            _ => None,
+        };
+
+        let start = match resume {
+            Some((start, ref prefix_texture)) => {
+                // The restore replaces the clear: the prefix already holds the
+                // composite of every child below `start`.
+                let gs = self
+                    .group_state
+                    .get_mut(&group_id)
+                    .expect("GroupState missing");
+                gs.current_accum = 0;
+                blit_region(
+                    encoder,
+                    prefix_texture,
+                    (0, 0),
+                    &gs.accum.textures[0],
+                    (0, 0),
+                    gs.accum.textures[0].width(),
+                    gs.accum.textures[0].height(),
+                );
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    self.walk_resumes += 1;
+                }
+                start
+            }
+            None => {
+                // A full walk: reset the accumulator, and drop any prefix. A
+                // walk reached here either because a coarse source moved —
+                // which can change output below any stamp — or because the
+                // stamps themselves diverged low. Keeping the old capture
+                // across that would let a later resume restore pre-change
+                // pixels.
+                if let Some(gs) = self.group_state.get_mut(&group_id) {
+                    gs.current_accum = 0;
+                    if let Some(cache) = gs.walk_cache.as_mut() {
+                        cache.prefix = None;
+                    }
+                    clear_view_transparent(encoder, &gs.accum.views[0], "clear-accum");
+                }
+                0
+            }
+        };
+
+        // A snapshot is only worth taking where the walk keeps splitting: the
+        // same depth dirty twice running. An alternating pair of edit depths
+        // leaves the prefix pinned below both rather than thrashing between
+        // them, and a converged prefix re-captures nothing.
+        let snapshot_at = d.filter(|&d| d >= 1 && d > start).and_then(|d| {
+            // The same depth dirty twice running: worth capturing below it.
+            let stable = last_d == Some(d);
+            // A full walk that still trusted its stamps establishes the first
+            // capture. A walk whose stamps were *not* trusted must not: its
+            // `d` was computed against a comparison a coarse bump already
+            // invalidated, so it names the wrong split.
+            let first_capture = resume.is_none() && valid;
+            (stable || first_capture).then_some(d - 1)
+        });
+
+        self.compose_children(
             encoder,
-            &gs.accum.textures[src_accum],
-            (scissor_x, scissor_y),
-            &gs.composite_cache,
-            (scissor_x, scissor_y),
-            scissor_w,
-            scissor_h,
+            device,
+            doc,
+            group_id,
+            &children[start..],
+            scissor,
+            isolated,
+            snapshot_at.map(|through| (through - start, through)),
         );
+
+        self.record_walk_cache(group_id, fresh, d);
+
+        // No copy out: the group's output *is* the half the walk ended on,
+        // named by `GroupState::output_index`. Consumers select a resource by
+        // that index instead of reading one fixed view.
+    }
+
+    /// Whether this group's cache was taken under the same coarse sources
+    /// that are in force now.
+    fn walk_cache_valid(&self, group_id: LayerId) -> bool {
+        self.group_state
+            .get(&group_id)
+            .and_then(|gs| gs.walk_cache.as_ref())
+            .is_some_and(|c| {
+                c.built_document == self.revisions.document()
+                    && c.built_targets == self.revisions.targets()
+            })
+    }
+
+    /// While a histogram is owed, no group may reuse anything.
+    ///
+    /// The dispatch that satisfies it happens inside `compose_effect_arm`,
+    /// mid-walk, against the effect's live input. Any skipped subtree between
+    /// the root and that effect makes the dispatch unreachable and
+    /// `pump_node_histogram` waits forever — and the guard cannot be scoped to
+    /// the host group, because an ancestor's own reuse is what skips it. A
+    /// histogram is owed only while a filter's panel is focused and its result
+    /// is one readback away, so refusing reuse outright for that window costs
+    /// less than the machinery to be precise about it.
+    fn histogram_forces_full_walk(&self) -> bool {
+        self.histogram_target
+            .is_some_and(|t| self.histogram.needs(&self.revisions, t))
+    }
+
+    /// Stamp every child of a group against the state this walk will see.
+    fn build_child_stamps(
+        &self,
+        doc: &Document,
+        children: &[LayerId],
+        isolated: Option<LayerId>,
+    ) -> Vec<ChildStamp> {
+        let screen_run = doc.screen_space_run();
+        children
+            .iter()
+            .map(|&id| {
+                let included = self.child_included(doc, id, screen_run, isolated);
+                ChildStamp {
+                    id,
+                    included,
+                    rev: if included {
+                        self.subtree_revision(doc, id, screen_run, isolated)
+                    } else {
+                        0
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Latest content revision anywhere in a child's subtree.
+    ///
+    /// Folds the node's own pixel and animation ticks together with those of
+    /// its filters — a mask is not in `children_of`, so it has to be reached
+    /// explicitly — and recurses through descendants. A passthrough group's
+    /// descendants are folded through the same inclusion predicate the walk
+    /// applies to them, because they inline into *this* group's accumulator:
+    /// an inner child that starts or stops drawing changes this group's output
+    /// exactly as a direct child would.
+    fn subtree_revision(
+        &self,
+        doc: &Document,
+        id: LayerId,
+        screen_run: &[LayerId],
+        isolated: Option<LayerId>,
+    ) -> crate::gpu::revisions::Tick {
+        let mut rev = self
+            .revisions
+            .node_pixels(id)
+            .max(self.revisions.animation(id));
+        for &filter in doc.filters_of(id) {
+            rev = rev
+                .max(self.revisions.node_pixels(filter))
+                .max(self.revisions.animation(filter));
+        }
+        for &child in doc.children_of(id) {
+            // An inner child's inclusion is part of what this subtree
+            // contributes, so a flip in it must move the fold.
+            if !self.child_included(doc, child, screen_run, isolated) {
+                continue;
+            }
+            rev = rev.max(self.subtree_revision(doc, child, screen_run, isolated));
+        }
+        rev
+    }
+
+    /// Store what this walk saw, so the next one can compare against it.
+    fn record_walk_cache(
+        &mut self,
+        group_id: LayerId,
+        stamps: Vec<ChildStamp>,
+        last_d: Option<usize>,
+    ) {
+        let (document, targets) = (self.revisions.document(), self.revisions.targets());
+        let Some(gs) = self.group_state.get_mut(&group_id) else {
+            return;
+        };
+        match gs.walk_cache.as_mut() {
+            Some(cache) => {
+                cache.stamps = stamps;
+                cache.built_document = document;
+                cache.built_targets = targets;
+                cache.last_d = last_d;
+            }
+            None => {
+                gs.walk_cache = Some(WalkCache {
+                    stamps,
+                    built_document: document,
+                    built_targets: targets,
+                    prefix: None,
+                    last_d,
+                })
+            }
+        }
+    }
+
+    /// Whether the walk will draw `child_id` into its parent this composite.
+    ///
+    /// The single answer consumed by both the walk (which children to
+    /// dispatch) and the walk cache (which children a stamp describes). One
+    /// function rather than two copies of the same chain: a drift between them
+    /// would mean a child the cache believes contributes nothing while the
+    /// walk draws it, which is exactly how a reuse goes stale.
+    fn child_included(
+        &self,
+        doc: &Document,
+        child_id: LayerId,
+        screen_run: &[LayerId],
+        isolated: Option<LayerId>,
+    ) -> bool {
+        let Some(node) = doc.find_node(child_id) else {
+            return false;
+        };
+        // Isolation and visibility are orthogonal — the document's eye state
+        // is never inspected beyond `visible()`, and isolation never mutates
+        // it.
+        node.visible()
+            && is_in_isolation_path(doc, isolated, child_id)
+            // Screen-space members are realized after the present pass, on the
+            // view-transformed image, so the canvas-space walk must not draw
+            // them. Export, flatten and merge composite through this same
+            // walk, which is what makes "viewport only" mean "not in the file"
+            // with no code of their own.
+            && !screen_run.contains(&child_id)
+            // …and the node's own answer about whether its arm can draw.
+            && node.compose_ready(self)
     }
 
     /// Composite a list of children into the parent group's accumulators.
@@ -379,8 +677,12 @@ impl Compositor {
     ///
     /// Per-child dispatch goes through [`LayerNode::compose_into`] so each
     /// node variant is responsible for its own compose behaviour — this
-    /// walk only owns the per-child visibility + isolation filters that are
-    /// orthogonal to node kind.
+    /// walk only owns the per-child filters that are orthogonal to node kind,
+    /// through [`Self::child_included`].
+    ///
+    /// `snapshot_after` is `(position in `children`, that child's index among
+    /// the group's full child list)`: the walk sees a suffix slice when it
+    /// resumes, while the cache records absolute indices.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn compose_children(
         &mut self,
@@ -391,45 +693,98 @@ impl Compositor {
         children: &[LayerId],
         scissor: (u32, u32, u32, u32),
         isolated: Option<LayerId>,
+        snapshot_after: Option<(usize, usize)>,
     ) {
         // Resolved once per group rather than per child: the run is a slice of
         // the root's children, so for a nested group this is an empty-match
         // scan.
         let screen_run = doc.screen_space_run();
-        for &child_id in children {
-            let node = match doc.find_node(child_id) {
-                Some(n) => n,
-                None => continue,
-            };
-            if !node.visible() {
-                continue;
+        for (position, &child_id) in children.iter().enumerate() {
+            if self.child_included(doc, child_id, screen_run, isolated) {
+                if let Some(node) = doc.find_node(child_id) {
+                    let mut ctx = CompositionContext {
+                        compositor: self,
+                        encoder,
+                        device,
+                        doc,
+                        parent_group,
+                        scissor,
+                        isolated,
+                    };
+                    node.compose_into(&mut ctx);
+                }
             }
-            // Isolation filter: skip children whose subtree doesn't touch
-            // the isolation target. `node.visible()` and isolation are
-            // orthogonal — the document's eye state is never inspected
-            // beyond this `visible()` check, and isolation never mutates it.
-            if !is_in_isolation_path(doc, isolated, child_id) {
-                continue;
+            // Capture is keyed to the loop position, not to a dispatch: a
+            // child the walk skipped leaves the accumulator untouched, so the
+            // content through this position is the same either way.
+            if let Some((at, through)) = snapshot_after {
+                if at == position {
+                    self.capture_prefix(encoder, device, parent_group, through);
+                }
             }
-            // Screen-space members are realized after the present pass, on the
-            // view-transformed image, so the canvas-space walk must not draw
-            // them. Export, flatten and merge composite through this same walk,
-            // which is what makes "viewport only" mean "not in the file" with
-            // no code of their own.
-            if screen_run.contains(&child_id) {
-                continue;
-            }
-            let mut ctx = CompositionContext {
-                compositor: self,
-                encoder,
-                device,
-                doc,
-                parent_group,
-                scissor,
-                isolated,
-            };
-            node.compose_into(&mut ctx);
         }
+    }
+
+    /// Copy the running accumulator into this group's prefix texture, marking
+    /// it as holding the composite through child index `through`.
+    ///
+    /// Allocated lazily and only for groups that actually split, so a
+    /// document that never resumes pays nothing. Sized like the accumulators,
+    /// because that is what it stands in for.
+    fn capture_prefix(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        group_id: LayerId,
+        through: usize,
+    ) {
+        let Some(gs) = self.group_state.get(&group_id) else {
+            return;
+        };
+        let (w, h) = {
+            let t = &gs.accum.textures[0];
+            (t.width(), t.height())
+        };
+        let fits = gs
+            .walk_cache
+            .as_ref()
+            .and_then(|c| c.prefix.as_ref())
+            .is_some_and(|p| p.texture.width() == w && p.texture.height() == h);
+        if !fits {
+            let (texture, _view) =
+                Self::make_accum_texture(device, w, h, &format!("walk-prefix-{group_id:?}"));
+            let Some(gs) = self.group_state.get_mut(&group_id) else {
+                return;
+            };
+            let Some(cache) = gs.walk_cache.as_mut() else {
+                return;
+            };
+            cache.prefix = Some(Prefix {
+                texture,
+                through: 0,
+            });
+        }
+
+        let Some(gs) = self.group_state.get_mut(&group_id) else {
+            return;
+        };
+        let src = gs.current_accum;
+        let Some(cache) = gs.walk_cache.as_mut() else {
+            return;
+        };
+        let Some(prefix) = cache.prefix.as_mut() else {
+            return;
+        };
+        prefix.through = through;
+        blit_region(
+            encoder,
+            &gs.accum.textures[src],
+            (0, 0),
+            &prefix.texture,
+            (0, 0),
+            w,
+            h,
+        );
     }
 
     /// During an active transform, the roles a masked host's preview can play:
@@ -1169,6 +1524,7 @@ impl Compositor {
                     &inner,
                     scissor,
                     isolated,
+                    None,
                 );
             }
             return;
@@ -1195,7 +1551,11 @@ impl Compositor {
         // only swaps mask_bg via `effective_mask_bind_group`).
         let bg_view = &self.group_state[&parent_group].accum.views[src];
         let gs_child = &self.group_state[&group_id];
-        let child_view = &gs_child.composite_cache_view;
+        // The child's output is whichever half its own walk ended on, so the
+        // cache key carries it alongside the parent's source half: both sides
+        // of this bind group can move independently between composites.
+        let child_out = gs_child.output_index();
+        let child_view = gs_child.output_view();
         let child_uniform = &gs_child.uniform_buf;
         let bgl = &self.blend_pipelines.bind_group_layout;
         let sampler = &self.sampler;
@@ -1204,7 +1564,11 @@ impl Compositor {
             bgl,
             sampler,
             device,
-            (parent_group, group_id, src as u8),
+            (
+                parent_group,
+                group_id,
+                (src as u8) | ((child_out as u8) << 1),
+            ),
             bg_view,
             child_view,
             child_uniform,
@@ -1264,6 +1628,7 @@ impl Compositor {
                 &inner,
                 scissor,
                 isolated,
+                None,
             );
             return;
         }
@@ -1279,6 +1644,7 @@ impl Compositor {
             &inner,
             scissor,
             isolated,
+            None,
         );
 
         // The children wrote into `current_accum`; the apply pass reads that as

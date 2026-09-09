@@ -6,6 +6,11 @@ use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::effect_layers::{EffectInstance, EffectSpace};
 use crate::layer::LayerId;
+use smallvec::SmallVec;
+
+/// The nodes one animation tick advanced. Documents animate a handful of
+/// layers at once; wider sets spill to the heap without ceremony.
+type TickedNodes = SmallVec<[LayerId; 8]>;
 
 impl Compositor {
     /// Master rAF tick counter. Advances exactly once per `update_animations`
@@ -79,11 +84,21 @@ impl Compositor {
         }
 
         if canvas_fires {
-            self.tick_animated_layers(queue, dt * canvas_divisor as f32, doc);
-            self.tick_animated_effects(queue, dt * canvas_divisor as f32, doc, false);
-            // Re-render needed: this side of the divider is document content,
-            // so it requires a full composite, not just a re-present.
-            self.revisions.bump_animation();
+            // This side of the divider is document content, so a tick feeds
+            // the composite rather than the presented frame. Each advanced
+            // node records its own bump: the walk needs to know *which*
+            // subtree moved to reuse the rest, and that is exactly what the
+            // loops below already know.
+            let mut ticked = self.tick_animated_layers(queue, dt * canvas_divisor as f32, doc);
+            ticked.extend(self.tick_animated_effects(
+                queue,
+                dt * canvas_divisor as f32,
+                doc,
+                false,
+            ));
+            for id in ticked {
+                self.revisions.bump_animation(id);
+            }
         }
 
         if screen_fires || overlay_fires {
@@ -135,35 +150,46 @@ impl Compositor {
     }
 
     /// Advance every effectively-visible animated effect instance in one space
-    /// by `dt`. Which space is a parameter rather than two loops because the
-    /// instances are one map and the only difference is the dirty flag the
-    /// caller sets afterwards.
+    /// by `dt`, returning the ids that advanced. Which space is a parameter
+    /// rather than two loops because the instances are one map and the only
+    /// difference is what the caller records afterwards.
     fn tick_animated_effects(
         &mut self,
         queue: &wgpu::Queue,
         dt: f32,
         doc: &Document,
         screen: bool,
-    ) {
+    ) -> TickedNodes {
+        let mut ticked = TickedNodes::new();
         for (id, inst) in self.effect_instances.iter_mut() {
             if !Self::effect_animates(inst, *id, doc, screen) {
                 continue;
             }
             inst.effect.update_time(queue, &inst.cache, dt);
+            ticked.push(*id);
         }
+        ticked
     }
 
     /// Advance every effectively-visible animated layer's procedural
-    /// content by `dt`. Called by `update_animations` at the cadence set by
-    /// `animation.canvas_divisor`. Visibility is queried the same way the
-    /// main composite walk queries it — no precomputed "hidden" set; the
-    /// doc is the authoritative tree.
-    fn tick_animated_layers(&mut self, queue: &wgpu::Queue, dt: f32, doc: &Document) {
+    /// content by `dt`, returning the ids that advanced. Called by
+    /// `update_animations` at the cadence set by `animation.canvas_divisor`.
+    /// Visibility is queried the same way the main composite walk queries
+    /// it — no precomputed "hidden" set; the doc is the authoritative tree.
+    fn tick_animated_layers(
+        &mut self,
+        queue: &wgpu::Queue,
+        dt: f32,
+        doc: &Document,
+    ) -> TickedNodes {
+        let mut ticked = TickedNodes::new();
         for (id, proc) in self.procedural_entries_mut() {
             if !proc.void.needs_animation() || !doc.effective_visible(id) {
                 continue;
             }
             proc.void.update_time(queue, &proc.cache, dt);
+            ticked.push(id);
         }
+        ticked
     }
 }

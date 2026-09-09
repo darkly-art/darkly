@@ -57,10 +57,19 @@ pub struct Revisions {
     /// "any node's pixels" avoid walking the map every frame.
     node_pixels_any: Tick,
 
-    /// A canvas-side animated clock advanced: void tick, canvas-effect tick.
-    /// Its own source rather than per-node pixel bumps, because histograms
-    /// depend on pixels and must survive an animation frame mid-drag.
-    animation: Tick,
+    /// Per-node: this node's rendered appearance advanced without a document
+    /// edit or an authored pixel write — an animated void's or effect's clock
+    /// tick, a camera void's frame upload. Separate from `node_pixels`
+    /// because the consumers differ: the composite needs "authored pixels or
+    /// advanced appearance", while thumbnails, content bounds and histograms
+    /// need authored pixels alone and would otherwise churn at frame rate
+    /// under any animated layer.
+    animation: HashMap<LayerId, Tick>,
+
+    /// Maintained maximum of `animation`, written only by
+    /// [`Self::bump_animation`] — the same aggregate shape as
+    /// `node_pixels_any`, so the frame gate stays a max-compare.
+    animation_any: Tick,
 
     /// A GPU render target was recreated — accumulators, the screen-run pair,
     /// the canvas apply scratch. Compositor-internal identity, invisible to
@@ -87,7 +96,8 @@ impl Revisions {
             document: 0,
             node_pixels: HashMap::new(),
             node_pixels_any: 0,
-            animation: 0,
+            animation: HashMap::new(),
+            animation_any: 0,
             targets: 0,
             present_inputs: 0,
         }
@@ -114,8 +124,12 @@ impl Revisions {
         self.node_pixels_any = t;
     }
 
-    pub fn bump_animation(&mut self) {
-        self.animation = self.tick();
+    /// Record that one node's animated appearance advanced. Moves the
+    /// aggregate too, so no caller has to remember both.
+    pub fn bump_animation(&mut self, id: LayerId) {
+        let t = self.tick();
+        self.animation.insert(id, t);
+        self.animation_any = t;
     }
 
     pub fn bump_targets(&mut self) {
@@ -132,6 +146,7 @@ impl Revisions {
     /// bump lands above every stale cursor value.
     pub fn remove_node(&mut self, id: LayerId) {
         self.node_pixels.remove(&id);
+        self.animation.remove(&id);
     }
 
     // --- Reads ---
@@ -160,8 +175,13 @@ impl Revisions {
         self.node_pixels_any
     }
 
-    pub fn animation(&self) -> Tick {
-        self.animation
+    /// When this node's animated appearance last advanced; 0 if it never has.
+    pub fn animation(&self, id: LayerId) -> Tick {
+        self.animation.get(&id).copied().unwrap_or(0)
+    }
+
+    pub fn animation_any(&self) -> Tick {
+        self.animation_any
     }
 
     pub fn targets(&self) -> Tick {
@@ -178,7 +198,9 @@ impl Revisions {
     /// source that can move *during* a composite, when the walk creates a
     /// group state or the apply scratch.
     pub fn latest_composite_input(&self) -> Tick {
-        self.document.max(self.node_pixels_any).max(self.animation)
+        self.document
+            .max(self.node_pixels_any)
+            .max(self.animation_any)
     }
 
     /// Latest change across every source a presented frame reflects — the
@@ -189,10 +211,13 @@ impl Revisions {
 
     /// Bump every source, so the next read of any derived artifact compares
     /// stale. Backs the from-scratch half of the byte-equality tests.
+    ///
+    /// `animation` needs no separate bump of its own: it stamps the same
+    /// clock, and the `document` bump above already dominates every
+    /// comparison a derived artifact makes.
     #[cfg(any(test, feature = "testing"))]
     pub fn bump_all_for_test(&mut self) {
         self.bump_document();
-        self.bump_animation();
         self.bump_targets();
         self.bump_present_inputs();
         let t = self.tick();
@@ -200,5 +225,106 @@ impl Revisions {
             *v = t;
         }
         self.node_pixels_any = t;
+        for v in self.animation.values_mut() {
+            *v = t;
+        }
+        self.animation_any = t;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(n: u64) -> LayerId {
+        LayerId::from_ffi(n)
+    }
+
+    #[test]
+    fn an_animation_bump_names_its_node_and_moves_the_aggregate() {
+        let mut r = Revisions::new();
+        let (a, b) = (id(1), id(2));
+
+        r.bump_animation(a);
+        assert!(r.animation(a) > 0, "the bumped node carries the new tick");
+        assert_eq!(r.animation(b), 0, "an untouched node keeps its own tick");
+        assert_eq!(
+            r.animation_any(),
+            r.animation(a),
+            "the aggregate tracks the latest per-node bump"
+        );
+    }
+
+    #[test]
+    fn an_animation_bump_wakes_the_composite() {
+        let mut r = Revisions::new();
+        let before = r.latest_composite_input();
+        r.bump_animation(id(1));
+        assert!(
+            r.latest_composite_input() > before,
+            "an animated node's tick must make the composite stale, or the \
+             frame it draws is the previous frame"
+        );
+    }
+
+    /// The reason `animation` is its own source rather than folded into
+    /// `node_pixels`: thumbnails, content bounds and histograms depend on
+    /// authored pixels, and would otherwise churn at frame rate under any
+    /// animated layer.
+    #[test]
+    fn an_animation_bump_leaves_the_pixel_consumers_alone() {
+        let mut r = Revisions::new();
+        let node = id(1);
+        r.bump_node_pixels(node);
+        let pixels_before = r.node_pixels(node);
+        let any_before = r.node_pixels_any();
+
+        r.bump_animation(node);
+
+        assert_eq!(
+            r.node_pixels(node),
+            pixels_before,
+            "an animation tick is not an authored pixel write"
+        );
+        assert_eq!(
+            r.node_pixels_any(),
+            any_before,
+            "the histogram's stamp must survive a veil playing beneath it"
+        );
+    }
+
+    #[test]
+    fn removing_a_node_prunes_both_per_node_maps() {
+        let mut r = Revisions::new();
+        let node = id(1);
+        r.bump_node_pixels(node);
+        r.bump_animation(node);
+
+        r.remove_node(node);
+
+        assert_eq!(r.node_pixels(node), 0);
+        assert_eq!(
+            r.animation(node),
+            0,
+            "a disposed node's animation stamp must go with it, or a later id \
+             reuse inherits it"
+        );
+    }
+
+    #[test]
+    fn bump_all_for_test_reaches_animation_stamps() {
+        let mut r = Revisions::new();
+        let node = id(1);
+        r.bump_animation(node);
+        let before = r.animation(node);
+
+        r.bump_all_for_test();
+
+        assert!(
+            r.animation(node) > before,
+            "the from-scratch reference must invalidate every source, \
+             animation included"
+        );
+        assert_eq!(r.animation_any(), r.animation(node));
     }
 }

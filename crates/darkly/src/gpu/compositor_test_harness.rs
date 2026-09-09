@@ -46,7 +46,7 @@ impl Compositor {
                 ..Default::default()
             });
             rpass.set_pipeline(&self.present_to_effects_pipeline);
-            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.set_bind_group(0, self.present_cache_bind_group(), &[]);
             rpass.draw(0..3, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));

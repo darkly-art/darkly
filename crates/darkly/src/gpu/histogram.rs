@@ -42,10 +42,14 @@ pub struct HistogramPass {
 
 /// The revision a histogram is valid against: any node's pixel write.
 ///
-/// Deliberately the aggregate rather than the target's own tick — a filter's
-/// histogram bins its *input* accumulator, which is every node beneath it, and
-/// deliberately not the document, so a Levels drag does not discard the
-/// histogram it is being read against.
+/// This is the histogram's own declared dependency, chosen here rather than
+/// arranged for by the revision registry. Deliberately the aggregate rather
+/// than the target's own tick, because a filter's histogram bins its *input*
+/// accumulator, which is every node beneath it. Deliberately not the
+/// document, so a Levels drag does not discard the histogram it is being read
+/// against. And deliberately not `animation`, because a histogram describes
+/// authored pixels: binning a playing veil's clock would mean the result
+/// could never settle while it animates.
 fn stamp(revisions: &Revisions) -> Tick {
     revisions.node_pixels_any()
 }

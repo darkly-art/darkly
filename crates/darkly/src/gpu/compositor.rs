@@ -253,13 +253,37 @@ pub(super) struct GroupState {
     /// Ping-pong accumulator pair for compositing children.
     pub(super) accum: AccumPair,
     /// Tracks which accumulator is the current "source" (last written).
+    /// Between composites this names the half holding the group's finished
+    /// output — see [`GroupState::output_view`].
     pub(super) current_accum: usize,
-    /// Cached final composite result of this group's children.
-    pub(super) composite_cache: wgpu::Texture,
-    pub(super) composite_cache_view: wgpu::TextureView,
     /// Uniform buffer holding opacity, blend_mode, isolated for blending
     /// this group's result into its parent.
     pub(super) uniform_buf: wgpu::Buffer,
+    /// What the last walk of this group saw, and the composite of its lower
+    /// children captured for reuse. `None` until the first walk records one.
+    pub(super) walk_cache: Option<crate::gpu::compose_walk::WalkCache>,
+}
+
+impl GroupState {
+    /// The accumulator half holding this group's finished composite.
+    ///
+    /// A group's output is whichever half its walk last wrote, which is why
+    /// consumers select a resource by this index rather than reading one
+    /// fixed view: the walk flips halves an unpredictable number of times,
+    /// so "the output" is an index, not a texture. Valid from the end of the
+    /// group's `compose_group` until the next one — nothing outside
+    /// `compose_group` writes an accumulator.
+    pub(super) fn output_index(&self) -> usize {
+        self.current_accum
+    }
+
+    pub(super) fn output_view(&self) -> &wgpu::TextureView {
+        &self.accum.views[self.current_accum]
+    }
+
+    pub(super) fn output_texture(&self) -> &wgpu::Texture {
+        &self.accum.textures[self.current_accum]
+    }
 }
 
 /// Per-instance GPU scaffolding shared by every layer that participates in
@@ -535,8 +559,9 @@ pub struct Compositor {
     /// Present pipeline targeting the accum format (Rgba8Unorm) for veil input.
     pub(super) present_to_effects_pipeline: wgpu::RenderPipeline,
     pub(super) _present_bind_group_layout: wgpu::BindGroupLayout,
-    /// Present bind group that reads from root's composite_cache.
-    pub(super) present_cache_bind_group: wgpu::BindGroup,
+    /// Present bind groups over the root group's accumulator halves; the
+    /// root's [`GroupState::output_index`] picks one at draw time.
+    pub(super) present_cache_bind_groups: [wgpu::BindGroup; 2],
     /// View transform uniform buffer for the present shader.
     pub(super) view_uniform_buf: wgpu::Buffer,
 
@@ -566,6 +591,14 @@ pub struct Compositor {
     /// have skipped", which a pixel assertion alone cannot see.
     #[cfg(any(test, feature = "testing"))]
     pub(super) composite_runs: u64,
+    /// Group walks that resumed from a captured prefix, and walks that found
+    /// nothing changed at all. Anti-vacuity instruments: a reuse test that
+    /// silently full-walks proves nothing, and only these can tell the two
+    /// apart. They count branches, never time.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) walk_resumes: u64,
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) walk_all_clean: u64,
 
     pub(super) canvas_width: u32,
     pub(super) canvas_height: u32,
@@ -700,7 +733,7 @@ impl Compositor {
         )
     }
 
-    /// Create a GroupState (accum pair + composite cache + uniforms).
+    /// Create a GroupState (accum pair + uniforms).
     pub(super) fn create_group_state(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -713,14 +746,13 @@ impl Compositor {
             Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-0"));
         let (a1, v1) =
             Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-1"));
-        let (cache, cache_view) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id:?}"));
 
         let normal = crate::gpu::blend_mode::registry().default().gpu_value;
-        // The group's window-sized cache occupies exactly the canvas window in
-        // plane space, so describing it as a "layer" at `layer_offset =
-        // canvas_origin`, `layer_size = canvas_size` makes the shared-canvas
-        // plane round-trip in `composite.wgsl` collapse to an identity sample.
+        // The group's window-sized accumulator occupies exactly the canvas
+        // window in plane space, so describing it as a "layer" at
+        // `layer_offset = canvas_origin`, `layer_size = canvas_size` makes the
+        // shared-canvas plane round-trip in `composite.wgsl` collapse to an
+        // identity sample.
         let uniforms = BlendUniforms::for_extent(
             1.0,
             normal,
@@ -737,15 +769,38 @@ impl Compositor {
                 views: [v0, v1],
             },
             current_accum: 0,
-            composite_cache: cache,
-            composite_cache_view: cache_view,
             uniform_buf,
+            walk_cache: None,
         }
     }
 
-    /// Build the present bind group that samples the root composite cache.
-    /// Shared by `new` and `set_canvas_rect` so the binding layout lives in
-    /// exactly one place.
+    /// Build the present bind groups that sample the root group's output —
+    /// one per accumulator half, selected at draw time by the root's
+    /// [`GroupState::output_index`].
+    ///
+    /// A pair rather than one bind group over a fixed texture: a bind group
+    /// is built against a specific view, and which half holds the composite
+    /// depends on how many times the walk flipped. Building both once is the
+    /// same trade `blend_bind_groups` already makes for children.
+    fn make_present_cache_bind_groups(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        root_state: &GroupState,
+        sampler: &wgpu::Sampler,
+        view_uniform_buf: &wgpu::Buffer,
+    ) -> [wgpu::BindGroup; 2] {
+        std::array::from_fn(|half| {
+            Self::make_present_cache_bind_group(
+                device,
+                layout,
+                &root_state.accum.views[half],
+                sampler,
+                view_uniform_buf,
+            )
+        })
+    }
+
+    /// Build one present bind group over a given view.
     fn make_present_cache_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -1015,11 +1070,11 @@ impl Compositor {
             }],
         });
 
-        // Present bind group reads from root's composite cache
-        let present_cache_bind_group = Self::make_present_cache_bind_group(
+        // Present samples whichever root accumulator half the walk ends on.
+        let present_cache_bind_groups = Self::make_present_cache_bind_groups(
             device,
             &_present_bind_group_layout,
-            &root_state.composite_cache_view,
+            &root_state,
             &sampler,
             &view_uniform_buf,
         );
@@ -1053,7 +1108,7 @@ impl Compositor {
             present_pipeline,
             present_to_effects_pipeline,
             _present_bind_group_layout,
-            present_cache_bind_group,
+            present_cache_bind_groups,
             view_uniform_buf,
             canvas_uniform_buf,
             canvas_bind_group,
@@ -1063,6 +1118,10 @@ impl Compositor {
             presented: 0,
             #[cfg(any(test, feature = "testing"))]
             composite_runs: 0,
+            #[cfg(any(test, feature = "testing"))]
+            walk_resumes: 0,
+            #[cfg(any(test, feature = "testing"))]
+            walk_all_clean: 0,
             canvas_width: width,
             canvas_height: height,
             canvas_origin: crate::coord::CanvasPoint::new(0, 0),
@@ -1785,11 +1844,11 @@ impl Compositor {
         self.projection_states.clear();
         self.blend_bind_groups.clear();
 
-        // Present samples the root composite cache — rebind to the fresh view.
-        self.present_cache_bind_group = Self::make_present_cache_bind_group(
+        // Present samples the root accumulators — rebind to the fresh views.
+        self.present_cache_bind_groups = Self::make_present_cache_bind_groups(
             device,
             &self._present_bind_group_layout,
-            &self.group_state[&self.root_id].composite_cache_view,
+            &self.group_state[&self.root_id],
             &self.sampler,
             &self.view_uniform_buf,
         );
@@ -1925,6 +1984,18 @@ impl Compositor {
     #[cfg(any(test, feature = "testing"))]
     pub fn composite_runs(&self) -> u64 {
         self.composite_runs
+    }
+
+    /// Group walks that resumed from a captured prefix since construction.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn walk_resumes(&self) -> u64 {
+        self.walk_resumes
+    }
+
+    /// Group walks that found nothing below them changed since construction.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn walk_all_clean(&self) -> u64 {
+        self.walk_all_clean
     }
 
     /// Force the next frame to composite and present from scratch, as if
@@ -2502,17 +2573,51 @@ impl Compositor {
         self.write_preview_blend_uniforms_if_active(queue, layer_id);
     }
 
-    /// Get the composited output texture (root group's composite cache).
-    /// Used by the color picker for readback.
+    /// The composited output texture: the root group's output accumulator
+    /// half. Used by the color picker for readback.
+    ///
+    /// Stable between composites — accumulators are written only inside
+    /// `compose_group` — and every consumer copies out of it at request time
+    /// into an immediately submitted encoder, so queue ordering serializes
+    /// that copy against any later composite.
     pub fn composited_texture(&self) -> &wgpu::Texture {
-        &self.group_state[&self.root_id].composite_cache
+        self.group_state[&self.root_id].output_texture()
     }
 
     /// View over [`Self::composited_texture`] — lets callers wrap the
     /// root composite in a `GpuPaintTarget` (e.g. the sample-merged clone
     /// snapshot) without creating a fresh view per use.
     pub fn composited_view(&self) -> &wgpu::TextureView {
-        &self.group_state[&self.root_id].composite_cache_view
+        self.group_state[&self.root_id].output_view()
+    }
+
+    /// The present bind group for the half the root's composite currently
+    /// lives in.
+    pub(super) fn present_cache_bind_group(&self) -> &wgpu::BindGroup {
+        &self.present_cache_bind_groups[self.root_output_half()]
+    }
+
+    /// Whether a group has the accumulator its children compose into.
+    /// Consulted through [`crate::layer::LayerNode::compose_ready`].
+    pub fn has_group_state(&self, id: LayerId) -> bool {
+        self.group_state.contains_key(&id)
+    }
+
+    /// Whether a node has a GPU texture to blend.
+    pub fn has_node_texture(&self, id: LayerId) -> bool {
+        self.node_textures.contains_key(&id)
+    }
+
+    /// Whether an effect layer's arm would draw: both a realized instance and
+    /// the shared apply scratch exist. Mirrors `compose_effect_arm`'s own two
+    /// early returns.
+    pub fn effect_arm_ready(&self, id: LayerId) -> bool {
+        self.effect_instances.contains_key(&id) && self.canvas_apply_scratch.is_some()
+    }
+
+    /// Which accumulator half holds the root group's composite.
+    pub fn root_output_half(&self) -> usize {
+        self.group_state[&self.root_id].output_index()
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {
@@ -2637,7 +2742,7 @@ impl Compositor {
                 ..Default::default()
             });
             rpass.set_pipeline(&self.present_pipeline);
-            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.set_bind_group(0, self.present_cache_bind_group(), &[]);
             rpass.draw(0..3, 0..1);
             // Draw solid overlay primitives in the same pass.
             self.tool_overlay.draw_solid(&mut rpass);
@@ -2647,7 +2752,7 @@ impl Compositor {
         self.screen_run.encode_present_into_run(
             encoder,
             &self.present_to_effects_pipeline,
-            &self.present_cache_bind_group,
+            self.present_cache_bind_group(),
         );
 
         let (Some(views), Some(scratch), Some(pipelines)) = (
@@ -2815,7 +2920,7 @@ impl Compositor {
         // during the walk, and it is not a visual source.
         let frame_tick = self.revisions.clock();
 
-        // Acquire surface and present composite_cache → veils → surface.
+        // Acquire surface and present root composite → veils → surface.
         // wgpu 29 replaced `Result<SurfaceTexture, SurfaceError>` with the
         // `CurrentSurfaceTexture` enum. `Suboptimal` still yields a usable
         // texture; `Lost`/`Outdated` mean the swapchain must be reconfigured.

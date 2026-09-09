@@ -659,10 +659,16 @@ impl DarklyEngine {
         self.thumbnails_queued
             .retain(|id, _| self.compositor.revisions().node_pixels(*id) > 0);
 
+        // The layer under an in-flight stroke is skipped: each dab marks its
+        // own pixels, so without this the panel would queue a readback every
+        // frame mid-stroke. The stroke-end mark lands the one update per
+        // stroke, which is the cadence this has always had.
+        let stroking = self.active_stroke_layer;
         let stale: Vec<(LayerId, crate::gpu::revisions::Tick)> = self
             .compositor
             .revisions()
             .node_pixels_iter()
+            .filter(|(id, _)| Some(*id) != stroking)
             .filter(|(id, tick)| *tick > self.thumbnails_queued.get(id).copied().unwrap_or(0))
             .collect();
 

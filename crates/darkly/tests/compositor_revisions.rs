@@ -761,6 +761,359 @@ fn a_histogram_survives_a_param_drag() {
 }
 
 // ---------------------------------------------------------------------------
+// Walk reuse
+// ---------------------------------------------------------------------------
+
+/// A raster under an animating veil, the shape this whole mechanism exists
+/// for. Each tick advances only the veil's own revision, so everything below
+/// it is provably unchanged and must be reused — and the result must still be
+/// byte-identical to a full walk.
+///
+/// The `walk_resumes` assertion is what stops this from proving nothing: a
+/// silently full-walking cache would produce identical bytes and pass the
+/// comparison alone.
+fn animating_veil_fixture() -> (DarklyEngine, LayerId) {
+    let mut engine = test_engine(W, H);
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 60, 90, 120);
+    // Non-zero speed — a grain at the default speed never animates, so the
+    // canvas animation gate would not fire at all.
+    engine
+        .add_filter_layer(
+            "grain",
+            vec![
+                ParamValue::Float(1.0), // speed
+                ParamValue::Float(0.0), // color
+                ParamValue::Float(1.0), // opacity
+            ],
+            None,
+        )
+        .expect("`grain` should be addable as an effect layer");
+    settle(&mut engine);
+    engine.test_readback_canvas();
+    (engine, base)
+}
+
+/// Advance the canvas animation clock by one firing tick and composite.
+fn tick(engine: &mut DarklyEngine, t: f32) {
+    engine.test_tick_animations(t);
+    engine.test_readback_canvas();
+}
+
+#[test]
+fn an_animating_veil_reuses_the_stack_below_it() {
+    let (mut engine, _base) = animating_veil_fixture();
+
+    // Convergence: the first tick after a full walk captures the prefix, the
+    // next one resumes from it.
+    tick(&mut engine, 1.0);
+    for i in 1..=6 {
+        tick(&mut engine, 1.0 + i as f32 * 0.05);
+    }
+
+    assert!(
+        engine.test_walk_resumes() > 0,
+        "an animating veil above an untouched stack must reuse the composite \
+         below it — without this the veil's tick re-blends every layer"
+    );
+
+    let incremental = engine.test_readback_canvas();
+    let scratch = engine.test_readback_canvas_from_scratch();
+    assert_eq!(
+        incremental, scratch,
+        "a resumed walk must produce the same pixels as a full one"
+    );
+}
+
+/// The staleness hole a prefix invites: a change that moves no per-child stamp
+/// at all. Opacity travels as a coarse `document` bump, so the walk correctly
+/// full-walks the frame it happens on — but if that walk kept the old capture,
+/// the next animation tick would resume from pixels taken before the change.
+#[test]
+fn a_property_change_below_the_prefix_is_not_restored_over() {
+    let (mut engine, base) = animating_veil_fixture();
+
+    // Establish a prefix that includes the base layer.
+    tick(&mut engine, 1.0);
+    for i in 1..=6 {
+        tick(&mut engine, 1.0 + i as f32 * 0.05);
+    }
+    assert!(
+        engine.test_walk_resumes() > 0,
+        "the prefix must be established, or this test cannot regress"
+    );
+
+    // A change to a layer *inside* the captured prefix, carried by a source
+    // no child stamp reflects.
+    engine.set_opacity(base, 0.25);
+    engine.test_readback_canvas();
+
+    // …and now a tick, which is exactly when a surviving stale prefix would be
+    // restored over the top of it.
+    tick(&mut engine, 2.0);
+
+    let incremental = engine.test_readback_canvas();
+    let scratch = engine.test_readback_canvas_from_scratch();
+    assert_eq!(
+        incremental, scratch,
+        "a prefix captured before a property change must not be restored \
+         after it — the tick following the change would show pre-change pixels"
+    );
+}
+
+/// A focused filter's histogram is binned from inside the walk, against its
+/// live input accumulator. Any reuse that skips the subtree carrying it makes
+/// that dispatch unreachable and the result never lands — so while a histogram
+/// is owed, no group may reuse anything.
+///
+/// The filter sits inside a nested group while the activity is at root level
+/// above it: a guard scoped to the host group alone would be skipped along
+/// with the group, which is the shape that starves.
+#[test]
+fn a_histogram_inside_a_group_still_lands_while_work_happens_above_it() {
+    let mut engine = test_engine(W, H);
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128);
+
+    let group = engine.add_group(None);
+    engine.set_group_passthrough(group, false);
+    let in_group = engine.add_raster_layer(Some(group));
+    engine
+        .move_layer(in_group, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
+    fill_layer(&mut engine, in_group, 90, 40, 200);
+
+    let fx = effect(&mut engine, "levels");
+    engine
+        .move_layer(fx, MoveTarget::IntoGroupTop(group))
+        .expect("move the filter inside the group");
+
+    let top = engine.add_raster_layer(None);
+    fill_layer(&mut engine, top, 30, 30, 30);
+    settle(&mut engine);
+
+    engine.set_histogram_target(Some(fx));
+
+    // Work above the group on every frame — exactly what would let an
+    // ancestor's reuse skip the group holding the filter.
+    let mut binned = Vec::new();
+    for i in 0..64 {
+        paint_dab(&mut engine, top, 4.0 + (i % 8) as f32, 4.0);
+        engine.test_readback_canvas();
+        engine.render(0.0);
+        binned = engine.histogram(fx);
+        if !binned.is_empty() {
+            break;
+        }
+    }
+
+    assert!(
+        !binned.is_empty(),
+        "a histogram owed for a filter inside a group must still land while \
+         the user works above that group — reuse that skips the group makes \
+         the mid-walk dispatch unreachable and it never resolves"
+    );
+}
+
+/// A nested group nobody touched contributes zero passes. Painting *below* it
+/// is what puts it in the re-walked suffix at all: the parent has to blend it
+/// again, but the group's own walk finds every stamp unchanged and draws
+/// nothing, blending the output its accumulator still holds.
+#[test]
+fn an_untouched_nested_group_is_not_rewalked() {
+    let mut f = fixture();
+    // A passthrough group inlines into its parent's accumulator and never
+    // walks separately; only an isolated one has a composite of its own to
+    // find unchanged.
+    f.engine.set_group_passthrough(f.group, false);
+    f.engine.test_readback_canvas();
+    let before = f.engine.test_walk_all_clean();
+
+    // `bottom` sits below the group, so the group is part of the suffix the
+    // root re-walks.
+    paint_dab(&mut f.engine, f.bottom, 8.0, 8.0);
+    let incremental = f.engine.test_readback_canvas();
+
+    assert!(
+        f.engine.test_walk_all_clean() > before,
+        "the fixture's nested group was untouched by a paint beneath it, so \
+         its own walk must have found nothing to do"
+    );
+    let scratch = f.engine.test_readback_canvas_from_scratch();
+    assert_eq!(
+        incremental, scratch,
+        "a group that skipped its own walk must still blend the same pixels \
+         a full walk would have produced"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The composite lives in an accumulator half, not a copy
+// ---------------------------------------------------------------------------
+
+/// A group's output is whichever ping-pong half its walk ended on, so every
+/// consumer selects a resource by that index. If the present pass bound one
+/// fixed half instead, a stack whose walk ends on the other half would present
+/// stale or empty pixels — so this composites onto *both* halves and checks
+/// each, asserting the halves really differed rather than trusting the parity.
+#[test]
+fn the_present_follows_the_composite_to_either_accumulator_half() {
+    let mut engine = test_engine(W, H);
+    let first = engine.add_raster_layer(None);
+    fill_layer(&mut engine, first, 255, 0, 0);
+    settle(&mut engine);
+
+    let half_a = engine.test_root_output_half();
+    let presented = engine.test_readback_present();
+    assert_eq!(
+        &presented[0..4],
+        &[255, 0, 0, 255],
+        "the present pass must read the half the walk ended on"
+    );
+
+    // One more advancing child flips the output to the other half.
+    let second = engine.add_raster_layer(None);
+    fill_layer(&mut engine, second, 0, 255, 0);
+    settle(&mut engine);
+
+    let half_b = engine.test_root_output_half();
+    let presented = engine.test_readback_present();
+    assert_eq!(
+        &presented[0..4],
+        &[0, 255, 0, 255],
+        "the present pass must follow the composite when it lands on the \
+         other half"
+    );
+
+    assert_ne!(
+        half_a, half_b,
+        "this test proves nothing unless the two composites actually ended on \
+         different accumulator halves"
+    );
+}
+
+/// The accumulators are written only inside `compose_group`, which is what
+/// lets a consumer hold on to "the output half" between composites. A
+/// present-only frame (view transform moved, document untouched) must still
+/// find the last composite intact.
+#[test]
+fn a_present_only_frame_still_finds_the_last_composite() {
+    let mut engine = test_engine(W, H);
+    let layer = engine.add_raster_layer(None);
+    fill_layer(&mut engine, layer, 0, 0, 255);
+    settle(&mut engine);
+
+    let before = engine.test_readback_present();
+    let runs_before = engine.test_composite_runs();
+
+    engine.set_view_transform(4.0, 2.0, 1.0, 0.0, false, W as f32, H as f32);
+    engine.render(0.0);
+    let after = engine.test_readback_present();
+
+    assert_eq!(
+        engine.test_composite_runs(),
+        runs_before,
+        "moving the view must not recomposite — otherwise this proves nothing \
+         about the accumulator surviving between composites"
+    );
+    assert_eq!(
+        before, after,
+        "a present-only frame must still find the composite in the half the \
+         last walk left it in"
+    );
+}
+
+/// `composited_texture()` is read by export, save, the recorder, previews and
+/// the sample-merged clone; the colour picker is the one consumer that reads
+/// it *between* composites without forcing one. It must see the output half.
+#[test]
+fn the_merged_colour_picker_reads_the_output_half() {
+    // Picking is asynchronous: the call queues a readback and hands back the
+    // previously landed colour, so a pick is "request, let it land, read".
+    fn pick_merged(engine: &mut DarklyEngine) -> [u8; 4] {
+        use darkly::engine::PickSource;
+        engine.pick_color(1.0, 1.0, PickSource::Merged);
+        settle(engine);
+        engine.pick_color(1.0, 1.0, PickSource::Merged)
+    }
+
+    let mut engine = test_engine(W, H);
+    let first = engine.add_raster_layer(None);
+    fill_layer(&mut engine, first, 255, 0, 0);
+    engine.test_readback_canvas();
+
+    let half_a = engine.test_root_output_half();
+    assert_eq!(
+        pick_merged(&mut engine),
+        [255, 0, 0, 255],
+        "the merged picker must sample the half holding the composite"
+    );
+
+    let second = engine.add_raster_layer(None);
+    fill_layer(&mut engine, second, 0, 255, 0);
+    engine.test_readback_canvas();
+
+    let half_b = engine.test_root_output_half();
+    assert_eq!(
+        pick_merged(&mut engine),
+        [0, 255, 0, 255],
+        "…on either half"
+    );
+    assert_ne!(half_a, half_b, "both halves must have been exercised");
+}
+
+/// The histogram's stamp is its own declared dependency on authored pixels,
+/// not an arrangement made for it by the revision registry. An animated veil
+/// advancing its clock recomposites the canvas every tick; if that also
+/// counted as a pixel write, a histogram could never settle while a veil
+/// plays.
+#[test]
+fn a_histogram_survives_an_animating_veil() {
+    let mut engine = test_engine(W, H);
+    let base = engine.add_raster_layer(None);
+    fill_layer(&mut engine, base, 128, 128, 128);
+    let fx = effect(&mut engine, "levels");
+    engine.set_histogram_target(Some(fx));
+    // Above the levels filter, and animating: non-zero speed, or the canvas
+    // animation gate never fires.
+    engine
+        .add_filter_layer(
+            "grain",
+            vec![
+                ParamValue::Float(1.0), // speed
+                ParamValue::Float(0.0), // color
+                ParamValue::Float(1.0), // opacity
+            ],
+            None,
+        )
+        .expect("`grain` should be addable as an effect layer");
+
+    let mut binned = Vec::new();
+    for _ in 0..64 {
+        engine.test_readback_canvas();
+        engine.render(0.0);
+        binned = engine.histogram(fx);
+        if !binned.is_empty() {
+            break;
+        }
+    }
+    assert!(!binned.is_empty(), "the histogram must land");
+
+    engine.test_tick_animations(1.0); // primes last_wall_time; dt == 0
+    for i in 1..=8 {
+        engine.test_tick_animations(1.0 + i as f32 * 0.05);
+    }
+    engine.test_readback_canvas();
+
+    assert_eq!(
+        engine.histogram(fx),
+        binned,
+        "an animation tick advances appearance, not authored pixels, so the \
+         histogram it is read against must survive one"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Thumbnail cursor
 // ---------------------------------------------------------------------------
 

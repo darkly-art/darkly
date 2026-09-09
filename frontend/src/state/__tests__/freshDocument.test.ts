@@ -83,7 +83,7 @@ describe('freshDocument recipes', () => {
 
             expect(api.setLayerName).toHaveBeenCalledWith({
                 id: await api.groupLayers.mock.results[0].value,
-                name: 'Viewport Effects',
+                name: 'Veils',
             });
 
             const boundaryOrder = api.moveLayer.mock.invocationCallOrder[0];

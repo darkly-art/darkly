@@ -82,7 +82,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             // the whole arrangement into canvas space.
             if (ids.length > 0) {
                 const groupId = await api.groupLayers({ ids });
-                if (groupId != null) api.setLayerName({ id: groupId, name: 'Viewport Effects' });
+                if (groupId != null) api.setLayerName({ id: groupId, name: 'Veils' });
             }
             // The panel read the tree when it mounted, which is before any of
             // this existed. Nothing else refreshes it — these layers are added

@@ -737,6 +737,28 @@ impl LayerNode {
         }
     }
 
+    /// Whether this node's compose arm has the GPU resources it needs to draw
+    /// anything at all.
+    ///
+    /// Sibling of [`Self::compose_into`], and dispatched the same way: every
+    /// arm that can silently return without drawing answers for itself, so the
+    /// walk never enumerates which kinds can no-op. The walk's cache consults
+    /// this so a child that contributes nothing is recorded as such — a child
+    /// whose resources appear or vanish changes the group's output exactly as
+    /// a pixel edit would.
+    ///
+    /// Answers `true` whenever it cannot be sure: recording a drawing child as
+    /// absent would let a later edit to it go unnoticed, while recording an
+    /// absent child as drawing only costs a recomposite.
+    pub fn compose_ready(&self, compositor: &crate::gpu::compositor::Compositor) -> bool {
+        match self {
+            LayerNode::Layer(layer) => layer.compose_ready(compositor),
+            // A passthrough group draws through its children; an isolated one
+            // needs its own accumulator to compose them into first.
+            LayerNode::Group(g) => g.passthrough || compositor.has_group_state(g.id),
+        }
+    }
+
     /// Whether this node transforms the running parent accumulator *in place*
     /// (the composite of everything below it) rather than blending its own
     /// discrete texture in. A passthrough group inlines its children into the
@@ -903,6 +925,21 @@ impl Layer {
             // blend path.
             Layer::Filter(f) => ctx.compose_effect(f),
             _ => ctx.compose_layer(self),
+        }
+    }
+
+    /// Whether this layer's compose arm has what it needs to draw — sibling of
+    /// [`Self::compose_into`], one level down from
+    /// [`LayerNode::compose_ready`].
+    pub fn compose_ready(&self, compositor: &crate::gpu::compositor::Compositor) -> bool {
+        match self {
+            // The effect arm needs a realized instance and the shared apply
+            // scratch; without either it composes as a no-op.
+            Layer::Filter(f) => compositor.effect_arm_ready(f.id),
+            // A divider is structure, never pixels.
+            Layer::Divider(_) => false,
+            // Raster, void and vector all blend their own node texture.
+            _ => compositor.has_node_texture(self.id()),
         }
     }
 

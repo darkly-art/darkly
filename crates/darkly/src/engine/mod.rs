@@ -1258,6 +1258,28 @@ impl DarklyEngine {
         self.compositor.composite_runs()
     }
 
+    /// Group walks that resumed from a captured prefix. Lets a reuse test
+    /// prove it exercised the resume path rather than silently full-walking.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_walk_resumes(&self) -> u64 {
+        self.compositor.walk_resumes()
+    }
+
+    /// Group walks that found nothing below them changed.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_walk_all_clean(&self) -> u64 {
+        self.compositor.walk_all_clean()
+    }
+
+    /// Which accumulator half the root group's composite currently lives in.
+    /// The walk flips halves once per advancing child, so this alternates
+    /// with the stack's shape — the instrument a test uses to prove it
+    /// actually exercised both halves rather than one twice.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_root_output_half(&self) -> usize {
+        self.compositor.root_output_half()
+    }
+
     /// Bump the compositor's `targets` revision alone — see
     /// [`crate::gpu::compositor::Compositor::test_bump_targets`].
     #[cfg(any(test, feature = "testing"))]

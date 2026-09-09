@@ -599,11 +599,15 @@ impl DarklyEngine {
             }
         }
 
-        // The compositor needs to recomposite the layer's pixels on
-        // the next render; thumbnail invalidation lives at the stroke
-        // boundary (end_stroke) rather than per-segment so the panel
-        // updates once per stroke instead of mid-flight.
-        self.compositor.mark_dirty();
+        // Name the layer the dab landed on rather than dirtying everything:
+        // the composite below an untouched stack is reusable, and only a
+        // per-node mark says so. The write-site invariant on
+        // `mark_node_pixels_dirty` ("if your signature carries a `LayerId`,
+        // you mark it") applies here — `gpu_stroke_to` has carried the id all
+        // along. Thumbnail cadence is unaffected: the drain skips the layer
+        // being stroked, so the panel still updates once at `end_stroke`
+        // rather than per segment.
+        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     /// Grow the layer texture if the next dab at canvas `(x, y)` would land

@@ -15,8 +15,9 @@ impl Compositor {
     /// sources under their normal blend modes.
     ///
     /// `source_ids` is bottom-to-top order. Each source may be a raster, a
-    /// non-passthrough group (its `composite_cache` must already be current),
-    /// or a passthrough group (children inlined). The destination's GPU
+    /// non-passthrough group (composed by the walk below, which leaves the
+    /// result in the group's own output accumulator), or a passthrough group
+    /// (children inlined). The destination's GPU
     /// texture must already exist and be canvas-sized (the engine allocates
     /// it via `ensure_raster_layer` before calling).
     ///
@@ -78,8 +79,9 @@ impl Compositor {
         self.sync_projection_states(device, queue, doc, None);
 
         // Composite the sources into the bake accum. `compose_children`
-        // handles rasters, groups (recursing through `compose_group` which
-        // updates each group's own composite_cache), and passthrough groups.
+        // handles rasters, groups (recursing through `compose_group`, which
+        // leaves each group's result in its own output accumulator), and
+        // passthrough groups.
         self.compose_children(
             &mut encoder,
             device,
@@ -87,6 +89,7 @@ impl Compositor {
             bake_parent,
             source_ids,
             scissor,
+            None,
             None,
         );
 
