@@ -60,22 +60,28 @@
        evenly, `transparent` holds the whole pack to an outline. Sampled in
        field coordinates like everything else, so the three columns share one
        ramp rather than each restarting it at its own left edge. */
-    /* The pack's edge, away from the explorer's field.
+    /* The pack, away from the explorer's field.
 
-       Inside the explorer a pack's rim is the beam at full strength, sampled
-       from the one field its three columns share (`--pack-beam` below). A
-       surface outside that field has no beam to carve a rim out of, and every
-       such surface still has to state the pack the same way, so the pair is
-       carried here as two stops rather than being mixed again wherever it is
-       needed: the toolbar's brush picker paints them as a CSS gradient across
-       its border box, the palette popup as an SVG gradient along a sector's
-       edge, and both are the same two colours at the same strength.
+       Inside the explorer a pack's light is the beam, sampled from the one
+       field its three columns share (`--pack-beam` below). A surface outside
+       that field has no beam to carve, and every such surface still has to
+       state the pack the same way, so the pair is carried here rather than
+       being mixed again wherever it is needed: the toolbar's brush picker
+       paints it as a CSS gradient across its border box, the palette popup as
+       an SVG gradient along a sector, and they are the same two colours at the
+       same two strengths.
 
-       Half strength, and the two together: refraction is chroma bent and is
-       drawn with it, never alone (`brush/pack.rs`), so a rim that carries the
-       pack does not outrank whatever it sits beside. */
-    --pack-rim-a: color-mix(in srgb, var(--pack-chroma) 50%, transparent);
-    --pack-rim-b: color-mix(in srgb, var(--pack-refraction) 50%, transparent);
+       The pair, never the one: refraction is chroma bent and is drawn with it,
+       never alone (`brush/pack.rs`).
+
+       Half strength on the edge, which is enough to name a pack without
+       outranking whatever the surface sits beside. A number here rather than
+       inside each mix, so a surface that wears the pair as a layer rather than
+       as a colour (an SVG stroke, which cannot take a CSS gradient) states the
+       same strength as the mixes do. */
+    --pack-rim-strength: 50%;
+    --pack-rim-a: color-mix(in srgb, var(--pack-chroma) var(--pack-rim-strength), transparent);
+    --pack-rim-b: color-mix(in srgb, var(--pack-refraction) var(--pack-rim-strength), transparent);
     /* The pair as a paint, for a consumer that can use a CSS gradient. Clipped
        to the border box, so a transparent border shows exactly the ring. */
     --pack-rim-fill: linear-gradient(90deg, var(--pack-rim-a), var(--pack-rim-b))
@@ -216,6 +222,55 @@
     mask-size: var(--field-w) var(--field-h), auto, auto;
     mask-position: var(--pack-field-offset, 0 0), 0 0, 0 0;
     mask-repeat: no-repeat;
+}
+
+/* A pack's name and marks, written in the pack's own pair.
+
+   The third of the three layers a pack surface is made of, beside `.pack-lit`
+   and `.pack-rim`: the body, its edge, and what is written across it. Chroma
+   where the mark is and refraction by the end of the line, so the text crosses
+   the same two colours in the same direction the beam does.
+
+   The pack's own colour on the pack's own surface with nothing neutral in
+   between, which a saturated pair can carry and a tinted near-white cannot;
+   the pair reads against a light theme and a dark one alike, so a surface
+   wearing this needs no colour picked for one of them.
+
+   `background-clip: text` claims the element's background, so this wants a box
+   of its own wherever the surface beneath is already spending one (a card's is
+   spoken for twice over, surface beneath and beam above). The clip paints the
+   glyphs of descendants too, which is what lets one of these dress a label and
+   a count, or a chip and a name, at once. */
+.pack-face {
+    background-image: linear-gradient(90deg, var(--pack-chroma), var(--pack-refraction));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* A mark inside a face takes `currentColor`, which the clip has emptied for
+   the text's sake. It sits at the gradient's own left end, so naming that
+   colour outright is what the ramp would have given it. */
+.pack-face svg {
+    color: var(--pack-chroma);
+}
+
+/* A pack's name, wherever one is written: set in small caps and truncated
+   rather than wrapped, because a pack's name is a label on a surface and not a
+   line of prose, and because every surface that carries one is narrower than
+   the longest name a painter can import.
+
+   The type is here and not on the face because the two are separable: a face
+   may hold a count or a mark that is not a name, and a name is set the same way
+   whether or not it is painted in the pair. */
+.pack-name {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* The envelope every miniature brush preview sits in: the picker's baked

@@ -24,10 +24,20 @@ import { rootAt, type WheelNode, type WheelTree } from './model';
  *  disc, with Krita's 15 px rotation-snap radius as the low bound. */
 export const HUB_R = 28;
 
-/** Radial thickness of each ring. Ring 0's outer edge (96 px) sits at
- *  Krita's 92 px color-donut outer and just above Blender's 100 px pie
- *  radius at ring 1's midline. */
-export const RING_T = 68;
+/** Radial thickness of each ring.
+ *
+ *  Set by the deepest thing a ring has to hold, which is a brush leaf's chip
+ *  laid along the radius (`.chip` in `PalettePopup.svelte`), and then by
+ *  wanting as little of it as that allows: a ring's depth is paid four times
+ *  over by the time a painter reaches a brush inside a pack, and it is the
+ *  reach of the whole gesture. A name costs nothing here, being 9 px of ink
+ *  centred in the band whatever the band is.
+ *
+ *  Ring 0's outer edge sits well inside Krita's 92 px colour-donut outer, and
+ *  deliberately: Krita's ring is the whole of its palette, where this is the
+ *  first of up to four, and the wheel's outermost edge is still wider than
+ *  Krita's 385 px disc. */
+export const RING_T = 48;
 
 /** Fraction of its ring's depth a highlighted or expanded sector grows
  *  radially outward: inner and angular edges stay fixed, only the outer
@@ -38,9 +48,9 @@ export const RING_T = 68;
 export const GROW = 0.2;
 export const RING_STRIDE = RING_T * (1 + GROW);
 
-/** Angular step per child sector, 22.5°: Blender's 8-item pie gives 45°
- *  slots at radius ~100; at ring 1's midline (~130 px) 22.5° subtends about
- *  the same arc length. */
+/** Angular step per child sector, 22.5°: half of the 45° slots Blender's
+ *  8-item pie gives at radius ~100, on a wheel whose fans sit further out
+ *  (ring 1's midline is ~110 px) and hold more than eight. */
 export const CHILD_STEP = Math.PI / 8;
 
 export interface SectorGeom {
@@ -154,7 +164,85 @@ export function midAngle(s: SectorGeom): number {
     return s.a0 + s.span / 2;
 }
 
+/** Height a line of `.pack-name` occupies above its baseline, px. Cap height
+ *  rather than line height: what is being centered in the band is the ink,
+ *  and a line box is mostly the air around it. */
+const LABEL_CAP = 9;
+
 /**
+ * The arc a sector's name is set along: its inner circumference, and the
+ * direction to travel it.
+ *
+ * `a0 -> a1` is the drawing order, not the sector's own winding, and that is
+ * the whole of the trick. Glyphs stand to the left of a path's direction of
+ * travel, so an arc drawn in increasing theta carries letters with their tops
+ * pointing away from the center, and one drawn in decreasing theta carries
+ * them pointing toward it. On the upper half of the wheel the first is right
+ * side up and on the lower half the second is, so a name reverses direction as
+ * it crosses the horizontal and stays readable the whole way round.
+ *
+ * `r` follows from the same split. The ink is centered on the band either way,
+ * so the baseline is half a cap height inside the middle when the letters grow
+ * outward and half a cap height outside it when they grow inward: a baseline is
+ * the foot of the ink, not its centre, and which side the ink is on has just
+ * been decided.
+ */
+export function labelArc(s: SectorGeom): { a0: number; a1: number; r: number } {
+    const outward = Math.sin(midAngle(s)) < 0;
+    const r = (s.r0 + s.r1) / 2 + (outward ? -LABEL_CAP / 2 : LABEL_CAP / 2);
+    // A span of a full turn has no start distinct from its end, and an arc
+    // command between coincident points draws nothing at all.
+    const span = Math.min(s.span, 2 * Math.PI - 1e-3);
+    const a1 = s.a0 + span;
+    return outward ? { a0: s.a0, a1, r } : { a0: a1, a1: s.a0, r };
+}
+
+/** Space between a sector's mark and its name, px along the arc. The card's
+ *  row spends 8 between the two; an arc reads tighter, and this is measured
+ *  along a curve rather than across a flex gap. */
+const LABEL_GAP = 5;
+
+/** Where a sector's mark and its name sit along its arc.
+ *
+ *  The two are one run, centered on the arc together the way a card's icon and
+ *  label are centered in their row: mark, gap, name. The name's own length has
+ *  to be measured off the rendered text (SVG lays nothing out for you), which
+ *  is why it arrives as an argument rather than being computed here.
+ *
+ *  `markTurn` is the direction of travel at the mark, which is what stands it
+ *  up the same way the glyphs beside it stand, on either half of the wheel. */
+export interface LabelPlacement {
+    markA: number;
+    markR: number;
+    markTurn: number;
+    /** Distance along the arc to the middle of the name. */
+    textOffset: number;
+}
+
+export function labelPlacement(
+    s: SectorGeom,
+    nameLen: number,
+    markW: number,
+): LabelPlacement {
+    const { a0, a1, r } = labelArc(s);
+    const sign = a1 > a0 ? 1 : -1;
+    const arcLen = Math.abs(a1 - a0) * r;
+    const run = markW + LABEL_GAP + nameLen;
+    const start = arcLen / 2 - run / 2;
+    const markA = a0 + (sign * (start + markW / 2)) / r;
+    return {
+        markA,
+        // The middle of the band, which is where the ink beside it is centered
+        // whichever side of its baseline that ink grows.
+        markR: (s.r0 + s.r1) / 2,
+        markTurn: markA + (sign * Math.PI) / 2,
+        textOffset: start + markW + LABEL_GAP + nameLen / 2,
+    };
+}
+
+/**
+ * Resolve a pointer offset from the wheel center to what it is over./**
+ * Resolve a pointer offset from the wheel center to what it is over./**
  * Resolve a pointer offset from the wheel center to what it is over.
  *
  * Radius bands pick the ring, clamped to the deepest expanded one (that ring

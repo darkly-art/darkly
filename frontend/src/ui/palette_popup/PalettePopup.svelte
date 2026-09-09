@@ -1,10 +1,12 @@
 <script lang="ts">
-    import { SvelteSet } from 'svelte/reactivity';
+    import { SvelteSet, SvelteMap } from 'svelte/reactivity';
     import { palettePopup } from '../../state/palettePopup.svelte';
     import {
         layoutWheel,
         hitKey,
         midAngle,
+        labelArc,
+        labelPlacement,
         GROW,
         HUB_R,
         type SectorGeom,
@@ -38,8 +40,30 @@
      *  pop. Cleared on close so the next open pops again. */
     const settled = new SvelteSet<string>();
     $effect(() => {
-        if (!palettePopup.isOpen) settled.clear();
+        if (!palettePopup.isOpen) {
+            settled.clear();
+            nameLen.clear();
+        }
     });
+
+    /** Edge length of a branch's mark on its arc, px. The card's icon is 13px
+     *  of type; this is the same mark measured as a box, because on an arc it
+     *  is placed rather than laid out. */
+    const MARK = 13;
+
+    /** Rendered length of each name, px, keyed by sector.
+     *
+     *  Measured off the DOM because SVG lays nothing out: a `<textPath>` places
+     *  glyphs along a curve and reports nothing about how far they reached, so
+     *  the only way to put a mark beside a name and center the pair is to ask
+     *  the text how long it came out. Read once per element, and again only if
+     *  the name it holds changes. */
+    const nameLen = new SvelteMap<string, number>();
+    function measureName(node: SVGTextPathElement, k: string) {
+        const read = (id: string) => nameLen.set(id, node.getComputedTextLength());
+        read(k);
+        return { update: read };
+    }
 
     /** Newly expanded rings pop outward from this fraction closer to the
      *  center, so a submenu emerges from under its growing parent. */
@@ -112,7 +136,11 @@
      *  the outward shift matching the sector's inner-anchored growth (a
      *  point at radius r moves (r - r0) * GROW along the mid-angle), and
      *  `--px/--py` is the inward offset the pop animation starts from
-     *  (matching the sector keyframe's compression toward its inner edge). */
+     *  (matching the sector keyframe's compression toward its inner edge),
+     *  plus the node's palette, which its face is written in. In the string
+     *  rather than through `use:packPalette`, because Svelte writes a
+     *  whole-string `style` attribute through `cssText` and would erase what
+     *  the action set on the same element. */
     function badgeStyle(s: SectorGeom, cx: number, cy: number): string {
         const mid = midAngle(s);
         const r = (s.r0 + s.r1) / 2;
@@ -122,13 +150,28 @@
         return `left: ${(cx + r * ux).toFixed(1)}px; top: ${(cy + r * uy).toFixed(1)}px;`
             + ` --gx: ${(ux * d * GROW).toFixed(1)}px; --gy: ${(uy * d * GROW).toFixed(1)}px;`
             + ` --px: ${(-ux * d * POP).toFixed(1)}px; --py: ${(-uy * d * POP).toFixed(1)}px;`
-            + ` --rot: ${mid.toFixed(4)}rad;`;
+            + ` --rot: ${mid.toFixed(4)}rad;`
+
+            + ` ${packPaletteStyle(s.node.palette)}`;
     }
 
     const key = (s: SectorGeom) => `sector:${s.path.join('.')}`;
     /** SVG id for a sector's rim paint. Ids share one document-wide namespace,
      *  so it is the sector's path, not its key, spelled for an id. */
-    const rimId = (s: SectorGeom) => `palette-rim-${s.path.join('-')}`;
+    const packId = (s: SectorGeom) => `palette-pack-${s.path.join('-')}`;
+    /** SVG id for the baseline a sector's name is set along. */
+    const arcId = (s: SectorGeom) => `palette-arc-${s.path.join('-')}`;
+
+    /** The label baseline as a path. One arc, drawn in `labelArc`'s direction,
+     *  which is what decides whether the name reads with its tops outward or
+     *  inward. */
+    function labelArcPath(s: SectorGeom, cx: number, cy: number): string {
+        const { a0, a1, r } = labelArc(s);
+        const p = (a: number) =>
+            `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
+        const large = Math.abs(a1 - a0) > Math.PI ? 1 : 0;
+        return `M ${p(a0)} A ${r} ${r} 0 ${large} ${a1 > a0 ? 1 : 0} ${p(a1)}`;
+    }
 
     /** Cursor marker: half-diagonal of the diamond drawn at the pointer. */
     const DIAMOND_R = 6;
@@ -165,12 +208,16 @@
         <svg>
             {#each drawOrder as s (key(s))}
                 {@const swatch = s.node.visual.kind === 'swatch' ? s.node.visual : null}
-                <!-- The sector's own shape twice: the rim beneath at full
-                     size, the body over it narrower by the rim's width, so the
-                     sector is outlined in its pack's colours without its
-                     silhouette or the gaps between sectors moving. A swatch skips the
-                     rim: it already paints the sector its own colour, and a
-                     second edge would be stating provenance it has none of. -->
+                <!-- The sector's own shape twice: the pack's pair beneath at
+                     full size, the opaque body over it narrower by the rim's
+                     width, so the sector is outlined without its silhouette or
+                     the gaps between sectors moving. The pack is carried the
+                     rest of the way by the name and the mark on the badge,
+                     which are written in the pair itself.
+
+                     A swatch skips the rim: it already paints the sector its
+                     own colour, and an edge would be stating provenance it has
+                     none of. -->
                 <!-- `PALETTE_CLASS` alongside the roles, never one without the
                      other: the derived rim tokens are declared in that class's
                      rule, and a custom property whose value contains `var()`
@@ -179,20 +226,21 @@
                     {#if !swatch}
                         <!-- `--pack-rim-fill` is a CSS gradient, and CSS
                              gradients cannot paint an SVG stroke, so the pair
-                             is spelled here as the paint server SVG needs. The
-                             colours are not restated: both stops are the
-                             palette's own rim tokens, so this edge and the
-                             toolbar picker's are the same two mixes. -->
-                        <linearGradient id={rimId(s)}>
-                            <stop offset="0" style:stop-color="var(--pack-rim-a)" />
-                            <stop offset="1" style:stop-color="var(--pack-rim-b)" />
+                             is spelled here as the paint server SVG needs.
+                             The roles are the stops and the strengths are
+                             `opacity` on the layers that wear it, so one
+                             gradient serves both and the two strengths stay
+                             the palette's own numbers. -->
+                        <linearGradient id={packId(s)}>
+                            <stop offset="0" style:stop-color="var(--pack-chroma)" />
+                            <stop offset="1" style:stop-color="var(--pack-refraction)" />
                         </linearGradient>
                         <path
                             class="sector rim"
                             class:grown={isGrown(s)}
                             class:settled={settled.has(key(s))}
-                            style:fill="url(#{rimId(s)})"
-                            style:stroke="url(#{rimId(s)})"
+                            style:fill="url(#{packId(s)})"
+                            style:stroke="url(#{packId(s)})"
                             d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
                         />
                     {/if}
@@ -209,6 +257,46 @@
                     />
                 </g>
             {/each}
+            <!-- Names last, so one is never buried under a neighbouring
+                 sector: the sectors above re-sort on every highlight, and a
+                 name belongs to the wheel rather than to the order they happen
+                 to be painting in.
+
+                 A brush is identified by its stroke, and a branch's mark is
+                 generic (packs ship a handful of shared `mdi:` marks), so only
+                 a branch is named. The name takes the sector's own gradient as
+                 its paint: the same pair, at full strength, that `.pack-face`
+                 clips to text in HTML, which SVG cannot do. -->
+            {#each layout as s (key(s))}
+                {#if s.node.kind === 'branch' && s.node.visual.kind === 'icon'}
+                    {@const place = labelPlacement(s, nameLen.get(key(s)) ?? 0, MARK)}
+                    <defs>
+                        <path id={arcId(s)} d={labelArcPath(s, cx, cy)} />
+                    </defs>
+                    <!-- Mark then name, one run centred on the arc, the way a
+                         pack card centres its icon and label in a row. The
+                         mark is turned by the arc's own direction of travel,
+                         so it stands the way the glyphs beside it do on either
+                         half of the wheel. -->
+                    {#if nameLen.has(key(s))}
+                        <g class="mark" style={packPaletteStyle(s.node.palette)}
+                           transform="translate({(cx + place.markR * Math.cos(place.markA)).toFixed(2)}
+                                                {(cy + place.markR * Math.sin(place.markA)).toFixed(2)})
+                                      rotate({(place.markTurn * 180 / Math.PI).toFixed(2)})">
+                            <g transform="translate({-MARK / 2} {-MARK / 2})">
+                                <Icon name={s.node.visual.icon} inline={false} />
+                            </g>
+                        </g>
+                    {/if}
+                    <text class="pack-name name" style={packPaletteStyle(s.node.palette)}
+                          style:fill="url(#{packId(s)})">
+                        <textPath href="#{arcId(s)}" startOffset={place.textOffset}
+                                  use:measureName={key(s)}>
+                            {s.node.label}
+                        </textPath>
+                    </text>
+                {/if}
+            {/each}
             <circle
                 class="hub"
                 class:highlighted={highlightKey === 'hub'}
@@ -219,24 +307,15 @@
         </svg>
         {#each layout as s (key(s))}
             {@const visual = s.node.visual}
-            {#if visual.kind !== 'swatch'}
-                {@const brush = visual.kind === 'brush' ? visual : null}
-                <div class="badge" class:leaf={brush} class:grown={isGrown(s)}
+            <!-- Only a brush gets a badge. A branch's mark rides its arc
+                 beside its name, and a swatch is its own sector's colour. -->
+            {#if visual.kind === 'brush'}
+                <div class="badge pack-face {PALETTE_CLASS}" class:grown={isGrown(s)}
                      class:settled={settled.has(key(s))}
                      style={badgeStyle(s, cx, cy)}>
-                    <div class="chip brush-thumbs" class:stroke-chip={brush}>
-                        {#if brush}
-                            <BrushThumb name={brush.name} icon={brush.icon} />
-                        {:else if visual.kind === 'icon'}
-                            <Icon name={visual.icon} />
-                        {/if}
+                    <div class="chip brush-thumbs">
+                        <BrushThumb name={visual.name} icon={visual.icon} />
                     </div>
-                    <!-- A brush is identified by its stroke; a branch's icon is
-                         generic (packs ship a handful of shared marks), so a
-                         branch keeps its name and a leaf drops it. -->
-                    {#if !brush}
-                        <div class="label">{s.node.label}</div>
-                    {/if}
                 </div>
             {/if}
         {/each}
@@ -344,6 +423,13 @@
     .sector.rimmed {
         stroke-width: calc(2 * var(--corner) - 2 * var(--pack-rim-width));
     }
+    /* The strength is `opacity` on the layer rather than alpha in the paint:
+       element opacity composites the layer once, so the path's own stroke does
+       not double up over its own fill where the two overlap. Alpha in the stops
+       would band every sector along that overlap. */
+    .sector.rim {
+        opacity: var(--pack-rim-strength);
+    }
     .hub {
         fill: var(--bg-raised);
         transform-origin: var(--cx) var(--cy);
@@ -352,23 +438,16 @@
     .hub.highlighted {
         transform: scale(calc(1 + var(--grow) * 2.5));
     }
+    /* Exactly its chip wide: a badge carries no text, which is what makes the
+       rotated chip cost less arc than the upright one it replaces, in the fans
+       where arc is scarcest. */
     .badge {
         position: absolute;
         transform: translate(-50%, -50%);
         display: flex;
-        flex-direction: column;
         align-items: center;
-        gap: 2px;
-        width: 60px;
-        color: var(--text);
+        justify-content: center;
         animation: badge-pop var(--dur) var(--ease);
-    }
-    /* A leaf has no label to size for, so it is exactly its chip wide: that
-       is what makes the rotated chip cost less arc than the badge it
-       replaces, in the fans where arc is scarcest. */
-    .badge.leaf {
-        width: auto;
-        gap: 0;
     }
     .badge.settled {
         animation: none;
@@ -378,41 +457,44 @@
             scale(calc(1 + var(--grow)));
         animation: badge-grow var(--dur) var(--ease);
     }
-    /* The badge's face: the same envelope the brush picker's strips wear.
-       It carries no colour and no edge of its own; the pack is stated by the
-       sector's rim beneath it, which is the shape a painter is actually
-       aiming at. */
+    /* A brush's chip: the same envelope the picker's strips wear, holding the
+       8:3 stroke bake laid along the sector's outward radial direction, so the
+       ring's depth carries the stroke's length instead of cropping it. It
+       carries no colour and no edge of its own; the pack is stated by the
+       sector beneath it, which is the shape a painter is actually aiming at.
+
+       No `transition`: re-sorting a highlighted badge remounts it, and a
+       transition would sweep the rotation across the wheel.
+
+       `font-size` sizes the fallback glyph, which `BrushPreviewFallback`
+       measures in `em` because a percentage cannot resolve against an
+       aspect-derived box. */
     .chip {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 26px;
-        height: 26px;
         box-sizing: border-box;
-        /* Sizes the fallback glyph, which `BrushPreviewFallback` measures in
-           `em` because a percentage cannot resolve against an aspect-derived
-           box. */
-        font-size: 13px;
-    }
-    /* A brush's chip holds the 8:3 stroke bake, laid along the sector's
-       outward radial direction so the ring's depth carries the stroke's
-       length instead of cropping it. No `transition`: re-sorting a
-       highlighted badge remounts it, and a transition would sweep the
-       rotation across the wheel. */
-    .stroke-chip {
-        width: 60px;
-        height: 22px;
-        font-size: 9px;
+        width: 42px;
+        height: 16px;
+        font-size: 7px;
         transform: rotate(var(--rot));
     }
-    .label {
-        max-width: 60px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 10px;
-        line-height: 1.2;
-        text-align: center;
+    /* `.pack-name` sets it, the same as on a pack card. What is the wheel's
+       own is where it sits: centred on its arc, which `startOffset` puts the
+       middle of the name at and `text-anchor` centres it about.
+
+       `dominant-baseline` is deliberately left alone: the ink is placed by
+       `labelArc`'s choice of radius, which already accounts for which side of
+       the baseline the letters grow on. */
+    .name {
+        text-anchor: middle;
+    }
+    /* The mark beside the name, in the colour the card's icon takes: the left
+       end of the pair the name itself is painted across. Sized in `em` by
+       Iconify, so the font size is the mark's size. */
+    .mark {
+        font-size: 13px;
+        color: var(--pack-chroma);
     }
     @keyframes pop {
         from {

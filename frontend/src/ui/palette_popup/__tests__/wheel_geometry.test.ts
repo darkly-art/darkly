@@ -5,6 +5,7 @@ import {
     advance,
     hitKey,
     midAngle,
+    labelArc,
     HUB_R,
     RING_T,
     RING_STRIDE,
@@ -83,6 +84,61 @@ describe('midAngle', () => {
         for (const s of layoutWheel(tree, [5])) {
             expect(midAngle(s)).toBeCloseTo(s.a0 + s.span / 2, 12);
         }
+    });
+});
+
+describe('labelArc', () => {
+    /** Where the ink lands, as a screen-space direction: glyphs stand to the
+     *  left of a path's direction of travel, so this is the travel direction
+     *  at the arc's midpoint turned a quarter that way. */
+    const glyphUp = (arc: { a0: number; a1: number; r: number }) => {
+        const mid = (arc.a0 + arc.a1) / 2;
+        const forward = arc.a1 > arc.a0 ? 1 : -1;
+        // d/da of (cos a, sin a), signed by the direction of travel.
+        const tx = -Math.sin(mid) * forward;
+        const ty = Math.cos(mid) * forward;
+        // Left of travel, on a screen whose y grows downward.
+        return [ty, -tx];
+    };
+
+    it('sets every name right side up, all the way round the wheel', () => {
+        // A name is upright when the ink grows toward the top of the screen,
+        // which is the whole point of reversing the arc across the horizontal:
+        // one direction for the entire circle leaves the bottom half inverted.
+        for (const s of layoutWheel(tree, [5, 0])) {
+            const [, upY] = glyphUp(labelArc(s));
+            expect(upY).toBeLessThan(0);
+        }
+    });
+
+    it('centres the ink on the band, whichever way it grows', () => {
+        // The baseline moves so the ink does not. A baseline is the foot of
+        // the ink and not its middle, so a name that grows inward has to be
+        // set a cap height further out than one that grows outward for the two
+        // to land in the same place.
+        for (const s of layoutWheel(tree, [5, 0])) {
+            const arc = labelArc(s);
+            const grows = arc.a1 > arc.a0 ? 1 : -1;
+            const inkCentre = arc.r + (grows * 9) / 2;
+            expect(inkCentre).toBeCloseTo((s.r0 + s.r1) / 2, 9);
+        }
+    });
+
+    it('never asks for an arc between coincident points', () => {
+        // A branch spread over the whole circumference: its children each take
+        // a slice, but a lone child would take the entire turn, whose start and
+        // end are the same point and which draws nothing.
+        const full: WheelTree = {
+            sections: [{
+                a0: 0,
+                span: 2 * Math.PI,
+                nodes: [branch('lib', [leaf('only')])],
+            }],
+        };
+        const full0 = { ...layoutWheel(full, [])[0] };
+        expect(full0.span).toBeCloseTo(2 * Math.PI, 9);
+        const arc = labelArc(full0);
+        expect(Math.abs(arc.a1 - arc.a0)).toBeLessThan(2 * Math.PI);
     });
 });
 
