@@ -8,8 +8,6 @@ import {
     labelArc,
     HUB_R,
     RING_T,
-    RING_STRIDE,
-    GROW,
     CHILD_STEP,
     type SectorGeom,
     type Hit,
@@ -263,7 +261,7 @@ describe('layoutWheel child fans', () => {
         // turn before it.
         expect(fan[0].a0).toBeCloseTo(-Math.PI / 2 - Math.PI, 9);
         // No angular gaps anywhere on a full ring.
-        const rMid1 = HUB_R + RING_STRIDE + RING_T / 2;
+        const rMid1 = HUB_R + RING_T + RING_T / 2;
         for (const theta of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 2.9]) {
             expect(sectorAt(layout, ...at(theta, rMid1)).kind).toBe('sector');
         }
@@ -274,11 +272,11 @@ describe('layoutWheel child fans', () => {
         expect(ring(layout, 2)).toHaveLength(2);
         for (const s of ring(layout, 1)) {
             expect(s.unbounded).toBe(false);
-            expect(s.r0).toBe(HUB_R + RING_STRIDE);
+            expect(s.r0).toBe(HUB_R + RING_T);
         }
         for (const s of ring(layout, 2)) {
             expect(s.unbounded).toBe(true);
-            expect(s.r0).toBe(HUB_R + 2 * RING_STRIDE);
+            expect(s.r0).toBe(HUB_R + 2 * RING_T);
         }
     });
 });
@@ -293,7 +291,7 @@ describe('sectorAt', () => {
     it('bands rings by radius', () => {
         const layout = layoutWheel(tree, [4]);
         const rMid0 = HUB_R + RING_T / 2;
-        const rMid1 = HUB_R + RING_STRIDE + RING_T / 2;
+        const rMid1 = HUB_R + RING_T + RING_T / 2;
         const [x0, y0] = at(Math.PI / 8, rMid0); // bottom half, first color
         const hit0 = sectorAt(layout, x0, y0);
         expect(hit0.kind).toBe('sector');
@@ -315,7 +313,7 @@ describe('sectorAt', () => {
     it('resolves angles outside a fan to a gap on that ring', () => {
         const layout = layoutWheel(tree, [4]);
         // Ring 1's fan is centered at -3π/4; theta 0 is far outside it.
-        const [x, y] = at(0, HUB_R + RING_STRIDE + RING_T / 2);
+        const [x, y] = at(0, HUB_R + RING_T + RING_T / 2);
         expect(sectorAt(layout, x, y)).toEqual({ kind: 'gap', ring: 1 });
     });
 
@@ -337,7 +335,7 @@ describe('sectorAt', () => {
             ],
         };
         const layout = layoutWheel(wide, [4]);
-        const [x, y] = at(0.8 * Math.PI, HUB_R + RING_STRIDE + RING_T / 2);
+        const [x, y] = at(0.8 * Math.PI, HUB_R + RING_T + RING_T / 2);
         const hit = sectorAt(layout, x, y);
         expect(hit.kind).toBe('sector');
         expect((hit as Extract<Hit, { kind: 'sector' }>).sector.path).toEqual([4, 0]);

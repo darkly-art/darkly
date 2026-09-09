@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { SvelteSet, SvelteMap } from 'svelte/reactivity';
+    import { SvelteMap } from 'svelte/reactivity';
     import { palettePopup } from '../../state/palettePopup.svelte';
     import {
         layoutWheel,
@@ -7,7 +7,6 @@
         midAngle,
         labelArc,
         labelPlacement,
-        GROW,
         HUB_R,
         type SectorGeom,
     } from './wheel_geometry';
@@ -21,29 +20,15 @@
         engaged ? layoutWheel(palettePopup.tree, engaged.path) : []);
     const highlightKey = $derived(engaged ? hitKey(engaged.highlight) : '');
 
-    /** Paint order (SVG paints in document order): the highlighted sector
-     *  strictly last, so growth is never eclipsed by its neighbors; below
-     *  that, deeper rings first, so a popping ring emerges from underneath
-     *  its parent's rim. The sort is stable, so sibling order never
-     *  changes. Re-sorting moves the highlighted node in the DOM, which
-     *  restarts its CSS animations; `settled` below turns that restart
-     *  into the mechanism: the grow keyframes play fresh on every
-     *  highlight change, while settled sectors suppress the entrance pop
-     *  so the move never blinks them. */
-    const drawOrder = $derived([...layout].sort((a, b) =>
-        Number(key(a) === highlightKey) - Number(key(b) === highlightKey)
-        || b.ring - a.ring));
+    /** Paint order (SVG paints in document order): deeper rings first, so a
+     *  popping ring emerges from underneath its parent's rim. Depends only on
+     *  the layout and not on what is highlighted, which is what keeps every
+     *  sector in its DOM position for the life of a gesture: a node that moved
+     *  would restart its entrance animation and blink. */
+    const drawOrder = $derived([...layout].sort((a, b) => b.ring - a.ring));
 
-    /** Keys whose entrance pop has finished. A re-mounted (reordered) node
-     *  replays its animation; marking sectors settled at animationend lets
-     *  CSS switch them to `animation: none` so only genuinely new sectors
-     *  pop. Cleared on close so the next open pops again. */
-    const settled = new SvelteSet<string>();
     $effect(() => {
-        if (!palettePopup.isOpen) {
-            settled.clear();
-            nameLen.clear();
-        }
+        if (!palettePopup.isOpen) nameLen.clear();
     });
 
     /** Edge length of a branch's mark on its arc, px. The card's icon is 13px
@@ -66,23 +51,27 @@
     }
 
     /** Newly expanded rings pop outward from this fraction closer to the
-     *  center, so a submenu emerges from under its growing parent. */
+     *  center, so a submenu emerges from under its parent. */
     const POP = 0.15;
 
-    /** The grown shape: same inner and angular edges, outer edge extended
-     *  by GROW of the ring's depth. Purely geometric, so gaps, corner
-     *  radii, and the inner edge stay pixel-identical to the rest shape. */
+    /** Fraction of its ring's depth a highlighted *swatch* grows radially
+     *  outward: inner and angular edges stay fixed, only the outer edge
+     *  extends.
+     *
+     *  Presentation and not layout, which is the whole reason it is affordable.
+     *  A colour is a leaf and terminates the gesture's chain, so no ring is
+     *  ever drawn outside a swatch that is under the pointer, and the room it
+     *  swells into costs nothing: rings still abut, and no other sector moves.
+     *  A branch cannot have this, because the room would have to be reserved on
+     *  every ring whether or not anything grew, which is radius paid four deep
+     *  by the time a painter reaches a brush inside a pack. */
+    const GROW = 0.2;
+
+    /** The grown shape: same inner and angular edges, outer edge extended by
+     *  GROW of the ring's depth. Purely geometric, so gaps, corner radii, and
+     *  the inner edge stay pixel-identical to the rest shape. */
     const grownGeom = (s: SectorGeom): SectorGeom =>
         ({ ...s, r1: s.r1 + (s.r1 - s.r0) * GROW });
-
-    /** A branch stays grown for as long as its subtree is open: expansion
-     *  is permanent while the sector is a prefix of the current path (the
-     *  submenu ring starts at the grown outer edge, see RING_STRIDE). */
-    const isExpanded = (s: SectorGeom) =>
-        engaged !== null &&
-        s.path.length <= engaged.path.length &&
-        s.path.every((v, i) => engaged!.path[i] === v);
-    const isGrown = (s: SectorGeom) => key(s) === highlightKey || isExpanded(s);
 
     /** Transparent gap between adjacent sectors' visual edges. */
     const GAP = 2;
@@ -117,29 +106,29 @@
             + ' Z';
     }
 
-    /** Per-sector style: the rest and grown outlines as CSS `d` values
-     *  (growth animates by interpolating the path itself, which is what
-     *  keeps the inner edge exactly still), plus the anchor vector
-     *  `--ax/--ay` (inner-edge midpoint relative to the wheel center) that
-     *  the entrance pop's compensated transform springs out along, and the
-     *  node's palette, which its rim is drawn in. */
+    /** Per-sector style: the outline as a CSS `d` value, the anchor vector
+     *  `--ax/--ay` (inner-edge midpoint relative to the wheel center) that the
+     *  entrance pop's compensated transform springs out along, and the node's
+     *  palette, which its rim is drawn in.
+     *
+     *  A swatch carries a second outline as well, the one it grows to under
+     *  the pointer. Only a swatch: nothing else grows, and a path is not a
+     *  cheap thing to build twice for every sector on the wheel. */
     function sectorStyle(s: SectorGeom, cx: number, cy: number): string {
         const mid = midAngle(s);
+        const grows = s.node.visual.kind === 'swatch';
         return `--d: path('${sectorPath(s, cx, cy)}');`
-            + ` --d-grown: path('${sectorPath(grownGeom(s), cx, cy)}');`
+            + (grows ? ` --d-grown: path('${sectorPath(grownGeom(s), cx, cy)}');` : '')
             + ` --ax: ${(Math.cos(mid) * s.r0).toFixed(1)}px;`
             + ` --ay: ${(Math.sin(mid) * s.r0).toFixed(1)}px;`
             + ` ${packPaletteStyle(s.node.palette)}`;
     }
 
-    /** Badge placement plus the per-badge motion vectors: `--gx/--gy` is
-     *  the outward shift matching the sector's inner-anchored growth (a
-     *  point at radius r moves (r - r0) * GROW along the mid-angle), and
-     *  `--px/--py` is the inward offset the pop animation starts from
-     *  (matching the sector keyframe's compression toward its inner edge),
-     *  plus the node's palette, which its face is written in. In the string
-     *  rather than through `use:packPalette`, because Svelte writes a
-     *  whole-string `style` attribute through `cssText` and would erase what
+    /** Badge placement, the inward offset `--px/--py` the pop animation
+     *  starts from (matching the sector keyframe's compression toward its
+     *  inner edge), and the node's palette, which its face is written in. In
+     *  the string rather than through `use:packPalette`, because Svelte writes
+     *  a whole-string `style` attribute through `cssText` and would erase what
      *  the action set on the same element. */
     function badgeStyle(s: SectorGeom, cx: number, cy: number): string {
         const mid = midAngle(s);
@@ -148,7 +137,6 @@
         const uy = Math.sin(mid);
         const d = r - s.r0;
         return `left: ${(cx + r * ux).toFixed(1)}px; top: ${(cy + r * uy).toFixed(1)}px;`
-            + ` --gx: ${(ux * d * GROW).toFixed(1)}px; --gy: ${(uy * d * GROW).toFixed(1)}px;`
             + ` --px: ${(-ux * d * POP).toFixed(1)}px; --py: ${(-uy * d * POP).toFixed(1)}px;`
             + ` --rot: ${mid.toFixed(4)}rad;`
 
@@ -203,11 +191,12 @@
          config/hotkeys.svelte.ts. Display-only: input never touches it. -->
     <dialog open class="palette-popup" aria-label="Palette popup"
             style:--cx="{cx}px" style:--cy="{cy}px"
-            style:--grow={GROW} style:--pop={POP} style:--corner="{CORNER}px"
+            style:--pop={POP} style:--corner="{CORNER}px"
             style:--pack-rim-width="{PACK_RIM}px">
         <svg>
             {#each drawOrder as s (key(s))}
                 {@const swatch = s.node.visual.kind === 'swatch' ? s.node.visual : null}
+                {@const grown = swatch !== null && key(s) === highlightKey}
                 <!-- The sector's own shape twice: the pack's pair beneath at
                      full size, the opaque body over it narrower by the rim's
                      width, so the sector is outlined without its silhouette or
@@ -237,23 +226,19 @@
                         </linearGradient>
                         <path
                             class="sector rim"
-                            class:grown={isGrown(s)}
-                            class:settled={settled.has(key(s))}
                             style:fill="url(#{packId(s)})"
                             style:stroke="url(#{packId(s)})"
-                            d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
+                            d={sectorPath(s, cx, cy)}
                         />
                     {/if}
                     <path
                         class="sector"
                         class:rimmed={!swatch}
-                        class:grown={isGrown(s)}
                         class:highlighted={key(s) === highlightKey}
-                        class:settled={settled.has(key(s))}
-                        d={sectorPath(isGrown(s) ? grownGeom(s) : s, cx, cy)}
+                        class:grown={grown}
+                        d={sectorPath(grown ? grownGeom(s) : s, cx, cy)}
                         style:fill={swatch ? swatch.color.slice(0, 7) : undefined}
                         style:stroke={swatch ? swatch.color.slice(0, 7) : undefined}
-                        onanimationend={() => settled.add(key(s))}
                     />
                 </g>
             {/each}
@@ -310,8 +295,7 @@
             <!-- Only a brush gets a badge. A branch's mark rides its arc
                  beside its name, and a swatch is its own sector's colour. -->
             {#if visual.kind === 'brush'}
-                <div class="badge pack-face {PALETTE_CLASS}" class:grown={isGrown(s)}
-                     class:settled={settled.has(key(s))}
+                <div class="badge pack-face {PALETTE_CLASS}"
                      style={badgeStyle(s, cx, cy)}>
                     <div class="chip brush-thumbs">
                         <BrushThumb name={visual.name} icon={visual.icon} />
@@ -364,13 +348,12 @@
         stroke-width: 1.5;
         stroke-linejoin: round;
     }
-    /* Selection is indicated by growth, not a border: the highlighted
-       sector grows radially outward while its inner edge stays anchored
-       (scale about the wheel center, compensated by a translate along the
-       sector's anchor vector), and a newly expanded ring pops outward from
-       its own inner edge, right out of the parent's rim, with the same
-       duration and easing, so parent-grow and submenu-pop read as one
-       motion. Transform-only: hit-testing stays pure math. */
+    /* Selection is indicated by fill, and expansion by the submenu ring
+       popping outward from its own inner edge, right out of its parent's rim.
+       Sectors themselves never move: a ring that swelled under the pointer had
+       to be given room to swell into, and that room is paid for in radius on
+       every ring, four deep by the time a painter reaches a brush inside a
+       pack. The pop and the lit parent carry the same moment for nothing. */
     /* The stroke is the sector's own color: it exists only to widen the
        inset path back to size with round joins (rounded corners + uniform
        transparent gaps), never as a visible border. */
@@ -381,27 +364,21 @@
         stroke-linejoin: round;
         d: var(--d);
         transform-origin: var(--cx) var(--cy);
-        transition: d var(--dur) var(--ease);
         animation: pop var(--dur) var(--ease);
-    }
-    /* Highlighting re-sorts the sector to the end of the document (see
-       drawOrder), and the re-mounted node restarts its animations: settled
-       suppresses the entrance pop from replaying on such moves, while the
-       grow keyframes (declared after, so they win on highlighted sectors)
-       play fresh from rest on every highlight change. */
-    .sector.settled {
-        animation: none;
-    }
-    /* Growth is the grown outline, not a transform: only the outer edge
-       moves. An expanded branch keeps it for as long as its subtree is
-       open; collapsing shrinks back through the d transition (no remount). */
-    .sector.grown {
-        d: var(--d-grown);
+        /* Only a swatch ever changes shape, so this only ever fires there. */
+        transition: d var(--dur) var(--ease);
     }
     .sector.highlighted {
         fill: var(--bg-active);
         stroke: var(--bg-active);
-        animation: grow var(--dur) var(--ease);
+    }
+    /* A swatch under the pointer swells: the outline itself, not a transform,
+       so only its outer edge moves and its inner edge stays exactly still. It
+       is the one sector that can, and the one that most wants to, since a
+       swatch shows its own colour and cannot take the highlight fill that
+       tells every other sector it is the one being aimed at. */
+    .sector.grown {
+        d: var(--d-grown);
     }
     /* The rim is the same path at the full stroke width, so it keeps the
        silhouette and the gaps; the body over it gives up `--pack-rim-width` on
@@ -435,8 +412,12 @@
         transform-origin: var(--cx) var(--cy);
         transition: transform var(--dur) var(--ease);
     }
+    /* The hub is the one thing that still swells under the pointer: it is a
+       disc with nothing in it, so scale is the only feedback available to it,
+       and it is a target rather than a ring whose neighbours it would push
+       against. */
     .hub.highlighted {
-        transform: scale(calc(1 + var(--grow) * 2.5));
+        transform: scale(1.5);
     }
     /* Exactly its chip wide: a badge carries no text, which is what makes the
        rotated chip cost less arc than the upright one it replaces, in the fans
@@ -448,14 +429,6 @@
         align-items: center;
         justify-content: center;
         animation: badge-pop var(--dur) var(--ease);
-    }
-    .badge.settled {
-        animation: none;
-    }
-    .badge.grown {
-        transform: translate(-50%, -50%) translate(var(--gx), var(--gy))
-            scale(calc(1 + var(--grow)));
-        animation: badge-grow var(--dur) var(--ease);
     }
     /* A brush's chip: the same envelope the picker's strips wear, holding the
        8:3 stroke bake laid along the sector's outward radial direction, so the
@@ -509,16 +482,6 @@
         from {
             opacity: 0;
             transform: translate(-50%, -50%) translate(var(--px), var(--py));
-        }
-    }
-    @keyframes grow {
-        from {
-            d: var(--d);
-        }
-    }
-    @keyframes badge-grow {
-        from {
-            transform: translate(-50%, -50%);
         }
     }
 </style>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reduce, CLOSED, type MachineState } from '../machine';
-import { HUB_R, RING_STRIDE, RING_T } from '../wheel_geometry';
+import { HUB_R, RING_T } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
@@ -43,7 +43,7 @@ const down = (pointerId = PID, x = CENTER.x, y = CENTER.y) =>
 const up = (pointerId = PID) => ({ kind: 'up' as const, pointerId });
 
 const RING0_MID = HUB_R + RING_T / 2;
-const RING1_MID = HUB_R + RING_STRIDE + RING_T / 2;
+const RING1_MID = HUB_R + RING_T + RING_T / 2;
 /** Middle of the Recent branch's ring-0 sector (top half, first sector). */
 const RECENT_MID = -3 * Math.PI / 4;
 /** Middle of the first color leaf's ring-0 sector (bottom half). */
