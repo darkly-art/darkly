@@ -82,9 +82,11 @@ crates/darkly/src/
   format/               Save/load: zip container, manifest, registry I/O
   nodegraph/            Generic node-graph (graph, compiler, layout)
   docs_md/              Generated regions in this repo's markdown
-    fragments/    ★     what a region can be filled with (catalog_table, …)
+    fragments/    ★     what a region can be filled with (catalog_table,
+                          catalog_graphic, …)
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
+  graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
 ```
 
 ### Coordinate Systems
@@ -304,6 +306,18 @@ cargo run --release -p darkly --features testing --bin render_docs -- \
   --stills --catalog veils
 ```
 
+A `catalog-graphic` region embeds a rendered picture of a catalog instead of a
+table of it, as the README's veils section does. The picture is a Svelte
+component in [`frontend/src/graphics/`](frontend/src/graphics/), rasterized by
+resvg rather than a browser; what that costs a component is documented at the top
+of the runner. `npm test` re-renders each one and fails if the committed image is
+stale.
+
+```bash
+cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json
+node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json
+```
+
 ## Lint / CI Checks
 
 Run at commit time only, not during iterative debugging. Use `cargo check` for mid-iteration build sanity. All must pass:
@@ -335,6 +349,8 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code
 # that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
 # fake node: see `src/lib/__tests__/clickOutside.test.ts`.
+# Also the staleness gate for catalog graphics: it re-renders each one and
+# fails if the committed image no longer matches its component and stills.
 (cd frontend && npm test)
 # Reclaim stale build artifacts: Cargo orphans a ~300 MB static test binary on
 # every fingerprint change and never GCs it, so `target/` balloons over time.

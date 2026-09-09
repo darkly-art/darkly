@@ -10,10 +10,19 @@
     import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
     import BrushExplorer from './brush_explorer/BrushExplorer.svelte';
+    import { brushLibrary } from '../state/brush_library.svelte';
+    import { packPalette } from '../lib/packPalette';
 
     /** The explorer's open flag. Local: the trigger owns the dialog, and
      *  picking a brush closes it, so nothing else needs to reach it. */
     let explorerOpen = $state(false);
+
+    /** The active brush's pack colours, so the trigger is recognisably the same
+     *  object as the tile it was picked from. Always a palette (a brush in no
+     *  pack, and an edited graph that is no named brush at all, both get the
+     *  neutral one), so the button paints one declaration and never asks
+     *  whether a pack is behind it. */
+    const activePalette = $derived(brushLibrary.paletteForBrush(brushGraph.activeBrush));
 
     function ensureInit() {
         if (!brushGraph.graph && app.engine) brushGraph.init();
@@ -83,12 +92,13 @@
 <ToolBarLayout>
     {#snippet center()}
         <!-- The leading control in the same wrapping row as the scrubs: a
-             black rounded button that wraps alongside them. It opens the brush
-             explorer, which takes the screen and closes again as soon as a
-             brush is picked. -->
+             rounded button, in the colours of the pack the active brush came
+             from, that wraps alongside them. It opens the brush explorer, which
+             takes the screen and closes again as soon as a brush is picked. -->
         <div class="brush-picker-section">
             <button
                 class="brush-picker-button bar-control"
+                use:packPalette={activePalette}
                 onclick={() => { ensureInit(); explorerOpen = true; }}
                 title="Browse brushes"
             >
@@ -233,11 +243,48 @@
         flex-shrink: 0;
     }
 
-    /* Shared `.bar-control` supplies the look (fill, radius, padding, gap,
-     * label/value metrics) so this matches the scrubs; only the button reset
-     * and the name's truncation are picker-specific. */
+    /* Shared `.bar-control` supplies the metrics (radius, padding, gap,
+     * label/value type) so this matches the scrubs; what is picker-specific is
+     * the button reset, the name's truncation, and the pack.
+     *
+     * The pack is worn as a rim in its vivid pair and a wash of its surface,
+     * which is the order a pack card spends its palette in: the pair on the
+     * edge, the surface on the body. The pair runs as a gradient because
+     * refraction is chroma bent and is drawn with it, never alone
+     * (`brush/pack.rs`), at half strength, so the chip carries the pack without
+     * outranking the scrubs it sits in a row with.
+     *
+     * A gradient cannot be a border colour, so the border is transparent and
+     * the ring is painted as the bottom background layer: clipped to the border
+     * box, with the body's two layers clipped to the padding box on top of it,
+     * so what shows through the transparent border is exactly the ring.
+     * `border-image` would be the direct spelling and is not usable here: it
+     * ignores `border-radius` and would square off the chip's corners.
+     *
+     * The body's own layers are opaque in the right order: a pack's surface may
+     * carry alpha, and what it is meant to let through is the control it is
+     * dressing (hence `--bg` beneath it), not the ring or the tool bar behind
+     * it.
+     *
+     * The padding gives back what the border takes, so the chip stands exactly
+     * as tall as the borderless scrubs it wraps alongside. */
     .brush-picker-button {
-        border: none;
+        --pack-rim-fill:
+            linear-gradient(
+                90deg,
+                color-mix(in srgb, var(--pack-chroma) 50%, transparent),
+                color-mix(in srgb, var(--pack-refraction) 50%, transparent))
+            border-box;
+        --bar-control-fill:
+            linear-gradient(var(--pack-surface) 0 0) padding-box,
+            linear-gradient(var(--bg) 0 0) padding-box,
+            var(--pack-rim-fill);
+        --bar-control-fill-hover:
+            linear-gradient(var(--pack-surface) 0 0) padding-box,
+            linear-gradient(var(--bg-hover) 0 0) padding-box,
+            var(--pack-rim-fill);
+        border: 2px solid transparent;
+        padding: 2px 8px;
         cursor: pointer;
     }
     .brush-picker-button .name {
