@@ -21,6 +21,7 @@ import { registerPalettePopupAction } from './palette_popup';
 import { registerCloneSourceAction } from './clone_source_gesture';
 import { registerClipboardActions } from './clipboard';
 import { registerPackActions } from './pack_actions';
+import { registerDevPackActions } from './dev_packs';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { decodeToRgba, placeSmartObjectFromBlob } from './place_smart_object';
@@ -983,6 +984,7 @@ export function registerActions() {
 
     // -- Brush pack import / export --
     registerPackActions();
+    registerDevPackActions();
 
     // -- Brush builder --
     actions.register({

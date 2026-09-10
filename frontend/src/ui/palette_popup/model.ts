@@ -59,6 +59,18 @@ export interface WheelBranch extends WheelPainted {
 
 export type WheelNode = WheelLeaf | WheelBranch;
 
+/** The name a node shows along its arc, or null for one that shows none.
+ *
+ *  A brush is identified by its stroke and a swatch by its own colour; only a
+ *  branch, whose mark is generic (packs ship a handful of shared `mdi:` marks),
+ *  has to be named. Asked here rather than at each consumer because the
+ *  geometry needs it to know how much arc a sector wants and the component
+ *  needs it to draw one, and those two must never disagree about which sectors
+ *  carry text. */
+export function wheelLabel(node: WheelNode): string | null {
+    return node.kind === 'branch' && node.visual.kind === 'icon' ? node.label : null;
+}
+
 /** An arc of ring 0: spans `[a0, a0 + span)` in increasing screen theta
  *  (+y down), wrap-aware, so it may cross the ±π seam. */
 export interface WheelArc {
@@ -107,6 +119,29 @@ class SectionRegistry {
 }
 
 export const paletteSections = new SectionRegistry();
+
+/** Every distinct label the tree will ever draw, in first-seen order.
+ *
+ *  Walked once per open so that every name can be measured before the ring
+ *  holding it is drawn: a fan's widening is decided from these widths, and a
+ *  ring that appeared at one width and then changed as its measurements landed
+ *  would move under the pen. Distinct, because a width belongs to a string. */
+export function wheelLabels(tree: WheelTree): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const walk = (nodes: WheelNode[]) => {
+        for (const node of nodes) {
+            const label = wheelLabel(node);
+            if (label !== null && !seen.has(label)) {
+                seen.add(label);
+                out.push(label);
+            }
+            if (node.kind === 'branch') walk(node.children);
+        }
+    };
+    for (const sec of tree.sections) walk(sec.nodes);
+    return out;
+}
 
 /** Root node `i` in the canonical ring-0 sector order. */
 export function rootAt(tree: WheelTree, i: number): WheelNode | undefined {

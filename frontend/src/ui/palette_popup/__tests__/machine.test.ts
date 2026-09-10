@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reduce, CLOSED, type MachineState } from '../machine';
-import { HUB_R, RING_T } from '../wheel_geometry';
+import { HUB_R, RING_T, hitKey } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
@@ -169,5 +169,145 @@ describe('release', () => {
         const r = reduce(s, { kind: 'cancel' }, tree);
         expect(r.state).toBe(CLOSED);
         expect(r.effect).toBeUndefined();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Stability of the widened fan.
+//
+// The wheel paints the layout it hit-tests, so the layout a frame draws is the
+// one the next pointer sample is resolved against. That is a loop, and these
+// are the tests that keep it closed: a pointer must never skip a sector it
+// swept across, and must never deselect what it just selected.
+// ---------------------------------------------------------------------------
+
+/** `n` packs under one full-circumference Library branch: the Library's own
+ *  shape, and the only fan on the wheel whose size is unbounded. */
+const packNames = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
+const packTree = (n: number): WheelTree => ({
+    sections: [{
+        a0: 0,
+        span: 2 * Math.PI,
+        nodes: [{
+            ...branch('library', packNames(n).map(name => branch(name, [leaf(`${name}-b`)]))),
+            spread: 'full' as const,
+        }],
+    }],
+});
+
+/** Ring 1's label circumference divided `n` ways: the width at which a name no
+ *  longer fits the arc it was dealt. */
+const crowding = (n: number) => 2 * Math.PI * 95.5 / n;
+
+/** Open, drop into the Library, and return the engaged state. */
+const intoLibrary = (tree: WheelTree, widths: Map<string, number>) => {
+    const s0 = reduce(CLOSED, down(), tree, widths).state;
+    return reduce(s0, moveAt(0, RING0_MID), tree, widths).state;
+};
+
+/** Walk the pointer once around ring 1 and report the packs it selected, in
+ *  order, collapsing repeats. */
+const sweep = (tree: WheelTree, widths: Map<string, number>, steps = 4000) => {
+    let s = intoLibrary(tree, widths);
+    const seen: number[] = [];
+    // Half-open: a full turn ends where it started, and the wrap back onto the
+    // first sector is not a skip.
+    for (let t = 0; t < steps; t++) {
+        s = reduce(s, moveAt(2 * Math.PI * t / steps, RING1_MID), tree, widths).state;
+        const e = engaged(s);
+        if (e.highlight.kind !== 'sector' || e.highlight.sector.ring !== 1) continue;
+        const i = e.highlight.sector.path[1];
+        if (seen[seen.length - 1] !== i) seen.push(i);
+    }
+    return seen;
+};
+
+describe('widened fan stability', () => {
+    it('enters every pack, in order, on a slow sweep of a crowded ring', () => {
+        const n = 50;
+        const tree = packTree(n);
+        const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
+        expect(sweep(tree, widths)).toEqual(packNames(n).map((_, i) => i));
+    });
+
+    it('skips nothing when one pack has a long name and its neighbour a short one', () => {
+        // The standing fence against a per-sector widening amount. Widening
+        // only the sectors that need it is the obvious economy, and it breaks
+        // the wheel: a pointer leaving a widened sector lands past several of
+        // its unwidened neighbours, which are then unreachable from that side.
+        // Under a per-sector rule this sweep reads 0, 1, 3, ...; sector 2 is
+        // never entered.
+        const n = 10;
+        const tree = packTree(n);
+        const widths = new Map<string, number>([['p0', 200], ['p1', 18]]);
+        expect(sweep(tree, widths)).toEqual(packNames(n).map((_, i) => i));
+    });
+
+    it('does not deselect what it just selected, when the sample is replayed', () => {
+        const n = 30;
+        const tree = packTree(n);
+        const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
+        let s = intoLibrary(tree, widths);
+        for (let t = 0; t < 600; t++) {
+            const theta = 2 * Math.PI * t / 600;
+            s = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
+            const first = engaged(s).highlight;
+            // The identical sample again, against the layout the first one
+            // produced. It must resolve to the same place.
+            const again = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
+            expect(hitKey(engaged(again).highlight)).toBe(hitKey(first));
+            s = again;
+        }
+    });
+
+    it('lands where it is aimed after a jump across the whole fan', () => {
+        const n = 40;
+        const tree = packTree(n);
+        const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
+        let s = intoLibrary(tree, widths);
+        s = reduce(s, moveAt(0.05, RING1_MID), tree, widths).state;
+        for (const theta of [Math.PI, 1.2, 5.9, 0.3, 3.7]) {
+            s = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
+            const landed = engaged(s).highlight;
+            const again = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
+            expect(hitKey(engaged(again).highlight)).toBe(hitKey(landed));
+            s = again;
+        }
+    });
+
+    it('keeps the pack selected while the pointer is inside its brush fan', () => {
+        // The gesture the widening exists to serve: read a pack's name, then
+        // reach past it for a brush. Keying the widening on the expansion path
+        // rather than the momentary highlight is what stops the whole ring
+        // collapsing under the pointer at that moment.
+        const n = 30;
+        const tree = packTree(n);
+        const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
+        let s = intoLibrary(tree, widths);
+        s = reduce(s, moveAt(0.05, RING1_MID), tree, widths).state;
+        const pack = engaged(s).path;
+        expect(pack).toHaveLength(2);
+        // Outward into the brush fan, along the pack's own mid-angle.
+        const mid = engaged(s).highlight;
+        expect(mid.kind).toBe('sector');
+        const theta = mid.kind === 'sector'
+            ? mid.sector.a0 + mid.sector.span / 2
+            : 0;
+        s = reduce(s, moveAt(theta, HUB_R + 2 * RING_T + RING_T / 2), tree, widths).state;
+        expect(engaged(s).path).toEqual(pack);
+    });
+
+    it('is today’s geometry when nothing has been measured', () => {
+        const n = 24;
+        const tree = packTree(n);
+        let bare = intoLibrary(tree, new Map());
+        let old = reduce(CLOSED, down(), tree).state;
+        old = reduce(old, moveAt(0, RING0_MID), tree).state;
+        for (let t = 0; t <= 200; t++) {
+            const theta = 2 * Math.PI * t / 200;
+            bare = reduce(bare, moveAt(theta, RING1_MID), tree, new Map()).state;
+            old = reduce(old, moveAt(theta, RING1_MID), tree).state;
+            expect(hitKey(engaged(bare).highlight)).toBe(hitKey(engaged(old).highlight));
+        }
     });
 });

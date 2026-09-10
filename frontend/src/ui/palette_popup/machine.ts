@@ -48,10 +48,17 @@ export type MachineEffect = { kind: 'commit'; path: number[] };
 
 export const CLOSED: MachineState = { kind: 'closed' };
 
+const NO_WIDTHS: ReadonlyMap<string, number> = new Map();
+
+/** `widths` carries each label's rendered length so the layout can widen a
+ *  crowded fan; it defaults to none, which is both the frame before anything
+ *  has been measured and the geometry the wheel had before labels could widen
+ *  anything at all. */
 export function reduce(
     state: MachineState,
     event: MachineEvent,
     tree: WheelTree,
+    widths: ReadonlyMap<string, number> = NO_WIDTHS,
 ): { state: MachineState; effect?: MachineEffect } {
     if (state.kind === 'closed') {
         // MOVE/UP while closed occur in practice: when the open was
@@ -76,8 +83,11 @@ export function reduce(
             return { state };
         case 'move': {
             if (event.pointerId !== state.pointerId) return { state };
+            // The layout the pointer is tested against is the one that was on
+            // screen when it moved, i.e. the one the previous path produced.
+            // That is what makes "hit-test what is drawn" literally true.
             const hit = sectorAt(
-                layoutWheel(tree, state.path),
+                layoutWheel(tree, state.path, widths),
                 event.x - state.center.x,
                 event.y - state.center.y,
             );

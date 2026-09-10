@@ -6,6 +6,7 @@
  * `handler`/`onMove`/`deactivate` (see `actions/palette_popup.ts`); the
  * overlay component is display-only and never feeds events back.
  */
+import { SvelteMap } from 'svelte/reactivity';
 import { app } from './app.svelte';
 import {
     CLOSED,
@@ -38,6 +39,19 @@ class PalettePopupStore {
     state = $state<MachineState>(CLOSED);
     /** Snapshotted at open; stable for the gesture's lifetime. */
     tree = $state<WheelTree>({ sections: [] });
+    /** Each label's rendered length in px, by label string.
+     *
+     *  Keyed by the string and not by the sector, because a width is a property
+     *  of a name in a font and not of a place on the wheel: two sectors showing
+     *  the same name measure once, and a name's width does not go stale when the
+     *  wheel re-lays under it.
+     *
+     *  It lives here rather than in the component because both the component's
+     *  paint and the machine's hit-test have to agree about it. That is the
+     *  "paint and hit can never disagree" invariant, and a measurement only one
+     *  of them could see would break it. Cleared at open, beside the snapshot
+     *  it belongs with. */
+    labelWidths = new SvelteMap<string, number>();
 
     get isOpen(): boolean {
         return this.state.kind === 'engaged';
@@ -48,6 +62,7 @@ class PalettePopupStore {
     open(e: PointerEvent): void {
         if (this.state.kind !== 'closed') return;
         if (app.pointerActive) return;
+        this.labelWidths.clear();
         this.tree = paletteSections.snapshot();
         this.#apply({ kind: 'down', pointerId: e.pointerId, x: e.clientX, y: e.clientY });
     }
@@ -76,7 +91,7 @@ class PalettePopupStore {
     }
 
     #apply(event: MachineEvent): void {
-        const { state, effect } = reduce(this.state, event, this.tree);
+        const { state, effect } = reduce(this.state, event, this.tree, this.labelWidths);
         if (!equivalent(this.state, state)) this.state = state;
         if (effect?.kind === 'commit') {
             const node = nodeAt(this.tree, effect.path);

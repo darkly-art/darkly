@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { SvelteMap } from 'svelte/reactivity';
     import { palettePopup } from '../../state/palettePopup.svelte';
     import {
         layoutWheel,
@@ -8,8 +7,10 @@
         labelArc,
         labelPlacement,
         HUB_R,
+        MARK,
         type SectorGeom,
     } from './wheel_geometry';
+    import { wheelLabel, wheelLabels } from './model';
     import BrushThumb from '../brush_library/BrushThumb.svelte';
     import { packPaletteStyle, PACK_RIM, PALETTE_CLASS } from '../../lib/packPalette';
     import Icon from '../../icons/Icon.svelte';
@@ -17,7 +18,7 @@
     const engaged = $derived(
         palettePopup.state.kind === 'engaged' ? palettePopup.state : null);
     const layout = $derived(
-        engaged ? layoutWheel(palettePopup.tree, engaged.path) : []);
+        engaged ? layoutWheel(palettePopup.tree, engaged.path, palettePopup.labelWidths) : []);
     const highlightKey = $derived(engaged ? hitKey(engaged.highlight) : '');
 
     /** Paint order (SVG paints in document order): deeper rings first, so a
@@ -27,27 +28,39 @@
      *  would restart its entrance animation and blink. */
     const drawOrder = $derived([...layout].sort((a, b) => b.ring - a.ring));
 
-    $effect(() => {
-        if (!palettePopup.isOpen) nameLen.clear();
-    });
+    /** Every name the open wheel can show, each rendered once into a hidden
+     *  measurer below. Distinct and known up front, so a fan's widening is
+     *  settled before the ring that needs it is drawn. */
+    const labels = $derived(engaged ? wheelLabels(palettePopup.tree) : []);
 
-    /** Edge length of a branch's mark on its arc, px. The card's icon is 13px
-     *  of type; this is the same mark measured as a box, because on an arc it
-     *  is placed rather than laid out. */
-    const MARK = 13;
-
-    /** Rendered length of each name, px, keyed by sector.
+    /** Publish a name's rendered length, measured off its hidden twin below.
      *
      *  Measured off the DOM because SVG lays nothing out: a `<textPath>` places
-     *  glyphs along a curve and reports nothing about how far they reached, so
-     *  the only way to put a mark beside a name and center the pair is to ask
-     *  the text how long it came out. Read once per element, and again only if
-     *  the name it holds changes. */
-    const nameLen = new SvelteMap<string, number>();
-    function measureName(node: SVGTextPathElement, k: string) {
-        const read = (id: string) => nameLen.set(id, node.getComputedTextLength());
-        read(k);
+     *  glyphs along a curve and reports nothing about how far they reached. The
+     *  measurer is a *separate* element from the one that draws and holds one
+     *  fixed string for as long as it exists, so measuring it can never feed
+     *  back into what it holds. */
+    function measure(node: SVGTextContentElement, label: string) {
+        const read = (l: string) => {
+            const w = measuredWidth(node, l.length);
+            if (w !== null) palettePopup.labelWidths.set(l, w);
+        };
+        read(label);
         return { update: read };
+    }
+
+    /** A measurer's advance across its first `n` characters, or null when it
+     *  cannot be measured.
+     *
+     *  `getSubStringLength` throws rather than returning zero when the element
+     *  renders no characters, which is the state of every element that has been
+     *  detached, is inside a `display: none` subtree, or has not had its text
+     *  attached yet. The count has to be asked for first; it is not a defensive
+     *  flourish. */
+    function measuredWidth(el: SVGTextContentElement, n: number): number | null {
+        const chars = el.getNumberOfChars();
+        if (chars === 0 || n <= 0) return null;
+        return el.getSubStringLength(0, Math.min(n, chars));
     }
 
     /** Newly expanded rings pop outward from this fraction closer to the
@@ -84,23 +97,33 @@
     /** Annular sector outline, inset for the gap-and-round stroke. Angles
      *  increase clockwise on screen (+y down), hence sweep 1 then 0. The
      *  angular insets are uniform in arc length (divided by radius), so
-     *  gaps have constant width; a sector too narrow at its inner radius
-     *  to fit both insets collapses there to a stroke-rounded tip. */
+     *  gaps have constant width; a sector too narrow at a given radius to fit
+     *  both insets collapses there to a stroke-rounded tip.
+     *
+     *  Both edges are guarded, not just the inner one. The inner edge crosses
+     *  first, being the shorter arc, which is why it was the only one that had
+     *  ever been seen to; widening a sector shrinks its siblings, so the outer
+     *  edge is reachable too, and an unguarded crossing there draws the sector
+     *  inside out. */
     function sectorPath(s: SectorGeom, cx: number, cy: number): string {
         const pad = GAP / 2 + CORNER;
         const r0 = s.r0 + pad;
         const r1 = s.r1 - pad;
         const a1 = s.a0 + s.span;
-        const o0 = s.a0 + pad / r1;
-        const o1 = a1 - pad / r1;
-        let i0 = s.a0 + pad / r0;
-        let i1 = a1 - pad / r0;
-        if (i1 < i0) i0 = i1 = s.a0 + s.span / 2;
+        const mid = s.a0 + s.span / 2;
+        const inset = (r: number): [number, number] => {
+            const lo = s.a0 + pad / r;
+            const hi = a1 - pad / r;
+            return hi < lo ? [mid, mid] : [lo, hi];
+        };
+        const [o0, o1] = inset(r1);
+        const [i0, i1] = inset(r0);
         const p = (a: number, r: number) =>
             `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
         const arc = (from: number, to: number, r: number, sweep: 0 | 1) =>
             `A ${r} ${r} 0 ${to - from > Math.PI ? 1 : 0} ${sweep} ${p(sweep ? to : from, r)}`;
-        return `M ${p(o0, r1)} ${arc(o0, o1, r1, 1)}`
+        return `M ${p(o0, r1)}`
+            + (o1 > o0 ? ` ${arc(o0, o1, r1, 1)}` : '')
             + ` L ${p(i1, r0)}`
             + (i1 > i0 ? ` ${arc(i0, i1, r0, 0)}` : '')
             + ' Z';
@@ -192,6 +215,7 @@
     <dialog open class="palette-popup" aria-label="Palette popup"
             style:--cx="{cx}px" style:--cy="{cy}px"
             style:--pop={POP} style:--corner="{CORNER}px"
+            style:--mark="{MARK}px"
             style:--pack-rim-width="{PACK_RIM}px">
         <svg>
             {#each drawOrder as s (key(s))}
@@ -253,8 +277,14 @@
                  its paint: the same pair, at full strength, that `.pack-face`
                  clips to text in HTML, which SVG cannot do. -->
             {#each layout as s (key(s))}
-                {#if s.node.kind === 'branch' && s.node.visual.kind === 'icon'}
-                    {@const place = labelPlacement(s, nameLen.get(key(s)) ?? 0, MARK)}
+                {@const label = wheelLabel(s.node)}
+                {@const nameLen = label === null
+                    ? undefined : palettePopup.labelWidths.get(label)}
+                <!-- Nothing is drawn until the name has been measured: whether
+                     it is drawn at all is decided by the measurement, and a
+                     guess would have to be walked back a frame later. -->
+                {#if label !== null && nameLen !== undefined && s.node.visual.kind === 'icon'}
+                    {@const place = labelPlacement(s, s.showsName ? nameLen : 0)}
                     <defs>
                         <path id={arcId(s)} d={labelArcPath(s, cx, cy)} />
                     </defs>
@@ -262,24 +292,29 @@
                          pack card centres its icon and label in a row. The
                          mark is turned by the arc's own direction of travel,
                          so it stands the way the glyphs beside it do on either
-                         half of the wheel. -->
-                    {#if nameLen.has(key(s))}
-                        <g class="mark" style={packPaletteStyle(s.node.palette)}
-                           transform="translate({(cx + place.markR * Math.cos(place.markA)).toFixed(2)}
-                                                {(cy + place.markR * Math.sin(place.markA)).toFixed(2)})
-                                      rotate({(place.markTurn * 180 / Math.PI).toFixed(2)})">
-                            <g transform="translate({-MARK / 2} {-MARK / 2})">
-                                <Icon name={s.node.visual.icon} inline={false} />
-                            </g>
+                         half of the wheel.
+
+                         The mark is always drawn and the name only sometimes:
+                         `showsName` is settled per fan by the layout, so a ring
+                         either names all of its packs or names only the one
+                         under the pen, and never a scattering of whichever
+                         names happened to be short. -->
+                    <g class="mark" style={packPaletteStyle(s.node.palette)}
+                       transform="translate({(cx + place.markR * Math.cos(place.markA)).toFixed(2)}
+                                            {(cy + place.markR * Math.sin(place.markA)).toFixed(2)})
+                                  rotate({(place.markTurn * 180 / Math.PI).toFixed(2)})">
+                        <g transform="translate({-MARK / 2} {-MARK / 2})">
+                            <Icon name={s.node.visual.icon} inline={false} />
                         </g>
+                    </g>
+                    {#if s.showsName}
+                        <text class="pack-name name" style={packPaletteStyle(s.node.palette)}
+                              style:fill="url(#{packId(s)})">
+                            <textPath href="#{arcId(s)}" startOffset={place.textOffset}>
+                                {label}
+                            </textPath>
+                        </text>
                     {/if}
-                    <text class="pack-name name" style={packPaletteStyle(s.node.palette)}
-                          style:fill="url(#{packId(s)})">
-                        <textPath href="#{arcId(s)}" startOffset={place.textOffset}
-                                  use:measureName={key(s)}>
-                            {s.node.label}
-                        </textPath>
-                    </text>
                 {/if}
             {/each}
             <circle
@@ -303,6 +338,18 @@
                 </div>
             {/if}
         {/each}
+        <!-- One hidden measurer per distinct name, mounted for the whole tree
+             at open rather than per drawn sector: a fan's widening is decided
+             from these widths, so they have to be known before the ring that
+             uses them is laid out. `visibility: hidden` still lays out, which
+             is the entire point; `display: none` would measure nothing. Each
+             holds its name and never changes, so measuring it can never feed
+             back into what it holds. -->
+        <svg class="measurers" aria-hidden="true">
+            {#each labels as label (label)}
+                <text class="pack-name" use:measure={label}>{label}</text>
+            {/each}
+        </svg>
         <!-- Topmost layer (after the badges, which paint above the main
              svg): the gesture's cursor, a thin thread back to the wheel's
              origin and a diamond at the pointer. -->
@@ -365,7 +412,8 @@
         d: var(--d);
         transform-origin: var(--cx) var(--cy);
         animation: pop var(--dur) var(--ease);
-        /* Only a swatch ever changes shape, so this only ever fires there. */
+        /* Fires for a swatch swelling under the pointer, and for a fan
+           re-laying itself when one of its sectors widens to fit its name. */
         transition: d var(--dur) var(--ease);
     }
     .sector.highlighted {
@@ -466,8 +514,15 @@
        end of the pair the name itself is painted across. Sized in `em` by
        Iconify, so the font size is the mark's size. */
     .mark {
-        font-size: 13px;
+        font-size: var(--mark);
         color: var(--pack-chroma);
+    }
+    /* Off-screen and unpaintable, but laid out, which is what makes it
+       measurable. It must be set in exactly the face the name is drawn in, so
+       it wears `.pack-name` and nothing else. */
+    .measurers {
+        visibility: hidden;
+        pointer-events: none;
     }
     @keyframes pop {
         from {

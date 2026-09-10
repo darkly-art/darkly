@@ -13,6 +13,13 @@ import { rustActionDocs } from './rust_action_docs';
 // documentation lives in the `tools` / `filters` catalogs (each names the action
 // that reaches it in `hotkey_action`), and their handlers register from loops
 // that need a live WASM handle. The Rust preset test covers those ids.
+//
+// The comparison is against `catalogIds()` and not `ids()`, which is the same
+// exemption stated once in the registry rather than per case: an action that
+// registers with its own `doc` is documented by something other than the Rust
+// tables, so requiring an entry there for it would be requiring a duplicate.
+// The third test below still holds every registered action, self-documented or
+// not, to having a real name, category and icon.
 
 describe('Rust action metadata joins to its TypeScript handler', () => {
     let handlers: string[];
@@ -20,7 +27,7 @@ describe('Rust action metadata joins to its TypeScript handler', () => {
 
     beforeAll(() => {
         registerActions();
-        handlers = actions.ids().sort();
+        handlers = actions.catalogIds().sort();
         documented = Object.keys(rustActionDocs()).sort();
     });
 

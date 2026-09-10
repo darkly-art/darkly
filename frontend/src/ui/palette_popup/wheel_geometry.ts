@@ -17,7 +17,7 @@
  * dead zone, 8-item max, `DNA_userdef_types.h` / `interface_intern.hh`).
  */
 import { angularOffset } from '../../lib/angle';
-import { rootAt, type WheelNode, type WheelTree } from './model';
+import { rootAt, wheelLabel, type WheelNode, type WheelTree } from './model';
 
 /** Dead-zone hub radius: the always-available cancel target. Blender's 12 px
  *  is a direction threshold, not a release target; a pen needs a landable
@@ -44,6 +44,27 @@ export const RING_T = 48;
  *  (ring 1's midline is ~110 px) and hold more than eight. */
 export const CHILD_STEP = Math.PI / 8;
 
+/** Edge length of a branch's mark on its arc, px. The pack card's icon is 13px
+ *  of type; this is the same mark measured as a box, because on an arc it is
+ *  placed rather than laid out. It lives here, beside `LABEL_GAP`, because the
+ *  arc a label needs is arithmetic and this is one of its terms; the component
+ *  reads it back out as `--mark` to size the glyph itself. */
+export const MARK = 13;
+
+/** The least a sector may be shrunk to pay for a widening sibling, as a
+ *  fraction of its own span.
+ *
+ *  A fraction rather than a floor in pixels, deliberately: an absolute floor
+ *  would forbid expansion at exactly the counts that need it most, since by
+ *  then a sector is already narrower than the mark. */
+const MIN_SHRINK = 0.5;
+
+/** The most a widened sector may take: a half turn, the same bound a fan is
+ *  already held to above. */
+const MAX_SELECTED_SPAN = Math.PI;
+
+const NO_WIDTHS: ReadonlyMap<string, number> = new Map();
+
 export interface SectorGeom {
     /** Ring index, 0 innermost. */
     ring: number;
@@ -60,6 +81,19 @@ export interface SectorGeom {
     /** Tree path of the node this sector shows (see `model.nodeAt`). */
     path: number[];
     node: WheelNode;
+    /** Whether this sector draws its node's name beside its mark.
+     *
+     *  Decided per *fan*, not per sector, which is the whole of it: a ring
+     *  where one short name is drawn and twenty long ones are not reads as an
+     *  accident rather than a rule. A fan whose every name fits draws them all;
+     *  a fan with even one name too long draws only the name of the sector that
+     *  widened to make room for it, and every other sector wears its mark
+     *  alone.
+     *
+     *  It is settled here rather than by the component because it is the same
+     *  question the widening asks, of the same fan, against the same arc, and
+     *  answering it twice is how the two come to disagree. */
+    showsName: boolean;
 }
 
 export type Hit =
@@ -78,6 +112,103 @@ export function hitKey(hit: Hit): string {
 }
 
 /**
+ * The extra span a fan's most crowded member needs, or 0 if none is crowded.
+ *
+ * One number for the whole fan, and that is not an economy: it is what makes
+ * the wheel stable. The selected sector's geometry is what the next frame
+ * hit-tests, so a pointer that lands in sector `j` while `i` is selected has to
+ * still be in `j` once `j` is the selected one. Writing `δ` for the amount each
+ * sibling gives up, that holds exactly when `δ_j >= δ_i`. A per-sector amount
+ * breaks it by construction, because its whole point is that a sector whose
+ * name fits takes nothing while its crowded neighbour takes a lot: the pointer
+ * then skips sectors it swept across and deselects what it just selected. One
+ * amount per fan gives `δ_j = δ_i` for every pair, so the condition holds with
+ * equality, and `sectorAt`'s half-open `[a0, a0 + span)` puts the shared edge
+ * on the right side of it.
+ *
+ * Uniform is also the better behaviour: the ring keeps one rhythm as the pen
+ * sweeps it, instead of every sector jumping a different distance depending on
+ * how long its neighbour's name happens to be.
+ */
+function fanWidening(
+    fan: SectorGeom[],
+    widths: ReadonlyMap<string, number>,
+): { crowded: boolean; extra: number } {
+    const n = fan.length;
+    let wanted = 0;
+    for (const s of fan) {
+        const nameLen = measuredName(s, widths);
+        // Not yet measured: contributes nothing, rather than a guess that the
+        // next frame would have to walk back.
+        if (nameLen === undefined) continue;
+        wanted = Math.max(wanted, labelDemand(nameLen) / labelRadius(s) - s.span);
+    }
+    // Crowded is asked of the *uncapped* need, so a fan too small to pay for
+    // the room it needs still knows it is crowded. Reading it off the capped
+    // amount would call such a fan comfortable and let it draw names that
+    // overflow, which is the silent character-shedding this replaced.
+    const crowded = wanted > 0;
+    // `extra / (n - 1)` has no meaning for a lone sector, and a lone sector has
+    // nobody to take the room from.
+    if (!crowded || n < 2) return { crowded, extra: 0 };
+    // Spans are uniform across a fan, so any member's is the fan's.
+    const w = fan[0].span;
+    const extra = Math.min(wanted, (n - 1) * w * (1 - MIN_SHRINK), MAX_SELECTED_SPAN - w);
+    return { crowded, extra: Math.max(0, extra) };
+}
+
+/** A sector's name width, or undefined if it shows no name or has not been
+ *  measured yet. */
+function measuredName(
+    s: SectorGeom,
+    widths: ReadonlyMap<string, number>,
+): number | undefined {
+    const label = wheelLabel(s.node);
+    return label === null ? undefined : widths.get(label);
+}
+
+/** Settle which of a fan's sectors draw their names.
+ *
+ *  Run after the widening, so the selected sector is measured against the arc
+ *  it actually ended up with. The fit is still checked even for the selected
+ *  one: a fan can be too small to buy all the room its longest name wanted, and
+ *  a name drawn into an arc that cannot hold it sheds characters from both ends
+ *  with no error, which is exactly the failure this whole ladder replaced. */
+function markNames(
+    fan: SectorGeom[],
+    widths: ReadonlyMap<string, number>,
+    crowded: boolean,
+    selected: number,
+): void {
+    fan.forEach((s, i) => {
+        const nameLen = measuredName(s, widths);
+        s.showsName = nameLen !== undefined
+            && (!crowded || i === selected)
+            && labelDemand(nameLen) <= labelArcLen(s) + FIT_EPS;
+    });
+}
+
+/**
+ * Re-lay a fan with `selected` widened by `extra` and every other member
+ * giving up an equal share of it.
+ *
+ * In index order from the fan's own `a0`, which pins both of its endpoints:
+ * total span is conserved (`(w+d) + (n-1)(w - d/(n-1)) = n·w`), so a bounded
+ * fan cannot slide out from under its parent and a full-circumference one
+ * closes exactly on its seam.
+ */
+function expandFan(fan: SectorGeom[], selected: number, extra: number): void {
+    if (extra <= 0) return;
+    const shrink = extra / (fan.length - 1);
+    let a = fan[0].a0;
+    fan.forEach((s, i) => {
+        s.a0 = a;
+        s.span += i === selected ? extra : -shrink;
+        a += s.span;
+    });
+}
+
+/**
  * Every visible sector for the tree under the current expansion `path`.
  *
  * Ring 0 splits each section's arc evenly among its nodes (Krita's
@@ -86,8 +217,28 @@ export function hitKey(hit: Hit): string {
  * `min(π, max(n · CHILD_STEP, parentSpan))`: wide enough to land in, never
  * narrower than the parent, never more than a half turn. A parent with
  * `spread: 'full'` instead hands its children the entire circumference.
+ *
+ * `widths` carries each label's rendered length, by label string. Where a fan
+ * holds a name too long for the arc it was dealt, the fan's selected member
+ * widens to fit it and its siblings give up the room uniformly. Passing no
+ * widths (or widths that all fit) yields exactly the even layout above, which
+ * is both the pre-measurement frame and every uncrowded wheel.
+ *
+ * The widening is applied to each ring as it is built, before the ring below
+ * is laid out, so a fan is dealt about its parent's *widened* midpoint and at
+ * its widened span. That is what keeps a pack's brush fan centred under the
+ * pack and no narrower than it, and it is why this is one pass rather than a
+ * layout followed by a correction.
+ *
+ * Note the widening is keyed on `path`, not on what the pointer is momentarily
+ * over. A leaf hit leaves `path` at its parent (see `advance`), so a pack stays
+ * wide and readable for as long as the painter is choosing a brush inside it.
  */
-export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
+export function layoutWheel(
+    tree: WheelTree,
+    path: number[],
+    widths: ReadonlyMap<string, number> = NO_WIDTHS,
+): SectorGeom[] {
     const out: SectorGeom[] = [];
 
     let base = 0;
@@ -95,7 +246,7 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
         const n = sec.nodes.length;
         if (n === 0) continue;
         const span = sec.span / n;
-        sec.nodes.forEach((node, i) => out.push({
+        const fan: SectorGeom[] = sec.nodes.map((node, i) => ({
             ring: 0,
             a0: sec.a0 + i * span,
             span,
@@ -104,7 +255,17 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
             unbounded: path.length === 0,
             path: [base + i],
             node,
+            showsName: false,
         }));
+        // A section is a fan: it owns an arc and divides it, so it is the
+        // group that pays for one of its own widening, and the group that
+        // decides together whether its names are drawn.
+        const rootSel = path.length > 0 ? path[0] - base : -1;
+        const selected = rootSel >= 0 && rootSel < n ? rootSel : -1;
+        const { crowded, extra } = fanWidening(fan, widths);
+        if (selected >= 0) expandFan(fan, selected, extra);
+        markNames(fan, widths, crowded, selected);
+        out.push(...fan);
         base += n;
     }
 
@@ -119,22 +280,25 @@ export function layoutWheel(tree: WheelTree, path: number[]): SectorGeom[] {
             : Math.min(Math.PI, Math.max(n * CHILD_STEP, parentSector.span));
         const child = span / n;
         const a0 = parentSector.a0 + parentSector.span / 2 - span / 2;
-        let next: SectorGeom | undefined;
-        parent.children.forEach((node, i) => {
-            const s: SectorGeom = {
-                ring,
-                a0: a0 + i * child,
-                span: child,
-                r0: HUB_R + ring * RING_T,
-                r1: HUB_R + (ring + 1) * RING_T,
-                unbounded: ring === path.length,
-                path: [...parentSector!.path, i],
-                node,
-            };
-            out.push(s);
-            if (i === path[k + 1]) next = s;
-        });
-        parentSector = next;
+        const fan: SectorGeom[] = parent.children.map((node, i) => ({
+            ring,
+            a0: a0 + i * child,
+            span: child,
+            r0: HUB_R + ring * RING_T,
+            r1: HUB_R + (ring + 1) * RING_T,
+            unbounded: ring === path.length,
+            path: [...parentSector!.path, i],
+            node,
+            showsName: false,
+        }));
+        const childSel = path[k + 1];
+        const selected = childSel !== undefined && childSel >= 0 && childSel < n
+            ? childSel : -1;
+        const { crowded, extra } = fanWidening(fan, widths);
+        if (selected >= 0) expandFan(fan, selected, extra);
+        markNames(fan, widths, crowded, selected);
+        out.push(...fan);
+        parentSector = selected === -1 ? undefined : fan[selected];
     }
     return out;
 }
@@ -180,7 +344,7 @@ const LABEL_CAP = 9;
  */
 export function labelArc(s: SectorGeom): { a0: number; a1: number; r: number } {
     const outward = Math.sin(midAngle(s)) < 0;
-    const r = (s.r0 + s.r1) / 2 + (outward ? -LABEL_CAP / 2 : LABEL_CAP / 2);
+    const r = outward ? labelRadius(s) : (s.r0 + s.r1) / 2 + LABEL_CAP / 2;
     // A span of a full turn has no start distinct from its end, and an arc
     // command between coincident points draws nothing at all.
     const span = Math.min(s.span, 2 * Math.PI - 1e-3);
@@ -188,17 +352,56 @@ export function labelArc(s: SectorGeom): { a0: number; a1: number; r: number } {
     return outward ? { a0: s.a0, a1, r } : { a0: a1, a1: s.a0, r };
 }
 
+/** The radius a sector's label is budgeted against.
+ *
+ *  The tighter of the two radii `labelArc` chooses between, and deliberately
+ *  the tighter: which one a sector actually gets depends on which half of the
+ *  wheel its midpoint falls in, and widening a sector moves its midpoint, far
+ *  enough to carry it across the horizontal. A sector budgeted at the roomier
+ *  radius and then drawn at this one would widen by exactly enough to leave its
+ *  name still too long, which is the one outcome the widening exists to
+ *  prevent. */
+export function labelRadius(s: SectorGeom): number {
+    return (s.r0 + s.r1) / 2 - LABEL_CAP / 2;
+}
+
 /** Space between a sector's mark and its name, px along the arc. The card's
  *  row spends 8 between the two; an arc reads tighter, and this is measured
  *  along a curve rather than across a flex gap. */
 const LABEL_GAP = 5;
+
+/** How much arc a sector has to set its label run in, px. */
+export function labelArcLen(s: SectorGeom): number {
+    const { a0, a1, r } = labelArc(s);
+    return Math.abs(a1 - a0) * r;
+}
+
+/** The arc a sector's whole label run wants, px: mark, gap, name.
+ *
+ *  One definition, shared by the fitter (which asks whether it has this much)
+ *  and the widening (which asks for this much). */
+export function labelDemand(nameLen: number): number {
+    return MARK + LABEL_GAP + nameLen;
+}
+
+/** Slack on the fit comparison, px.
+ *
+ *  The widening solves for the span at which a name exactly fits, so a widened
+ *  sector arrives here on a constructed tie: `demand / labelRadius * radius`,
+ *  which is `demand` in exact arithmetic and a few ulps either side of it in
+ *  floating point. Landing on the wrong side means widening a sector to fit a
+ *  name and then declining to draw it, which is the one outcome both halves of
+ *  this exist to prevent. Far below a pixel, so it can never turn a real
+ *  overflow into a fit. */
+const FIT_EPS = 1e-6;
 
 /** Where a sector's mark and its name sit along its arc.
  *
  *  The two are one run, centered on the arc together the way a card's icon and
  *  label are centered in their row: mark, gap, name. The name's own length has
  *  to be measured off the rendered text (SVG lays nothing out for you), which
- *  is why it arrives as an argument rather than being computed here.
+ *  is why it arrives as an argument rather than being computed here; pass 0 for
+ *  a sector showing no name, and the mark centers alone.
  *
  *  `markTurn` is the direction of travel at the mark, which is what stands it
  *  up the same way the glyphs beside it stand, on either half of the wheel. */
@@ -210,30 +413,26 @@ export interface LabelPlacement {
     textOffset: number;
 }
 
-export function labelPlacement(
-    s: SectorGeom,
-    nameLen: number,
-    markW: number,
-): LabelPlacement {
+export function labelPlacement(s: SectorGeom, nameLen: number): LabelPlacement {
     const { a0, a1, r } = labelArc(s);
     const sign = a1 > a0 ? 1 : -1;
-    const arcLen = Math.abs(a1 - a0) * r;
-    const run = markW + LABEL_GAP + nameLen;
+    const arcLen = labelArcLen(s);
+    // A mark with no name beside it is centred on its own, gap and all: a gap
+    // to nothing would push it off centre by half of one.
+    const run = MARK + (nameLen > 0 ? LABEL_GAP + nameLen : 0);
     const start = arcLen / 2 - run / 2;
-    const markA = a0 + (sign * (start + markW / 2)) / r;
+    const markA = a0 + (sign * (start + MARK / 2)) / r;
     return {
         markA,
         // The middle of the band, which is where the ink beside it is centered
         // whichever side of its baseline that ink grows.
         markR: (s.r0 + s.r1) / 2,
         markTurn: markA + (sign * Math.PI) / 2,
-        textOffset: start + markW + LABEL_GAP + nameLen / 2,
+        textOffset: start + MARK + LABEL_GAP + nameLen / 2,
     };
 }
 
 /**
- * Resolve a pointer offset from the wheel center to what it is over./**
- * Resolve a pointer offset from the wheel center to what it is over./**
  * Resolve a pointer offset from the wheel center to what it is over.
  *
  * Radius bands pick the ring, clamped to the deepest expanded one (that ring

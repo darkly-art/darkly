@@ -6,6 +6,9 @@ import {
     hitKey,
     midAngle,
     labelArc,
+    labelArcLen,
+    labelRadius,
+    labelDemand,
     HUB_R,
     RING_T,
     CHILD_STEP,
@@ -42,20 +45,19 @@ const ring = (layout: SectorGeom[], k: number) => layout.filter(s => s.ring === 
 const at = (theta: number, r: number): [number, number] =>
     [r * Math.cos(theta), r * Math.sin(theta)];
 
-describe('midAngle', () => {
-    /** Probe along a sector's mid-angle and ask the wheel what is there. A
-     *  round trip through `sectorAt` rather than a restatement of
-     *  `a0 + span / 2`: it fails on a sign error, a degrees/radians slip, or
-     *  an off-by-half-span, which is what would point a rotated chip the
-     *  wrong way. */
-    const landsOnItself = (layout: SectorGeom[]) => {
-        for (const s of layout) {
-            const hit = sectorAt(layout, ...at(midAngle(s), (s.r0 + s.r1) / 2));
-            expect(hit.kind).toBe('sector');
-            expect((hit as { sector: SectorGeom }).sector.path).toEqual(s.path);
-        }
-    };
+/** Probe along a sector's mid-angle and ask the wheel what is there. A round
+ *  trip through `sectorAt` rather than a restatement of `a0 + span / 2`: it
+ *  fails on a sign error, a degrees/radians slip, or an off-by-half-span,
+ *  which is what would point a rotated chip the wrong way. */
+const landsOnItself = (layout: SectorGeom[]) => {
+    for (const s of layout) {
+        const hit = sectorAt(layout, ...at(midAngle(s), (s.r0 + s.r1) / 2));
+        expect(hit.kind).toBe('sector');
+        expect((hit as { sector: SectorGeom }).sector.path).toEqual(s.path);
+    }
+};
 
+describe('midAngle', () => {
     it('points into its own sector, on every ring and in every quadrant', () => {
         landsOnItself(layoutWheel(tree, [5, 0]));
     });
@@ -394,5 +396,249 @@ describe('hitKey', () => {
             hitKey(sectorAt(layout, HUB_R + 10, 10)),
         ]);
         expect(keys.size).toBe(4);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Label fitting and the widening it arms.
+// ---------------------------------------------------------------------------
+
+/** A pack fan of `n` members under one full-circumference branch, which is the
+ *  Library's shape and the only fan on the wheel whose size is unbounded. */
+const packTree = (names: string[]): WheelTree => ({
+    sections: [{
+        a0: 0,
+        span: 2 * Math.PI,
+        nodes: [{
+            ...branch('library', names.map(name => branch(name, [leaf(`${name}-b`)]))),
+            spread: 'full' as const,
+        }],
+    }],
+});
+
+/** `n` packs named `p0 … p(n-1)`. */
+const packs = (n: number) => packTree(Array.from({ length: n }, (_, i) => `p${i}`));
+
+/** Every label measuring `px`, which is what makes a fan crowded or not. */
+const widthsOf = (labels: string[], px: number) =>
+    new Map(labels.map(l => [l, px]));
+
+const ringOf = (layout: SectorGeom[], k: number) => layout.filter(s => s.ring === k);
+/** Just the geometry, for asserting that a layout is placed identically to
+ *  another. `showsName` is not geometry: measuring the names is exactly what
+ *  changes it, so a layout given widths differs there and nowhere else when
+ *  every name fits. */
+const placement = (layout: SectorGeom[]) =>
+    layout.map(({ showsName, node, ...geom }) => geom);
+const total = (fan: SectorGeom[]) => fan.reduce((a, s) => a + s.span, 0);
+
+describe('showsName', () => {
+    /** The width at which every member of an `n`-pack fan is crowded. */
+    const crowding = (n: number) => 2 * Math.PI * 95.5 / n;
+    const namesOf = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
+
+    it('names every pack when the whole fan fits', () => {
+        const n = 5;
+        const fan = ringOf(layoutWheel(packs(n), [0, 2], widthsOf(namesOf(n), 20)), 1);
+        expect(fan.map(s => s.showsName)).toEqual(fan.map(() => true));
+    });
+
+    it('names only the widened pack once any one name does not fit', () => {
+        // The `Ink` case: one short name among long ones must not be the lone
+        // label in a ring of marks. A fan decides together.
+        const n = 8;
+        const names = namesOf(n);
+        const widths = new Map(names.map(l => [l, 20]));
+        widths.set('p3', crowding(n) * 3);
+        const fan = ringOf(layoutWheel(packs(n), [0, 6], widths), 1);
+        expect(fan.map(s => s.showsName)).toEqual(fan.map((_, i) => i === 6));
+    });
+
+    it('names nothing in a crowded fan with no selection', () => {
+        const n = 8;
+        const names = namesOf(n);
+        const widths = new Map(names.map(l => [l, 20]));
+        widths.set('p3', crowding(n) * 3);
+        // Path stops at the Library: the pack ring is drawn, none selected.
+        const fan = ringOf(layoutWheel(packs(n), [0], widths), 1);
+        expect(fan.some(s => s.showsName)).toBe(false);
+    });
+
+    it('names nothing that has not been measured', () => {
+        const fan = ringOf(layoutWheel(packs(6), [0, 1], new Map()), 1);
+        expect(fan.some(s => s.showsName)).toBe(false);
+    });
+
+    it('names the widened pack, at every index and on both halves of the wheel', () => {
+        // The widening solves for the span at which a name exactly fits, so the
+        // selected sector arrives at the fit check on a constructed tie. Landing
+        // on the wrong side of it means widening a sector to fit a name and then
+        // declining to draw it, which is the one outcome both halves exist to
+        // prevent.
+        const n = 24;
+        const names = namesOf(n);
+        const px = crowding(n);
+        for (let i = 0; i < n; i++) {
+            const fan = ringOf(layoutWheel(packs(n), [0, i], widthsOf(names, px)), 1);
+            expect(fan[i].showsName).toBe(true);
+            expect(labelDemand(px)).toBeLessThanOrEqual(labelArcLen(fan[i]) + 1e-6);
+        }
+    });
+
+    it('declines to name a pack the fan could not buy enough room for', () => {
+        // A fan too small to pay for its longest name must not draw it anyway:
+        // an overflowing `<textPath>` sheds glyphs from both ends silently.
+        const n = 6;
+        const names = namesOf(n);
+        const fan = ringOf(layoutWheel(packs(n), [0, 2], widthsOf(names, 5000)), 1);
+        expect(fan.some(s => s.showsName)).toBe(false);
+    });
+});
+
+describe('layoutWheel widening', () => {
+    /** The width at which every member of an `n`-pack fan is crowded. */
+    const crowding = (n: number) => 2 * Math.PI * 95.5 / n;
+
+    it('is exactly the even layout when no name is measured', () => {
+        const tree10 = packs(10);
+        expect(layoutWheel(tree10, [0, 3], new Map())).toEqual(layoutWheel(tree10, [0, 3]));
+    });
+
+    it('places sectors exactly as the even layout does when every name fits', () => {
+        const tree10 = packs(10);
+        const names = Array.from({ length: 10 }, (_, i) => `p${i}`);
+        const fits = widthsOf(names, 10);
+        expect(placement(layoutWheel(tree10, [0, 3], fits)))
+            .toEqual(placement(layoutWheel(tree10, [0, 3])));
+    });
+
+    it('contains the selected sector’s own base interval, at every index', () => {
+        const n = 50;
+        const tree50 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const w = widthsOf(names, crowding(n));
+        const base = ringOf(layoutWheel(tree50, [0]), 1);
+        for (let i = 0; i < n; i++) {
+            const s = ringOf(layoutWheel(tree50, [0, i], w), 1)[i];
+            expect(s.a0).toBeLessThanOrEqual(base[i].a0 + 1e-12);
+            expect(s.a0 + s.span).toBeGreaterThanOrEqual(base[i].a0 + base[i].span - 1e-12);
+        }
+    });
+
+    it('conserves the fan’s total span and pins its endpoints', () => {
+        const n = 20;
+        const tree20 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const w = widthsOf(names, crowding(n));
+        const base = ringOf(layoutWheel(tree20, [0]), 1);
+        for (const i of [0, 7, n - 1]) {
+            const fan = ringOf(layoutWheel(tree20, [0, i], w), 1);
+            expect(total(fan)).toBeCloseTo(total(base), 9);
+            expect(fan[0].a0).toBeCloseTo(base[0].a0, 9);
+            const end = fan[n - 1].a0 + fan[n - 1].span;
+            expect(end).toBeCloseTo(base[0].a0 + 2 * Math.PI, 9);
+        }
+    });
+
+    it('shrinks every sibling by the same amount', () => {
+        const n = 12;
+        const tree12 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const w = widthsOf(names, crowding(n));
+        const fan = ringOf(layoutWheel(tree12, [0, 4], w), 1);
+        const siblings = fan.filter((_, i) => i !== 4).map(s => s.span);
+        for (const span of siblings) expect(span).toBeCloseTo(siblings[0], 12);
+        expect(fan[4].span - 2 * Math.PI / n)
+            .toBeCloseTo((n - 1) * (2 * Math.PI / n - siblings[0]), 12);
+    });
+
+    it('widens by one amount for the whole fan, not one per sector', () => {
+        // A fan holding one long name and one short: selecting the short-named
+        // member must widen it by exactly as much as selecting the long-named
+        // one. This is the property the wheel's stability rests on, and it is
+        // the one an "optimization" would most naturally break: why widen a
+        // sector that does not need it? Because otherwise the pointer skips
+        // sectors it swept across. See the machine suite's sweep tests.
+        const tree10 = packs(10);
+        const w = new Map([['p0', 200], ['p1', 5]]);
+        const a = ringOf(layoutWheel(tree10, [0, 0], w), 1);
+        const b = ringOf(layoutWheel(tree10, [0, 1], w), 1);
+        expect(b[1].span).toBeCloseTo(a[0].span, 12);
+    });
+
+    it('leaves a one-member fan alone, without producing NaN', () => {
+        const one = packs(1);
+        const w = widthsOf(['p0'], 500);
+        const fan = ringOf(layoutWheel(one, [0, 0], w), 1);
+        expect(fan).toHaveLength(1);
+        expect(Number.isFinite(fan[0].a0)).toBe(true);
+        expect(Number.isFinite(fan[0].span)).toBe(true);
+        expect(fan[0].span).toBeCloseTo(2 * Math.PI, 12);
+    });
+
+    it('closes a full-circumference fan on its own seam', () => {
+        const n = 30;
+        const tree30 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const fan = ringOf(layoutWheel(tree30, [0, 11], widthsOf(names, crowding(n))), 1);
+        // Contiguous, with no gap and no overlap, to accumulation error: the
+        // re-lay sums spans where the even layout multiplies.
+        for (let i = 1; i < n; i++) {
+            expect(fan[i].a0).toBeCloseTo(fan[i - 1].a0 + fan[i - 1].span, 9);
+        }
+    });
+
+    it('holds siblings above the shrink floor and the selection below a half turn', () => {
+        const n = 8;
+        const tree8 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        // Far more demand than the fan can pay for.
+        const fan = ringOf(layoutWheel(tree8, [0, 2], widthsOf(names, 5000)), 1);
+        const w = 2 * Math.PI / n;
+        expect(fan[2].span).toBeLessThanOrEqual(Math.PI + 1e-12);
+        for (const [i, s] of fan.entries()) {
+            if (i !== 2) expect(s.span).toBeGreaterThanOrEqual(w * 0.5 - 1e-12);
+        }
+    });
+
+    it('centres a widened pack’s brush fan under it, and leaves ring 0 alone', () => {
+        const n = 24;
+        const tree24 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const w = widthsOf(names, crowding(n));
+        const plain = layoutWheel(tree24, [0, 5]);
+        const wide = layoutWheel(tree24, [0, 5], w);
+        expect(ringOf(wide, 0)).toEqual(ringOf(plain, 0));
+        const pack = ringOf(wide, 1)[5];
+        const brushes = ringOf(wide, 2);
+        expect(brushes.length).toBeGreaterThan(0);
+        const centre = midAngle(brushes[0]) + (midAngle(brushes[brushes.length - 1])
+            - midAngle(brushes[0])) / 2;
+        expect(centre).toBeCloseTo(midAngle(pack), 9);
+    });
+
+    it('still resolves every sector it draws', () => {
+        // The "paint and hit can never disagree" invariant, asserted against a
+        // widened layout rather than an even one.
+        const n = 30;
+        const tree30 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        landsOnItself(layoutWheel(tree30, [0, 17], widthsOf(names, crowding(n))));
+    });
+
+    it('budgets against the tighter of the two label radii', () => {
+        // `labelArc` picks its radius from which half of the wheel a sector's
+        // midpoint falls in, and widening moves that midpoint. Budgeting
+        // against the roomier radius would widen a sector by exactly enough to
+        // leave its name still too long.
+        const n = 16;
+        const tree16 = packs(n);
+        const names = Array.from({ length: n }, (_, i) => `p${i}`);
+        const px = crowding(n);
+        for (let i = 0; i < n; i++) {
+            const s = ringOf(layoutWheel(tree16, [0, i], widthsOf(names, px)), 1)[i];
+            expect(labelRadius(s)).toBeLessThanOrEqual((s.r0 + s.r1) / 2);
+            expect(labelArcLen(s) + 1e-9).toBeGreaterThanOrEqual(labelDemand(px));
+        }
     });
 });
