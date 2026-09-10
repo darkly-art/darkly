@@ -1,4 +1,4 @@
-//! Brush perf instrumentation — bench-facing extraction + frame phases.
+//! Brush perf instrumentation: bench-facing extraction + frame phases.
 //!
 //! [`BrushPerfCounters`] itself lives on [`crate::brush::gpu_context`]
 //! because it's a field on `BrushGpuContext`. The engine accumulates
@@ -11,7 +11,7 @@
 //! `PaintComputeTimestamps` (6 slots today, easily grown), **not** new CPU
 //! `record_*` methods on `BrushPerfCounters`. `Instant::now()` brackets in
 //! the brush hot path are non-zero overhead in production and sprawl
-//! during investigations — the previous `[stab-perf]` log carried ~25
+//! during investigations; the previous `[stab-perf]` log carried ~25
 //! sub-buckets that all paid that cost. Keep `BrushPerfCounters` small
 //! and stable; reach for timestamps when you need finer attribution.
 
@@ -22,7 +22,7 @@ use crate::brush::gpu_context::BrushPerfCounters;
 /// differences against the previous snapshot; vectors are taken
 /// whole-cloth from the current counter (and reset to empty there).
 ///
-/// Bench-only — the WASM bridge never calls the drain.
+/// Bench-only: the WASM bridge never calls the drain.
 #[derive(Default, Debug, Clone)]
 pub struct BrushPerfDelta {
     /// Wall-clock microseconds spent inside `queue.submit()` (final +
@@ -47,7 +47,7 @@ pub struct BrushPerfDelta {
 impl BrushPerfDelta {
     /// Difference between two counter snapshots. Scalars are
     /// `saturating_sub`'d; the per-flush vectors are taken from `curr`
-    /// via `mem::take` (so `curr`'s vectors are empty afterwards — the
+    /// via `mem::take` (so `curr`'s vectors are empty afterwards; the
     /// engine resnapshots `prev` from `curr` after this call, which is
     /// why that's correct).
     pub(crate) fn between(curr: &mut BrushPerfCounters, prev: &BrushPerfCounters) -> Self {

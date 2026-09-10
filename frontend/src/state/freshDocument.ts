@@ -7,7 +7,7 @@ export type DeployMode = 'demo' | 'app';
 
 export const deployMode: DeployMode = __DARKLY_APP_MODE__;
 
-/** The starter content of a fresh document — everything that differs between the
+/** The starter content of a fresh document: everything that differs between the
  *  decorative `demo.darkly.art` build and the clean `app` build. Consumers call
  *  the two hooks without knowing which flavor they got; a new mode is a purely
  *  additive entry in {@link RECIPES}. */
@@ -17,7 +17,7 @@ interface FreshDocumentRecipe {
     defaultBrushName: string;
     /** The initial foreground paint color for this build. */
     foreground: Color;
-    /** The initial background swatch color for this build — the other half of
+    /** The initial background swatch color for this build: the other half of
      *  the foreground/background pair "reset colors" returns to and "swap"
      *  toggles into. */
     background: Color;

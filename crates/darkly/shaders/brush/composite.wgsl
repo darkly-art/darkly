@@ -6,7 +6,7 @@
 //   2. Stroke→layer:   fg = stroke buffer (straight),    bg = pre-stroke (straight)
 // The fg_premultiplied uniform tells the shader which convention fg uses.
 //
-// Outputs straight alpha with REPLACE blend — no hardware alpha blending.
+// Outputs straight alpha with REPLACE blend (no hardware alpha blending).
 // See docs/lessons-learned/compositing-lessons-learned.md #4 (why REPLACE) and #6 (why the flag).
 
 struct CompositeUniforms {
@@ -65,11 +65,11 @@ struct VertexOutput {
 }
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Sample foreground (premultiplied or straight — see fg_premultiplied).
+    // Sample foreground (premultiplied or straight, see fg_premultiplied).
     let dab = textureSample(t_dab, s_dab, in.dab_uv);
 
     // Selection masking: modulate dab by selection coverage. Applied per-dab
-    // only — the stroke→layer commit passes `apply_selection = 0` because
+    // only: the stroke→layer commit passes `apply_selection = 0` because
     // selection has already been baked into the scratch by prior dabs.
     let sel_uv = plane_to_selection_uv(in.canvas_pos, u.canvas_origin, u.canvas_size);
     let sel_raw = textureSample(t_selection, s_selection, sel_uv).r;
@@ -78,11 +78,11 @@ struct VertexOutput {
     // Stroke-level opacity cap: scales the foreground alpha (and premultiplied
     // rgb) before the Porter-Duff blend. Per-dab compositing passes 1.0.
     let fg_a = dab.a * sel * u.stroke_opacity;
-    // When fg_premultiplied == 0, the dab is straight alpha — premultiply now.
+    // When fg_premultiplied == 0, the dab is straight alpha; premultiply now.
     let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel * u.stroke_opacity;
 
     // Background: read canvas copy (straight alpha).
-    // The copy_texture_to_texture origin is floor(u.origin) — integer pixel coords.
+    // The copy_texture_to_texture origin is floor(u.origin), integer pixel coords.
     // Use floored origin so the UV maps each fragment to the correct canvas texel.
     let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_scratch_mirror));
     let bg = textureSample(t_scratch_mirror, s_scratch_mirror, copy_uv);

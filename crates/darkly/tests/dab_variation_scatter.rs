@@ -1,6 +1,6 @@
 //! GPU coverage test for the Dab-space `variation` decorrelation offset.
 //!
-//! The bug this guards against: the per-dab offset was `vec2(v*64, v*64)` — the
+//! The bug this guards against: the per-dab offset was `vec2(v*64, v*64)`, the
 //! same scalar on both axes, so every dab landed on the `x == y` diagonal of the
 //! field (1D), and the `*64` stride resonated with the field's period. The fix
 //! hashes `variation` into two independent components via `fbm_offset2`
@@ -10,11 +10,11 @@
 //! emitted WGSL but cannot execute `fbm_pcg`. This test executes the real
 //! shipped `fbm_offset2` on the GPU for the exact input path a wired
 //! `random → variation` produces, then asserts the results actually cover 2D and
-//! are uncorrelated — the numerical property the bug was about.
+//! are uncorrelated: the numerical property the bug was about.
 
 use darkly::gpu::test_utils::test_device;
 
-/// Number of per-dab samples to evaluate — the `random` node quantizes to full
+/// Number of per-dab samples to evaluate: the `random` node quantizes to full
 /// f32 precision per dab; 1024 evenly-spaced draws is plenty to characterize the
 /// distribution.
 const N: u32 = 1024;
@@ -126,8 +126,8 @@ fn dab_variation_offset_scatters_across_2d() {
     let filled = occupied.iter().flatten().filter(|c| **c).count();
     assert!(
         filled >= 48,
-        "expected ≥48/{} grid cells occupied (2D scatter); got {filled} \
-         — the buggy diagonal fills ≤{GRID}",
+        "expected ≥48/{} grid cells occupied (2D scatter); got {filled}: \
+         the buggy diagonal fills ≤{GRID}",
         GRID * GRID,
     );
 

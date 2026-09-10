@@ -16,7 +16,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "placeSmartObject",
         display_name: "Place as Smart Object",
-        description: "Place an image (PNG / JPEG / WebP) as a smart object in the current document — a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
+        description: "Place an image (PNG / JPEG / WebP) as a smart object in the current document: a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
         icon: "tabler:photo-scan",
     },
     ActionDef {
@@ -28,7 +28,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "saveDocumentAs",
         display_name: "Save As",
-        description: "Save the current document to a new file — `.darkly`, or PNG / JPEG / WebP to export the canvas.",
+        description: "Save the current document to a new file: `.darkly`, or PNG / JPEG / WebP to export the canvas.",
         icon: "fa6-solid:file-export",
     },
     ActionDef {

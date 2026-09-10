@@ -4,7 +4,7 @@
 //! canvas (the reported "grain swims under the rotating stamp" bug).
 //!
 //! The graph has no circle node, so the dab silhouette (a full disc) is
-//! identical between the two renders — only the interior grain differs. The
+//! identical between the two renders; only the interior grain differs. The
 //! probe therefore compares **RGB** (the noise color), not alpha coverage.
 //! At the dab centre the oriented frame is invariant, so probes are taken
 //! off-centre where rotation actually moves the sample.

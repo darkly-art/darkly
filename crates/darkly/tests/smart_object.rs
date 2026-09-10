@@ -1,7 +1,7 @@
 //! Smart objects: a placed image displayed through a stored transform.
 //!
 //! The point of the kind is that resizing is non-destructive. These tests pin
-//! that end to end — placement geometry, the lossless scale round trip,
+//! that end to end: placement geometry, the lossless scale round trip,
 //! minification quality, save/load, and the coordinate frame the image is
 //! anchored in.
 
@@ -54,7 +54,7 @@ fn stripe_source() -> (u32, u32, Vec<u8>) {
     (w, h, px)
 }
 
-/// Fully opaque red, edge to edge — no transparent margin, so the rectangle's
+/// Fully opaque red, edge to edge, no transparent margin, so the rectangle's
 /// own border is the visible silhouette.
 fn opaque_source(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     let px = std::iter::repeat_n([255u8, 0, 0, 255], (w * h) as usize)
@@ -85,7 +85,7 @@ fn save_to_zip(engine: &mut DarklyEngine) -> Vec<u8> {
     panic!("save did not complete within 32 frames");
 }
 
-/// Every void layer's id, read out of the serialized layer tree — the same
+/// Every void layer's id, read out of the serialized layer tree, the same
 /// view the frontend consumes, so the test can find a layer whose id was
 /// re-minted by a document load.
 fn void_layer_ids(engine: &DarklyEngine) -> Vec<LayerId> {
@@ -196,7 +196,7 @@ fn rescale_round_trip_is_bit_identical() {
     assert_eq!(
         after_canvas, before_canvas,
         "returning to the original transform must reproduce the original \
-         pixels exactly — any intermediate resample would round-trip lossily",
+         pixels exactly; any intermediate resample would round-trip lossily",
     );
 
     let after_source = engine
@@ -216,8 +216,8 @@ fn stripe_minify() -> Transform {
 
 /// Minifying one-pixel stripes must read as their average, not as one of them.
 ///
-/// This pins the user-visible property — a shrunk image resolves rather than
-/// shimmering — but not the mechanism: the headless adapter integrates the
+/// This pins the artist-visible property (a shrunk image resolves rather than
+/// shimmering), but not the mechanism: the headless adapter integrates the
 /// whole footprint per sample, so it satisfies this with or without a mip
 /// chain. `smart_object_source_carries_a_mip_chain` is what pins the chain, and
 /// `gpu::rescale`'s own unit tests pin what each level contains.
@@ -247,7 +247,7 @@ fn assert_stripes_averaged(canvas: &[u8]) {
     for s in &samples {
         assert!(
             (i32::from(s[0]) - 128).abs() <= 24 && (i32::from(s[2]) - 128).abs() <= 24,
-            "expected a red/blue average near [128, _, 128], got {s:?} — a \
+            "expected a red/blue average near [128, _, 128], got {s:?}: a \
              single-tap sampler returns near-pure red or blue instead",
         );
     }
@@ -309,7 +309,7 @@ fn rotated_boundary_has_partial_coverage() {
 }
 
 /// Minification must not project the image's edge across the rest of the
-/// canvas. The silhouette is the transformed source rect at every scale — a
+/// canvas. The silhouette is the transformed source rect at every scale; a
 /// sample that lands outside it contributes nothing, however deep into the mip
 /// chain the hardware reads.
 #[test]
@@ -379,7 +379,7 @@ fn crop_does_not_move_the_smart_object() {
     );
 }
 
-/// A placed image survives save and reload — both the transform and the
+/// A placed image survives save and reload: both the transform and the
 /// source pixels, at the source's own dimensions.
 #[test]
 fn transform_round_trips_through_save_and_load() {
@@ -438,7 +438,7 @@ fn a_reloaded_smart_object_renders_identically() {
     assert_eq!(
         after, before,
         "a reloaded smart object must render pixel for pixel what it rendered \
-         before the save — same source, same transform, same filtering",
+         before the save: same source, same transform, same filtering",
     );
     // Equality alone would also be satisfied by both renders being wrong in the
     // same way, so assert the reloaded canvas is right on its own terms: the
@@ -448,7 +448,7 @@ fn a_reloaded_smart_object_renders_identically() {
 }
 
 /// A placed source is allocated with a full mip chain, and the chain is rebuilt
-/// on load rather than saved — the blob holds level 0 only. Asserted
+/// on load rather than saved; the blob holds level 0 only. Asserted
 /// structurally because no rendered-pixel assertion can see it here (the
 /// headless adapter filters a full footprint per sample either way), and
 /// because the chain is the whole minification-quality work item: without this
@@ -475,7 +475,7 @@ fn smart_object_source_carries_a_mip_chain() {
         reloaded.test_void_source_mip_levels(new_id),
         Some(LEVELS),
         "load must reinstall the source through the same path placement uses, \
-         chain included — the saved blob is level 0 only",
+         chain included; the saved blob is level 0 only",
     );
 }
 

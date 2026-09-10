@@ -4,7 +4,7 @@
     import ToolOptionsBar from '../ui/ToolOptionsBar.svelte';
     import { canvasSlot } from './canvasSlot.svelte';
 
-    // The canvas itself lives in the persistent `CanvasOverlay`, not here — this
+    // The canvas itself lives in the persistent `CanvasOverlay`, not here; this
     // panel only reserves the space and publishes its rect. Registering on mount
     // and clearing on destroy lets the overlay follow the panel as it's tiled,
     // and hide when this panel is an inactive tab (unmounted).
@@ -44,7 +44,7 @@
         overflow: hidden;
     }
 
-    /* Empty on purpose — reserves the canvas area; `CanvasOverlay` renders the
+    /* Empty on purpose: reserves the canvas area; `CanvasOverlay` renders the
        actual WebGPU canvases positioned over this rect. */
     .canvas-region {
         flex: 1;

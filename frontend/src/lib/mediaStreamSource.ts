@@ -3,7 +3,7 @@
  *
  * A [`FrameSource`](./frameSource.ts) whose frames come from a `<video>` element
  * backed by a `MediaStream` the caller has already acquired (`getUserMedia` for
- * the camera, `getDisplayMedia` for screenshare — see `app.acquireMediaStream`).
+ * the camera, `getDisplayMedia` for screenshare, see `app.acquireMediaStream`).
  * The shared base owns the per-`tick()` gate, the off-thread
  * `createImageBitmap → uploadVoidExternalImage` upload, the resolution cap, and
  * the freeze / visibility / divisor setters; this subclass only supplies the
@@ -60,8 +60,8 @@ export class MediaStreamSource extends FrameSource {
         this.starting = true;
         this.stream = stream;
         try {
-            // Fire `onEnded` when the capture stops outside our control — the
-            // common path for screenshare (the user clicks the browser's "Stop
+            // Fire `onEnded` when the capture stops outside our control: the
+            // common path for screenshare (the artist clicks the browser's "Stop
             // sharing" bar), and possible for the camera (device unplugged).
             const track = stream.getVideoTracks()[0];
             track?.addEventListener('ended', () => this.handleTrackEnded());
@@ -76,7 +76,7 @@ export class MediaStreamSource extends FrameSource {
             // backing texture even without DOM attachment, but in practice
             // `copyExternalImageToTexture` reliably reads real pixels only
             // after the element has been attached and a frame has been
-            // *presented* — see the requestVideoFrameCallback gate below.
+            // *presented*, see the requestVideoFrameCallback gate below.
             video.style.position = 'fixed';
             video.style.left = '-9999px';
             video.style.top = '0';
@@ -88,7 +88,7 @@ export class MediaStreamSource extends FrameSource {
             video.srcObject = this.stream;
             await video.play();
             // The stream may have been torn down (track ended, layer deleted)
-            // between attach and play — bail without leaving a live element.
+            // between attach and play: bail without leaving a live element.
             if (this.stopped) {
                 video.pause();
                 video.srcObject = null;
@@ -130,7 +130,7 @@ export class MediaStreamSource extends FrameSource {
         }
     }
 
-    /** External track-end handler — also the unit-test seam, since a live
+    /** External track-end handler, also the unit-test seam, since a live
      *  `MediaStreamTrack` can't be faked in the node vitest env. Tears the
      *  source down, flips `ended`, and notifies the app so it can prune the
      *  source and re-show Resume. Idempotent. */
@@ -154,7 +154,7 @@ export class MediaStreamSource extends FrameSource {
     }
 
     /** A live camera/screenshare is always "new" once its first frame has been
-     *  presented — every tick decodes whatever the video currently shows. */
+     *  presented; every tick decodes whatever the video currently shows. */
     protected hasFrameReady(): boolean {
         return this.hasFrame;
     }
@@ -186,7 +186,7 @@ export function describeMediaError(err: unknown, captureKind: CaptureKind): stri
     switch (name) {
         case 'NotAllowedError':
         case 'PermissionDeniedError':
-            // getDisplayMedia rejects with NotAllowedError both when the user
+            // getDisplayMedia rejects with NotAllowedError both when the artist
             // cancels the OS picker and when sharing is policy-blocked.
             return captureKind === 'display'
                 ? 'Screen share was denied or cancelled.'

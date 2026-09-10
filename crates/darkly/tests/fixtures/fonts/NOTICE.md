@@ -7,8 +7,8 @@ shipped binary.
 ## Cantarell-VF.otf
 
 - **Family:** Cantarell
-- **Why:** a genuine variable font (CFF2, `wght` 100–800 axis) with Latin
-  glyphs — exercises variable-axis weight resolution (the Phase-0 spike),
+- **Why:** a genuine variable font (CFF2, `wght` 100-800 axis) with Latin
+  glyphs: exercises variable-axis weight resolution (the Phase-0 spike),
   `register_font`, and `.darkly` font embedding round-tripping.
 - **License:** SIL Open Font License, Version 1.1 (OFL-1.1)
 - **Copyright:** © The Cantarell Authors

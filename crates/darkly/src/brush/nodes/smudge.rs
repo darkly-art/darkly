@@ -1,4 +1,4 @@
-//! Smudge terminal — per-dab fragment-pass smear with a per-brush
+//! Smudge terminal: per-dab fragment-pass smear with a per-brush
 //! compiled WGSL shader.
 //!
 //! Rides the shared [read-mirror terminal](crate::brush::read_mirror_terminal)
@@ -7,14 +7,14 @@
 //! file owns only what's smudge-specific: the read half-extent and the
 //! variant WGSL.
 //!
-//! Each smudge dab samples the scratch read mirror twice — once at
+//! Each smudge dab samples the scratch read mirror twice: once at
 //! `target_pos` (current background) and once at `target_pos − motion`
-//! (the smear sample, what was under the brush at the previous dab) — and
-//! mixes the two by `rate × mask × selection × stroke_opacity`. Per-dab
+//! (the smear sample, what was under the brush at the previous dab). It
+//! then mixes the two by `rate × mask × selection × stroke_opacity`. Per-dab
 //! serialization is *semantically required*: each dab must see the prior
 //! dab's output, which a single instanced draw can't express.
 //!
-//! Stationary dabs (`|motion| < 0.5 px`) are dropped before queueing —
+//! Stationary dabs (`|motion| < 0.5 px`) are dropped before queueing:
 //! `mix(bg, src, _)` collapses to identity in that regime. The read
 //! region is expanded by `|motion|` per axis (ceiled for the bilinear
 //! sampler's half-texel reach) so the smear sample at `target_pos −
@@ -32,7 +32,7 @@ use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 /// Motion magnitude (canvas pixels) below which the dab is treated as
-/// stationary and dropped before queueing — `mix(bg, src, _)` is an
+/// stationary and dropped before queueing: `mix(bg, src, _)` is an
 /// identity write when `src == bg`.
 const STATIONARY_THRESHOLD_PX: f32 = 0.5;
 
@@ -53,7 +53,7 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
                 PortDef::input("motion", BrushWireType::Vec2)
-                    .with_description("Per-dab motion vector — the offset to sample from"),
+                    .with_description("Per-dab motion vector: the offset to sample from"),
                 PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -109,7 +109,7 @@ impl ReadMirrorTerminal for SmudgeEvaluator {
 
     fn read_half(&self, ctx: &EvalContext, _radius: f32, bbox_radius: f32) -> Option<[f32; 2]> {
         let motion = ctx.input("motion").as_vec2();
-        // Stationary-dab early-out — `mix(bg, src, _)` is identity in this
+        // Stationary-dab early-out: `mix(bg, src, _)` is identity in this
         // regime. Skipping the queue saves a render pass and a mirror copy.
         if motion[0].abs() < STATIONARY_THRESHOLD_PX && motion[1].abs() < STATIONARY_THRESHOLD_PX {
             return None;
@@ -152,7 +152,7 @@ impl ReadMirrorTerminal for SmudgeEvaluator {
         Ok(wgsl)
     }
 
-    /// Preview body — show the footprint, not the smear: neutral gray
+    /// Preview body, showing the footprint, not the smear: neutral gray
     /// modulated by the upstream shape mask so the cursor reads the
     /// brush's actual coverage area. (The stroke body's `scratch_mirror`
     /// bindings are omitted in preview mode.)

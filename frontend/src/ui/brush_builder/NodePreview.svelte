@@ -12,18 +12,18 @@
     }
     let { nodeId, width = 96, height = 96 }: Props = $props();
 
-    /** Same throttle window as `BrushDabView` — debounces graph mutations
+    /** Same throttle window as `BrushDabView`: debounces graph mutations
      *  during scrubbing so the engine sees ~10 render requests/sec at peak
      *  instead of one per Svelte tick. */
     const REFRESH_MS = 100;
 
     let imgUrl = $state('');
-    /** Byte length that produced `imgUrl` — skip redundant Blob/URL churn
+    /** Byte length that produced `imgUrl`: skip redundant Blob/URL churn
      *  when WASM hands back the same PNG (cache hit). */
     let lastLen = 0;
 
-    /** Frame budget after each request — wide enough to cover the async
-     *  readback (~10–30ms render + 1–2 frame poll latency). Once the bytes
+    /** Frame budget after each request: wide enough to cover the async
+     *  readback (~10-30ms render + 1-2 frame poll latency). Once the bytes
      *  arrive and the cache fills, we stop polling until the next change. */
     const POLL_FRAMES_PER_REQUEST = 30;
     let framesRemaining = 0;

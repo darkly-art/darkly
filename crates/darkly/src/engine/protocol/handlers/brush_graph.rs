@@ -3,15 +3,15 @@
 //! queries, and `set_brush_blend_mode` are now generated on
 //! `engine/brush_graph.rs`. What stays here:
 //!
-//! - **kind ≠ engine-method name** — the wire verb and the engine method differ
+//! - **kind ≠ engine-method name**: the wire verb and the engine method differ
 //!   (`brush_graph_compile` → `set_brush_graph`, `brush_graph_active` →
 //!   `active_brush_graph`, …); the macro keys the kind off the method name.
-//! - **value-shaping** — `{ yaml }` / `{ value }` envelopes, and the
+//! - **value-shaping**: `{ yaml }` / `{ value }` envelopes, and the
 //!   `null | { error }` compile/validate result (`returns = ok_error` would fit,
 //!   but the kind/method mismatch keeps these hand-written anyway).
-//! - **input marshalling** — `brush_graph_set_input` (kind/value → `InputValue`)
+//! - **input marshalling**: `brush_graph_set_input` (kind/value → `InputValue`)
 //!   and `brush_graph_auto_layout` (`HashMap<String,…>` ↔ `NodeId` keys).
-//! - **`brush_upload_image`** — an always-`Err` stub with unused params.
+//! - **`brush_upload_image`**: an always-`Err` stub with unused params.
 
 use serde::Deserialize;
 use serde_json::json;
@@ -21,24 +21,24 @@ use crate::engine::protocol::{
     bad_payload, decode, graph_result, ok_or_error, ProtocolError, RequestRegistration, Response,
 };
 
-/// `{ json }` — a serialized node-graph (compile / validate).
+/// `{ json }`: a serialized node-graph (compile / validate).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushGraphJsonReq {
     pub json: String,
 }
 
-/// `{ yaml }` — a YAML node-graph to import.
+/// `{ yaml }`: a YAML node-graph to import.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushGraphYamlReq {
     pub yaml: String,
 }
 
-/// `{ node_id, input_name, kind, value }` — set one node input's authored
+/// `{ node_id, input_name, kind, value }`: set one node input's authored
 /// value. `value` is interpreted per `kind`
 /// (`float`/`int`/`enum`/`bool`/`string`/`curve`). One setter for every
-/// input kind — the unified replacement for the former param/port-default
+/// input kind: the unified replacement for the former param/port-default
 /// split.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -50,14 +50,14 @@ pub struct BrushGraphSetInputReq {
     pub value: serde_json::Value,
 }
 
-/// `{ sizes }` — measured node box sizes, keyed by node id, for auto-layout.
+/// `{ sizes }`: measured node box sizes, keyed by node id, for auto-layout.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct BrushGraphAutoLayoutReq {
     pub sizes: std::collections::HashMap<String, [f32; 2]>,
 }
 
-/// `{ resource_name, width, height }` — an uploaded image resource; pixels ride
+/// `{ resource_name, width, height }`: an uploaded image resource; pixels ride
 /// the binary side-channel.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]

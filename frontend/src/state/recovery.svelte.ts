@@ -45,7 +45,7 @@ class RecoveryState {
 
         const inst = shell.open(entry.name);
         // The crashed tab's recording scratch survives the crash (that's
-        // the point of OPFS scratch) — move it onto the restored tab's
+        // the point of OPFS scratch), move it onto the restored tab's
         // identity before its recorder scans for the next segment number.
         void processRecording.adoptScratch(entry, inst);
         inst.onHandleReady = async (engine) => {
@@ -53,7 +53,7 @@ class RecoveryState {
                 await engine.api.openDocument(bytes);
                 const name = await engine.api.documentName();
                 shell.setName(inst.id, name);
-                // Recovered work has no backing file — keep it dirty so
+                // Recovered work has no backing file: keep it dirty so
                 // closing the tab still prompts and autosave re-snapshots it.
                 engine.api.markDirty();
                 await inst.syncCanvasRect();

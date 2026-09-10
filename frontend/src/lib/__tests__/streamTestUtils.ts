@@ -5,7 +5,7 @@
  * under test in the node vitest env (which has no real `fetch`).
  */
 
-/** `[4-byte big-endian length][payload]` — the on-wire frame format. */
+/** `[4-byte big-endian length][payload]`: the on-wire frame format. */
 export function lenPrefixed(payload: Uint8Array): Uint8Array {
     const out = new Uint8Array(4 + payload.length);
     new DataView(out.buffer).setUint32(0, payload.length, false);

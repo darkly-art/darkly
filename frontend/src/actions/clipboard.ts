@@ -4,11 +4,12 @@ import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { placeSmartObjectFromBlob } from './place_smart_object';
+import { toast } from '../state/toast.svelte';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
  *  immediately draggable. When transform is already active we ask the
  *  CanvasView transition effect to reactivate it (rebind session + re-run
- *  onActivate, no deactivate) so it picks up the just-pasted floating — a plain
+ *  onActivate, no deactivate) so it picks up the just-pasted floating; a plain
  *  same-tool assignment would be a no-op and would never begin a fresh
  *  activation. See `planToolTransition` in tool_session.ts. */
 function enterTransformTool() {
@@ -32,7 +33,7 @@ export function registerClipboardActions(): void {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
             // `copy_layer_rich` snapshots metadata up front and then drives
-            // the same async pixel readback that `copy` does — it's a
+            // the same async pixel readback that `copy` does: it's a
             // superset, so we don't need to call both.
             engine.api.copyLayerRich({ id: app.activeLayerId });
             app.onCopyResult(async (result) => {
@@ -51,7 +52,7 @@ export function registerClipboardActions(): void {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
-            // No `cut_layer_rich` yet — fall back to the pixels-only path
+            // No `cut_layer_rich` yet: fall back to the pixels-only path
             // for cut. Cross-tab paste of a cut layer still works (PNG
             // fallback restores the bitmap) but loses blend mode/opacity.
             // Worth a follow-up.
@@ -91,6 +92,31 @@ export function registerClipboardActions(): void {
         },
     });
     actions.register({
+        // Deliberately no `menuPath`: this only means anything while content is
+        // floating, and a permanently-greyed Edit-menu row would be noise. The
+        // canvas context menu offers it exactly when it applies; the palette
+        // resolves it by name for anyone who wants a hotkey.
+        id: 'convertFloatingToSmartObject',
+        handler: async () => {
+            const engine = app.engine;
+            if (!engine) return;
+            try {
+                const id = await engine.api.convertFloatingToSmartObject();
+                app.selectLayer(id);
+                await app.refreshLayerTree();
+                // Re-activate rather than switch tools: a switch would emit
+                // `deactivate`, and the transform tool commits the floating on
+                // deactivate, stamping down the very pixels we just chose not
+                // to. Reactivation rebuilds the gizmo against the new layer.
+                app.requestToolReactivation();
+                app.requestFrame();
+            } catch (e) {
+                toast.show('error', 'Nothing to convert');
+                console.error('[convert] floating → smart object failed', e);
+            }
+        },
+    });
+    actions.register({
         id: 'paste',
         menuPath: ['Edit:50'],
         handler: async () => {
@@ -101,7 +127,7 @@ export function registerClipboardActions(): void {
             // clipboard. Cross-tab paste this way preserves blend mode and
             // opacity, which the PNG fallback cannot. Brush-builder pastes
             // always want the pixel path, so skip rich there.
-            if (!brushGraph.isOpen) {
+            if (!brushGraph.isVisible) {
                 const rich = await readLayerFromClipboard();
                 if (rich) {
                     const activeId = app.activeLayerId ?? -1;
@@ -115,7 +141,7 @@ export function registerClipboardActions(): void {
                         app.requestFrame();
                         return;
                     }
-                    // Rich paste failed (malformed JSON, bad pixel data) —
+                    // Rich paste failed (malformed JSON, bad pixel data):
                     // fall through to the PNG path below.
                 }
             }
@@ -123,10 +149,14 @@ export function registerClipboardActions(): void {
             const clip = await readImageFromClipboard();
             if (!clip) return;
 
-            // If the brush builder is open, paste into the node editor
-            // instead of the main canvas.  Fill the selected Image node
-            // when there is one; otherwise spawn a new Image node.
-            if (brushGraph.isOpen) {
+            // If the brush builder is on screen, paste into the node editor
+            // instead of the main canvas. Fill the selected Image node when
+            // there is one; otherwise spawn a new Image node.
+            //
+            // Gated on `isVisible`, not `isOpen`: the builder is the brush
+            // tool's panel, so an expanded-but-unmounted builder is invisible
+            // and must not intercept a paste aimed at the canvas.
+            if (brushGraph.isVisible) {
                 let nodeId: string | null = null;
                 if (brushGraph.selectedNode != null) {
                     const node = brushGraph.graph?.nodes[brushGraph.selectedNode];
@@ -139,14 +169,28 @@ export function registerClipboardActions(): void {
                     nodeId = await brushGraph.addNode('image', x, y);
                 }
                 if (nodeId != null) {
-                    brushGraph.uploadImageToNode(
-                        nodeId,
-                        `image_${nodeId}`,
-                        clip.rgba,
-                        clip.width,
-                        clip.height,
-                    );
-                    brushGraph.selectedNode = nodeId;
+                    // Awaited and caught: the engine rejects some images
+                    // outright (a stamp brush takes an alpha mask, not colour),
+                    // and an un-awaited call turns that into an unhandled
+                    // rejection: the paste vanishes with nothing but a console
+                    // trace to explain it.
+                    try {
+                        await brushGraph.uploadImageToNode(
+                            nodeId,
+                            `image_${nodeId}`,
+                            clip.rgba,
+                            clip.width,
+                            clip.height,
+                        );
+                        brushGraph.selectedNode = nodeId;
+                    } catch (e) {
+                        const msg =
+                            e && typeof e === 'object' && 'message' in e
+                                ? String((e as { message: unknown }).message)
+                                : 'Could not paste into the brush builder';
+                        toast.show('error', msg);
+                        console.error('[paste] brush builder image upload failed', e);
+                    }
                     return;
                 }
             }
@@ -177,7 +221,7 @@ export function registerClipboardActions(): void {
         handler: async () => {
             const engine = app.engine;
             if (!engine || app.activeLayerId == null) return;
-            // Paste into the active target — a raster layer or, when a mask is
+            // Paste into the active target: a raster layer or, when a mask is
             // the active edit target, the mask. Both write through the engine's
             // shared paste path, which handles RGBA layers and R8 masks alike,
             // and both float first so the clip can be positioned before it

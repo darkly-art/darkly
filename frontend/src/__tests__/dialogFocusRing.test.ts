@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 // @ts-ignore
 import { readFileSync } from 'node:fs';
 
-// Regression: UA focus rings kept resurfacing as bright white borders — first
+// Regression: UA focus rings kept resurfacing as bright white borders, first
 // around whole modals, then on the modal close button. The browser invents
 // focus targets on its own (`showModal()` delegates focus to the first
 // focusable descendant and forces `:focus-visible` on it, mouse or not), so

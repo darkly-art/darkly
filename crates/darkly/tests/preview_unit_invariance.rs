@@ -6,7 +6,7 @@
 //! the fragment shader's discard test compared a target-pixel `local`
 //! against a canvas-pixel `bbox_radius` from the dab record. The
 //! discard never fired and the dab filled the texture to its square
-//! edge — visible as "square-clipped" cursor previews at large brush
+//! edge, visible as "square-clipped" cursor previews at large brush
 //! sizes.
 //!
 //! The fix: the intrinsic dab header is packed in the target's pixel
@@ -15,7 +15,7 @@
 //! preview path with a deliberately undersized mask to confirm the
 //! discard now fires correctly.
 //!
-//! **Pre-fix**: assertion 1 (corners transparent) FAILS — corners
+//! **Pre-fix**: assertion 1 (corners transparent) FAILS; corners
 //! come back nearly opaque because the discard never fires.
 
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
-/// Deliberately undersized vs the brush's natural bbox — simulates the
+/// Deliberately undersized vs the brush's natural bbox: simulates the
 /// production `MAX_PREVIEW_MASK_SIDE` clamp without needing a real
 /// `ToolOverlay`. A 128² mask + a brush with canvas-px bbox ~512 puts
 /// the dab well over the texture's inscribed disc (`texture_half = 64`).
@@ -111,7 +111,7 @@ fn render_big_disc() -> Out {
         view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        // Drive the test-fallback path on `ensure_cursor_preview_mask` — the
+        // Drive the test-fallback path on `ensure_cursor_preview_mask`: the
         // production clamp path needs a real `ToolOverlay`, which is
         // heavier to construct than this test needs. The undersized
         // mask reproduces the exact same target-vs-canvas unit
@@ -176,7 +176,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
 
     // ── Headline regression: the four corners must be transparent.
     //
-    // The corners sit at distance ~85 from the centre (64, 64) — well
+    // The corners sit at distance ~85 from the centre (64, 64), well
     // outside the dab's `bbox_target_px = 64`, so the fragment discard
     // fires and writes nothing.
     //
@@ -187,7 +187,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         let p = px(&out.rgba, cx, cy);
         assert_eq!(
             p[3], 0,
-            "corner ({cx}, {cy}) must be transparent — discard fires past `bbox_target_px`; got {p:?}",
+            "corner ({cx}, {cy}) must be transparent (discard fires past `bbox_target_px`); got {p:?}",
         );
     }
 
@@ -202,7 +202,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
 
     // ── Radial symmetry. The circle tip has no angular dependence; four
     // symmetric points well inside the bbox should agree closely.
-    // Pick offset 32 from centre (half the bbox half-extent) — deep
+    // Pick offset 32 from centre (half the bbox half-extent), deep
     // in the falloff, so any rotational asymmetry would read clearly
     // but we're not sitting on the discard boundary.
     let half = PREVIEW_SIDE / 2;

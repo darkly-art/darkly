@@ -6,19 +6,29 @@
     type Props = {
         open: boolean;
         title?: string;
-        size?: 'sm' | 'md' | 'lg';
+        size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
+        /** Where the dialog sits in the viewport. `top` is for dialogs the artist
+         *  types into blind: a command palette lands under the pointer's
+         *  resting height instead of jumping the eye to the centre. */
+        align?: 'center' | 'top';
         /** Hide the default header row entirely. Caller provides its own chrome. */
         bare?: boolean;
-        /** Dim the backdrop (default). `false` keeps the canvas fully visible —
+        /** Dim the backdrop (default). `false` keeps the canvas fully visible
          *  for panels that live-preview onto it (e.g. the filter apply dialog). */
         dimmed?: boolean;
-        /** Let the user reposition the dialog by dragging its header. Spawns
+        /** Let the artist reposition the dialog by dragging its header. Spawns
          *  centered (the default), then follows the drag. */
         draggable?: boolean;
         /** Controls rendered in the header row, between the title and the close
-         *  button — for chrome that belongs to the dialog rather than to its
-         *  content (a search box, a mode toggle). Sits outside the drag handle,
-         *  so interacting with it never starts a drag. */
+         *  button, filling whatever space the title leaves. For chrome that
+         *  belongs to the dialog rather than to its content (a search box, a
+         *  mode toggle).
+         *
+         *  Sits outside the drag handle, so interacting with it never starts a
+         *  drag. A header is a fixed cost every dialog already pays: it is one
+         *  line tall whether it holds a word or a word and a search field.
+         *  Anything a dialog needs *above* its content belongs here rather than
+         *  in a second bar below, which would spend the space twice. */
         headerControls?: Snippet;
         children?: Snippet;
     };
@@ -27,6 +37,7 @@
         open = $bindable(false),
         title = '',
         size = 'md',
+        align = 'center',
         bare = false,
         dimmed = true,
         draggable = false,
@@ -80,6 +91,17 @@
         // Escape handling still runs (it doesn't depend on bubbling).
         e.stopPropagation();
     }
+
+    function onWheel(e: WheelEvent) {
+        // `showModal()` promotes the dialog to the top layer visually, but it
+        // stays a DOM descendant of whatever mounted it, so a wheel event
+        // inside the modal still bubbles to ancestor handlers. The brush
+        // builder's node canvas is the case that bites: its wheel handler
+        // preventDefaults and pans, so the modal body never scrolls. Nothing
+        // beneath a modal should see its wheel events; the body's own
+        // `overflow: auto` scrolling is unaffected (no preventDefault here).
+        e.stopPropagation();
+    }
 </script>
 
 <dialog
@@ -87,7 +109,8 @@
     onclose={onClose}
     use:backdropDismiss={onClose}
     onkeydown={onKeydown}
-    class="modal size-{size}"
+    onwheel={onWheel}
+    class="modal size-{size} align-{align}"
     class:bare
     class:undimmed={!dimmed}
     style={pos ? `inset: auto; margin: 0; left: ${pos.x}px; top: ${pos.y}px;` : ''}
@@ -123,14 +146,17 @@
      * `display: none` for closed dialogs, leaving the modal visible
      * permanently. */
     dialog.modal {
-        background: var(--bg-active);
+        /* The base surface, not a raised one: a dialog is the darkest thing on
+         * screen and the scrim behind it lifts, rather than the other way
+         * around. `--scrim` carries that inversion per theme. */
+        background: var(--bg);
         color: var(--text);
         border: 1px solid var(--bg-hover);
         border-radius: 8px;
         padding: 0;
         max-height: 85vh;
         overflow: hidden;
-        /* Center in viewport — explicit so behaviour is identical across
+        /* Center in viewport, explicit so behaviour is identical across
          * browsers regardless of any residual UA stylesheet quirks. */
         position: fixed;
         inset: 0;
@@ -143,7 +169,7 @@
     }
 
     dialog.modal::backdrop {
-        background: rgba(0, 0, 0, 0.65);
+        background: var(--scrim);
     }
 
     /* Non-dimming: the canvas stays fully visible (for live-preview panels).
@@ -176,8 +202,21 @@
     }
 
     dialog.modal.size-sm { width: min(90vw, 420px); }
-    dialog.modal.size-md { width: min(90vw, 720px); }
-    dialog.modal.size-lg { width: min(92vw, 960px); height: min(82vh, 720px); }
+    dialog.modal.size-md { width: min(92vw, 560px); }
+    dialog.modal.size-lg { width: min(90vw, 720px); }
+    /* The one size that also fixes a height: browsing dialogs need a stable
+     * box, not one that resizes as the result set changes. */
+    dialog.modal.size-xl { width: min(92vw, 960px); height: min(82vh, 720px); }
+    /* Near-fullscreen, for a view whose whole point is room to browse. */
+    dialog.modal.size-full { width: 92vw; height: 88vh; max-height: 88vh; }
+
+    /* Anchored below the top edge rather than centered. The margin replaces
+     * the centering `auto` on the top side only, so it stays horizontally
+     * centered, and the shorter max-height keeps the bottom on screen. */
+    dialog.modal.align-top {
+        margin: 10vh auto auto;
+        max-height: 70vh;
+    }
 
     header {
         --header-pad-y: 14px;
@@ -185,6 +224,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 14px;
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
@@ -205,6 +245,17 @@
         margin: 0;
         font-size: 16px;
         font-weight: 600;
+        /* The title states its size; the controls take what is left. */
+        flex: none;
+    }
+
+    /* Takes the room between the title and the close button, which is the whole
+     * point of putting anything here. */
+    .header-controls {
+        display: flex;
+        align-items: center;
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     .close {

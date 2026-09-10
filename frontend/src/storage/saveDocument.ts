@@ -4,7 +4,7 @@
  * (off-WASM-thread), assembles the zip via `fflate`, and writes through
  * the file handle abstraction.
  *
- * Rust never writes the zip in production — keeping PNG encoders off
+ * Rust never writes the zip in production: keeping PNG encoders off
  * the WASM main thread matches the architectural call in
  * [`crates/darkly/src/format/zip_io.rs`]. The kitchen-sink integration
  * test exercises the equivalent path on the Rust side.
@@ -21,7 +21,7 @@ import { removeSnapshot } from './recovery';
 import { sessionId } from '../state/recoverySession';
 import { processRecording } from '../recording/recorder.svelte';
 
-/** Why a `.darkly` save is being produced — see the Rust `SavePurpose`.
+/** Why a `.darkly` save is being produced: see the Rust `SavePurpose`.
  *  A `'snapshot'` autosave leaves the document dirty; a `'file'` save
  *  clears it. */
 export type SavePurpose = 'file' | 'snapshot';
@@ -47,7 +47,7 @@ const MANIFEST_PATH = 'manifest.json';
 export type Format = 'darkly' | 'png' | 'jpeg' | 'webp';
 
 /** One row of the save format table. Each format owns everything about
- *  itself — consumers call `produce()` and read `isDocument`, never
+ *  itself; consumers call `produce()` and read `isDocument`, never
  *  `switch(format)` (type-owned dispatch). */
 interface SaveFormat {
     /** Filename extension (no dot). */
@@ -94,7 +94,7 @@ export const SAVE_FORMATS: Record<Format, SaveFormat> = {
 };
 
 /** Format order for the native picker's "Save as type" dropdown and the
- *  fallback modal — `.darkly` first so it's the default. */
+ *  fallback modal, `.darkly` first so it's the default. */
 export const SAVE_FORMAT_ORDER: Format[] = ['darkly', 'png', 'jpeg', 'webp'];
 
 /** Picker type list, in `SAVE_FORMAT_ORDER`. */
@@ -115,7 +115,7 @@ export function formatFromName(name: string): Format {
     return EXT_TO_FORMAT[ext] ?? 'darkly';
 }
 
-/** Shared `showSaveFilePicker` id — one id across save and export so the
+/** Shared `showSaveFilePicker` id: one id across save and export so the
  *  picker reopens in the same last-used directory. */
 const PICKER_ID = 'darkly-file';
 
@@ -150,19 +150,19 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
     const suggested =
         sanitizeFilename(await instance.engine.api.documentName()) || 'darkly-document';
 
-    // Firefox / Safari: no native picker — route to the in-app Save modal,
-    // which drives produce + download and resolves when the user is done.
+    // Firefox / Safari: no native picker; route to the in-app Save modal,
+    // which drives produce + download and resolves when the artist is done.
     if (!hasFilePicker) {
         await saveModal.request(suggested);
         return;
     }
 
-    // Chromium: native multi-type picker (activation required here — bytes are
+    // Chromium: native multi-type picker (activation required here; bytes are
     // produced *after* so the picker isn't blocked). Only the picker needs
     // transient activation; `writeToHandle` on the returned handle does not.
     try {
         const handle = await pickFileHandle(`${suggested}.darkly`, SAVE_ACCEPTS, PICKER_ID);
-        if (!handle) return; // user cancelled
+        if (!handle) return; // artist cancelled
         const format = formatFromName(handle.name);
         const data = await SAVE_FORMATS[format].produce(instance);
         await writeToHandle(handle, data);
@@ -181,7 +181,7 @@ export async function saveDocument({ forceAs = false }: { forceAs?: boolean } = 
 
 /**
  * Produce `format` bytes for `instance` and save them via a browser download
- * — the Firefox/Safari path, shared with the fallback Save modal so the format
+ * (the Firefox/Safari path), shared with the fallback Save modal so the format
  * table and encode live in exactly one place.
  */
 export async function saveViaDownload(
@@ -215,7 +215,7 @@ async function afterSaved(instance: DarklyInstance, format: Format): Promise<voi
 
 /**
  * Drive a `.darkly` save for `instance` to completion and return the
- * assembled zip bytes — the destination-agnostic core shared by file-save
+ * assembled zip bytes, the destination-agnostic core shared by file-save
  * (above) and autosave snapshots. It kicks `start_save_document` over the
  * async transport and awaits the `poll_save_result` callback, which the
  * instance's render loop drives to completion (`onSaveResult` keeps that
@@ -223,7 +223,7 @@ async function afterSaved(instance: DarklyInstance, format: Format): Promise<voi
  * drains the readback scheduler itself).
  *
  * Rejects if a save is already in flight on the engine
- * (`SaveError::InProgress`) — autosave catches this and skips the tick so
+ * (`SaveError::InProgress`); autosave catches this and skips the tick so
  * a manual Ctrl+S always wins the single save slot.
  */
 export async function produceDarklyBytes(
@@ -241,7 +241,7 @@ export async function produceDarklyBytes(
 
 /** Kick `start_save_document` on `instance` and await the
  *  `poll_save_result` callback. `snapshot` marks an autosave save (which
- *  must not clear the document's dirty flag — see the Rust `SavePurpose`).
+ *  must not clear the document's dirty flag; see the Rust `SavePurpose`).
  *  The instance's render loop polls `poll_save_result` until the bundle
  *  lands; `onSaveResult` keeps that loop alive even for a backgrounded tab. */
 function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
@@ -261,7 +261,7 @@ function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<Sav
 }
 
 /** Build the .darkly zip bytes from a SaveBundle, plus any embedded
- *  process-recording entries (already-compressed video — stored raw). */
+ *  process-recording entries (already-compressed video, stored raw). */
 async function assembleZip(
     bundle: SaveBundle,
     recording: Array<{ path: string; bytes: Uint8Array }> = [],
@@ -286,7 +286,7 @@ async function assembleZip(
         entries[blob.path] = blob.bytes;
     }
     for (const entry of recording) {
-        // Encoded video doesn't deflate — don't burn CPU trying.
+        // Encoded video doesn't deflate, so don't burn CPU trying.
         entries[entry.path] = entry.path.endsWith('.bin')
             ? [entry.bytes, { level: 0 }]
             : entry.bytes;
@@ -312,7 +312,7 @@ async function encodeRgbaPng(
 }
 
 /** Downsample the composite to a ≤256px thumbnail and PNG-encode.
- *  Aspect-preserving — fits within a 256×256 square, never stretches. */
+ *  Aspect-preserving: fits within a 256×256 square, never stretches. */
 async function encodeThumbnailPng(
     rgba: Uint8Array,
     width: number,

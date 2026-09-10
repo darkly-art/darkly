@@ -3,7 +3,7 @@
 //! Drives `crates/darkly/src/format/stroke_recording.rs::replay` against
 //! a real recording captured from the frontend dev build with
 //! `?_RECORD_STROKES=1`. The recording is a short curvy stroke with
-//! multiple direction reversals — exactly the workload the stabilizer's
+//! multiple direction reversals, exactly the workload the stabilizer's
 //! "walk back time" rewind path exists to handle. Asserts the parser
 //! handles the live wire format and that the replay produces actual
 //! paint (non-empty raster bounds) without panicking.
@@ -51,7 +51,7 @@ fn live_recording_parses_with_expected_shape() {
         recording.events.len()
     );
 
-    // time_ms must be monotonic non-decreasing — anything else means the
+    // time_ms must be monotonic non-decreasing; anything else means the
     // recorder mis-ordered events or PointerEvent.timeStamp jumped
     // backward, which would break the replay's pacing math.
     for w in recording.events.windows(2) {
@@ -71,7 +71,7 @@ fn live_recording_parses_with_expected_shape() {
         .any(|w| (w[1].x - w[0].x).signum() != (w[2].x - w[1].x).signum());
     assert!(
         has_direction_reversal,
-        "recording has no x-direction reversal — pick a curvier stroke for this fixture",
+        "recording has no x-direction reversal, so pick a curvier stroke for this fixture",
     );
 }
 
@@ -106,7 +106,7 @@ fn replay_produces_paint_on_the_layer() {
         // wall-clock cost the live stroke recorded. The engine's
         // stabilizer reads `time_ms` from each StrokeOp payload (not the
         // wall-clock), so the *engine* behaves identically under either
-        // pacing — only the harness's perf numbers differ.
+        // pacing, only the harness's perf numbers differ.
         ReplayPacing::AsFastAsPossible,
     );
 
@@ -115,7 +115,7 @@ fn replay_produces_paint_on_the_layer() {
     assert_eq!(timings.last().unwrap().index, recording.events.len() - 1);
 
     // After end_stroke + render, the raster layer's stored bounds should
-    // be non-empty — the ink pen painted somewhere within the canvas.
+    // be non-empty; the ink pen painted somewhere within the canvas.
     let bounds = engine
         .layer_bounds(layer_id)
         .expect("raster layer should report bounds");

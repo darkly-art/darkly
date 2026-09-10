@@ -2,19 +2,19 @@
  * Natural cubic spline evaluation.
  *
  * This is the JS-side mirror of `crates/darkly/src/brush/curve_math.rs`.
- * Used for real-time preview in the CurveEditor component — avoids
+ * Used for real-time preview in the CurveEditor component, avoiding
  * a WASM round-trip on every pointermove event.  The Rust version is
  * authoritative; this is purely for rendering.
  *
  * Algorithm matches Krita's `KisLegacyCubicSpline` in `kis_cubic_curve_spline.h`:
  * natural cubic spline with tridiagonal solver.  Natural boundary conditions
  * (zero second derivative at endpoints) make the curve approach endpoints
- * linearly — endpoints only set the y-intercept, not the interior shape.
+ * linearly; endpoints only set the y-intercept, not the interior shape.
  */
 
 type Point = [number, number];
 
-/** Evaluate the natural cubic spline at parameter `t` (0–1). */
+/** Evaluate the natural cubic spline at parameter `t` (0-1). */
 export function evaluateCurve(points: Point[], t: number): number {
     if (points.length < 2) return t;
     t = Math.max(0, Math.min(1, t));

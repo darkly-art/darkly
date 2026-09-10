@@ -1,6 +1,6 @@
 /**
  * Process-recording encoder worker. Owns the WebCodecs `VideoEncoder` and
- * the OPFS sync-access handles for the current segment — sync handles are
+ * the OPFS sync-access handles for the current segment; sync handles are
  * a worker-only API and give true appends (the main-thread `createWritable`
  * is atomic-rewrite-on-close, useless for an ever-growing chunk log).
  *
@@ -9,7 +9,7 @@
  * segment meta) · `close` (finalize + release everything).
  * Messages out: `ready` · `flushed` · `closed` · `disabled`.
  *
- * Failure policy — encoder errors and storage write errors (including
+ * Failure policy: encoder errors and storage write errors (including
  * `QuotaExceededError`) share one path: finalize the current segment,
  * retry once on a fresh segment + encoder; a second failure posts
  * `disabled` and capture stops for the session.
@@ -30,13 +30,13 @@ const KEYFRAME_INTERVAL = 150;
 
 export interface InitMsg {
     type: 'init';
-    /** Scratch dir name (`<sessionId>~<recoveryId>` — see `segments.ts`). */
+    /** Scratch dir name (`<sessionId>~<recoveryId>`, see `segments.ts`). */
     scratchKey: string;
     segmentN: number;
     codec: string;
     width: number;
     height: number;
-    /** Document canvas dims the encoder dims were negotiated against —
+    /** Document canvas dims the encoder dims were negotiated against,
      *  persisted per segment for export's aspect-ratio grouping. */
     canvasWidth: number;
     canvasHeight: number;
@@ -48,7 +48,7 @@ export interface FrameMsg {
     /** Transferred tightly-packed RGBA, `width × height × 4`. */
     data: ArrayBuffer;
     frameIndex: number;
-    /** Wall-clock capture time (µs) — stored in the chunk framing. */
+    /** Wall-clock capture time (µs), stored in the chunk framing. */
     timestampUs: number;
 }
 export type WorkerInMsg = InitMsg | FrameMsg | { type: 'flush' } | { type: 'close' };
@@ -221,7 +221,7 @@ function onChunk(
 /** Persist `segment-<n>.json`. Runs on flush / close / roll so the meta on
  *  disk always describes the chunks that made it into the `.bin`. Awaited by
  *  its callers so the `.json` has landed before `'flushed'`/`'closed'` is
- *  posted — otherwise the write suspends on its first `await` and is
+ *  posted; otherwise the write suspends on its first `await` and is
  *  guillotined when the worker tears down. */
 async function writeSegmentMeta(seg: Segment): Promise<void> {
     if (!cfg || !dir) return;
@@ -261,7 +261,7 @@ async function teardown(): Promise<void> {
     try {
         if (seg.encoder.state === 'configured') await seg.encoder.flush();
     } catch {
-        // Encoder already errored — persist what reached the bin.
+        // Encoder already errored; persist what reached the bin.
     }
     try {
         await writeSegmentMeta(seg);
@@ -281,7 +281,7 @@ async function teardown(): Promise<void> {
     }
 }
 
-/** Unified failure path — see the module docs. */
+/** Unified failure path: see the module docs. */
 async function handleFailure(err: unknown): Promise<void> {
     if (disabled) return;
     const rolledFrom = segment?.n ?? cfg?.segmentN ?? 0;
@@ -293,7 +293,7 @@ async function handleFailure(err: unknown): Promise<void> {
             ctx.postMessage({ type: 'ready', segmentN: rolledFrom + 1 });
             return;
         } catch {
-            // Fresh segment failed too — fall through to disable.
+            // Fresh segment failed too; fall through to disable.
         }
     }
     disabled = true;

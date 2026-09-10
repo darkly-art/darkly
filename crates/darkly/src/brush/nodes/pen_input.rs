@@ -1,11 +1,11 @@
-//! Pen Input sensor node — source of all tablet data.
+//! Pen Input sensor node: source of all tablet data.
 //!
 //! Outputs 14 live sensor values.  This node is special-cased in the runner:
 //! `seed_sensors()` writes directly to its output slots (no virtual dispatch).
 //! The evaluator is a no-op.
 //!
-//! Brush-level settings that aren't stylus data — `size`, `stabilize`,
-//! `spacing`, `spacing_min_px` — live on the separate
+//! Brush-level settings that aren't stylus data (`size`, `stabilize`,
+//! `spacing`, `spacing_min_px`) live on the separate
 //! [`super::brush_settings`] node, not here.
 
 use std::sync::Arc;
@@ -35,7 +35,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Horizontal tilt of the pen barrel (-1 = left, 1 = right)"),
             PortDef::output("y_tilt", BrushWireType::Scalar)
                 .with_natural_range(-1.0, 1.0)
-                .with_description("Vertical tilt of the pen barrel (-1 = toward user, 1 = away)"),
+                .with_description("Vertical tilt of the pen barrel (-1 = toward artist, 1 = away)"),
             PortDef::output("tilt_magnitude", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description(
@@ -43,7 +43,7 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             // No `natural_range`: radians are a unit, not a normalized
             // signal. A wire from `tilt_direction → stamp.rotation` (both
-            // in radians) is a unit-preserving identity. Users who want a
+            // in radians) is a unit-preserving identity. Artists who want a
             // normalized angle can pre-scale through `multiply` or `curve`.
             PortDef::output("tilt_direction", BrushWireType::Scalar)
                 .with_description(
@@ -61,7 +61,7 @@ pub fn register() -> BrushNodeRegistration {
             // `distance`, `time`, and `index` are intentionally without a
             // `natural_range`: they're unbounded cumulative counters and
             // there is no meaningful upper end to remap against. Wires from
-            // them pass through raw — feed them into a `clamp` or `remap`
+            // them pass through raw: feed them into a `clamp` or `remap`
             // node first if you need them in a bounded domain.
             PortDef::output("distance", BrushWireType::Scalar)
                 .with_description("Cumulative distance traveled along the stroke (pixels)"),
@@ -69,7 +69,7 @@ pub fn register() -> BrushNodeRegistration {
             // stamp.rotation` is the canonical use case (brush faces the
             // stroke) and it must pass radians through unchanged.
             PortDef::output("drawing_angle", BrushWireType::Scalar)
-                .with_description("Direction of motion along the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke."),
+                .with_description("Orientation of the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke. This is the stroke's undirected axis (reversing along a stroke does not spin the stamp a half turn), and it turns no faster than Brush Settings → Turn rate. Use `motion` when you need the true signed direction of travel."),
             PortDef::output("time", BrushWireType::Scalar)
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)
@@ -92,7 +92,7 @@ pub fn register() -> BrushNodeRegistration {
     )
 }
 
-/// No-op evaluator — `seed_sensors()` handles this node directly.
+/// No-op evaluator: `seed_sensors()` handles this node directly.
 pub struct PenInputEvaluator;
 
 impl BrushNodeEvaluator for PenInputEvaluator {
@@ -135,7 +135,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
         }
 
         // f32-equivalent outputs (alignment 4). Includes scalar sensors
-        // and the `index` int (emitted as f32 — fine for the first
+        // and the `index` int (emitted as f32, fine for the first
         // ~16M dabs, cast to u32 in WGSL where downstream nodes want it).
         let f32_outputs = [
             "pressure",
@@ -166,7 +166,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
                     bytes.extend_from_slice(bytemuck::bytes_of(&v));
                 }),
             });
-            // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
+            // `drawing_angle` is `atan2(canvas_dy, canvas_dx)`, a
             // canvas-frame angle. The skeleton subtracts `view_rotation`
             // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
             // (the canonical stroke-follow wire) aligned with the on-

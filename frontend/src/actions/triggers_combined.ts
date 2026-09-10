@@ -1,5 +1,5 @@
 // Unified read/write model for the Settings UI. Each action stores its
-// triggers in two split namespaces — `hotkeys.<id>` for keyboard chords
+// triggers in two split namespaces: `hotkeys.<id>` for keyboard chords
 // (dispatched by tinykeys) and `mouseclicks.<id>` for mouse chords
 // (dispatched by `dispatchClick`/`dispatchDrag`). The Hotkeys tab treats
 // them as one flat list per action; this module bridges the two.
@@ -14,7 +14,7 @@ export type TriggerKind = 'kbd' | 'mouse';
 export interface Trigger {
     kind: TriggerKind;
     /** Full `[site:]chord` binding string. May be `""` for a freshly-added
-     *  row the user hasn't captured into yet. */
+     *  row the artist hasn't captured into yet. */
     binding: string;
 }
 
@@ -36,8 +36,8 @@ export function parseTriggerStrings(
 }
 
 export function serializeTriggers(triggers: Trigger[]): { kbd: string; mouse: string } {
-    // Drop rows with an empty chord — including ones that only carry a
-    // `<site>:` prefix (a freshly-added row the user didn't capture into
+    // Drop rows with an empty chord, including ones that only carry a
+    // `<site>:` prefix (a freshly-added row the artist didn't capture into
     // before navigating away). Those would persist as ghost entries that
     // dispatch to nothing.
     const isBound = (t: Trigger) => !!t.binding && !!parseBinding(t.binding).chord;
@@ -49,8 +49,8 @@ export function serializeTriggers(triggers: Trigger[]): { kbd: string; mouse: st
 
 /** Vocabulary terminals that identify a mouse chord. Anything whose last
  *  segment matches one of these is a mouse chord; everything else is keyboard.
- *  Keeping this set tight (terminal verbs only) means a key like `KeyM` —
- *  which contains no `+` segment matching — is unambiguously keyboard. */
+ *  Keeping this set tight (terminal verbs only) means a key like `KeyM`
+ *  (which contains no `+` segment matching) is unambiguously keyboard. */
 const MOUSE_VERBS = new Set([
     'click', 'doubleClick', 'middleClick',
     'drag', 'middleDrag', 'rightDrag',
@@ -78,7 +78,7 @@ export function writeTriggers(actionId: string, triggers: Trigger[]): void {
     config.set(`mouseclicks.${actionId}`, mouse);
 }
 
-/** Drop user overrides for both namespaces — falls back to overlay/default. */
+/** Drop user overrides for both namespaces: falls back to overlay/default. */
 export function resetTriggers(actionId: string): void {
     config.resetKey(`hotkeys.${actionId}`);
     config.resetKey(`mouseclicks.${actionId}`);

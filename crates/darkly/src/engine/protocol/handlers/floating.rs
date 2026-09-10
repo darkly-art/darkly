@@ -1,7 +1,7 @@
 //! Floating content (paste/transform) query that needs wire shaping the
 //! `#[handler]` macro can't derive. The lifecycle verbs and the scalar queries
 //! are `#[handler]`-generated on `engine/floating.rs`; only `floating_info`
-//! stays here — its engine return is a composite `Option<(ox, oy, w, h, Transform)>`
+//! stays here: its engine return is a composite `Option<(ox, oy, w, h, Transform)>`
 //! tuple, and the wire wants a flat `{ ox, oy, w, h, mode, matrix }` object with
 //! `mode`/`matrix` *derived* from the `Transform` (6 affine floats for `Basic`,
 //! 9 homography floats for `Perspective`; the frontend's `liftMatrix` picks the

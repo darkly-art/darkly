@@ -1,5 +1,5 @@
 // Pure value <-> position math for the shared Slider widget. Kept free of DOM
-// so it can be unit-tested headlessly (vitest runs in node — no `window`).
+// so it can be unit-tested headlessly (vitest runs in node, no `window`).
 
 /** Step between adjacent slider values. Explicit `step` wins; otherwise integer
  *  sliders move by 1 and continuous ones split the range into 200 notches. */

@@ -7,7 +7,7 @@
 
     let { onaddnode }: Props = $props();
 
-    // Group node types by category. Every registered node type is placeable —
+    // Group node types by category. Every registered node type is placeable:
     // the engine's synthesised preview terminal is a WGSL construct, not a
     // registration, so there is nothing to hide here.
     let categories = $derived((() => {

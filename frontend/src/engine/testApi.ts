@@ -3,7 +3,7 @@ import { makeApi, type EngineApi, type Transport } from './protocol_gen';
 /** A minimal fake engine transport for unit tests: `send`/`post` spies plus a
  *  real {@link EngineApi} that forwards to them. Because `api` closes over the
  *  same spies, assertions can still inspect `engine.send`/`engine.post` calls by
- *  kind — the typed client is just sugar over the same transport. */
+ *  kind: the typed client is just sugar over the same transport. */
 export interface MockEngine {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     send: (kind: string, payload?: object, bytes?: Uint8Array) => Promise<any>;
@@ -13,7 +13,7 @@ export interface MockEngine {
 }
 
 /** Attach a real `api` (and the underlying {@link Transport}) to a fake engine
- *  whose `send`/`post` are test spies. `post` is optional — a mock exercising
+ *  whose `send`/`post` are test spies. `post` is optional: a mock exercising
  *  only awaited requests can omit it. Exposing `transport` lets the fake stand
  *  in for a real {@link import('../engine/protocol').Engine} wherever a
  *  `SessionEngine` is constructed over it (`new SessionEngine(fakeEngine)`). */

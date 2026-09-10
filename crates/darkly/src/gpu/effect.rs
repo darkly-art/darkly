@@ -72,7 +72,7 @@ impl EffectCache {
     /// nothing when this cache holds no such buffer.
     ///
     /// An effect's parameter state reaches the GPU through exactly two callers
-    /// — the effect's own `create_cache` and whatever rewrites it afterwards —
+    /// (the effect's own `create_cache` and whatever rewrites it afterwards),
     /// and the two must agree on a layout `bytemuck` will not check for them.
     /// Routing both through one method is what keeps the packing in one place.
     pub fn write_uniform(&self, queue: &wgpu::Queue, index: usize, bytes: &[u8]) {

@@ -1,5 +1,5 @@
 //! Flatten Image: composite every visible top-level layer into one raster,
-//! discarding the rest. Photoshop-style — hidden layers are lost; visible
+//! discarding the rest. Photoshop-style: hidden layers are lost; visible
 //! ones are baked into a single "Background" layer at the root.
 
 use darkly_macros::handlers;
@@ -7,7 +7,7 @@ use darkly_macros::handlers;
 use super::DarklyEngine;
 use crate::document::TreeSlot;
 use crate::layer::{Layer, LayerId, LayerNode};
-use crate::undo::{BakeLayersAction, BakeSourceSlot};
+use crate::undo::BakeSourceSlot;
 
 #[handlers]
 impl DarklyEngine {
@@ -25,7 +25,7 @@ impl DarklyEngine {
             return Err("Document has no layers to flatten".into());
         }
 
-        // Visible top-level nodes — these get composited into the result.
+        // Visible top-level nodes; these get composited into the result.
         // The walk respects only direct-child visibility; descendants of a
         // visible group whose own visible flag is false are filtered by
         // the compositor.
@@ -57,7 +57,7 @@ impl DarklyEngine {
 
         // Bake the composite of every visible top-level node into the
         // result. If `visible_ids` is empty (everything hidden), the bake
-        // produces a transparent result — that's the right semantic.
+        // produces a transparent result; that's the right semantic.
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
@@ -66,50 +66,33 @@ impl DarklyEngine {
             result_id,
         );
 
-        // Snapshot tombstones for the detached sources BEFORE detaching.
-        let mut source_tombstones: Vec<LayerId> = Vec::new();
-        let mut sources: Vec<BakeSourceSlot> = Vec::new();
-        for (idx, &id) in top_level.iter().enumerate() {
-            if id == result_id {
-                continue;
-            }
-            source_tombstones.extend(self.collect_pixel_node_ids(id));
-            sources.push(BakeSourceSlot {
+        // Record each source's slot before anything detaches. Flatten takes
+        // every top-level node except the result, hidden ones included; they
+        // are discarded from the document but still tombstoned, so undo brings
+        // them back with their pixels.
+        let sources: Vec<BakeSourceSlot> = top_level
+            .iter()
+            .enumerate()
+            .filter(|(_, &id)| id != result_id)
+            .map(|(idx, &id)| BakeSourceSlot {
                 id,
                 slot: TreeSlot {
                     parent: Some(root_id),
                     position: idx,
                 },
-            });
-        }
+            })
+            .collect();
 
-        // Detach every top-level non-result node. Textures stay alive as
-        // tombstones owned by the BakeLayersAction.
-        for source in &sources {
-            self.doc.detach_for_undo(source.id);
-        }
-
-        // Reposition result to root position 0 (bottom of stack — flatten
-        // makes the result the new "Background").
-        self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(
+        // Root position 0 is the bottom of the stack: flatten makes the result
+        // the new "Background".
+        self.finish_bake(
+            sources,
             result_id,
             TreeSlot {
                 parent: Some(root_id),
                 position: 0,
             },
         );
-
-        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
-            sources,
-            source_tombstones,
-            result_id,
-            result_slot,
-            vec![result_id],
-        )));
 
         Ok(result_id)
     }
@@ -127,9 +110,9 @@ impl DarklyEngine {
     /// - For a **paintable layer with filters** (a raster carrying a mask):
     ///   bakes the filters into the layer's RGBA and removes them. The layer
     ///   keeps its id, blend props, and tree position. Implemented as a re-use
-    ///   of [`Self::apply_mask`] — same semantics, just a different entry name
-    ///   so the UI can call "Flatten" uniformly across node kinds.
-    /// - For a **layer whose pixels are generated** (a void — smart object,
+    ///   of [`Self::apply_mask`] (same semantics, just a different entry name
+    ///   so the UI can call "Flatten" uniformly across node kinds).
+    /// - For a **layer whose pixels are generated** (a void: smart object,
     ///   camera; a filter layer; a vector layer): rasterizes it, replacing the
     ///   node with a raster holding what it currently renders. This is the
     ///   "make it paintable" path: the source layer keeps existing only inside
@@ -139,7 +122,7 @@ impl DarklyEngine {
     ///   opacity, visible, and locked, and takes the group's tree slot.
     ///   The group's children and the group itself are tombstoned for undo.
     ///
-    /// Errors when flattening would be a no-op — a raster with no filters
+    /// Errors when flattening would be a no-op: a raster with no filters
     /// already *is* plain pixels.
     #[handler]
     pub fn flatten_node(&mut self, node_id: LayerId) -> Result<LayerId, String> {
@@ -240,26 +223,7 @@ impl DarklyEngine {
         // Restore real uniforms so undo brings the source back in a sane state.
         self.refresh_blend_uniforms(node_id);
 
-        // Collect tombstones before detaching — `detach_for_undo` removes
-        // the parent link find_node walks rely on for `Group::children`.
-        let source_tombstones = self.collect_pixel_node_ids(node_id);
-
-        self.doc.detach_for_undo(node_id);
-
-        // Reposition the result to take the source's slot.
-        self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, slot);
-
-        let result_slot = self.doc.slot_of(result_id).unwrap_or_default();
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(BakeLayersAction::new(
-            vec![BakeSourceSlot { id: node_id, slot }],
-            source_tombstones,
-            result_id,
-            result_slot,
-            vec![result_id],
-        )));
+        self.finish_bake(vec![BakeSourceSlot { id: node_id, slot }], result_id, slot);
 
         Ok(result_id)
     }

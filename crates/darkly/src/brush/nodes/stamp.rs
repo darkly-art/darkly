@@ -5,7 +5,7 @@
 //! from `circle.mask`'s compile output); the emitted `dab` output is
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
-//! Flow lives on the `paint` terminal — that is the single, authoritative
+//! Flow lives on the `paint` terminal: that is the single, authoritative
 //! per-stroke deposit knob. Dab dimensions, rotation, and mirroring are
 //! likewise owned by the terminal (which sizes its quad from
 //! `bbox_target_px`).

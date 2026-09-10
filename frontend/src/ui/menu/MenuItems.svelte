@@ -9,8 +9,8 @@
     let { entries, onrun }: { entries: MenuEntry[]; onrun?: () => void } = $props();
 
     // Which submenu flyout is currently open in THIS list. Hovering a submenu
-    // row opens it; hovering any leaf row closes whatever was open — standard
-    // menu behavior, so once one menu is open you can sweep across the others
+    // row opens it; hovering any leaf row closes whatever was open (standard
+    // menu behavior), so once one menu is open you can sweep across the others
     // without re-clicking.
     let openSubmenu = $state<string | null>(null);
 
@@ -157,7 +157,7 @@
         margin: 4px 0;
     }
 
-    /* Submenu flyout — opens to the right of its parent row. The hamburger
+    /* Submenu flyout: opens to the right of its parent row. The hamburger
        lives at the far left, so there's always room rightward. */
     .submenu-row {
         position: relative;

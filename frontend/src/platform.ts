@@ -49,7 +49,7 @@ export function detectPlatform(
 }
 
 function detectOs(ua: string, uad: UAData | undefined, plat: string, touchPoints: number): Os {
-    // iOS first — iPadOS lies as MacIntel and all iOS browsers are WebKit.
+    // iOS first, since iPadOS lies as MacIntel and all iOS browsers are WebKit.
     if (/iPhone|iPod/.test(ua)) return 'ios';
     if (plat === 'MacIntel' && touchPoints > 1) return 'ios';
     if (/iPad/.test(ua)) return 'ios';
@@ -65,7 +65,7 @@ function detectOs(ua: string, uad: UAData | undefined, plat: string, touchPoints
 }
 
 function detectBrowser(os: Os, ua: string, uad: UAData | undefined): Browser {
-    // All iOS browsers are WebKit under the hood — same enable path.
+    // All iOS browsers are WebKit under the hood, so the same enable path applies.
     if (os === 'ios') return 'safari';
 
     if (uad?.brands?.some(b => CHROMIUM_BRANDS.has(b.brand))) return 'chromium';

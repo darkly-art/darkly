@@ -1,14 +1,14 @@
 //! Full-stroke brush preview renderer.
 //!
 //! Runs the real `StrokeEngine` against a self-owned offscreen target to
-//! produce a preview of a synthetic S-curve stroke — what the brush would
+//! produce a preview of a synthetic S-curve stroke: what the brush would
 //! look like in actual use, not a single hover dab. Used by the brush
 //! editor's live preview and by brush thumbnail baking.
 //!
 //! Distinct from the hover overlay path (`render_preview_pipeline` in
 //! `eval.rs`), which forces `flow=1` and white color to produce a tip-mask
 //! for the cursor-follow overlay. The editor preview runs the real
-//! deposition pipeline — `begin_stroke` / `execute_gpu` / `commit` — so
+//! deposition pipeline (`begin_stroke` / `execute_gpu` / `commit`) so
 //! flow, opacity, and other per-dab settings affect the output. The
 //! stroke/background colors are theme-sourced (set via the engine's
 //! `set_preview_theme`), not the active paint color, so all previews
@@ -100,7 +100,7 @@ impl BrushStrokePreviewRenderer {
 
     /// Render a synthetic stroke into the preview texture.
     ///
-    /// Returns the layer texture, GPU-resident — the caller issues any
+    /// Returns the layer texture, GPU-resident; the caller issues any
     /// readback. Returns `None` if the graph fails to compile or `path` is
     /// empty.
     pub fn render_stroke(
@@ -124,7 +124,7 @@ impl BrushStrokePreviewRenderer {
         let runner = super::compile_graph(graph).ok()?;
 
         // Ensure scratch + layer textures match the requested size *and*
-        // the brush's scratch format — the cached target is shared across
+        // the brush's scratch format: the cached target is shared across
         // brushes, so previewing a warp terminal after a colour one must
         // reallocate rather than bind a colour scratch to a field pipeline.
         let scratch_format = runner.scratch_format();
@@ -145,7 +145,7 @@ impl BrushStrokePreviewRenderer {
 
         // Pre-fill the layer with the backdrop, then snapshot it as the
         // pre-stroke. `color_output::commit` composites the stroke scratch onto
-        // this snapshot and writes the result back to the layer — so painting
+        // this snapshot and writes the result back to the layer, so painting
         // the backdrop here is how it gets shown. It is also the only way one
         // reaches a terminal that *transports* the destination: those sample
         // `source_override.unwrap_or(pre_stroke_texture)` (`gpu_context.rs`),
@@ -177,13 +177,13 @@ impl BrushStrokePreviewRenderer {
         // Fresh uniform rings for the dab passes that follow.
         pipelines.reset_uniform_rings();
 
-        // Fresh StrokeEngine every render — reusing the engine's own
+        // Fresh StrokeEngine every render: reusing the engine's own
         // `brush_stroke_engine` would contaminate save-points and dab-size
-        // state with the user's in-flight real stroke.
+        // state with the artist's in-flight real stroke.
         //
-        // Spacing comes from the graph's brush_settings node — same source the
-        // real stroke uses — so scrubbing the spacing slider actually moves
-        // the dabs in the preview.
+        // Spacing comes from the graph's brush_settings node (same source
+        // the real stroke uses) so scrubbing the spacing slider actually
+        // moves the dabs in the preview.
         let spacing = brush_settings::spacing_config(graph);
         // Dab previews render at a fixed, larger canonical size than the brush's
         // own `brush_settings.size` so the rasterized tip carries enough detail
@@ -193,8 +193,8 @@ impl BrushStrokePreviewRenderer {
 
         // A brush that transports pixels from elsewhere has nowhere to
         // transport them from unless the preview says where. The offset comes
-        // from the backdrop — the only thing that knows what displacement
-        // escapes its own field — and the compiled graph says whether anything
+        // from the backdrop (the only thing that knows what displacement
+        // escapes its own field) and the compiled graph says whether anything
         // will use it, so no node authors a coordinate and any future
         // source-sampling node gets a working preview for free.
         let clone_source_anchor = runner.samples_source().then(|| {
@@ -212,6 +212,7 @@ impl BrushStrokePreviewRenderer {
             Box::new(PassThrough::new()),
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
+            brush_settings::stamp_angle_rate(graph),
         );
         if clone_source_anchor.is_some() {
             // The snapshot being sampled is the pre-stroke, which covers the
@@ -221,7 +222,7 @@ impl BrushStrokePreviewRenderer {
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
         // `render_from_stabilized_range_to` walks them verbatim. No
-        // smoothing, no lag — the S-curve is exactly what we handed in.
+        // smoothing, no lag: the S-curve is exactly what we handed in.
         for pt in path {
             let _ = engine.stabilize(*pt);
         }
@@ -234,7 +235,7 @@ impl BrushStrokePreviewRenderer {
             ($label:expr) => {{
                 // The preview stroke buffer never captures a source
                 // snapshot, so a source-sampling brush previews off the
-                // pre-stroke snapshot — which is the backdrop, and is what
+                // pre-stroke snapshot, which is the backdrop, and is what
                 // gives it something to transport.
                 let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
                     target.stroke_buffer.parts_for_brush_ctx();
@@ -252,7 +253,7 @@ impl BrushStrokePreviewRenderer {
                     blend_mode: 0,
                     // Editor preview always renders at identity view; the
                     // S-curve preview shouldn't shift orientation when the
-                    // user happens to rotate the canvas while editing.
+                    // artist happens to rotate the canvas while editing.
                     view_rotation: 0.0,
                     perf: BrushPerfCounters::default(),
                     // Preview render target is canvas-aligned RGBA8.
@@ -269,7 +270,7 @@ impl BrushStrokePreviewRenderer {
             }};
         }
 
-        // Terminal setup — color_output clears the scratch to transparent.
+        // Terminal setup: color_output clears the scratch to transparent.
         {
             let mut ctx = make_gpu_ctx!("brush-preview-begin-stroke");
             engine.begin_stroke(&mut ctx);
@@ -286,7 +287,7 @@ impl BrushStrokePreviewRenderer {
         }
 
         // Composite the scratch onto the pre-stroke snapshot and write
-        // the result to the layer — same path as a real stroke's commit.
+        // the result to the layer: same path as a real stroke's commit.
         {
             let mut ctx = make_gpu_ctx!("brush-preview-commit");
             engine.commit(&mut ctx);
@@ -316,8 +317,8 @@ impl Default for BrushStrokePreviewRenderer {
 /// Synthesize a single full-pressure dab at the centre of a target rect.
 ///
 /// Drives the brush graph through the regular stroke pipeline with one
-/// stationary sample — useful for the brush picker's tile-shape thumbnail
-/// (and the BrushBar trigger button), where the user wants to see the
+/// stationary sample, useful for the brush picker's tile-shape thumbnail
+/// (and the BrushBar trigger button), where the artist wants to see the
 /// tip silhouette without a full stroke arc.
 pub fn synthesize_dab_path(width: f32, height: f32) -> Vec<PaintInformation> {
     vec![PaintInformation {
@@ -330,16 +331,16 @@ pub fn synthesize_dab_path(width: f32, height: f32) -> Vec<PaintInformation> {
 /// Synthesize an S-curve preview stroke of the given dimensions.
 ///
 /// Samples `n_points` evenly along a cubic Bezier from lower-left to upper-
-/// right. Pressure ramps 0 → 1 → 0.2 along the curve so users can see
+/// right. Pressure ramps 0 → 1 → 0.2 along the curve so artists can see
 /// pressure-driven dynamics (size taper, flow attenuation, etc.).
 ///
 /// `inset` is the canvas-pixel margin reserved on every edge so an
 /// endpoint dab of that radius fits inside the canvas. Caller is
-/// responsible for passing a value < `min(width, height) / 2` — this
+/// responsible for passing a value < `min(width, height) / 2`; this
 /// function does not clamp.
 ///
-/// Shape follows Krita's `KisPresetLivePreviewView::setupAndPaintStroke`
-/// — start low-left at pressure 0, end high-right at pressure 0.2, peak
+/// Shape follows Krita's `KisPresetLivePreviewView::setupAndPaintStroke`:
+/// start low-left at pressure 0, end high-right at pressure 0.2, peak
 /// pressure at the midpoint.
 pub fn synthesize_stroke_path(
     width: f32,

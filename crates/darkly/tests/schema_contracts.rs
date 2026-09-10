@@ -20,7 +20,7 @@ fn all_prefs() -> Vec<&'static Pref> {
 
 // NOTE: a pref's `key` is a stable identifier independent of which section
 // it currently lives in. Settings can be moved between sections (purely
-// display groupings) without renaming the underlying key — there is
+// display groupings) without renaming the underlying key; there is
 // intentionally no test enforcing key-prefix == section-id.
 
 #[test]
@@ -39,9 +39,9 @@ fn no_duplicate_pref_keys() {
 }
 
 /// Every schema-declared pref except `app.baseSettings` must have a value in
-/// `defaults.yaml` or in every overlay — without that, `get_*` would panic
+/// `defaults.yaml` or in every overlay: without that, `get_*` would panic
 /// at runtime. `app.baseSettings` itself is the picker choice; it's
-/// legitimately absent before the user picks an editor.
+/// legitimately absent before the artist picks an editor.
 #[test]
 fn every_pref_has_a_resolvable_value() {
     let names = config::base_names();
@@ -54,7 +54,7 @@ fn every_pref_has_a_resolvable_value() {
             }
             let value = config::get(pref.key).unwrap_or_else(|| {
                 panic!(
-                    "pref {:?} has no value under overlay {:?} — \
+                    "pref {:?} has no value under overlay {:?}: \
                      missing from defaults.yaml and {:?}.yaml",
                     pref.key, overlay_name, overlay_name
                 )

@@ -4,7 +4,7 @@ import { Engine } from '../engine/protocol';
 /**
  * Process-level WASM bootstrap + shared `DarklySession`.
  *
- * `DarklySession` owns one `wgpu::Instance` and one `Arc<GpuDevice>` —
+ * `DarklySession` owns one `wgpu::Instance` and one `Arc<GpuDevice>`:
  * every `DarklyHandle` minted via `session.createHandle(canvas, w, h)` shares
  * the same WebGPU device. Multi-tab editors use one session and N handles,
  * one per open document; the embedded single-instance host uses one session
@@ -12,7 +12,7 @@ import { Engine } from '../engine/protocol';
  *
  * `getSession()` is idempotent and lazy: the first caller initialises the
  * WASM module and constructs the session; subsequent callers reuse it. A
- * concurrent first-call returns the same `Promise` — there is exactly one
+ * concurrent first-call returns the same `Promise`: there is exactly one
  * session per process.
  */
 

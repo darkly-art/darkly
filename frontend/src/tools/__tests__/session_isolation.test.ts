@@ -5,7 +5,7 @@ import { ToolSessionCancelled, runHook } from '../tool_session';
 import '../index';
 
 // Incident regression: painting died with an uncaught `ToolSessionCancelled` in
-// multi-tab — a background tab's engine finished async init and (under the old
+// multi-tab: a background tab's engine finished async init and (under the old
 // module-global session) its `CanvasView` effect stole the focused tab's
 // session, cancelling the focused tab's in-flight tool op. With the session
 // owned per `DarklyInstance`, a background instance beginning / rebinding its
@@ -48,7 +48,7 @@ describe('per-instance tool-session isolation', () => {
         expect(a.session).toBe(sessionA); // untouched
         expect(a.session).not.toBe(b.session);
 
-        // A's parked op resolves on A's still-live session — no cancellation.
+        // A's parked op resolves on A's still-live session; no cancellation.
         gateA.resolve(true);
         await expect(parked).resolves.toBe(true);
     });
@@ -111,7 +111,7 @@ describe('per-instance tool-session isolation', () => {
             expect(unhandled[0]).toBeInstanceOf(ToolSessionCancelled);
 
             // The dispatcher shape: the same op wrapped in runHook settles
-            // cleanly — no additional unhandled rejection.
+            // cleanly; no additional unhandled rejection.
             const wrappedGate = deferred<boolean>();
             const inst2 = new DarklyInstance();
             inst2.requestFrame = vi.fn();

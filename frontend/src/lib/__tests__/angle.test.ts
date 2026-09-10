@@ -22,7 +22,7 @@ describe('snapAngleToGrid', () => {
         expect(snapAngleToGrid(30 * DEG, CARDINAL_ANGLE_RAD)).toBeCloseTo(45 * DEG, 9);
     });
 
-    it('is wrap-invariant — 2π is a multiple of 15°', () => {
+    it('is wrap-invariant: 2π is a multiple of 15°', () => {
         const a = 23 * DEG;
         expect(snapAngleToGrid(a + 2 * Math.PI)).toBeCloseTo(
             snapAngleToGrid(a) + 2 * Math.PI,

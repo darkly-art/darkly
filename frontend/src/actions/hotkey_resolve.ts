@@ -23,7 +23,7 @@
  *                               brush is "clone". Out-ranks the group-scoped
  *                               `canvas@paint:$mod+drag` (color sampler) so a
  *                               brush can claim a modifier the tool group also
- *                               uses — see `specificity`.
+ *                               uses (see `specificity`).
  *
  * The dispatcher consumes these to:
  *   1. Build a `chord → ordered ChordEntry[]` index from action defaults
@@ -46,7 +46,7 @@
  *
  *  The colon is the chord separator; the site part before it is split on
  *  `@` into `site@scope@brush` (each optional). Anything after the first
- *  `:` is the chord verbatim — `@` inside a chord stays put. */
+ *  `:` is the chord verbatim; `@` inside a chord stays put. */
 export function parseBinding(raw: string): {
     site: string | null;
     scope: string | null;
@@ -82,7 +82,7 @@ export interface ChordEntry {
 /** Specificity score. `site` dominates `scope` dominates `brush` so the
  *  existing site/scope ordering is unchanged, and a brush-scoped entry
  *  out-ranks the otherwise-identical group-scoped one (letting a brush
- *  claim a modifier its tool group also binds — e.g. clone's set-source
+ *  claim a modifier its tool group also binds, e.g. clone's set-source
  *  vs. the color sampler, both `canvas@paint…:$mod+drag`). Higher fires
  *  first. */
 function specificity(e: ChordEntry): number {

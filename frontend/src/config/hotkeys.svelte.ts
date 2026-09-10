@@ -50,7 +50,7 @@ export function registerHotkeys() {
             // shortcuts don't leak to the canvas.
             if (document.querySelector('dialog[open]')) return;
             // Keys typed into a text field are content, not shortcuts (range
-            // sliders excepted — see `isEditableTarget`).
+            // sliders excepted; see `isEditableTarget`).
             if (isEditableTarget(e.target)) return;
 
             const chain = activeSiteChain();

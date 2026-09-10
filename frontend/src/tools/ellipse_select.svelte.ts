@@ -18,7 +18,7 @@ class EllipseSelectTool extends ToolBase {
 
     // Krita-style integer-pixel snapping of the bounding rect (see
     // `kis_tool_select_elliptical.cc`). The ellipse boundary itself is curved,
-    // so antialiasing stays on at commit time — only the bbox is snapped.
+    // so antialiasing stays on at commit time; only the bbox is snapped.
     private pushPreviewOverlay(): void {
         const engine = this.engine;
         if (!engine || !this.dragStart || !this.dragEnd) return;

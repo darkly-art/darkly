@@ -61,7 +61,7 @@ pub fn rasterize_sdf_r8(
     };
 
     // Tight output region: the margin-expanded shape box clamped to the window.
-    // A shape entirely off-window — or a reversed-drag negative bw/bh — has no
+    // A shape entirely off-window (or a reversed-drag negative bw/bh) has no
     // overlap, so `intersect` yields `None` and the mask is empty.
     let window = WindowRect::from_xywh(0, 0, canvas_width, canvas_height);
     let region = match WindowRect::from_corners(
@@ -115,7 +115,7 @@ pub fn rasterize_sdf_r8(
 
 /// Rasterize a polygon into a tight-bounds R8 buffer using scanline fill.
 ///
-/// O(height × edges + pixels) — no per-pixel distance computation.
+/// O(height × edges + pixels): no per-pixel distance computation.
 /// Antialiasing uses 4× vertical supersampling.
 pub fn rasterize_polygon_r8(
     canvas_width: u32,
@@ -412,7 +412,7 @@ pub fn pixel_bounds_r8(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4
         }
     }
 
-    // Only subtract once we know a set pixel exists — guarantees max >= min on
+    // Only subtract once we know a set pixel exists, which guarantees max >= min on
     // both axes. A zero-dimension or all-zero buffer simply finds nothing.
     if found {
         Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
@@ -523,7 +523,7 @@ fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 
 /// hundreds of segments to tens while preserving shape within ±1px.
 ///
 /// Returns one polyline per connected component. Closed loops have first ≈ last.
-/// RDP is skipped entirely below a segment-count threshold — small selections
+/// RDP is skipped entirely below a segment-count threshold; small selections
 /// don't benefit from it.
 fn build_polylines(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<Vec<[f32; 2]>> {
     if segments.is_empty() {
@@ -655,12 +655,12 @@ fn rdp_simplify(points: &[[f32; 2]], epsilon: f32) -> Vec<[f32; 2]> {
         left.extend(right);
         left
     } else {
-        // All intermediate points are within epsilon — keep only endpoints.
+        // All intermediate points are within epsilon: keep only endpoints.
         vec![first, last]
     }
 }
 
-/// Perpendicular distance from point `p` to line segment `a`–`b`.
+/// Perpendicular distance from point `p` to line segment `a`-`b`.
 fn point_to_line_dist(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
@@ -833,14 +833,14 @@ mod tests {
 
     #[test]
     fn polylines_segments_are_chained() {
-        // Adjacent segments within a polyline must share endpoints — that's the
+        // Adjacent segments within a polyline must share endpoints; that's the
         // invariant the dash-phase math relies on.
         let buf = rect_buffer_r8(20, 5, 5, 8, 8);
         let polylines = crate::mask::contour_polylines_r8(&buf, 20, 20, 127);
         for poly in &polylines {
             for i in 1..poly.len() {
                 // The point at index i is shared between segment (i-1) and segment i,
-                // so the chain trivially links — what we're really asserting is that
+                // so the chain trivially links: what we're really asserting is that
                 // every consecutive pair forms a non-degenerate segment.
                 let a = poly[i - 1];
                 let b = poly[i];
@@ -883,8 +883,8 @@ mod tests {
     #[test]
     fn polylines_inverted_rect_has_border_and_hole() {
         // The exact marching-ants invert case: a full-canvas mask with a
-        // rectangular hole punched out (selection inverted). Expect two loops —
-        // the canvas border and the inner hole — not just the hole.
+        // rectangular hole punched out (selection inverted). Expect two loops
+        // (the canvas border and the inner hole), not just the hole.
         let stride = 20u32;
         let mut buf = vec![255u8; (stride * stride) as usize];
         for y in 6..12 {

@@ -10,22 +10,22 @@ use serde::{Deserialize, Serialize};
 /// Display unit for a numeric value.
 ///
 /// Defines how a stored value is converted for display in the UI. The
-/// conversion methods use `f32` math — any numeric type (Scalar, Int) can
+/// conversion methods use `f32` math, so any numeric type (Scalar, Int) can
 /// round-trip through them. Non-numeric types (Bool, Color) ignore this
 /// field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum UnitType {
-    /// Identity — display and internal are both raw values (shown as `0.50`).
+    /// Identity: display and internal are both raw values (shown as `0.50`).
     #[default]
     Normalized,
     /// Display as percentage: `display = value × 100`, suffix `%`.
     Percent,
     /// Wire unit is radians; display in degrees. `display = value × 180/π`, suffix `°`.
     Degrees,
-    /// Identity with no suffix — useful for dimensionless multipliers.
+    /// Identity with no suffix, useful for dimensionless multipliers.
     Raw,
-    /// Identity with `px` suffix — value is in canvas pixels.
+    /// Identity with `px` suffix: value is in canvas pixels.
     Pixels,
 }
 

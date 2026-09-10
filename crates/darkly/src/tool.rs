@@ -15,12 +15,12 @@ pub struct ToolRegistration {
     /// session state (the brush's eraser mode) overrides this in its frontend
     /// descriptor; this is the registry's own, state-free answer.
     pub icon: &'static str,
-    /// One-sentence summary of what the tool does on the canvas — the toolbar
+    /// One-sentence summary of what the tool does on the canvas: the toolbar
     /// tooltip and the reference manual's row for it.
     pub description: &'static str,
     /// Id of the action that selects this tool. Bindings in
     /// `presets/*.yaml` name this string, and it is deliberately not derived
-    /// from `type_id` — `colorpicker` binds `colorPickerTool`.
+    /// from `type_id`: `colorpicker` binds `colorPickerTool`.
     pub hotkey_action: &'static str,
     pub params: &'static [ParamDef],
 }
@@ -38,7 +38,7 @@ impl ToolRegistration {
     }
 }
 
-/// The tool catalog — every registered tool, sorted by `type_id`.
+/// The tool catalog: every registered tool, sorted by `type_id`.
 pub fn catalog() -> Catalog {
     Catalog::new(
         CATALOG_ID,
@@ -49,7 +49,7 @@ pub fn catalog() -> Catalog {
             .map(ToolRegistration::catalog_entry)
             .collect(),
     )
-    .with_description("What a pointer does on the canvas — painting, filling, picking, selecting.")
+    .with_description("What a pointer does on the canvas: painting, filling, picking, selecting.")
 }
 
 /// Auto-discovered tool registry. Owns the human-friendly display name surface
@@ -96,7 +96,7 @@ impl ToolRegistry {
 
     /// Return every registered tool's full [`ToolRegistration`], sorted by
     /// `type_id` for deterministic output. Callers read whatever fields they
-    /// need off the registration — a new field is free here.
+    /// need off the registration; a new field is free here.
     pub fn types(&self) -> Vec<&ToolRegistration> {
         let mut v: Vec<&ToolRegistration> = self.entries.values().map(|e| &e.reg).collect();
         v.sort_by_key(|reg| reg.type_id);
@@ -113,13 +113,13 @@ pub fn registry() -> &'static ToolRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// ToolSession — generic shared-state container for tools
+// ToolSession: generic shared-state container for tools
 // ---------------------------------------------------------------------------
 
 /// Process-wide bag of tool state shared across every `DarklyEngine`
 /// spawned from one `DarklySession`. Tools that have state which must
-/// survive engine swaps — multi-tab brush graph being the motivating
-/// example — register a state type here and read/write it through
+/// survive engine swaps (multi-tab brush graph being the motivating
+/// example), register a state type here and read/write it through
 /// `get::<T>()` / `get_mut::<T>()`.
 ///
 /// The container has zero knowledge of which tools exist or what they

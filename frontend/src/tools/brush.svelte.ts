@@ -21,7 +21,7 @@ import {
 } from './clone_source_cursor';
 import { isToolHoverSuppressed } from './modifier_cursor';
 
-/** Brush-tool session state — an app-global user preference (not per-document),
+/** Brush-tool session state: an app-global artist preference (not per-document),
  *  so it stays module-level even though the brush *tool* is per-instance.
  *  Persists across strokes within the session; resets on reload. The engine-side
  *  blend-mode mirror is pushed by `onActivate` / `onDeactivate` and by the
@@ -34,7 +34,7 @@ export const brushSession = new BrushSession();
 
 /** Soft-contrast strength for big brushes. Tuned by eye. */
 const BASE_STRENGTH = 0.22;
-/** Strength at or below the "small" threshold — compensates for the
+/** Strength at or below the "small" threshold: compensates for the
  *  stamp covering fewer screen pixels by amping contrast. */
 const MAX_STRENGTH = 0.65;
 /** Half-extent in *on-screen* pixels where MAX_STRENGTH applies. */
@@ -57,9 +57,9 @@ function previewStrength(halfExtent: [number, number], zoom: number): number {
     return MAX_STRENGTH + (BASE_STRENGTH - MAX_STRENGTH) * smooth;
 }
 
-/** Pen pose passed to `refresh_brush_cursor_preview` — drives any pressure /
+/** Pen pose passed to `refresh_brush_cursor_preview`: drives any pressure /
  *  tilt / twist dynamics wired into the brush graph. Components are in
- *  the normalised ranges WASM expects (pressure 0–1, tilt ±1, twist 0–1). */
+ *  the normalised ranges WASM expects (pressure 0-1, tilt ±1, twist 0-1). */
 export interface PenPose {
     pressure: number;
     tiltX: number;
@@ -69,7 +69,7 @@ export interface PenPose {
 }
 
 /** Pose for the on-canvas cursor preview. Pressure is pinned to full so the
- *  circle shows the brush's reach — a hovering pen reports 0, and the preview
+ *  circle shows the brush's reach; a hovering pen reports 0, and the preview
  *  isn't a live dab. Tilt and twist still track the live event. The resize
  *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
 export function cursorPose(e: PointerEvent): PenPose {
@@ -117,7 +117,7 @@ class BrushTool extends ToolBase {
 
     /** Monotonic hover generation, bumped every time the overlay is invalidated
      *  (stroke start, pointer leave, tool deactivate). `pushHoverOverlay` awaits
-     *  the preview refresh before drawing — so a hover in flight when a stroke
+     *  the preview refresh before drawing, so a hover in flight when a stroke
      *  begins could otherwise land its `set_overlay` *after* pointerdown's
      *  `clear_overlay`, freezing a ghost dab on-canvas for the whole stroke.
      *  Capturing the generation before the await and re-checking after lets an
@@ -126,12 +126,12 @@ class BrushTool extends ToolBase {
      *  A finer-grained sibling of `tool_session.ts`: that primitive invalidates
      *  on session boundaries (tool switch, layer change); `hoverGen` also
      *  invalidates on *stroke start* within the same session, a boundary a tool
-     *  session doesn't draw — so it stays. */
+     *  session doesn't draw, so it stays. */
     private hoverGen = 0;
 
     /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the given
      *  pose. Also reachable by non-brush callers (the shift+drag size scrub, the
-     *  `[` / `]` hotkey refresh) via {@link focusedBrushTool}. Async — it awaits
+     *  `[` / `]` hotkey refresh) via {@link focusedBrushTool}. Async: it awaits
      *  the preview refresh before drawing. */
     async pushHoverOverlay(pose: PenPose, cx: number, cy: number): Promise<void> {
         const engine = this.engine;
@@ -142,7 +142,7 @@ class BrushTool extends ToolBase {
         // airtight: an engagement landing *during* the await below slips past
         // it, and is caught instead by the `hoverGen` recheck (engaging runs
         // `suspendHover` → `clearHover()` → `hoverGen++`). Suppression safety is
-        // the gate and the gen counter jointly — neither is redundant.
+        // the gate and the gen counter jointly: neither is redundant.
         // `restoreHover` fires only after the last engager disengages, so it
         // passes.
         if (isToolHoverSuppressed()) return;
@@ -156,7 +156,7 @@ class BrushTool extends ToolBase {
             rotation: pose.twist,
             tangential_pressure: pose.tangentialPressure,
         })) as BrushCursorPreviewInfo | null;
-        // A stroke / leave / deactivate fired during the await — that path
+        // A stroke / leave / deactivate fired during the await; that path
         // already cleared the overlay, so drawing now would resurrect a frozen
         // ghost dab.
         if (gen !== this.hoverGen) return;
@@ -207,8 +207,8 @@ class BrushTool extends ToolBase {
         // paint never read brush_blend_mode; brush tools that do (color_output)
         // will pick this up on the next stroke.
         engine.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
-        // Hide the native cursor only if a preview is available — otherwise fall
-        // back to the default cursor so the user has *something* to see.
+        // Hide the native cursor only if a preview is available; otherwise fall
+        // back to the default cursor so the artist has *something* to see.
         const info = await engine.api.getBrushCursorPreviewInfo();
         // Re-check after the await: a modifier cursor may have engaged in the
         // meantime (hotkeying into the brush with the chord already held) and
@@ -237,13 +237,13 @@ class BrushTool extends ToolBase {
         const layerId = this.inst.activeLayerId;
         if (!layerId || !engine) return;
 
-        // Clear the hover overlay while painting — the stamp renders onto the
+        // Clear the hover overlay while painting: the stamp renders onto the
         // canvas directly; a ghost at the cursor would just clutter.
         engine.api.clearOverlay();
         engine.api.clearBrushCursorPreviewPose();
         this.clearHover();
         this.inst.toolCursor = 'none';
-        const params = brushStrokeParams(e, cx, cy, this.inst.foreground);
+        const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
         beginPaintStroke(engine, layerId);
         engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
         // Capture the clone dest anchor so the source marker tracks the cursor
@@ -257,7 +257,7 @@ class BrushTool extends ToolBase {
         const engine = this.engine;
         if (!engine) return;
         if (e.buttons & 1) {
-            const params = brushStrokeParams(e, cx, cy, this.inst.foreground);
+            const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
             engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
             strokeRecorder.addEvent(params);
             onCloneStrokeMove(cx, cy);

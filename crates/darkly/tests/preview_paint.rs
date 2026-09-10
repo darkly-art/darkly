@@ -173,12 +173,12 @@ fn rough_ink_preview_shows_color() {
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should be the brush color (orange-ish). Perlin noise can
-    // dip flow at the centre — only assert color, not full opacity.
+    // dip flow at the centre, so only assert color, not full opacity.
     assert!(
         centre[0] > centre[2] && centre[3] > 0,
         "Rough Ink centre should be visible and lean orange; got {centre:?}",
     );
     // (Boundary-variance check lives in `preview_watercolor.rs` against
-    // Rough Watercolor — that brush has a much larger amplitude so the
+    // Rough Watercolor: that brush has a much larger amplitude so the
     // shape modulation reads cleanly at our sampling resolution.)
 }

@@ -1,4 +1,4 @@
-# Getting Started — Darkly in TypeScript
+# Getting Started: Darkly in TypeScript
 
 This is the **page 1** guide to embedding Darkly's engine in a web app. It covers
 the three things you need to do to put paint on a canvas: **import**,
@@ -10,8 +10,8 @@ the three things you need to do to put paint on a canvas: **import**,
 
 ## The shape of the API
 
-You never call engine methods directly. Instead you talk to one object — an
-`Engine` — that speaks a single async **request/response protocol**:
+You never call engine methods directly. Instead you talk to one object (an
+`Engine`) that speaks a single async **request/response protocol**:
 
 - `engine.send(kind, payload?, bytes?)` → a `Promise` that resolves with the
   response. Use it when you need the result.
@@ -26,7 +26,7 @@ union in [`frontend/src/engine/protocol_gen.ts`](../frontend/src/engine/protocol
 
 Under the hood every request is enqueued onto one FIFO and drained either on a
 `MessageChannel` macrotask (sub-frame, for `send`/`post`) or inside `render()`
-(at frame time). You don't manage any of that — you just `await` your promise.
+(at frame time). You don't manage any of that; you just `await` your promise.
 
 ## 1. Import & instantiate
 
@@ -54,7 +54,7 @@ const engine = new Engine(handle);
 ```
 
 `session.createHandle(canvas, w, h)` allocates the WebGPU device on the first
-call and **reuses it** for every later handle — that's how the multi-tab editor
+call and **reuses it** for every later handle: that's how the multi-tab editor
 runs N documents (N handles) on one device. `docWidth`/`docHeight` are the
 document's pixel dimensions; the canvas's own CSS/backing size is independent.
 
@@ -67,7 +67,7 @@ const engine = await createHandle(canvas, 1920, 1080); // returns an Engine
 ```
 
 > **Single instance vs. shared device.** If you only ever have one canvas you
-> can skip the session and call `DarklyHandle.create(canvas, w, h)` directly —
+> can skip the session and call `DarklyHandle.create(canvas, w, h)` directly:
 > it allocates its own device. Prefer `DarklySession` whenever more than one
 > canvas is in play.
 
@@ -79,7 +79,7 @@ const engine = await createHandle(canvas, 1920, 1080); // returns an Engine
 // Add a raster layer and get its id back.
 const { layerId } = await engine.send('add_raster', { name: 'Layer 1' });
 
-// Fire-and-forget mutations (no result needed) — ideal for pointer streams.
+// Fire-and-forget mutations (no result needed), ideal for pointer streams.
 engine.post('begin_stroke', { layerId, x: 100, y: 120, pressure: 0.8 });
 engine.post('stroke_to',    { x: 140, y: 160, pressure: 0.9 });
 engine.post('end_stroke',   {});
@@ -121,10 +121,10 @@ requestAnimationFrame(frame);
 ```
 
 `status.state` is a synchronously-readable snapshot the UI mirrors
-(`frameCount`, `thumbnailVersion`, `dirty`, `hasSelection`) — read it instead of
+(`frameCount`, `thumbnailVersion`, `dirty`, `hasSelection`); read it instead of
 issuing extra queries each frame. `status.busy` is `true` only when a re-entrant
 render couldn't get the engine; when you see it, **don't** schedule another
-frame — the outer render already owns the work.
+frame: the outer render already owns the work.
 
 ## 3. Tear down
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { virtualGridWindow, type GridMetrics } from '../virtual_grid';
 
-// A 150px-min tile, 74px tall, 8px gap — the font browser's real footprint.
+// A 150px-min tile, 74px tall, 8px gap: the font browser's real footprint.
 const BASE: GridMetrics = {
     count: 1000,
     containerWidth: 640,
@@ -42,7 +42,7 @@ describe('virtualGridWindow', () => {
         expect(w.sliceEnd).toBe(44);
     });
 
-    it('slides the window down as the user scrolls', () => {
+    it('slides the window down as the artist scrolls', () => {
         // Scrolled 100 rows down: 100 * 82 = 8200px.
         const w = virtualGridWindow({ ...BASE, scrollTop: 8200 });
         // floor(8200/82) - 2 buffer = 98.

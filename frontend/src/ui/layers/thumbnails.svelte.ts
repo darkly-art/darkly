@@ -27,7 +27,7 @@ export function rgbaToDataUrl(rgba: Uint8Array, width: number, height: number): 
 // an async refresh keyed on `thumbnailEpoch`; when the bytes land we write
 // them here, and because this is `$state` the `$derived` consumers re-run.
 const cache = $state<Record<number, string>>({});
-// Last epoch we fetched per node id — guards against re-fetching the same
+// Last epoch we fetched per node id: guards against re-fetching the same
 // node many times within one epoch (each `$derived` re-eval would otherwise
 // fire a fresh query) while still refetching when a new readback lands.
 const fetchedEpoch = new Map<number, number>();
@@ -38,7 +38,7 @@ const fetchedEpoch = new Map<number, number>();
 export function getNodeThumbnail(nodeId: number): string {
     // Subscribe to `engineState.thumbnailVersion` so any `$derived` calling this
     // function re-runs when an async readback lands in the wasm cache, and so we
-    // refetch the new bytes. (See `app.svelte.ts` `requestFrame` — render's
+    // refetch the new bytes. (See `app.svelte.ts` `requestFrame`; render's
     // returned state mirror carries the version.)
     const epoch = app.engineState?.thumbnailVersion ?? 0;
     const engine = app.engine;

@@ -3,10 +3,10 @@
 //! Every modular system (veils, brush nodes, stabilizers, …) shares the
 //! same identity-on-wire: `{ "type_id": "<slug>", "params": [...] }`. These
 //! helpers materialize that shape from any instance and parse it back. The
-//! save/load core never matches on module identity — it just calls
+//! save/load core never matches on module identity: it just calls
 //! [`serialize_instance`] and [`deserialize_instance`].
 //!
-//! Helpers are intentionally minimal — the registries vary in their
+//! Helpers are intentionally minimal: the registries vary in their
 //! constructor signature (veils need a GPU pipeline; stabilizers don't),
 //! so per-registry callers stay close. What we centralize is the *shape*,
 //! not the dispatch.
@@ -18,7 +18,7 @@ use crate::gpu::params::ParamValue;
 
 /// Canonical wire-format envelope for a modular instance.
 ///
-/// Veils, brush nodes, stabilizers — every `(type_id, params)` pair on
+/// Veils, brush nodes, stabilizers: every `(type_id, params)` pair on
 /// disk serializes through this shape. Phase 2 uses it for round-trip
 /// shape verification; Phase 3 writes the same shape into the manifest's
 /// `veils` array and the brush-graph node list.
@@ -49,7 +49,7 @@ pub fn serialize_instance(
 }
 
 /// Deserialize an [`InstancePayload`] from JSON. The caller is responsible
-/// for resolving `payload.type_id` against the appropriate registry — this
+/// for resolving `payload.type_id` against the appropriate registry; this
 /// helper only handles the JSON shape, not the registry dispatch.
 ///
 /// Returns [`LoadError::Json`] for malformed input; the registry-miss case

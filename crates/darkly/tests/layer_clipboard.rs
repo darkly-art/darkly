@@ -1,7 +1,7 @@
 //! Round-trip test for rich-layer copy/paste.
 //!
 //! Confirms `copy_layer_rich` → JSON → `paste_layer_rich` preserves the
-//! source layer's pixels, blend mode, opacity, name, and mask presence —
+//! source layer's pixels, blend mode, opacity, name, and mask presence:
 //! the foundation of cross-tab paste in the multi-tab editor.
 //!
 //! Run with: `cargo test -p darkly --test layer_clipboard -- --test-threads=1`
@@ -92,7 +92,7 @@ fn rich_copy_paste_preserves_blend_mode_opacity_and_pixels() {
     assert!(json.contains("\"blend_mode\":\"multiply\""));
     assert!(json.contains("\"name\":\"Source layer\""));
 
-    // Paste into a fresh engine — same engine→engine round-trip the
+    // Paste into a fresh engine: same engine→engine round-trip the
     // multi-tab cross-tab paste does, just without the system clipboard
     // in the middle.
     let mut sink = test_engine(w, h);

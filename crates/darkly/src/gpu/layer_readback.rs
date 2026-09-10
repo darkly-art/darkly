@@ -9,15 +9,15 @@
 //! [`request_layer_readback`] + [`LayerReadbackExtent`] are the single place
 //! that owns that translation: the readback samples the texture's full extent,
 //! and the extent projects the resulting layer-local bytes into a window-local
-//! R8 mask — the frame the selection texture and the paint mask are indexed in.
+//! R8 mask: the frame the selection texture and the paint mask are indexed in.
 //! **Do not** call `request_readback` with a canvas rect from such a call site;
 //! go through this module.
 //!
 //! Producers layered on the projection:
 //!
-//! - [`LayerReadbackExtent::flood_fill_to_canvas_mask`] — magic wand and the
+//! - [`LayerReadbackExtent::flood_fill_to_canvas_mask`] - magic wand and the
 //!   paint-bucket fill tool, via the scanline fills in [`crate::gpu::flood_fill`].
-//! - [`LayerReadbackExtent::opacity_to_canvas_mask`] — "alpha to selection",
+//! - [`LayerReadbackExtent::opacity_to_canvas_mask`] - "alpha to selection",
 //!   the per-pixel opacity of the node.
 
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -26,7 +26,7 @@ use crate::gpu::readback::{self, ReadbackRequest};
 /// Snapshot of a paint target's coordinate frame, captured at readback-request
 /// time and carried through the async round-trip.
 ///
-/// Owns no GPU resources — pure metadata. Pairs with the readback request
+/// Owns no GPU resources (pure metadata). Pairs with the readback request
 /// returned by [`request_layer_readback`]: the request reads the texture's full
 /// extent (`width × height` pixels starting at texture-local (0,0)), and this
 /// struct provides the canvas↔texture translation on the other side so callers
@@ -36,10 +36,10 @@ pub struct LayerReadbackExtent {
     /// Plane-space offset of the texture's (0, 0) pixel.
     pub offset_x: i32,
     pub offset_y: i32,
-    /// Texture pixel dimensions — the size of the readback buffer.
+    /// Texture pixel dimensions: the size of the readback buffer.
     pub width: u32,
     pub height: u32,
-    /// Document canvas (window) dimensions — the size of the produced mask.
+    /// Document canvas (window) dimensions: the size of the produced mask.
     pub canvas_width: u32,
     pub canvas_height: u32,
     /// Plane-space origin of the canvas window. The produced mask is
@@ -74,7 +74,7 @@ impl LayerReadbackExtent {
     ///
     /// `seed_canvas` is the click point in plane coordinates, translated to
     /// texture-local coords before the fill runs. Format dispatch matches the
-    /// texture's own format — RGBA reads four bytes per pixel, R8 reads one.
+    /// texture's own format: RGBA reads four bytes per pixel, R8 reads one.
     pub fn flood_fill_to_canvas_mask(
         &self,
         pixels: &[u8],
@@ -108,7 +108,7 @@ impl LayerReadbackExtent {
         self.project_to_window_mask(&layer_mask)
     }
 
-    /// The node's per-pixel opacity as a window-local R8 mask — the coverage
+    /// The node's per-pixel opacity as a window-local R8 mask: the coverage
     /// "alpha to selection" loads. An RGBA texture contributes its alpha
     /// channel; an R8 texture (mask / selection filter) *is* coverage already,
     /// so its bytes pass through.
@@ -123,7 +123,7 @@ impl LayerReadbackExtent {
     }
 
     /// Project a layer-local R8 buffer (one byte per texture pixel) into a
-    /// **window-local** R8 mask sized `canvas_width × canvas_height` — the
+    /// **window-local** R8 mask sized `canvas_width × canvas_height`: the
     /// frame the selection texture is indexed in (see `crate::coord`).
     ///
     /// Pixels outside the layer's canvas-window footprint stay 0.
@@ -165,14 +165,14 @@ impl LayerReadbackExtent {
 ///
 /// Single source of truth for the readback rect used by magic wand, the
 /// paint-bucket flood fill, and alpha-to-selection. The rect is the texture's
-/// own dimensions, NOT the canvas — see the module docs for why.
+/// own dimensions, NOT the canvas; see the module docs for why.
 pub fn request_layer_readback(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     target: &GpuPaintTarget<'_>,
 ) -> (ReadbackRequest, LayerReadbackExtent) {
     let extent = LayerReadbackExtent::from_target(target);
-    // Texture-local rect spanning the entire layer — the canvas↔texture
+    // Texture-local rect spanning the entire layer: the canvas↔texture
     // translation happens later, in the extent's projection.
     let request = readback::request_readback(
         device,
@@ -189,7 +189,7 @@ mod tests {
     use super::*;
 
     /// A 2×2 layer sitting at plane (3, 2), inside a 6×6 canvas window whose
-    /// origin is plane (2, 1) — i.e. the layer projects to window-local
+    /// origin is plane (2, 1), i.e. the layer projects to window-local
     /// [1,3)×[1,3).
     fn cropped_extent(format: wgpu::TextureFormat) -> LayerReadbackExtent {
         LayerReadbackExtent {
@@ -205,7 +205,7 @@ mod tests {
         }
     }
 
-    /// REGRESSION: the produced mask is **window-local** — the magic-wand fill
+    /// REGRESSION: the produced mask is **window-local**; the magic-wand fill
     /// must land where the window-sized selection texture expects it after a
     /// crop, i.e. at `plane − canvas_origin`, not at the raw plane coordinate.
     #[test]
@@ -226,13 +226,13 @@ mod tests {
         assert_eq!(at(0, 0), 0, "outside the fill stays empty");
     }
 
-    /// Alpha-to-selection reads the RGBA alpha channel, ignoring RGB — an
+    /// Alpha-to-selection reads the RGBA alpha channel, ignoring RGB. An
     /// erased pixel keeps ghost color under `a = 0` (straight-alpha storage)
     /// and must not be selected.
     #[test]
     fn opacity_mask_reads_rgba_alpha_only() {
         // 2×2 RGBA: opaque red, half-transparent red, transparent red ghost,
-        // transparent black — reading row-major.
+        // transparent black, reading row-major.
         let pixels = vec![
             255, 0, 0, 255, // (0, 0)
             255, 0, 0, 128, // (1, 0)
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(at(2, 2), 0);
     }
 
-    /// An R8 node (mask filter) is coverage already — its bytes pass straight
+    /// An R8 node (mask filter) is coverage already; its bytes pass straight
     /// through the projection.
     #[test]
     fn opacity_mask_passes_r8_coverage_through() {

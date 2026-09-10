@@ -2,7 +2,7 @@
 //!
 //! Model: plain paste always makes its own layer; pasting INTO the active
 //! target (a layer or a mask) is the "paste in place" verb, which writes RGBA
-//! layers and R8 masks alike. Target kind never changes the routing — with
+//! layers and R8 masks alike. Target kind never changes the routing; with
 //! transform-after-paste on, every target floats so the clip can be positioned
 //! before it overwrites anything, and the transform tool is what commits it.
 //! An RGBA clip converts to mask values on the way in (luminance, transparency
@@ -96,7 +96,7 @@ fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usi
 }
 
 /// Bug 1 (floating verb): floating the clipboard onto a MASK and committing it
-/// writes into the mask — no new layer, and undoable. This is the path the UI
+/// writes into the mask: no new layer, and undoable. This is the path the UI
 /// takes when "activate transform after paste" is on; the commit below stands
 /// in for the gizmo gesture that ends the session.
 #[test]
@@ -188,7 +188,7 @@ fn paste_in_place_committed_writes_into_active_mask() {
 
 /// REPRO: paste a pure-GREEN clip into a mask. A mask is a grayscale value, so
 /// the clip must convert by luminance (green ≈ 0.7152 → ~182). Reading the
-/// source's red channel instead yields 0 — the mask goes black and the host
+/// source's red channel instead yields 0; the mask goes black and the host
 /// vanishes, "it pastes full black regardless of what is in the clipboard".
 #[test]
 fn repro_rgba_paste_into_mask_converts_by_luminance_not_red() {
@@ -364,7 +364,7 @@ fn region_copy_of_masked_layer_pastes_without_mask() {
 fn paste_does_not_seed_mask_from_active_selection() {
     let (w, h) = (32u32, 32u32);
 
-    // Whole-layer copy (no selection) — the mask travels with the layer.
+    // Whole-layer copy (no selection): the mask travels with the layer.
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
     paint_dot(&mut source, layer, 16.0, 16.0, (1.0, 0.0, 0.0));
@@ -390,7 +390,7 @@ fn paste_does_not_seed_mask_from_active_selection() {
     let first = m[0];
     assert!(
         m.iter().all(|&v| v == first),
-        "the restored mask must be uniform — paste must not seed it from the \
+        "the restored mask must be uniform; paste must not seed it from the \
          active selection"
     );
 }

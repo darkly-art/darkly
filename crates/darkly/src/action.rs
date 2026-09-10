@@ -1,13 +1,13 @@
 //! Every command the editor can run, as data.
 //!
-//! An action has two halves. The documentable half — its id, label, icon and
-//! one-line description — is static data, and lives here beside the
-//! `presets/*.yaml` bindings that name the same ids. The behavioural half —
-//! what running it does — closes over Svelte runes and lives in
+//! An action has two halves. The documentable half (its id, label, icon and
+//! one-line description) is static data, and lives here beside the
+//! `presets/*.yaml` bindings that name the same ids. The behavioural half
+//! (what running it does) closes over Svelte runes and lives in
 //! `frontend/src/actions/`. The two join by id.
 //!
 //! Actions group one file per category (`actions/edit.rs`, `actions/view.rs`,
-//! …), each a `const ACTIONS` table plus one `register()` — the same
+//! …), each a `const ACTIONS` table plus one `register()`: the same
 //! many-items-per-file shape `config/sections/` uses, and the shape GIMP's
 //! per-domain `GimpActionEntry` tables use. `build.rs` discovers the files, so
 //! a new category is a new file and nothing else.
@@ -21,8 +21,8 @@ pub struct ActionDef {
     pub id: &'static str,
     pub display_name: &'static str,
     /// One sentence describing what running the action does. The command
-    /// palette's substring search indexes it, so it should carry the words a
-    /// user would reach for.
+    /// palette's substring search indexes it, so it should carry the words an
+    /// artist would reach for.
     pub description: &'static str,
     /// Iconify name, rendered in the menu gutter, the command-palette row and
     /// the reference manual's table.
@@ -48,14 +48,14 @@ impl ActionDef {
             .with_description(self.description)
             .with_category(category)
             // An action *is* the thing a binding names, so the id it binds is
-            // its own. Declaring it means one rule — "the entry whose
-            // `hotkey_action` matches" — resolves a bound chord to its
+            // its own. Declaring it means one rule ("the entry whose
+            // `hotkey_action` matches") resolves a bound chord to its
             // documentation for tools, filters and actions alike.
             .with_hotkey_action(self.id)
     }
 }
 
-/// The action catalog — every registered action, grouped by category.
+/// The action catalog: every registered action, grouped by category.
 pub fn catalog() -> Catalog {
     let categories = crate::actions::registrations();
     Catalog::new(
@@ -67,7 +67,7 @@ pub fn catalog() -> Catalog {
             .collect(),
     )
     .with_description(
-        "Every command the editor can run — from a menu, the command palette, or a hotkey.",
+        "Every command the editor can run, whether from a menu, the command palette, or a hotkey.",
     )
     .with_shared_icons()
 }
@@ -75,7 +75,7 @@ pub fn catalog() -> Catalog {
 #[cfg(test)]
 mod tests {
     /// The category is the grouping the cheat sheet and the hotkeys tab render,
-    /// and it is declared once per file — so two files claiming the same one
+    /// and it is declared once per file, so two files claiming the same one
     /// would silently merge into a section with no single owner.
     #[test]
     fn every_category_declares_a_unique_id() {
@@ -99,7 +99,7 @@ mod tests {
 
     /// Every action carries the four columns the reference manual's table has.
     /// `catalog.rs` demands the name and the description of every catalog
-    /// entry, but not the icon — that is `Option` there because other
+    /// entry, but not the icon: that is `Option` there because other
     /// registries decline it, whereas an action always has one to show in the
     /// menu gutter.
     #[test]

@@ -4,7 +4,7 @@
     import { recovery } from '../state/recovery.svelte';
     import { readSnapshot, snapshotThumbnail, type RecoveryEntry } from '../storage/recovery';
 
-    // Object URLs minted for thumbnails — revoked on teardown.
+    // Object URLs minted for thumbnails, revoked on teardown.
     const urls: string[] = [];
     onDestroy(() => {
         for (const u of urls) URL.revokeObjectURL(u);
@@ -29,9 +29,9 @@
     function onDiscardAll() { void recovery.discardAll(); }
 </script>
 
-<Modal bind:open={recovery.open} title="Recover unsaved work" size="md">
+<Modal bind:open={recovery.open} title="Recover unsaved work" size="lg">
     <p class="message">
-        Darkly didn't shut down cleanly. These documents had unsaved changes —
+        Darkly didn't shut down cleanly. These documents had unsaved changes;
         restore the ones you want to keep.
     </p>
 

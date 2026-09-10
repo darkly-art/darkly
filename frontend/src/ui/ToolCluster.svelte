@@ -23,7 +23,7 @@
     // The cluster button mirrors a single member tool's icon:
     //   • the currently-active member when one belongs to this cluster
     //   • otherwise the default member
-    // The cluster never owns an icon of its own — it's pure routing.
+    // The cluster never owns an icon of its own; it's pure routing.
     const iconSource = $derived(
         activeMember ?? toolRegistry.get(cluster.defaultToolId) ?? null
     );
@@ -49,7 +49,7 @@
         pinned = false;
     }
 
-    // Dismiss the pinned state when the user clicks outside this cluster.
+    // Dismiss the pinned state when the artist clicks outside this cluster.
     // Mirrors LeftSidebar's color-picker dismissal pattern.
     $effect(() => {
         if (!pinned) return;
@@ -110,7 +110,7 @@
     }
 
     /* Vertical column of sub-tool buttons. Positioned flush against the
-       toolbar's right edge — the 6px margin-left bridges from the cluster
+       toolbar's right edge: the 6px margin-left bridges from the cluster
        button (32px wide, centered in the 44px toolbar) to the toolbar's
        right edge, so the popout's left edge butts cleanly onto the sidebar
        with no visible gap. Vertically centered on the cluster button's
@@ -142,7 +142,7 @@
         pointer-events: auto;
     }
 
-    /* Invisible hit-area bridge — extends the popout's pointer hit zone
+    /* Invisible hit-area bridge: extends the popout's pointer hit zone
        leftward by 6px to cover the toolbar's right padding between the
        cluster button and the popout. Without this, the pointer crosses
        "background of toolbar" mid-transit and fires `mouseleave` on the
@@ -156,8 +156,8 @@
         height: 100%;
     }
 
-    /* Reuse .tool styling — duplicated here because Svelte scoped styles
-       don't reach into this component. Kept in sync with LeftSidebar's. */
+    /* Reuse .tool styling (duplicated here because Svelte scoped styles
+       don't reach into this component). Kept in sync with LeftSidebar's. */
     .tool {
         width: 32px;
         height: 32px;

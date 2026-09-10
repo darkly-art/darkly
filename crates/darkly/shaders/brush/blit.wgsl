@@ -23,7 +23,7 @@ struct VertexOutput {
     // Full-screen triangle: vertex indices 0,1,2 cover the viewport.
     let unit = vec2f(f32((idx << 1u) & 2u), f32(idx & 2u));
     var out: VertexOutput;
-    // Flip Y in NDC so UV (0,0) lands on the top-left dest texel — matches
+    // Flip Y in NDC so UV (0,0) lands on the top-left dest texel, matching
     // source texture orientation (UV origin = top-left in WGPU). Without
     // this flip the dest is vertically mirrored vs the source.
     out.pos = vec4f(unit.x * 2.0 - 1.0, 1.0 - unit.y * 2.0, 0.0, 1.0);

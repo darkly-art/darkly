@@ -11,7 +11,7 @@
 
     let filter = $state('');
 
-    // Group by the prefix before the first '/' — Krita uses
+    // Group by the prefix before the first '/': Krita uses
     // "MaskingBrush/Preset/FlowSensor"-style namespaced names.
     interface GroupItem {
         param: KritaParam;

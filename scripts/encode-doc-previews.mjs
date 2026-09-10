@@ -6,7 +6,7 @@
  *   cargo run -p darkly --features testing --bin render_docs -- --out frames
  *   node scripts/encode-doc-previews.mjs --frames frames --out out
  *
- * Raw frames were always the intermediate, never the deliverable — the last
+ * Raw frames were always the intermediate, never the deliverable: the last
  * full render is 1 599 PNGs and 75 MB, which is not something to put on a
  * release, let alone in a table. H.264 over the same frames is a few MB.
  *
@@ -18,14 +18,14 @@
  *
  * ## What it writes
  *
- *   <out>/assets.json                   the index — same shape as the frame
+ *   <out>/assets.json                   the index: same shape as the frame
  *                                       index, with `poster`/`video` where it
  *                                       had `dir`/`frames`/`still`
  *   <out>/previews/<catalog>/<id>.webp  the frame `render-docs` nominated
  *   <out>/previews/<catalog>/<id>.mp4   the loop, absent for a still-only entry
  *
- * A single-frame entry — every brush is one, they declare `PreviewAnim::STILL`
- * — gets a poster and no video. `video` being absent is how a consumer knows
+ * A single-frame entry (every brush is one, they declare `PreviewAnim::STILL`)
+ * gets a poster and no video. `video` being absent is how a consumer knows
  * there is nothing to play, so it can render a plain image rather than a
  * `<video>` that will never move.
  *
@@ -42,12 +42,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 /*
- * Constant quality rather than a bitrate: the catalogs differ enormously in how
- * hard they are to encode — a blend-mode sweep is two smooth fields crossfading,
- * the noise void is full-frame grain — and one bitrate would either starve the
- * grain or waste bytes on the gradients. 20 is a little finer than the 23
- * default because these are 256 px squares read at a glance for exactly the
- * difference between one effect and the next.
+ * Constant quality rather than a bitrate: the catalogs differ enormously in
+ * how hard they are to encode (a blend-mode sweep is two smooth fields
+ * crossfading, the noise void is full-frame grain), and one bitrate would
+ * either starve the grain or waste bytes on the gradients. 20 is a little
+ * finer than the 23 default because these are 256 px squares read at a
+ * glance for exactly the difference between one effect and the next.
  */
 const CRF = '20';
 
@@ -57,14 +57,14 @@ const PRESET = 'veryslow';
 /*
  * Posters are lossy WebP, not the PNG the renderer wrote.
  *
- * They are half the frames' pixels but they were 51 % of the encoded artifact —
+ * They are half the frames' pixels but they were 51 % of the encoded artifact:
  * a 256 px square of smooth gradient costs 70 KB as PNG and 3 KB as WebP, and
  * the two are indistinguishable at the size a table cell shows them. Every
  * poster on a page loads eagerly (that is what makes the video's `preload:
  * none` affordable), so this is the number that decides what a reader waits
  * for: 1.9 MB of posters across 48 entries becomes 0.1 MB.
  *
- * These previews are gradients, fields and strokes — no text, no hard edges,
+ * These previews are gradients, fields and strokes: no text, no hard edges,
  * nothing that shows ringing. The lossless frames are still the intermediate;
  * nothing downstream reads a poster as reference pixels.
  */
@@ -90,7 +90,7 @@ function parseArgs(argv) {
 }
 
 const USAGE = `\
-encode-doc-previews — poster + looping H.264 per previewable entry
+encode-doc-previews - poster + looping H.264 per previewable entry
 
 USAGE:
     node scripts/encode-doc-previews.mjs --frames <dir> --out <dir>
@@ -152,7 +152,7 @@ function main() {
     const out = path.resolve(args.out);
     const index = path.join(frames, 'assets.json');
     if (!fs.existsSync(index)) {
-        fail(`${index} does not exist — run render_docs --out ${args.frames} first`);
+        fail(`${index} does not exist; run render_docs --out ${args.frames} first`);
     }
     const manifest = JSON.parse(fs.readFileSync(index, 'utf8'));
 
@@ -171,7 +171,7 @@ function main() {
             const dir = path.join(frames, asset.dir);
             if (!fs.existsSync(dir)) fail(`assets.json names ${asset.dir}, which does not exist`);
             if (asset.width % 2 || asset.height % 2) {
-                fail(`${catalog}/${id} is ${asset.width} × ${asset.height} — H.264 needs even edges`);
+                fail(`${catalog}/${id} is ${asset.width} × ${asset.height}: H.264 needs even edges`);
             }
 
             const poster = path.join('previews', catalog, `${id}.webp`);
@@ -223,7 +223,7 @@ function main() {
             .reduce((sum, e) => sum + fs.statSync(path.join(e.parentPath, e.name)).size, 0);
 
     log(
-        `${manifest.version} — ${videos} loop(s), ${stills} still(s), ` +
+        `${manifest.version}: ${videos} loop(s), ${stills} still(s), ` +
             `${(bytes(media) / 1024 / 1024).toFixed(1)} MB`,
     );
 }

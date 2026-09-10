@@ -135,7 +135,7 @@ mod tests {
     }
 
     /// The prefix is a three-part grammar, not one opaque string. Collapsing it
-    /// to a `(scope, chord)` pair would report `layerThumb` — a *site* — as a
+    /// to a `(scope, chord)` pair would report `layerThumb` (a *site*) as a
     /// scope and drop `brush` entirely.
     #[test]
     fn parse_binding_splits_site_scope_brush() {

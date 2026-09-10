@@ -3,7 +3,7 @@ import { withApi } from '../../engine/testApi';
 
 // Stand-ins for the Svelte state proxy + GPU overlay builder so the gizmo's
 // lifecycle runs without the Svelte/GPU/DOM runtime. The transform-mode
-// registry and projective math are NOT mocked — this exercises the real
+// registry and projective math are NOT mocked; this exercises the real
 // mode-switching path.
 const { fakeApp } = vi.hoisted(() => {
     const engine = { post: vi.fn(), send: vi.fn(() => Promise.resolve({})) };

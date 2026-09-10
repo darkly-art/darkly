@@ -3,7 +3,7 @@
 //! Krita's preset XML embeds brush tips and patterns as base64-encoded blobs.
 //! The inner format is one of: PNG, JPEG, SVG (XML), GBR (GIMP brush), GIH
 //! (GIMP image hose), or ABR (Adobe brush). We don't decode any of those
-//! here — we just sniff the magic bytes so the inspector can pick the right
+//! here; we just sniff the magic bytes so the inspector can pick the right
 //! display strategy (native `<img>` for browser-supported formats, fallback
 //! hex view for the rest).
 
@@ -13,7 +13,7 @@ use serde::Serialize;
 pub struct KritaResource {
     pub name: String,
     pub filename: String,
-    /// Krita's resource type ID — e.g. `brushes`, `patterns`, `paintoppresets`.
+    /// Krita's resource type ID, e.g. `brushes`, `patterns`, `paintoppresets`.
     pub resource_type: String,
     pub md5sum: String,
     pub byte_length: usize,
@@ -37,19 +37,19 @@ pub enum ResourceFormat {
     Jpeg,
     /// SVG document (vector brush tip).
     Svg,
-    /// GIMP brush — single grayscale or RGBA stamp.
+    /// GIMP brush: single grayscale or RGBA stamp.
     Gbr,
-    /// GIMP image hose — animated/sequenced brush.
+    /// GIMP image hose: animated/sequenced brush.
     Gih,
     /// Adobe brush bundle.
     Abr,
     /// Format not recognized. Includes a short hex dump of the leading bytes
-    /// so the inspector can show *something* to the user.
+    /// so the inspector can show *something* to the artist.
     Unknown { magic_hex: String },
 }
 
 /// Inspect the leading bytes of a resource blob and return a best-guess
-/// format label. This is intentionally narrow — we only care about
+/// format label. This is intentionally narrow: we only care about
 /// distinguishing formats the frontend will treat differently.
 pub fn sniff_resource_format(bytes: &[u8]) -> ResourceFormat {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {

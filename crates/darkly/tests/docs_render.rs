@@ -2,9 +2,9 @@
 //! preview, that what it renders moves, and that what lands on disk is what the
 //! catalogs said it would be.
 //!
-//! Two groups live here. The first is GPU-free and reads the registries: what
-//! an entry *declares* — that it has a preview, how long it runs, whether it
-//! closes — is data, and can be checked before a device is touched.
+//! Two groups live here. The first is GPU-free and reads the registries: what an
+//! entry *declares* (that it has a preview, how long it runs, whether it closes)
+//! is data, and can be checked before a device is touched.
 //!
 //! The second group renders. Motion itself is a method rather than a
 //! declaration, so there is nothing left to inspect statically and the pixels
@@ -21,12 +21,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use darkly::catalog::{catalogs, preview_mechanisms};
-use darkly::docs_render::{self, Gpu, Manifest, Rendered};
+use darkly::docs_render::{self, Command, Gpu, Manifest, Rendered};
 use darkly::gpu::params::ParamValue;
-use darkly::gpu::preview::{frame_t, PreviewAnim};
+use darkly::gpu::preview::{frame_t, PreviewAnim, PreviewVariant};
 
 // ---------------------------------------------------------------------------
-// Shared enumeration — one source for every test below
+// Shared enumeration: one source for every test below
 // ---------------------------------------------------------------------------
 
 /// One previewable entry: where it lives and how long its preview runs.
@@ -94,7 +94,7 @@ fn previewable() -> Vec<Previewable> {
 }
 
 // ---------------------------------------------------------------------------
-// The declarations — GPU-free
+// The declarations: GPU-free
 // ---------------------------------------------------------------------------
 
 /// Every effect, every blend mode and `noise` declares a preview.
@@ -131,7 +131,7 @@ fn every_previewable_entry_declares_a_preview() {
 /// A blend mode is a relation between two images rather than an effect over
 /// one; a brush is a stroke driven through the brush engine rather than an
 /// effect over one image. Neither has a pass to open, so each is rendered by its
-/// own arm in `render_entry` — as a further *caller* of `PreviewAnim`, not a
+/// own arm in `render_entry`, as a further *caller* of `PreviewAnim`, not a
 /// further preview system.
 const MECHANISMLESS: [&str; 2] = [
     darkly::gpu::blend_mode::CATALOG_ID,
@@ -187,7 +187,7 @@ fn shared_effects_share_one_preview() {
     }
 }
 
-/// A void's previewability *is* its declaration — one fact, not two that can
+/// A void's previewability *is* its declaration: one fact, not two that can
 /// drift.
 #[test]
 fn void_previewability_is_the_declaration() {
@@ -260,13 +260,14 @@ fn assets() -> &'static (PathBuf, Manifest) {
 
 /// One entry rendered on its own, without the PNG round-trip.
 ///
-/// Darkly's GPU state is deliberately not `Send` — the engine is single-threaded
-/// everywhere — so the device is an ordinary local rather than a shared static.
+/// Darkly's GPU state is deliberately not `Send` (the engine is single-threaded
+/// everywhere), so the device is an ordinary local rather than a shared static.
 /// Each test that renders holds one for the whole of its own work, which is also
 /// what lets the tests that care about cross-asset leakage drive several entries
 /// through the same documents.
 fn render_one(gpu: &mut Gpu, catalog: &str, type_id: &str) -> Rendered {
-    docs_render::render_entry(gpu, catalog, type_id).expect("render_entry")
+    docs_render::render_entry(gpu, catalog, type_id, PreviewVariant::Animated)
+        .expect("render_entry")
 }
 
 /// Every `(catalog, entry)` directory actually present under `root`.
@@ -291,7 +292,7 @@ fn dirs_on_disk(root: &Path) -> BTreeSet<(String, String)> {
     out
 }
 
-/// The full walk succeeds — no previewable entry was missed by the renderer
+/// The full walk succeeds: no previewable entry was missed by the renderer
 /// table. This is what fails the day a new previewable registry is added.
 #[test]
 fn every_previewable_entry_has_a_renderer() {
@@ -323,7 +324,7 @@ fn all_forty_four_assets_land() {
 }
 
 /// The set of directories **found by walking the output** equals the previewable
-/// set the catalogs declare, in both directions — and the index agrees with the
+/// set the catalogs declare, in both directions, and the index agrees with the
 /// directory.
 ///
 /// Scanning the tree rather than trusting the manifest is the difference between
@@ -363,7 +364,7 @@ fn assets_on_disk_match_the_previewable_set() {
 /// renderers are hard-wired to fit into the picker's preview box, and the
 /// document path is sized to match it. If that constant ever moved, veil and
 /// void frames would silently diverge in size from the rest. A brush stroke is
-/// the one asset that is deliberately not square — it is a left-to-right line
+/// the one asset that is deliberately not square; it is a left-to-right line
 /// framed to the picker strip's own shape, so it is checked against that
 /// constant instead.
 #[test]
@@ -396,7 +397,7 @@ fn every_frame_is_the_size_its_entry_declares() {
 
 /// For every asset the PNG count equals the frame count the declaration says
 /// will be *emitted*, and the index's `frames` / `fps` / `loop` are the entry's
-/// own — which is what makes `loop` in the artifact something a consumer can
+/// own, which is what makes `loop` in the artifact something a consumer can
 /// rely on rather than a claim.
 ///
 /// Emitted, not declared: `close_loop` spends `LOOP_CLOSE_FRAMES` of a one-way
@@ -480,8 +481,8 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
     }
 
     // Alphabetically the last of the six tests that read the fixture, and under
-    // the mandatory single test thread that makes it the last to run — so the
-    // 65–160 MB of frames come back here rather than being left on every
+    // the mandatory single test thread that makes it the last to run, so the
+    // 65-160 MB of frames come back here rather than being left on every
     // developer machine and every CI run. The fixture also clears any earlier
     // tree before writing, so a run that panicked or was killed reclaims its
     // predecessor's space rather than adding to it.
@@ -491,7 +492,7 @@ fn manifest_frames_fps_and_loop_match_the_declaration() {
 /// Every asset that declares more than one frame renders at least two distinct
 /// images; one that declares a still writes exactly one file.
 ///
-/// Motion is a method now, so there is no declaration left to inspect — the
+/// Motion is a method now, so there is no declaration left to inspect: the
 /// pixels are the whole of the evidence, and this is the floor.
 /// `tests/picker_preview.rs` carries the finer-grained assertions over the same
 /// driver.
@@ -586,7 +587,7 @@ fn invert_is_the_exact_inverse_of_the_source_it_was_given() {
 }
 
 /// At the frame where the tint reads zero, every pixel of the black-and-white
-/// veil is neutral grey — so the offscreen veil path applied the veil rather
+/// veil is neutral grey, so the offscreen veil path applied the veil rather
 /// than writing the subject through.
 ///
 /// Deliberately a *relational* pin rather than an absolute grey value: the veil
@@ -619,7 +620,7 @@ fn black_and_white_veil_frame_is_neutral_gray() {
 }
 
 /// Every noise frame holds more than one distinct value. A void that failed to
-/// render — or whose aux texture was still a placeholder — produces a flat
+/// render (or whose aux texture was still a placeholder) produces a flat
 /// image, which is exactly the failure the stream voids opt out of preview to
 /// avoid, checked here on the one void that opts in.
 #[test]
@@ -639,7 +640,7 @@ fn noise_void_frames_are_not_uniform() {
 ///
 /// Sixteen identical assets is the failure this whole path exists to avoid. It
 /// doubles as the guard on the blend source's colour choice and on the shared
-/// blend-mode document — a mode that leaked its predecessor's shader value would
+/// blend-mode document: a mode that leaked its predecessor's shader value would
 /// show up here as a duplicate. Deliberately *not* asserted at frame 0, where
 /// the top layer is invisible and all sixteen are correctly identical.
 #[test]
@@ -686,17 +687,20 @@ fn blend_mode_frames_at_full_opacity_are_pairwise_distinct() {
 // ---------------------------------------------------------------------------
 
 /// The binary's only logic. It lives in the library because coverage tooling
-/// runs test targets and never executes a `[[bin]]` — a `parse_args` left inside
+/// runs test targets and never executes a `[[bin]]`: a `parse_args` left inside
 /// `fn main` would be permanently uncovered.
 #[test]
 fn parse_args_reads_out() {
     let args = docs_render::parse_args(["--out".to_string(), "/tmp/x".to_string()].into_iter())
         .expect("--out <dir> parses");
-    assert_eq!(args.out, Some(PathBuf::from("/tmp/x")));
+    assert!(
+        matches!(args, Command::Frames { out } if out == Path::new("/tmp/x")),
+        "--out alone names the frame sequences"
+    );
 
     // `--help` is not an error, and it names no work to do.
     let args = docs_render::parse_args(["--help".to_string()].into_iter()).unwrap();
-    assert_eq!(args.out, None);
+    assert!(matches!(args, Command::Help));
 }
 
 #[test]
@@ -706,7 +710,49 @@ fn parse_args_rejects_a_missing_out() {
     assert!(docs_render::parse_args(["--wat".to_string()].into_iter()).is_err());
 }
 
-/// **Every** brush renders the same bytes twice — all thirteen, not a sample.
+/// The stills mode names a catalog and defaults its destination to the one the
+/// generated tables link to, so nobody has to remember the path, and a typo in
+/// it cannot put the images somewhere the markdown does not look.
+#[test]
+fn parse_args_reads_the_stills_mode() {
+    let args = docs_render::parse_args(
+        ["--stills", "--catalog", "veils"]
+            .map(String::from)
+            .into_iter(),
+    )
+    .expect("--stills --catalog <id> parses");
+    let Command::Stills { out, catalog } = args else {
+        panic!("--stills names the stills mode");
+    };
+    assert_eq!(catalog, "veils");
+    assert_eq!(
+        out,
+        darkly::docs_md::repo_root().join(darkly::docs_md::STILLS_DIR)
+    );
+
+    let args = docs_render::parse_args(
+        ["--stills", "--catalog", "veils", "--out", "/tmp/x"]
+            .map(String::from)
+            .into_iter(),
+    )
+    .expect("--out overrides the destination");
+    assert!(matches!(args, Command::Stills { out, .. } if out == Path::new("/tmp/x")));
+}
+
+#[test]
+fn parse_args_rejects_a_catalog_without_stills() {
+    // Naming a catalog for the sequence mode is a misunderstanding, not a
+    // no-op: that mode renders every catalog there is.
+    assert!(docs_render::parse_args(
+        ["--out", "/tmp/x", "--catalog", "veils"]
+            .map(String::from)
+            .into_iter()
+    )
+    .is_err());
+    assert!(docs_render::parse_args(["--stills".to_string()].into_iter()).is_err());
+}
+
+/// **Every** brush renders the same bytes twice: all thirteen, not a sample.
 ///
 /// Unlike the other catalogs the failure mode here *is* per-entry: `rough_ink`,
 /// `rough_watercolor` and `smooth_watercolor` contain `random`/`noise` nodes and

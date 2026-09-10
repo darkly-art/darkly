@@ -34,7 +34,7 @@
         { id: 'gif', label: 'GIF', ext: 'gif' },
     ];
 
-    // Save-picker filters — a timelapse is never the document, so it uses the
+    // Save-picker filters: a timelapse is never the document, so it uses the
     // shared picker but never sets `fileHandle`.
     const TIMELAPSE_ACCEPT: Record<Format, SaveAccept> = {
         mp4: { description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } },
@@ -53,7 +53,7 @@
     let exporting = $state(false);
     let info = $state<RecordingInfo | null>(null);
     let loading = $state(false);
-    /** Index into `info.groups` — the target aspect ratio. */
+    /** Index into `info.groups`, the target aspect ratio. */
     let groupIndex = $state(0);
     let method = $state<ConversionMethod>('fit');
     let width = $state(0);
@@ -61,8 +61,8 @@
 
     const group = $derived(info?.groups[groupIndex] ?? null);
 
-    // Re-read the recording summary each time the modal opens — the
-    // recording grows while the user paints.
+    // Re-read the recording summary each time the modal opens: the
+    // recording grows while the artist paints.
     $effect(() => {
         if (exportTimelapse.open) void refreshInfo();
     });
@@ -140,7 +140,7 @@
                 handle = await pickFileHandle(filename, [TIMELAPSE_ACCEPT[format]], 'darkly-file');
             } catch (e) {
                 console.error('[export-timelapse] picker failed', e);
-                alert('Timelapse export failed — see console for details.');
+                alert('Timelapse export failed: see console for details.');
                 return;
             }
             if (!handle) return; // cancelled
@@ -160,7 +160,7 @@
             exportTimelapse.open = false;
         } catch (e) {
             console.error('[export-timelapse] export failed', e);
-            alert('Timelapse export failed — see console for details.');
+            alert('Timelapse export failed: see console for details.');
         } finally {
             exporting = false;
         }
@@ -183,7 +183,7 @@
             <p class="info">Reading recording…</p>
         {:else if !info}
             <p class="info">
-                No process recording yet — paint with recording enabled
+                No process recording yet: paint with recording enabled
                 (Settings → Recording) and come back.
             </p>
         {:else}

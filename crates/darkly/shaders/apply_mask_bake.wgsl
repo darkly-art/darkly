@@ -1,6 +1,6 @@
 // Destructive mask bake: multiply a host layer's alpha by a mask sampled in
 // the mask's OWN plane-anchored frame, so "what you bake" is definitionally
-// "what you saw" — the live composite modulates alpha through the same
+// "what you saw": the live composite modulates alpha through the same
 // `sample_mask_plane` footprint logic (shaders/apply_mask.wgsl).
 //
 // Keeps paint_circle's extent-aware vertex stage (quad positioned via
@@ -8,7 +8,7 @@
 // the host texture's own extent) but replaces the fragment with a
 // footprint-aware alpha-multiply: outputs (0, 0, 0, mask) so the alpha-only
 // multiply blend does `dst.a *= mask`, `dst.rgb` unchanged. Outside the mask
-// footprint the mask reveals 1.0 — host alpha is preserved, matching the
+// footprint the mask reveals 1.0; host alpha is preserved, matching the
 // display path (paint_circle's selection default would smear the edge texel).
 
 struct Uniforms {

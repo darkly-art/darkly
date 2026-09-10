@@ -74,7 +74,7 @@ describe('groupSegmentsByAspect', () => {
                 height: 1000,
                 frameCount: 3,
             }),
-            // 960×540 reduces to 16:9 like segment 1 — same group.
+            // 960×540 reduces to 16:9 like segment 1, same group.
             meta({
                 n: 3,
                 canvasWidth: 960,
@@ -87,7 +87,7 @@ describe('groupSegmentsByAspect', () => {
         expect(groups).toHaveLength(2);
         expect(groups[0]).toMatchObject({ arW: 16, arH: 9, label: '16:9', frameCount: 7 });
         expect(groups[1]).toMatchObject({ arW: 1, arH: 1, label: '1:1', frameCount: 3 });
-        // Default is the LAST segment's group — the document's final shape.
+        // Default is the LAST segment's group: the document's final shape.
         expect(defaultIndex).toBe(0);
     });
 

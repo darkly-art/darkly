@@ -2,7 +2,7 @@
 //!
 //! A compute shader scans a texture and produces the tight bounding rect of
 //! all non-transparent pixels using atomic min/max. The result is 16 bytes
-//! (4× u32) read back asynchronously — no full-texture readback required.
+//! (4× u32) read back asynchronously, with no full-texture readback required.
 //!
 //! The compositor owns a [`ContentBoundsPass`] and exposes cached per-layer
 //! bounds. A cached result records the [`Stamp`] it was computed under and is

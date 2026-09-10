@@ -82,7 +82,7 @@ pub struct KritaParam {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParamDecoded {
-    /// Plain scalar — number, boolean, or short string.
+    /// Plain scalar: number, boolean, or short string.
     Plain { value: String },
     /// Parsed as a curve point list (`x1,y1;x2,y2;...`).
     Curve { points: Vec<(f32, f32)> },
@@ -91,17 +91,17 @@ pub enum ParamDecoded {
         sensor_id: Option<String>,
         xml: String,
     },
-    /// `type="bytearray"` — base64 decoded into raw bytes (length only;
+    /// `type="bytearray"`: base64 decoded into raw bytes (length only;
     /// payload available via the WASM bridge if ever needed).
     Bytearray { byte_length: usize },
     /// CDATA payload parsed as a structured XML tree. This is how
     /// `brush_definition` (and similar nested-XML params) surface every
-    /// element + attribute the engine consumes — diameter, fade, spikes,
+    /// element + attribute the engine consumes: diameter, fade, spikes,
     /// mask type, file references, etc.
     NestedXml { root: XmlNode },
     /// The param value is a base64-encoded image (typically PNG). Krita
     /// inlines pattern textures this way without declaring `type="bytearray"`,
-    /// so the type tag alone isn't enough to spot them — we sniff the
+    /// so the type tag alone isn't enough to spot them; we sniff the
     /// decoded magic bytes. Bytes are skipped from JSON; the WASM bridge
     /// hands them out via `param_image_bytes(index)`.
     EmbeddedImage {
@@ -180,8 +180,8 @@ pub fn parse_kpp(bytes: &[u8]) -> Result<KritaPreset, ParseError> {
 }
 
 /// Best-effort decode of a single `<param>`. The fall-through is `Plain`,
-/// which is always safe — the raw value is preserved in `KritaParam::raw_value`
-/// regardless of decode outcome.
+/// which is always safe: the raw value is preserved in
+/// `KritaParam::raw_value` regardless of decode outcome.
 fn decode_param(raw: RawParam) -> KritaParam {
     let decoded = match raw.raw_type.as_deref() {
         Some("bytearray") => {
@@ -284,7 +284,7 @@ impl ReadPng {
 
 fn read_png(bytes: &[u8]) -> Result<ReadPng, ParseError> {
     // We need both the PNG-crate decoder (for IHDR + decompressed text) and a
-    // raw chunk walk (for the chunk listing — including chunks the decoder
+    // raw chunk walk (for the chunk listing, including chunks the decoder
     // ignores). Both reads are cheap on these tiny preset PNGs.
     let chunks = walk_chunks(bytes);
 

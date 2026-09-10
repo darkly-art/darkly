@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { withApi } from '../../engine/testApi';
 
-// Control the invalidation token directly — a plain object standing in for the
+// Control the invalidation token directly: a plain object standing in for the
 // library store, so a test can swap `families` to a fresh array to simulate a
 // re-import without touching IndexedDB.
 const { lib } = vi.hoisted(() => ({ lib: { families: [] as string[] } }));
@@ -27,7 +27,7 @@ describe('font capabilities cache', () => {
         expect(caps).toEqual({ italic: false, axes: [] });
     });
 
-    it('caches per family — a repeat lookup does not refetch', async () => {
+    it('caches per family, so a repeat lookup does not refetch', async () => {
         const engine = fakeEngine();
         const first = await fontCaps(engine as never, 'Noto Sans');
         const second = await fontCaps(engine as never, 'Noto Sans');
@@ -40,7 +40,7 @@ describe('font capabilities cache', () => {
         const engine = fakeEngine();
         await fontCaps(engine as never, 'Roboto');
         expect(engine.send).toHaveBeenCalledTimes(1);
-        // A re-import replaces the families array — the same-named family may now
+        // A re-import replaces the families array; the same-named family may now
         // have different axes, so the next lookup must refetch.
         lib.families = ['Roboto'];
         await fontCaps(engine as never, 'Roboto');

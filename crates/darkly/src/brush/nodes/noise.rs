@@ -1,15 +1,15 @@
-//! Noise node — procedural, domain-warped, per-octave-rotated fBm sampled
+//! Noise node: procedural, domain-warped, per-octave-rotated fBm sampled
 //! per fragment.
 //!
 //! Outputs a chromatic RGBA `color`: each channel is an independent fBm
 //! field driven by `seed + {0,1,2}`, so R, G, and B carry uncorrelated
-//! noise — genuine color grain / cloud. For a monochrome field (paper
-//! grain, scatter masks) take the scalar `value` output instead — a single
+//! noise, genuine color grain / cloud. For a monochrome field (paper
+//! grain, scatter masks) take the scalar `value` output instead: a single
 //! fBm field at the base seed, one third the per-fragment cost of computing
 //! three channels and averaging them back down.
 //!
 //! The field is **interpolated value noise** (bilinear blend of corner
-//! hashes through a quintic fade — smooth and resolution-independent, not
+//! hashes through a quintic fade, smooth and resolution-independent, not
 //! blocky cell noise), summed over `octaves` at doubling frequency, with a
 //! single-octave domain warp and a per-octave rotation that break the
 //! axis-aligned value-noise lattice. It never visibly repeats. `scale`
@@ -18,8 +18,8 @@
 //!
 //! Coordinate frame is selectable via the `space` param, shared with
 //! [`super::image`] through [`crate::brush::wgsl::frame_sample_coord_expr`]:
-//! **Canvas** (default) samples `target_pos / scale` — canvas pixels in
-//! stroke mode, preview-mask texels in preview — so the grain is pinned to
+//! **Canvas** (default) samples `target_pos / scale` (canvas pixels in
+//! stroke mode, preview-mask texels in preview) so the grain is pinned to
 //! the canvas. **Dab** samples the stamp's oriented unit frame (`local_uv`
 //! rotated by the `rotation` input, offset per dab by `variation`), so the
 //! grain rides the stamp instead of swimming under it. In both frames `scale`
@@ -50,10 +50,10 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Noise",
-            description: "Procedural noise sampled where the brush touches the canvas — for grain, jitter, and texture.",
+            description: "Procedural noise sampled where the brush touches the canvas, for grain, jitter, and texture.",
             ports: vec![
                 // Per-dab orientation and decorrelation for Dab-space
-                // sampling — the same input-port path `circle.rotation_input`
+                // sampling, the same input-port path `circle.rotation_input`
                 // uses. Hidden in Canvas mode, where the grain is pinned to
                 // the canvas and neither applies.
                 PortDef::input("rotation", BrushWireType::Scalar)
@@ -75,7 +75,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 // Base feature size in canvas pixels: `target_pos / scale`
                 // sets the lowest octave's cell size. A per-dab-computable
-                // scalar — wirable (drive it from pressure, a curve, …).
+                // scalar: wirable (drive it from pressure, a curve, …).
                 PortDef::input("scale", BrushWireType::Scalar)
                     .with_range(1.0, 512.0, 32.0)
                     .with_natural_range(1.0, 512.0)
@@ -92,7 +92,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_label("Seed")
                     .with_unit(UnitType::Raw)
                     .with_description("RNG seed for the noise field."),
-                // Number of fBm octaves — each adds detail at 2× frequency,
+                // Number of fBm octaves: each adds detail at 2× frequency,
                 // `roughness×` amplitude. Wirable.
                 PortDef::input("octaves", BrushWireType::Scalar)
                     .with_range(1.0, 8.0, 4.0)
@@ -126,16 +126,16 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("color", BrushWireType::Vec4)
                     .preview_image()
                     .with_description(
-                    "Chromatic RGBA fBm noise at the fragment's sample position — each channel an independent field",
+                    "Chromatic RGBA fBm noise at the fragment's sample position: each channel an independent field",
                 ),
-                // Monochrome scalar field — a single fBm evaluation at the base
+                // Monochrome scalar field: a single fBm evaluation at the base
                 // seed (`color.r`'s field), for grain / masks that only need one
                 // channel. Emitted independently of `color`, so a value-only
                 // consumer pays one `fbm_tile`, not three.
                 PortDef::output("value", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description(
-                        "Monochrome fBm noise at the sample position — a single scalar field for grain and masks",
+                        "Monochrome fBm noise at the sample position: a single scalar field for grain and masks",
                     ),
             ],
             is_gpu: false,
@@ -150,7 +150,7 @@ pub fn register() -> BrushNodeRegistration {
 pub struct NoiseEvaluator;
 
 impl BrushNodeEvaluator for NoiseEvaluator {
-    /// CPU evaluation returns a neutral grey — `noise` is only
+    /// CPU evaluation returns a neutral grey: `noise` is only
     /// meaningful per-fragment. Same shape as [`super::image`]'s CPU
     /// stub for the same reason.
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
@@ -169,7 +169,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         }
         // The sampling frame is shared by the baked and the live path.
         // `scale`/`space`/`rotation`/`variation` shape the sample *coordinate*,
-        // not the field content — so they are applied here at sample time and
+        // not the field content, so they are applied here at sample time and
         // one baked tile serves Canvas and Dab, every scale and every per-dab
         // variation.
         let scale_expr = cctx.input("scale").as_f32();
@@ -190,7 +190,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         let var = cctx.ident("noise_c");
 
         // Bake the field into a cached tile when every field-defining input
-        // is static — turning the ~80-hash fBm kernel (re-run per fragment
+        // is static, turning the ~80-hash fBm kernel (re-run per fragment
         // per overlapping dab) into a single `textureSample`. Any wired field
         // input falls through to the live kernel below.
         let field_static = ["octaves", "warp", "roughness"]
@@ -224,7 +224,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             // The tile packs `FIELD_SPAN` field units across its `[0,1)` uv, so
             // the sample coordinate is divided by `FIELD_SPAN` (and wrapped):
             // feature size then matches the live path, and the field repeats
-            // once per `FIELD_SPAN` field units — a period large enough that the
+            // once per `FIELD_SPAN` field units: a period large enough that the
             // repeat is not visible within a normal view.
             let mut body = format!("{frame_pre}    let {var}_p = {coord};\n");
             let uv = format!("fract(({var}_p) / {:.1})", BakeSpec::FIELD_SPAN);
@@ -254,7 +254,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
             return Ok(wgsl);
         }
 
-        // Live fallback — a wired field input means the tile can't be
+        // Live fallback: a wired field input means the tile can't be
         // precomputed. `octaves`/`warp`/`roughness` resolve to WGSL
         // expressions; the clamps live in the emitted WGSL so they hold for
         // the wired value too.
@@ -265,7 +265,7 @@ impl BrushNodeEvaluator for NoiseEvaluator {
         let warp_expr = format!("max(({}), 0.0)", cctx.input("warp").as_f32());
         let gain_expr = format!("clamp(({}), 0.0, 1.0)", cctx.input("roughness").as_f32());
 
-        // The sampled coordinate is shared by both outputs — emit it once,
+        // The sampled coordinate is shared by both outputs: emit it once,
         // then let each consumed output reference `{var}_p`. The live field
         // uses the same tileable `fbm_tile` and the same period the baked path
         // does, so a wired-param brush and a static one look identical.
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(reg.node.type_id, "noise");
         assert_eq!(reg.node.category, "texture");
         // rotation, variation, scale, seed, octaves, warp, roughness, space
-        // inputs plus the color and value outputs — all unified.
+        // inputs plus the color and value outputs, all unified.
         assert_eq!(reg.node.ports.len(), 10);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "value"));

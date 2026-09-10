@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-/// Shareable GPU device + queue. Multiple `GpuContext`s — and thus multiple
-/// `DarklyEngine` instances rendering to different canvases — can hold an
+/// Shareable GPU device + queue. Multiple `GpuContext`s (and thus multiple
+/// `DarklyEngine` instances rendering to different canvases) can hold an
 /// `Arc<GpuDevice>` and use a single underlying WebGPU device. This avoids
 /// duplicate adapter/device acquisition (mandatory on web, where browsers
 /// typically expose only one device per origin) and lets shaders/pipelines
@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// `wgpu::Device` and `wgpu::Queue` are `Send + Sync` on native but not on
 /// wasm32. Darkly is single-threaded everywhere (the JS event loop on web,
 /// the main thread on native), so the `Arc` is only ever used for shared
-/// ownership across engines on the same thread — `Rc` would work too, but
+/// ownership across engines on the same thread; `Rc` would work too, but
 /// we keep `Arc` so the `GpuDevice` type doesn't fork by platform. The
 /// clippy `arc_with_non_send_sync` lint is suppressed at construction.
 pub struct GpuDevice {
@@ -25,7 +25,7 @@ pub struct GpuContext {
 }
 
 // Field access through `Deref` lets the engine keep using `self.gpu.device`
-// and `self.gpu.queue` everywhere — `self.gpu` is a `GpuContext`, has no
+// and `self.gpu.queue` everywhere: `self.gpu` is a `GpuContext`, has no
 // `device` field, autoderefs to `GpuDevice`, finds it.
 impl std::ops::Deref for GpuContext {
     type Target = GpuDevice;
@@ -80,7 +80,7 @@ impl GpuContext {
     }
 
     /// Build a context that re-uses an existing shared `GpuDevice`. Use this
-    /// to attach a second (or Nth) canvas to the same device — e.g. for the
+    /// to attach a second (or Nth) canvas to the same device, e.g. for the
     /// multi-tab editor. Picks the surface format the same way as `new`, but
     /// does not allocate a new device or queue.
     pub async fn new_with_shared_device(
@@ -114,7 +114,7 @@ impl GpuContext {
         }
     }
 
-    /// Create a headless GPU context — no surface or window needed.
+    /// Create a headless GPU context: no surface or window needed.
     /// Used for testing and headless rendering.
     pub fn new_headless(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         GpuContext {
@@ -180,7 +180,7 @@ impl GpuContext {
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         match &self.surface_config {
             Some(config) => config.format,
-            // Headless fallback — Bgra8UnormSrgb is the most common desktop
+            // Headless fallback: Bgra8UnormSrgb is the most common desktop
             // surface format, so pipelines compiled against it will match
             // production behaviour.
             None => wgpu::TextureFormat::Bgra8UnormSrgb,

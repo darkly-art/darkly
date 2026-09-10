@@ -72,8 +72,8 @@ beforeEach(() => {
  * Regression: `dismissOverlay` is async and awaits engine round-trips. A tool
  * switch / layer change tears the tool down (onDeactivate commits + nulls the
  * gizmo) AND kills the tool session in the same synchronous moment. The parked
- * dismissOverlay must then reject via the dead session — unwinding before it can
- * dereference the now-null gizmo or commit a second time — and that rejection is
+ * dismissOverlay must then reject via the dead session (unwinding before it can
+ * dereference the now-null gizmo or commit a second time), and that rejection is
  * a `ToolSessionCancelled` that the dispatcher's `runHook` swallows.
  */
 describe('transform dismissOverlay race with session teardown', () => {
@@ -89,7 +89,7 @@ describe('transform dismissOverlay race with session teardown', () => {
         killSession();
         expect(gizmo.commit).toHaveBeenCalledTimes(1); // onDeactivate's own commit
 
-        // The deferred read now resolves — but on a dead session, so the resumed
+        // The deferred read now resolves, but on a dead session, so the resumed
         // dismissOverlay rejects rather than reaching its final commit.
         resolveHasFloating();
         await expect(pending).rejects.toBeInstanceOf(ToolSessionCancelled);

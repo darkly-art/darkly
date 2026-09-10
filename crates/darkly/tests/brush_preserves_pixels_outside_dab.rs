@@ -1,10 +1,10 @@
 //! Universal commit invariant: a pixel that lies outside every dab's
-//! footprint must survive the stroke unchanged — regardless of brush.
+//! footprint must survive the stroke unchanged, regardless of brush.
 //!
 //! Iterates over every builtin brush. Regression for the watercolor
 //! commit path, which used to seed its scratch with a straight-alpha
 //! copy of pre_stroke and then re-source-over the whole scratch onto
-//! pre_stroke as if it were premultiplied — boosting alpha and rgb on
+//! pre_stroke as if it were premultiplied, boosting alpha and rgb on
 //! every partial-alpha pixel the moment a stroke began.
 //!
 //! Run with a small dab at the canvas centre so the corner pixels are
@@ -65,7 +65,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    // Compile before allocating — the terminal owns the scratch format,
+    // Compile before allocating: the terminal owns the scratch format,
     // and a warp terminal's scratch holds a displacement field, not
     // colour. Hardcoding a colour format here silently gives liquify the
     // wrong surface and wipes the layer.
@@ -167,7 +167,7 @@ fn every_builtin_brush_preserves_pixels_outside_dab_on_partial_alpha_layer() {
     for brush in &brushes {
         let name = &brush.metadata.name;
         let rgba = render_one_dab(name, [1.0, 0.0, 0.0, 1.0], &canvas);
-        // Corner pixel — distance >85 px from the dab centre at (64, 64),
+        // Corner pixel: distance >85 px from the dab centre at (64, 64),
         // well outside the bbox of any builtin brush at size=0.05.
         let corner = pixel(&rgba, 2, 2);
         assert_eq!(

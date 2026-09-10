@@ -14,7 +14,7 @@
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
     /** Reveal per-trigger Scope dropdowns in the Hotkeys tab. When off,
      *  non-global scopes are still surfaced as a read-only chip beside
-     *  the chord so the user isn't blind to them. */
+     *  the chord so the artist isn't blind to them. */
     let showScopes = $state(false);
 
     /** Settings tab: every visible (non-Hidden) schema-defined pref. */
@@ -65,7 +65,7 @@
             downloadBlob(blob, `darkly-${stamp}.zip`);
         } catch (e) {
             console.error('[storage] export failed', e);
-            alert('Export failed — see console for details.');
+            alert('Export failed: see console for details.');
         } finally {
             exporting = false;
         }
@@ -73,7 +73,7 @@
 
 </script>
 
-<Modal bind:open={settings.open} title="Settings" size="lg">
+<Modal bind:open={settings.open} title="Settings" size="xl">
     <div class="settings-body">
         <header class="topbar">
             <button

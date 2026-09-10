@@ -1,12 +1,12 @@
 /**
- * Process-recording storage model — pure helpers shared by the recorder
+ * Process-recording storage model: pure helpers shared by the recorder
  * service, the encoder worker, the save/open integration, and the export
  * pipeline. No DOM, no OPFS: everything here is unit-testable in node.
  *
  * ## Layout
  *
  * The **working recording** lives in OPFS scratch, keyed by
- * `<sessionId>~<recoveryId>` — the same attribution the crash-recovery
+ * `<sessionId>~<recoveryId>`, the same attribution the crash-recovery
  * store encodes in its snapshot filenames, so scratch dirs share the
  * snapshots' exact lifecycle (offered for adoption after a crash,
  * garbage-collected as orphans of cleanly-exited sessions at boot):
@@ -18,7 +18,7 @@
  * On save the same files are embedded in the `.darkly` zip under
  * `recording/` (Procreate's `video/segments/` shape); on open they are
  * extracted back into the new tab's scratch. One segment per encoder run
- * (app session, resolution change, or error-recovery roll) — each leads
+ * (app session, resolution change, or error-recovery roll); each leads
  * with a keyframe by construction, so export can concatenate them.
  *
  * ## Chunk framing (`segment-<n>.bin`)
@@ -28,7 +28,7 @@
  *     [u32le payload length][u8 keyframe flag][u64le timestampUs][payload]
  *
  * `timestampUs` is the **wall-clock** capture time in microseconds. It may
- * be non-monotonic (system clock adjustment, suspend/resume) — consumers
+ * be non-monotonic (system clock adjustment, suspend/resume), so consumers
  * must tolerate that; export re-stamps frames with synthetic timestamps
  * (frame N plays at N/fps) and ignores this field.
  *
@@ -55,9 +55,9 @@ export const ZIP_DIR = 'recording';
 
 const MANIFEST_NAME = 'recording.json';
 
-/** Separator between session id and recovery id in a scratch dir name —
- *  same convention as the recovery store's snapshot filenames; neither id
- *  contains `~`, so parsing back is unambiguous. */
+/** Separator between session id and recovery id in a scratch dir name,
+ *  the same convention as the recovery store's snapshot filenames; neither
+ *  id contains `~`, so parsing back is unambiguous. */
 const KEY_SEP = '~';
 
 /** The scratch dir name for a tab: session + tab attribution in one key. */
@@ -111,7 +111,7 @@ export function segmentNumberFromName(name: string): number | null {
 // Metadata types
 // ---------------------------------------------------------------------------
 
-/** `recording.json` — stream-global parameters. Everything per-segment
+/** `recording.json`: stream-global parameters. Everything per-segment
  *  (codec, dims, frame count, decoder description) lives in the segment's
  *  own JSON so there is exactly one home per fact. */
 export interface RecordingManifest {
@@ -119,7 +119,7 @@ export interface RecordingManifest {
     fps: number;
 }
 
-/** `segment-<n>.json` — everything a decoder needs to play the segment's
+/** `segment-<n>.json`: everything a decoder needs to play the segment's
  *  `.bin`, written when the segment finalizes (flush / close / roll). */
 export interface SegmentMeta {
     n: number;
@@ -128,7 +128,7 @@ export interface SegmentMeta {
     /** Encoder frame dimensions (even-aligned fit of the canvas). */
     width: number;
     height: number;
-    /** Document canvas dimensions during this segment — the exact aspect
+    /** Document canvas dimensions during this segment, the exact aspect
      *  ratio export groups by (the encoder fit perturbs the ratio at small
      *  sizes). */
     canvasWidth: number;
@@ -186,7 +186,7 @@ export function base64Decode(text: string): Uint8Array {
 /** One encoded video chunk as stored in a segment `.bin`. */
 export interface FramedChunk {
     key: boolean;
-    /** Wall-clock capture time in µs — may be non-monotonic; see module docs. */
+    /** Wall-clock capture time in µs (may be non-monotonic; see module docs). */
     timestampUs: number;
     data: Uint8Array;
 }
@@ -205,7 +205,7 @@ export function encodeChunkRecord(chunk: FramedChunk): Uint8Array {
 }
 
 /** Decode every complete record in a segment `.bin`. A torn final record
- *  (header or payload cut short by a crash mid-write) is silently dropped —
+ *  (header or payload cut short by a crash mid-write) is silently dropped:
  *  every prefix of a valid stream is a valid stream. */
 export function decodeChunkRecords(bytes: Uint8Array): FramedChunk[] {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

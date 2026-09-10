@@ -60,8 +60,8 @@ beforeEach(() => {
  * `onFrame -> gizmo.frame() -> adopt()` almost always has an async
  * `void_transform_info` read in flight. Pressing Enter (commit) clears the
  * gizmo synchronously, but the read that was issued *before* the commit then
- * resolves — and its continuation must NOT rebuild the overlay. If it does, the
- * gizmo handles reappear and the user has to press Enter a second time.
+ * resolves, and its continuation must NOT rebuild the overlay. If it does, the
+ * gizmo handles reappear and the artist has to press Enter a second time.
  */
 // Give the fake engine a real typed `api` over its send/post spies.
 withApi(engine);
@@ -90,7 +90,7 @@ describe('transform gizmo commit during in-flight frame read', () => {
         gate = deferred<typeof INFO | null>();
         const frameP = gizmo.frame();
 
-        // ...the user presses Enter mid-read: commit clears the gizmo.
+        // ...the artist presses Enter mid-read: commit clears the gizmo.
         gizmo.commit();
         expect(gizmo.active).toBe(false);
         // Routed through the session wrapper, so trailing payload/bytes ride along.

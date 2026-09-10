@@ -135,7 +135,7 @@ describe('HttpStreamSource frame parsing + upload', () => {
 
     it('decodes frames into the premultiplied convention the frame texture stores', async () => {
         // Convention pin: the void's aux texture holds premultiplied texels
-        // (so GPU linear filtering doesn't darken alpha edges — see
+        // (so GPU linear filtering doesn't darken alpha edges; see
         // `video_stream_void.rs`); the straight-alpha frames the add-on emits
         // must be converted at decode. Guards a drive-by revert to 'none';
         // the behavioral regression test lives in `tests/void_layer.rs`.
@@ -209,7 +209,7 @@ describe('HttpStreamSource heartbeats + stall watchdog', () => {
 
     it('declares a byte-silent stream dead and reports it', async () => {
         // Regression: a dead-but-open socket used to await `reader.read()`
-        // forever — indistinguishable from an idle scene, no error surfaced.
+        // forever, indistinguishable from an idle scene, with no error surfaced.
         const { engine } = harness();
         const ended: number[] = [];
         const src = new HttpStreamSource(5, engine, (id) => ended.push(id));
@@ -237,7 +237,7 @@ describe('HttpStreamSource heartbeats + stall watchdog', () => {
         expect(ended).toEqual([]);
         expect(src.ended).toBe(false);
 
-        // A heartbeat is not a frame — nothing to decode or upload.
+        // A heartbeat is not a frame: nothing to decode or upload.
         src.tick(4);
         await vi.advanceTimersByTimeAsync(0);
         expect(uploads).toEqual([]);
@@ -255,7 +255,7 @@ describe('HttpStreamSource heartbeats + stall watchdog', () => {
         await vi.advanceTimersByTimeAsync(0);
         src.tick(4);
         await vi.advanceTimersByTimeAsync(0);
-        // Exactly one upload, and it decoded the real frame's bytes — not the
+        // Exactly one upload, and it decoded the real frame's bytes, not the
         // heartbeat's empty payload.
         expect(uploads).toEqual([7]);
         expect(decodeSources).toHaveLength(1);
@@ -311,7 +311,7 @@ describe('HttpStreamSource heartbeats + stall watchdog', () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(connections).toHaveLength(2);
 
-        // Exactly one live stall interval after the supersede — the old
+        // Exactly one live stall interval after the supersede: the old
         // connect's watchdog was cleared, not orphaned.
         expect(vi.getTimerCount()).toBe(1);
 

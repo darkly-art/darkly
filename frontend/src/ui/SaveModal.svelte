@@ -31,7 +31,7 @@
     });
 
     // Any close path (Cancel button, Escape, backdrop, ×) sets `open` false via
-    // the Modal binding — resolve the pending `request()` so the awaiting save
+    // the Modal binding: resolve the pending `request()` so the awaiting save
     // flow (and the close-guard) unblocks.
     $effect(() => {
         if (!saveModal.open) saveModal.finish();
@@ -46,7 +46,7 @@
             saveModal.finish();
         } catch (e) {
             console.error('[save] download failed', e);
-            alert('Save failed — see console for details.');
+            alert('Save failed: see console for details.');
         } finally {
             saving = false;
         }

@@ -1,8 +1,8 @@
-# stroke_replay_matrix — `stamp-color-output`
+# stroke_replay_matrix: `stamp-color-output`
 
-Brush: `Ink Pen` topology `stamp-color-output` (terminal: `color_output`, stabilize=`1`). Recording: 204 events spanning 3536 ms recorded at 4000×2000. Replay pacing: real-time. `behind_by_ms = wall_total - stroke_duration` — positive means the engine fell behind the recorded cadence. `max_event_behind_ms` is the worst single-event lateness (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).
+Brush: `Ink Pen` topology `stamp-color-output` (terminal: `color_output`, stabilize=`1`). Recording: 204 events spanning 3536 ms recorded at 4000×2000. Replay pacing: real-time. `behind_by_ms = wall_total - stroke_duration`: positive means the engine fell behind the recorded cadence. `max_event_behind_ms` is the worst single-event lateness (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).
 
-**GPU timestamps unavailable on this adapter** — the bench device couldn't request `TIMESTAMP_QUERY`. The `gpu_*` columns will all read 0; use `cpu_*` for perf signal.
+**GPU timestamps unavailable on this adapter**: the bench device couldn't request `TIMESTAMP_QUERY`. The `gpu_*` columns will all read 0; use `cpu_*` for perf signal.
 
 | canvas | radius_px | events | duration (ms) | wall (ms) | behind (ms) | max_event_behind (ms) | cpu p50 (µs) | cpu p95 (µs) | cpu max (µs) | gpu p50 (µs) | gpu p95 (µs) | gpu max (µs) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|

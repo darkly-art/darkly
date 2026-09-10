@@ -8,7 +8,7 @@ use darkly_macros::handlers;
 use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 
-/// Completed export readback — drained by `poll_export_result`.
+/// Completed export readback, drained by `poll_export_result`.
 pub struct ExportImageResult {
     pub width: u32,
     pub height: u32,
@@ -29,7 +29,7 @@ impl DarklyEngine {
             return;
         }
 
-        // Composite cache is rebuilt on demand by the offscreen render — same
+        // Composite cache is rebuilt on demand by the offscreen render, the same
         // mechanism `test_readback_canvas` uses headlessly, and the production
         // present path keeps it fresh. Force an offscreen composite first so
         // the readback sees the current document state even when no surface

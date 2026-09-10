@@ -1,4 +1,4 @@
-//! `.darkly` load flow — atomic install with up-front refusal checks.
+//! `.darkly` load flow: atomic install with up-front refusal checks.
 //!
 //! The contract is **all-or-nothing**: either the file is fully
 //! representable in this build and loads completely, or it isn't, and
@@ -8,17 +8,17 @@
 //!
 //! Refusal checks happen *before* any engine mutation:
 //!
-//! 1. **Zip extraction** — malformed archive → [`LoadError::Zip`].
-//! 2. **Manifest existence + container/requires presence** — missing
+//! 1. **Zip extraction**: malformed archive → [`LoadError::Zip`].
+//! 2. **Manifest existence + container/requires presence**: missing
 //!    `manifest.json`, missing `container_version`, or missing
 //!    `requires` block → [`LoadError::CorruptManifest`].
-//! 3. **Container version** — newer than the binary understands →
+//! 3. **Container version**: newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
 //! 4. **`requires` inventory** — diffed against the four registries
 //!    (effects, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
-//! 5. **Full schema parse + staging-doc construction** — any
+//! 5. **Full schema parse + staging-doc construction**: any
 //!    per-variant `type_id` the registry doesn't know, despite passing
 //!    the inventory diff, means the manifest's `requires` block lied
 //!    and the file is corrupt → [`LoadError::CorruptManifest`].
@@ -71,7 +71,7 @@ impl DarklyEngine {
 
         // First parse to an untyped JSON value so we can check the
         // container version + `requires` presence BEFORE trying the
-        // full typed schema — a too-new container could have schema
+        // full typed schema: a too-new container could have schema
         // shapes the typed parse can't make sense of, and we want the
         // precise refusal diagnostic rather than a confused JSON error.
         let raw: serde_json::Value = serde_json::from_slice(manifest_bytes)?;
@@ -85,7 +85,7 @@ impl DarklyEngine {
         // exact "needs <thing>, please update Darkly" message.
         pre_check_requires(self, &manifest.requires)?;
 
-        // Staging doc — built off to the side. Per-variant safety net
+        // Staging doc: built off to the side. Per-variant safety net
         // for the cases where `requires` declared what the body uses
         // but the binary's registry is still missing it (would be a
         // bug at the pre-check level), or where `requires` lies short
@@ -104,8 +104,8 @@ impl DarklyEngine {
 
 /// Refuse files whose `container_version` is newer than this binary
 /// supports, or whose value is missing/malformed entirely (we control
-/// the writer; absence means the file is corrupt, not "older format" —
-/// there's no older format).
+/// the writer; absence means the file is corrupt, not "older format",
+/// since there's no older format).
 fn pre_check_container_version(raw: &serde_json::Value) -> Result<(), LoadError> {
     let found = raw
         .get("container_version")
@@ -179,7 +179,7 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 }
 
 // ----------------------------------------------------------------------------
-// Staging doc construction (allocation only — no engine mutation)
+// Staging doc construction (allocation only, no engine mutation)
 // ----------------------------------------------------------------------------
 
 /// Build a fresh [`Document`] from a [`Manifest`], producing an
@@ -194,7 +194,7 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 ///    manifest-old ids.
 /// 2. **Remap cross-refs.** Each entity's registered `remap_ids` rewrites
 ///    its cross-references using the `id_map`. Each kind owns the
-///    knowledge of which fields hold ids — a future kind that adds a
+///    knowledge of which fields hold ids, so a future kind that adds a
 ///    private id field is forced to implement this hook by signature.
 /// 3. **Rebuild parent map.** Walk every group's `children` and every
 ///    host's `filters`; the body's child/filter list is the single
@@ -211,7 +211,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
 
     let mut id_map: IdMap = HashMap::with_capacity(manifest.nodes.len() + manifest.modifiers.len());
 
-    // The manifest's `root` maps to the new doc's auto-allocated root —
+    // The manifest's `root` maps to the new doc's auto-allocated root:
     // we don't re-create the root entity, we reuse the one Document::new
     // built. Every other node + filter is allocated fresh and
     // recorded.
@@ -230,8 +230,8 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
             let reg = layer_kind_registry.get(&entry.type_id).ok_or_else(|| {
                 LoadError::CorruptManifest {
                     reason: format!(
-                        "manifest root {} declares layer_kind/{} but registry is missing it \
-                         — `requires` block lies",
+                        "manifest root {} declares layer_kind/{} but registry is missing it: \
+                         `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 }
@@ -247,13 +247,13 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
                 .get(&entry.type_id)
                 .ok_or_else(|| LoadError::CorruptManifest {
                     reason: format!(
-                        "node {} declares layer_kind/{} but registry is missing it \
-                     — `requires` block lies",
+                        "node {} declares layer_kind/{} but registry is missing it: \
+                     `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 })?;
         // `insert_with_key` runs the constructor with the freshly-allocated
-        // key. `deserialize` is fallible — if it errors, we want to bubble
+        // key. `deserialize` is fallible: if it errors, we want to bubble
         // up rather than leave a half-formed slotmap entry, so we use a
         // two-step allocate-then-fill pattern via a Result-bearing temporary.
         let mut new_id_opt: Option<LayerId> = None;
@@ -290,8 +290,8 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
                 .get(&entry.type_id)
                 .ok_or_else(|| LoadError::CorruptManifest {
                     reason: format!(
-                        "filter {} declares filter/{} but registry is missing it \
-                     — `requires` block lies",
+                        "filter {} declares filter/{} but registry is missing it: \
+                     `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 })?;
@@ -360,7 +360,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
     // hosts' filters. The body's lists are the single source of truth.
     rebuild_parent_map(&mut doc);
 
-    // Selection sentinel — point `Document::selection` at the
+    // Selection sentinel: point `Document::selection` at the
     // freshly-allocated id (if the manifest declared one).
     if let Some(old_sel_id) = manifest.selection_id {
         if let Some(new_id) = id_map.get(&old_sel_id) {
@@ -479,7 +479,7 @@ fn rebuild_parent_map(doc: &mut Document) {
 }
 
 // ----------------------------------------------------------------------------
-// Atomic install — no fallible operations from here on.
+// Atomic install: no fallible operations from here on.
 // ----------------------------------------------------------------------------
 
 /// Swap the staging doc into the engine and rebuild every derived
@@ -493,13 +493,13 @@ fn install_staging(
     entries: &HashMap<String, Vec<u8>>,
 ) {
     // Cancel any in-flight readbacks that referenced the previous
-    // document — their context ids point at the about-to-be-dropped
+    // document: their context ids point at the about-to-be-dropped
     // slotmap entries. Done before the doc swap so the cancel sees the
     // old context types correctly.
     engine.readbacks.cancel(|_| true);
 
     // The compositor caches a lot keyed off the old document's
-    // slotmap. Building a fresh one is the simplest correct route —
+    // slotmap. Building a fresh one is the simplest correct route:
     // every old texture / bind group / passthrough state is dropped.
     engine.doc = staging;
     engine.compositor = Compositor::new(
@@ -528,7 +528,7 @@ fn install_staging(
     register_embedded_fonts(engine, manifest, entries);
     engine.sync_compositor_layers();
     // Restore void persistent pixels (camera void's last frame, etc.)
-    // AFTER `sync_compositor_layers` — that's where the void's GPU cache
+    // AFTER `sync_compositor_layers`: that's where the void's GPU cache
     // is first allocated (with a placeholder texture), and our restore
     // method resizes + writes bytes into that cache.
     upload_loaded_void_pixels(engine, entries);
@@ -539,7 +539,7 @@ fn install_staging(
     engine.floating = None;
     // The clone pin MUST clear: the loaded doc's fresh slotmap can hand
     // out a key that collides with a stale cross-document pin. The anchor
-    // clears with it — a point in the old doc's plane is meaningless here.
+    // clears with it: a point in the old doc's plane is meaningless here.
     engine.clone_source_anchor = None;
     engine.clone_source_layer = None;
     for channel in &mut engine.overlays {
@@ -556,7 +556,7 @@ fn install_staging(
 /// Allocate GPU textures for every loaded entity and upload the
 /// matching pixel bytes from the zip. Walks each entity, reads the
 /// `pixels` ref out of the body, and routes through the appropriate
-/// allocator. Infallible — pixel-buffer size mismatches log and
+/// allocator. Infallible: pixel-buffer size mismatches log and
 /// continue (the surrounding load is already past every refusal check
 /// and we'd rather show a half-loaded layer than abort with a fresh
 /// compositor sitting around).
@@ -650,7 +650,7 @@ fn upload_loaded_pixels(
 /// Restore persistent void textures (camera void's last received frame,
 /// future screenshare, …) into their freshly-allocated GPU caches. Runs
 /// after `sync_compositor_layers` so every void already has an
-/// `EffectCache` to overwrite. Walks the doc's void layers — the
+/// `EffectCache` to overwrite. Walks the doc's void layers: the
 /// `frame` field on each is the authoritative source of "this void
 /// has a persisted texture under blob_key X at dims W×H".
 fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String, Vec<u8>>) {
@@ -681,7 +681,7 @@ fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String
 
 /// Thin wrapper that routes through `Compositor::upload_node_pixels`
 /// (which atomically writes + dirty-marks). A `false` return means the
-/// node has no texture or the buffer is short — log and continue
+/// node has no texture or the buffer is short: log and continue
 /// (the load is past every refusal gate; half a layer beats aborting
 /// with a fresh compositor sitting around).
 fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
@@ -694,7 +694,7 @@ fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
 }
 
 /// Register every font embedded in the container back into the engine's font
-/// collection so text renders self-contained — the same
+/// collection so text renders self-contained: the same
 /// [`crate::text::FontRegistry::register_font`] path uploads and Google imports
 /// use. Deduped by content hash (several families can share one blob), and
 /// best-effort: a font blob missing from the archive is skipped, and the text
@@ -746,7 +746,7 @@ mod tests {
         let l = doc.add_raster_layer(Some(g));
         let m = doc.add_mask_filter(l).expect("mask added");
 
-        // Wipe parent map and force a rebuild — the derived state must
+        // Wipe parent map and force a rebuild: the derived state must
         // match the original.
         doc.parent.clear();
         rebuild_parent_map(&mut doc);
@@ -757,12 +757,12 @@ mod tests {
     }
 
     /// `build_staging_document` builds a Document via the layer-kind /
-    /// filter registries — no central match on type_id. A manifest with
+    /// filter registries: no central match on type_id. A manifest with
     /// one of every kind round-trips through `serialize` + `deserialize`
     /// and arrives with consistent tree + parent state.
     #[test]
     fn staging_document_round_trips_one_of_each_kind() {
-        // We don't go through save here — we just hand-build a manifest
+        // We don't go through save here: we just hand-build a manifest
         // shape that mirrors what a real save would produce, then assert
         // the staging doc's structure.
         // Manifest ids are `LayerId::to_ffi` outputs (generation in the high

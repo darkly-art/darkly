@@ -1,4 +1,4 @@
-//! WASM bridge for the Darkly engine — the in-process transport.
+//! WASM bridge for the Darkly engine: the in-process transport.
 //!
 //! ## The async request/response boundary
 //!
@@ -15,17 +15,17 @@
 //! and a re-entrant pointer/rAF callback took a competing borrow → permanent
 //! `RefCell` poison. Now there are **exactly two** engine borrow sites:
 //!
-//! - [`render`] — `try_borrow_mut`; drains the FIFO then composites, all in one
+//! - [`render`] - `try_borrow_mut`; drains the FIFO then composites, all in one
 //!   borrow. Returns `false`-equivalent (`busy: true`) and reschedules if it
 //!   can't get the borrow.
-//! - [`drain`] — `Transport::try_drain`, which `try_borrow_mut`s and yields
+//! - [`drain`] - `Transport::try_drain`, which `try_borrow_mut`s and yields
 //!   `busy` instead of panicking when render holds the borrow.
 //!
 //! [`enqueue`] borrows nothing (it only appends to the FIFO), so a re-entrant
 //! request fired inside `submit()` is safe by construction. A CI grep gate
 //! enforces that no third `engine.borrow*()` site appears.
 //!
-//! `frame_count` / `thumbnail_version` are no longer separate borrowing reads —
+//! `frame_count` / `thumbnail_version` are no longer separate borrowing reads:
 //! [`render`] returns them as a downhill projection of its single borrow.
 
 use std::cell::RefCell;
@@ -79,19 +79,19 @@ pub fn compute_view_matrices(
 }
 
 // ---------------------------------------------------------------------------
-// DarklySession — shared GPU device for multiple DarklyHandles
+// DarklySession: shared GPU device for multiple DarklyHandles
 // ---------------------------------------------------------------------------
 
 /// A process-level GPU session that owns one `wgpu::Instance` and one
 /// `Arc<GpuDevice>`. Hand out `DarklyHandle`s via `createHandle(...)` to attach
-/// additional canvases to the same WebGPU device — the multi-tab editor uses one
+/// additional canvases to the same WebGPU device: the multi-tab editor uses one
 /// session and N handles, one per open document.
 #[wasm_bindgen]
 pub struct DarklySession {
     instance: wgpu::Instance,
     /// `None` until the first canvas is attached; `Some` thereafter.
     gpu: RefCell<Option<Arc<GpuDevice>>>,
-    /// Shared tool session — generic per-tool state bag, cloned into every
+    /// Shared tool session: generic per-tool state bag, cloned into every
     /// handle so all engines see the same tool state.
     tool_session: darkly::tool::SharedToolSession,
 }
@@ -183,7 +183,7 @@ impl Default for DarklySession {
 /// A deferred upload of a live `OffscreenCanvas` frame into a camera-style
 /// void's GPU texture. This is the one engine operation that can't cross the
 /// serialized protocol boundary (an `OffscreenCanvas` isn't JSON), so it rides
-/// its own typed side-FIFO — but it is still *deferred* (no synchronous borrow
+/// its own typed side-FIFO, but it is still *deferred* (no synchronous borrow
 /// at call time) and applied under `render`/`drain`'s borrow, preserving the
 /// "exactly two borrow sites" invariant.
 struct PendingExternalImage {
@@ -192,7 +192,7 @@ struct PendingExternalImage {
     /// The `ImageBitmap` backing `source`, retained so it can be `.close()`d the
     /// instant the GPU copy is recorded. `copyExternalImageToTexture` snapshots
     /// its source synchronously, so releasing the bitmap right after the copy is
-    /// safe — and necessary, or the decoded frame lingers until GC, stalling the
+    /// safe, and necessary, or the decoded frame lingers until GC, stalling the
     /// browser's video-decode buffer pool.
     bitmap: web_sys::ImageBitmap,
 }
@@ -267,10 +267,10 @@ impl DarklyHandle {
     }
 
     // =======================================================================
-    // Transport surface — enqueue (no borrow), drain, render
+    // Transport surface: enqueue (no borrow), drain, render
     // =======================================================================
 
-    /// Append a request to the FIFO. **Borrows nothing** — safe to call
+    /// Append a request to the FIFO. **Borrows nothing**: safe to call
     /// re-entrantly inside render's event pump (invariant #1). `payload` is a JS
     /// object; `bytes` is an optional `Uint8Array` binary side-channel.
     pub fn enqueue(&self, id: f64, kind: &str, payload: JsValue, bytes: Option<Vec<u8>>) {
@@ -281,7 +281,7 @@ impl DarklyHandle {
     }
 
     /// Non-blocking drain (the scheduler path). Returns `{ busy: true }` if the
-    /// engine is borrowed (render in flight — caller reschedules), else
+    /// engine is borrowed (render in flight; caller reschedules), else
     /// `{ busy: false, results: [...] }` with one entry per dispatched request.
     pub fn drain(&self) -> JsValue {
         // Apply deferred OffscreenCanvas uploads first, under the same borrow,
@@ -300,11 +300,11 @@ impl DarklyHandle {
     }
 
     /// Render the current frame. **Seam B.** Drains the FIFO (and pending image
-    /// uploads) under its one `try_borrow_mut`, *then* composites — preserving
+    /// uploads) under its one `try_borrow_mut`, *then* composites, preserving
     /// frame-coherent "mutate-then-composite-same-frame" semantics. Returns
     /// `{ busy, needsMore, frameCount, thumbnailVersion, results }`; `busy` is
     /// true when a re-entrant render couldn't get the borrow (caller must not
-    /// reschedule another rAF — the outer render handles everything).
+    /// reschedule another rAF: the outer render handles everything).
     pub fn render(&self, time_secs: f32) -> JsValue {
         let Ok(mut e) = self.engine.try_borrow_mut() else {
             return busy_result();
@@ -343,7 +343,7 @@ impl DarklyHandle {
             );
         }
 
-        // The frontend's synchronously-readable engine-state mirror — one struct
+        // The frontend's synchronously-readable engine-state mirror: one struct
         // for every value the UI caches (frame/thumbnail counters + document
         // bools), built from cheap CPU reads under the borrow render already
         // holds (no extra query / per-frame poll). Grows as the UI needs more.
@@ -381,7 +381,7 @@ impl DarklyHandle {
     }
 
     /// Engine-side thumbnail dimension used by the auto-queue path. Returns a
-    /// compile-time constant — no engine borrow. The frontend's `THUMB_SIZE`
+    /// compile-time constant: no engine borrow. The frontend's `THUMB_SIZE`
     /// must match; `app.svelte.ts` asserts equality at init.
     pub fn engine_default_thumb_size(&self) -> u32 {
         darkly::engine::DEFAULT_THUMB_SIZE
@@ -420,10 +420,10 @@ fn outcomes_to_js(outcomes: Vec<RequestOutcome>) -> js_sys::Array {
 /// One dispatched request's result: `{ id, value, bytes? }` on success, or
 /// `{ id, error }` (the `{ kind, message }` envelope) on a protocol failure.
 ///
-/// `serde_json::Value`s are serialized with `serialize_maps_as_objects(true)` —
+/// `serde_json::Value`s are serialized with `serialize_maps_as_objects(true)`:
 /// without it, `serde_wasm_bindgen` emits a JS `Map` for every JSON object
 /// (so `result.id` / `layerInfo.type` would be `undefined`). A binary response
-/// always emits a `bytes` field (even when empty — a readback-in-flight preview),
+/// always emits a `bytes` field (even when empty: a readback-in-flight preview),
 /// keyed off `Some`, never off emptiness.
 fn outcome_to_js(outcome: RequestOutcome) -> JsValue {
     use serde::Serialize;

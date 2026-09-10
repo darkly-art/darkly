@@ -1,7 +1,7 @@
 // Pure geometry for the interactive canvas-resize preview.
 //
 // The whole interaction has a single source of truth: the **new canvas window
-// expressed in content space** — a `Rect { x, y, w, h }` where the current
+// expressed in content space**, a `Rect { x, y, w, h }` where the current
 // document content occupies `[0..docW] × [0..docH]`. `(x, y)` is the new
 // window's top-left relative to the content's top-left (it may be negative when
 // growing, or positive when cropping inward). The modal converts this to a
@@ -31,7 +31,7 @@ export function clampDim(v: number): number {
 
 /**
  * Content-space new-canvas rect for a 9-point anchor. `anchorX/anchorY` are the
- * fraction of the size delta taken off the top/left edge — content offset within
+ * fraction of the size delta taken off the top/left edge: content offset within
  * the new canvas is `(w - docW) * anchorX`, so the window's top-left sits at
  * `x = (docW - w) * anchorX`. Matches the retired engine `resize_anchor_rect`.
  */
@@ -56,7 +56,7 @@ export function rectFromAnchor(
 
 /**
  * If the rect's offset on an axis lands on a 9-point anchor (0, 0.5, 1) within
- * `tolPx`, return it; otherwise null. Used only to highlight the anchor grid —
+ * `tolPx`, return it; otherwise null. Used only to highlight the anchor grid:
  * a dimension with zero delta is anchor-ambiguous and yields null.
  */
 export function matchedAnchor(

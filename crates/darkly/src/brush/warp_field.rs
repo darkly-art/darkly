@@ -1,4 +1,4 @@
-//! Warp field — the stroke scratch as a displacement map, and the single
+//! Warp field: the stroke scratch as a displacement map, and the single
 //! resample that turns it back into pixels.
 //!
 //! A warp terminal (liquify, and any pinch/swirl/bloat sibling) does not
@@ -18,7 +18,7 @@
 //!
 //! * GEGL's `gegl:warp` iterates a two-component float coordinate buffer
 //!   (`operations/common-cxx/warp.cc:321`) and per stamp does
-//!   `field'(p) = field(p + nv) + nv` (`:700-704`) — the exact update
+//!   `field'(p) = field(p + nv) + nv` (`:700-704`), the exact update
 //!   [`advect_wgsl`] emits. GIMP wires the accumulated buffer through
 //!   `gegl:map-relative` to sample the drawable once
 //!   (`app/tools/gimpwarptool.c:913,1059-1071`).
@@ -38,7 +38,7 @@
 //! ## Why `Rg32Float`
 //!
 //! At full strength liquify locks pixels to the cursor, so the field is
-//! the *cumulative* drag — a 1200 px drag stores values near 1200, where
+//! the *cumulative* drag: a 1200 px drag stores values near 1200, where
 //! half-float ULP is a whole pixel (measured f16-vs-f32 error over such a
 //! drag: p90 3.6 px, p99 15.7 px). GEGL and GIMP both use float32 here.
 //! `Rg32Float` is renderable in core WebGPU but not *filterable*, so both
@@ -64,7 +64,7 @@ pub const RESOLVE_PIPELINE_ID: &str = "warp_field_resolve";
 /// Manual bilinear fetch of a two-channel field, by `textureLoad`.
 ///
 /// `p` is in texels from the texture's origin, integer `p` naming a texel
-/// *corner* — the same convention the read-mirror UV math uses, where
+/// *corner*, the same convention the read-mirror UV math uses, where
 /// `copy_origin` is floored to integers and `target_pos` interpolates to
 /// fragment centres. Hence the `-0.5` before `floor`.
 ///
@@ -93,14 +93,14 @@ fn warp_field_bilinear(t: texture_2d<f32>, p: vec2<f32>) -> vec2<f32> {
 /// The per-dab fragment tail every warp terminal shares: advect the
 /// accumulated field by this dab's offset, add the offset, write it back.
 ///
-/// `offset_expr` must evaluate to a `vec2<f32>` — the displacement this
+/// `offset_expr` must evaluate to a `vec2<f32>`: the displacement this
 /// dab contributes at the current fragment, already shaped by whatever
 /// falloff, selection and mask attenuation the terminal wants. Pointing
 /// it *backward* along travel makes content move *forward* with the
 /// cursor (GEGL does the same: `motion_x = priv->last_x - x`,
 /// `warp.cc:412`).
 ///
-/// A new warp behaviour is therefore one file supplying one expression —
+/// A new warp behaviour is therefore one file supplying one expression;
 /// `scale`/`rotate` offsets are functions of `local`, which the framework
 /// wrapper already provides.
 pub fn advect_wgsl(offset_expr: &str, copy_origin_field: &str) -> String {
@@ -168,7 +168,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 /// Resolves an accumulated warp field against a source snapshot, straight
 /// onto the paint target.
 ///
-/// Two pipelines, one per destination format — raster layers are
+/// Two pipelines, one per destination format: raster layers are
 /// `Rgba8Unorm`, mask layers `R8Unorm`. Per the type-owned-dispatch
 /// principle the branch lives in [`WarpFieldResolve::pipeline`], not at
 /// the call site, mirroring `CompositePipeline`.
@@ -179,7 +179,7 @@ pub struct WarpFieldResolve {
 }
 
 /// Harvested by `BrushPipelines::new` alongside the other plumbing
-/// pipelines — the resolve belongs to no single node, since every warp
+/// pipelines, since the resolve belongs to no single node: every warp
 /// terminal shares it.
 pub fn warp_field_resolve_registration() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
@@ -276,7 +276,7 @@ impl WarpFieldResolve {
     /// Full extent, not a damage rect: the whole point is that the output
     /// is a pure function of the pre-stroke snapshot and the current
     /// field, so it stays correct when the stabiliser rewinds and discards
-    /// dabs — a tracked rect would leave a stale warped fringe behind the
+    /// dabs; a tracked rect would leave a stale warped fringe behind the
     /// truncation. It also costs no more than the full-extent scratch copy
     /// a colour terminal's commit already does.
     #[allow(clippy::too_many_arguments)]

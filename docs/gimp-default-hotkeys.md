@@ -1,8 +1,8 @@
-# GIMP — Default Keyboard Shortcuts Reference
+# GIMP: Default Keyboard Shortcuts Reference
 
-A comprehensive reference of the default keyboard shortcuts shipped with **GIMP 3.0+** (the GNU Image Manipulation Program). Compiled directly from the GIMP source tree — the `GimpActionEntry` arrays in `app/actions/*.c` and the tool `_register()` calls in `app/tools/gimp*tool.c` — so every binding listed here is the one GIMP actually wires into its action map at startup.
+A comprehensive reference of the default keyboard shortcuts shipped with **GIMP 3.0+** (the GNU Image Manipulation Program). Compiled directly from the GIMP source tree (the `GimpActionEntry` arrays in `app/actions/*.c` and the tool `_register()` calls in `app/tools/gimp*tool.c`), so every binding listed here is the one GIMP actually wires into its action map at startup.
 
-> **Tip** — View, search, or rebind these in-app via **Edit ▸ Keyboard Shortcuts…**, or hit the **Search and Run a Command** dialog (`/`) to invoke any action by name.
+> **Tip**: View, search, or rebind these in-app via **Edit ▸ Keyboard Shortcuts…**, or hit the **Search and Run a Command** dialog (`/`) to invoke any action by name.
 
 ## Conventions
 
@@ -61,7 +61,7 @@ Each tool's binding is declared in its `_register()` call in `app/tools/gimp<nam
 | Fuzzy Select (Magic Wand) | U | U |
 | Select by Color | Shift + O | Shift + O |
 | Scissors Select | I | I |
-| Foreground Select | _none — accessible from Tools ▸ Selection Tools_ | _same_ |
+| Foreground Select | _none, accessible from Tools ▸ Selection Tools_ | _same_ |
 
 ### Paint tools
 
@@ -149,7 +149,7 @@ GIMP names its modifier *roles* in `app/core/` and references them everywhere a 
 | `extend_selection_mask` | Shift | Shift | Add to selection; draw a straight line from last paint stamp |
 | `modify_selection_mask` | Ctrl | Cmd | Subtract from selection; toggle behaviour-specific intersect |
 | `constrain_behavior_mask` | Ctrl | Cmd | Constrain angles to 15°; constrain transform to axis; constrain crop to square |
-| `toggle_behavior_mask` | Ctrl | Cmd | Toggle inverse behaviour (e.g. Bucket Fill — fill *similar* vs *opposite*) |
+| `toggle_behavior_mask` | Ctrl | Cmd | Toggle inverse behaviour (e.g. Bucket Fill: fill *similar* vs *opposite*) |
 | (extra mod) | Alt | Option | Move floating selection without anchoring; pick from screen |
 
 Selection-tool combinations across all the marquee/lasso/wand/scissors/by-color tools:
@@ -186,10 +186,10 @@ Move-tool combinations:
 | --- | --- | --- |
 | Nudge active layer / selection / path by 1 px | ←, →, ↑, ↓ | ←, →, ↑, ↓ |
 | Nudge by an "accelerated" step (≈25 px) | Shift + arrow | Shift + arrow |
-| Pick up the layer under the cursor (instead of the active one) | (default — see **Tool Options**) | _same_ |
+| Pick up the layer under the cursor (instead of the active one) | (default, see **Tool Options**) | _same_ |
 | Constrain motion to axis | Hold Ctrl while dragging | Hold Cmd while dragging |
 
-> **Pan & rotate the canvas with the mouse alone** — these are GIMP-wide hard-wired bindings, *not* configurable through the action editor:
+> **Pan & rotate the canvas with the mouse alone**: these are GIMP-wide hard-wired bindings, *not* configurable through the action editor:
 >
 > | Gesture | Effect |
 > | --- | --- |
@@ -410,11 +410,11 @@ These open (or focus, if already docked) the named dockable dialog. See `app/act
 
 ### Source-of-truth files
 
-If a binding ever drifts from this document, these are the authoritative C arrays — they're what GIMP reads at startup to register every action and its accelerator:
+If a binding ever drifts from this document, these are the authoritative C arrays: they're what GIMP reads at startup to register every action and its accelerator:
 
 | Subsystem | File |
 | --- | --- |
-| Tool activation keys | `app/tools/gimp<tool>tool.c` — the `_register()` call near the top |
+| Tool activation keys | `app/tools/gimp<tool>tool.c` - the `_register()` call near the top |
 | File menu | `app/actions/file-actions.c` |
 | Edit menu | `app/actions/edit-actions.c` |
 | Select menu | `app/actions/select-actions.c` |
@@ -434,10 +434,10 @@ If a binding ever drifts from this document, these are the authoritative C array
 
 ### What's *not* in this list
 
-GIMP ships hundreds of actions without default bindings — alignment commands, channel/path operations, layer-stack moves (raise/lower/merge-down), most filters, every dockable that isn't in the table above, all the script-fu and python-fu scripts, and the entirety of the colour-management menu. Each is still bindable through **Edit ▸ Keyboard Shortcuts** or by editing `~/.config/GIMP/3.0/shortcutsrc`.
+GIMP ships hundreds of actions without default bindings: alignment commands, channel/path operations, layer-stack moves (raise/lower/merge-down), most filters, every dockable that isn't in the table above, all the script-fu and python-fu scripts, and the entirety of the colour-management menu. Each is still bindable through **Edit ▸ Keyboard Shortcuts** or by editing `~/.config/GIMP/3.0/shortcutsrc`.
 
 ### Customising
 
-- **In-app:** **Edit ▸ Keyboard Shortcuts…** — searchable, live conflict detection, per-action reset.
+- **In-app:** **Edit ▸ Keyboard Shortcuts…**, searchable, live conflict detection, per-action reset.
 - **On disk:** Custom bindings are persisted to `~/.config/GIMP/3.0/shortcutsrc` (Linux/Windows portable: `%APPDATA%\GIMP\3.0\shortcutsrc`). Delete the file to revert all customisations to the defaults documented here.
 - **Per-keymap themes:** **Edit ▸ Preferences ▸ Interface ▸ Keyboard Shortcuts** lets you load alternate keymaps shipped with GIMP, including a Photoshop-style preset.

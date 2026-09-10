@@ -1,8 +1,8 @@
-/** 15° — discrete rotation-snap increment (Krita DISCRETE_ANGLE_STEP, PS). */
+/** 15°: discrete rotation-snap increment (Krita DISCRETE_ANGLE_STEP, PS). */
 export const SNAP_ANGLE_RAD = Math.PI / 12;
-/** 45° — major "cardinal" marks the free rotation detents to. */
+/** 45°: major "cardinal" marks the free rotation detents to. */
 export const CARDINAL_ANGLE_RAD = Math.PI / 4;
-/** ±2° — cardinal detent tolerance (Krita angleForSnapping). */
+/** ±2°: cardinal detent tolerance (Krita angleForSnapping). */
 export const CARDINAL_TOL_RAD = (2 * Math.PI) / 180;
 
 /** Quantize an absolute angle to the nearest grid multiple. */

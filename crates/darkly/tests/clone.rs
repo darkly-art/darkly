@@ -10,7 +10,7 @@
 //! The frame conversion (`uv = (src - source_offset) / source_size`) is
 //! the recurring hazard, so the copy is exercised both at the origin and
 //! under a **non-zero canvas origin + offset layer**. Erase mode is
-//! covered too — clone inherits the terminal's paint-vs-erase commit.
+//! covered too: clone inherits the terminal's paint-vs-erase commit.
 //!
 //! Engine-level tests below the runner-level ones cover cross-layer
 //! source pinning, sample-merged, the deleted-source fallback, mask
@@ -127,7 +127,7 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
         runner.samples_source(),
         "Clone brush must report samples_source"
     );
-    // The source frame matches `layer_rect` — under a nonzero origin this
+    // The source frame matches `layer_rect`; under a nonzero origin this
     // guards the uniform-carried frame the shader samples through (it no
     // longer reads `IntrinsicUniforms.layer_*`).
     runner.set_clone_state(Some(CloneState {
@@ -232,7 +232,7 @@ fn clone_copies_source_onto_destination() {
 fn clone_copies_under_nonzero_origin_and_offset_layer() {
     // Same geometry lifted into a cropped plane: the canvas window and the
     // layer both sit at plane (10, 20). This exercises the
-    // `uv = (src - layer_offset) / layer_size` conversion — the recurring
+    // `uv = (src - layer_offset) / layer_size` conversion: the recurring
     // wrong-frame hazard. Source/dest are given in plane pixels; the
     // readback is layer-local, so subtract the offset when probing.
     let origin = [10, 20];
@@ -342,7 +342,7 @@ fn cross_layer_clone_copies_pinned_layer() {
     );
 }
 
-/// With "Sample Merged" on, the clone reads the root composite — the top
+/// With "Sample Merged" on, the clone reads the root composite: the top
 /// layer's colour wins over the pinned (bottom) layer.
 #[test]
 fn sample_merged_clones_composite() {
@@ -397,7 +397,7 @@ fn deleted_source_falls_back_to_painted_layer() {
 }
 
 /// A pinned mask (R8) broadcasts to grey through the shared snapshot
-/// path — the default-white mask deposits white onto the raster layer.
+/// path: the default-white mask deposits white onto the raster layer.
 #[test]
 fn mask_source_broadcasts_r8() {
     let mut e = test_engine(W, W);

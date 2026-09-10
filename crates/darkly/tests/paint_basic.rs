@@ -6,7 +6,7 @@
 //! `rough_ink.rs` covers the deeper invariants of the paint
 //! pipeline (bbox-correctness on overlapping dabs, flow scaling,
 //! shape parity). These tests only need to verify each brush's
-//! graph wires up cleanly and produces visible output — per-brush
+//! graph wires up cleanly and produces visible output, so per-brush
 //! wire bugs (e.g. forgetting `paint_color → stamp.color`) surface
 //! here.
 
@@ -182,7 +182,7 @@ fn count_deposited(rgba: &[u8]) -> usize {
 fn airbrush_deposits_softer_than_ink_pen() {
     // Airbrush has softness=1.0; Ink Pen has 0.1. Centre coverage should
     // still be solid (pressure→opacity is 1.0), but the alpha falloff
-    // at the rim is gentler. Smoke-test centre only here — the softer
+    // at the rim is gentler. Smoke-test centre only here, since the softer
     // edge is hard to assert quantitatively without a per-pixel
     // gradient probe.
     let rgba = render_single_dab("Airbrush", 0.15, [0.0, 1.0, 0.0, 1.0]);
@@ -198,7 +198,7 @@ fn airbrush_deposits_softer_than_ink_pen() {
 /// the Airbrush, so the deposited color must scale with pressure. The
 /// bug was that `commit()` read `ctx.input_f32("opacity")` from an
 /// empty inputs map (lifecycle hooks weren't pulling slot values),
-/// always returning the port default 1.0 — so every Airbrush stroke
+/// always returning the port default 1.0, so every Airbrush stroke
 /// committed at full opacity regardless of pressure.
 #[test]
 fn airbrush_opacity_tracks_pressure() {
@@ -223,7 +223,7 @@ fn airbrush_opacity_tracks_pressure() {
     assert!(
         full_g - low_g > 50,
         "Airbrush center green at pressure=1.0 ({full_g}) must be significantly \
-         brighter than at pressure=0.2 ({low_g}) — opacity must track pressure",
+         brighter than at pressure=0.2 ({low_g}): opacity must track pressure",
     );
 }
 

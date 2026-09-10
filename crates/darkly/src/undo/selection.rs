@@ -28,7 +28,7 @@ impl SelectionAction {
 
 impl UndoAction for SelectionAction {
     fn undo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // No-op on the document — the engine handles gpu_selection.active
+        // No-op on the document: the engine handles gpu_selection.active
         // and GPU texture restore via selection_region_entry_mut().
         HashMap::new()
     }
@@ -48,14 +48,14 @@ impl UndoAction for SelectionAction {
     }
 
     fn byte_cost(&self) -> u64 {
-        // Same `UndoRegionEntry` byte_size pathway as `GpuRegionAction` —
+        // Same `UndoRegionEntry` byte_size pathway as `GpuRegionAction`:
         // selection-mask snapshots compete for the same WASM heap budget
         // and can easily run to 10s of MB on a complex selection edit.
         self.entry.byte_size
     }
 
     fn on_evict(&mut self, _compositor: &mut Compositor) {
-        // See `GpuRegionAction::on_evict` — storage is action-owned, no
+        // See `GpuRegionAction::on_evict`: storage is action-owned, no
         // shared pool to release. Override exists to document the
         // contract.
     }

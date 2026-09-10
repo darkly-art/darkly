@@ -18,7 +18,7 @@
 
     /** Canonical port definition from the node type registration.
      *  Display metadata (unit_type, icon, label, description) comes from
-     *  here — not the instance — so it stays current even for old graphs. */
+     *  here (not the instance), so it stays current even for old graphs. */
     let regPort = $derived.by(() => {
         const node = brushGraph.graph?.nodes[nodeId];
         if (!node) return null;
@@ -32,10 +32,11 @@
     let label = $derived(regPort?.label || port.name);
 
     /** A block widget (curve) gets its own standalone header row. When that
-     *  lone label merely repeats the node's title it's pure redundancy — the
-     *  node header already says it — so we suppress it and drop the empty row.
-     *  Inline labels (sliders/enums) are NOT suppressed even when they match
-     *  the title: there they disambiguate one control among sibling ports. */
+     *  lone label merely repeats the node's title it's pure redundancy (the
+     *  node header already says it), so we suppress it and drop the empty
+     *  row. Inline labels (sliders/enums) are NOT suppressed even when they
+     *  match the title: there they disambiguate one control among sibling
+     *  ports. */
     let blockLabelRedundant = $derived.by(() => {
         const node = brushGraph.graph?.nodes[nodeId];
         const title = node ? (brushGraph.getNodeType(node.type_id)?.display_name ?? node.type_id) : '';
@@ -58,8 +59,8 @@
     });
 
     /** Effective slider bounds. Math-node sliders widen from the declared
-     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the user has unlocked the node's
-     *  extended range — or when the current value already sits outside the base
+     *  `0..1` to `0..EXTENDED_RANGE_MAX` when the artist has unlocked the node's
+     *  extended range, or when the current value already sits outside the base
      *  range, so a loaded gain like `2.56` shows correctly and isn't clamped on
      *  first touch. UI-only; the engine never enforces these bounds. */
     let range = $derived.by(() => {
@@ -88,7 +89,7 @@
     let showDot = $derived(port.dir === 'Output' || port.wirable);
 
     /** A settable-source input (`port.source`) also offers a right-edge source
-     *  handle to wire *from* — but only while the input itself is undriven. Once
+     *  handle to wire *from*, but only while the input itself is undriven. Once
      *  a wire drives the port its value is the driver's, so the source handle
      *  hides (mirror of `showSlider` hiding the value widget when connected). */
     let showSourceHandle = $derived(port.dir === 'Input' && port.source && !connected);
@@ -107,13 +108,13 @@
 
     // Re-register whenever `port.name` changes. The `{#each inputPorts}` in
     // NodeWidget isn't keyed, so when `visible_when` hides/shows a sibling
-    // port, Svelte rebinds existing instances by index — every reused
+    // port, Svelte rebinds existing instances by index: every reused
     // instance from the hidden port's index downward gets a *different*
     // `port` (and a different DOM row). Tracking `port.name` therefore
     // catches every layout shift: an inserted/removed port always changes
     // `port.name` on at least every index from the change onward.
     $effect(() => {
-        // Tracked reads — re-fire when the port identity changes.
+        // Tracked reads: re-fire when the port identity changes.
         const portName = port.name;
         const portDir = port.dir;
         // The measurement + side-effect are wrapped in `untrack` so the
@@ -167,7 +168,7 @@
     }
 
     function onPointerDown(e: PointerEvent) {
-        // Don't stopPropagation — the container needs to see this event
+        // Don't stopPropagation: the container needs to see this event
         // to set up pointer capture for wire drag mouse tracking.
         e.preventDefault();
 
@@ -222,7 +223,7 @@
     let sliderEl = $state<HTMLDivElement>();
     let sliderDrag: ScrubDrag | null = null;
 
-    /** Normalized position (0–1) of a client point relative to the slider bar. */
+    /** Normalized position (0-1) of a client point relative to the slider bar. */
     function sliderFraction(clientX: number, clientY: number): number {
         if (!sliderEl) return 0;
         const local = coords.clientToElementLocal(sliderEl, clientX, clientY);
@@ -267,7 +268,7 @@
                 app.endInteraction();
             },
         });
-        // Seed from the pointerdown position — clicking the track jumps the
+        // Seed from the pointerdown position: clicking the track jumps the
         // value there, so a click that never moves still commits.
         sliderDrag.move(e.clientX, e.clientY);
     }
@@ -277,7 +278,7 @@
     }
 
     /** Wired to both `pointerup` and `lostpointercapture`; `end` is idempotent.
-     *  A lost capture commits rather than discarding — the previewed value is
+     *  A lost capture commits rather than discarding: the previewed value is
      *  already on screen, so dropping it would leave the widget showing a value
      *  the engine never received. */
     function onSliderEnd() {
@@ -307,7 +308,7 @@
 
     /** A disconnected input can be exposed to the brush bar only if its
      *  type has a brush-bar widget (`port.exposable`, computed in Rust from
-     *  `WireKind::is_user_exposable`) — so curves/strings show no eye toggle. */
+     *  `WireKind::is_user_exposable`), so curves/strings show no eye toggle. */
     let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
@@ -447,7 +448,7 @@
         />
     {:else if showCurve}
         <!-- A curve is a full-height block widget, so it gets its own header
-             row (label + expose) with the editor stacked below — it can't sit
+             row (label + expose) with the editor stacked below; it can't sit
              inside the fixed-height inline row the scalar widgets use. The row
              is dropped entirely when it would hold nothing (a redundant label
              and no expose toggle, as on the Curve node). -->
@@ -509,7 +510,7 @@
         padding-right: 10px;
     }
     /* Block widgets (curve editor) can't live in the fixed-height inline
-       row — stack a header + the editor vertically and let the node grow to
+       row: stack a header + the editor vertically and let the node grow to
        contain it, so it's neither clipped nor mis-measured by auto-layout. */
     .port-block {
         height: auto;

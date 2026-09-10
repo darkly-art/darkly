@@ -49,7 +49,7 @@ fn all_wgsl_shaders_compile() {
     for path in &files {
         let source = std::fs::read_to_string(path).unwrap();
 
-        // Skip preamble-only files — they have no entry points and are
+        // Skip preamble-only files, since they have no entry points and are
         // validated indirectly when prepended to the shaders that use them.
         let has_entry_point = source.contains("@vertex")
             || source.contains("@fragment")
@@ -61,7 +61,7 @@ fn all_wgsl_shaders_compile() {
         // Prepend any preamble whose symbols are referenced by this shader.
         // A preamble that exports multiple helpers (e.g. `lib/fbm.wgsl` ships
         // `fbm`, `fbm_warp`, `fbm_warp_offset`, etc.) might be referenced by
-        // any of its names — collect them all and match against the union.
+        // any of its names; collect them all and match against the union.
         let mut full_source = String::new();
         for (_, preamble_src) in &preambles {
             let fn_names: Vec<&str> = preamble_src
@@ -190,12 +190,12 @@ fn no_reversed_edge_constant_smoothstep() {
             }
             let (Some(lo), Some(hi)) = (parse_wgsl_number(&args[0]), parse_wgsl_number(&args[1]))
             else {
-                continue; // one or both edges are runtime expressions — allowed
+                continue; // one or both edges are runtime expressions (allowed)
             };
             if lo >= hi {
                 let line = source[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
                 violations.push(format!(
-                    "{}:{line}: smoothstep({lo}, {hi}, …) has low >= high — \
+                    "{}:{line}: smoothstep({lo}, {hi}, …) has low >= high: \
                      rewrite as 1.0 - smoothstep({hi}, {lo}, …)",
                     name.display()
                 ));

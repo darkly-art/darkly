@@ -18,7 +18,7 @@
          * `position: fixed` dialog, pinning the checkbox at a viewport
          * position that ignores the settings list's scroll offset. Clicking
          * a toggle you had to scroll to then focuses an off-screen checkbox,
-         * and the browser scrolls it into view — yanking the modal contents
+         * and the browser scrolls it into view, yanking the modal contents
          * up by the scroll distance. Anchoring it to the visible toggle
          * makes the focus scroll-into-view a no-op. */
         position: relative;

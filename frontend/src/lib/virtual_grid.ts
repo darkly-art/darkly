@@ -5,7 +5,7 @@
  * so it unit-tests without layout.
  *
  * Prior art: Graphite's font menu virtual scrolling
- * (`frontend/src/components/floating-menus/MenuList.svelte`) — only the visible
+ * (`frontend/src/components/floating-menus/MenuList.svelte`); only the visible
  * window of entries is rendered, with a spacer reserving the full height so the
  * scrollbar is correct and per-entry font previews load lazily.
  */

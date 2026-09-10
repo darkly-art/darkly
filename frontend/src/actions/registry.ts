@@ -4,7 +4,7 @@ import { bumpRegistryEpoch } from './registryEpoch.svelte';
 export type ActionContext = Record<string, any>;
 export type ActionType = 'instant' | 'hold';
 
-/** An action's documentation — the half authored in Rust (`crates/darkly/src/
+/** An action's documentation: the half authored in Rust (`crates/darkly/src/
  *  actions/`) and shipped in the `actions` catalog. */
 export interface ActionDoc {
     displayName: string;
@@ -19,7 +19,7 @@ export interface ActionDoc {
     icon: string;
 }
 
-/** What a call site hands to `actions.register` — the behavioural half, which
+/** What a call site hands to `actions.register`: the behavioural half, which
  *  closes over Svelte runes and so cannot leave the browser. */
 export interface ActionRegistration {
     id: string;
@@ -49,7 +49,7 @@ export interface ActionRegistration {
     /** Leading status indicator for menu/palette rows. Returns an Iconify
      *  icon name to display in the row's gutter (e.g. 'fa6-solid:check' for an
      *  active toggle), or undefined for no status. The action owns its own
-     *  representation — the renderer just displays whatever name it returns.
+     *  representation: the renderer just displays whatever name it returns.
      *  An action that defines `status` always reserves gutter space, so the
      *  label doesn't shift when the indicator toggles on/off. */
     status?: () => string | undefined;
@@ -62,7 +62,7 @@ export interface ActionRegistration {
     deactivate?: (ctx: ActionContext) => void;
 }
 
-/** A registration joined with its documentation — what every consumer reads. */
+/** A registration joined with its documentation: what every consumer reads. */
 export type Action = Omit<ActionRegistration, 'doc'> & ActionDoc;
 
 export interface BindingSiteRegistration {
@@ -115,8 +115,8 @@ class ActionRegistry {
     private actions = new Map<string, ActionRegistration>();
 
     /** Rust-owned documentation by action id, installed once during editor init
-     *  from the `actions` catalog. Fixed for the process — a catalog is
-     *  `&'static` data on the other side of the bridge — so the join needs no
+     *  from the `actions` catalog. Fixed for the process (a catalog is
+     *  `&'static` data on the other side of the bridge), so the join needs no
      *  reactive tracking. */
     private docs: Record<string, ActionDoc> = {};
 
@@ -127,7 +127,7 @@ class ActionRegistry {
 
     /** Join a registration to its documentation. An id with neither an
      *  `actions` entry nor its own `doc` falls back to showing the id, the same
-     *  way `app.displayName` does for an unknown `type_id` — the TypeScript
+     *  way `app.displayName` does for an unknown `type_id`; the TypeScript
      *  join test is what fails loudly on it. */
     private resolve(reg: ActionRegistration): Action {
         const { doc, ...behaviour } = reg;
@@ -146,13 +146,13 @@ class ActionRegistry {
         return reg && this.resolve(reg);
     }
 
-    /** Run an action's handler. Unknown ids are a no-op — a preset can name
+    /** Run an action's handler. Unknown ids are a no-op: a preset can name
      *  one, and the Rust preset test is what catches it. */
     dispatch(id: string, ctx: ActionContext = {}) {
         this.actions.get(id)?.handler(ctx);
     }
 
-    /** For 'hold' actions — called on trigger release. */
+    /** For 'hold' actions: called on trigger release. */
     release(id: string, ctx: ActionContext = {}) {
         const action = this.actions.get(id);
         if (action?.type === 'hold') action.deactivate?.(ctx);

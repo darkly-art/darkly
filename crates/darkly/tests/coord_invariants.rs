@@ -2,7 +2,7 @@
 //! type, never long-lived storage.
 //!
 //! Long-lived rect storage must use `CanvasRect`. `LayerRect` is permitted
-//! only as a function parameter, return type, or local `let` binding —
+//! only as a function parameter, return type, or local `let` binding,
 //! never as a struct field or enum variant field, except in the type
 //! definition itself and the canvas <-> layer translation helpers.
 

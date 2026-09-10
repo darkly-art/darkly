@@ -1,0 +1,731 @@
+/**
+ * How the pack wheel's position relates to the brush list's.
+ *
+ * Pure (no DOM, no `$state`, no reactive imports), so it is testable in
+ * Vitest's node environment. Same reason `grouping.ts` sits beside its
+ * component rather than inside it.
+ *
+ * The wheel has uniform cards; the list has sections whose heights follow their
+ * contents, so a 40-brush pack is ten times taller than a 4-brush one. The
+ * relation between them is therefore **piecewise linear**, with a knot at every
+ * section boundary: section `i`'s list extent maps onto the wheel's slot
+ * `[i·cardAdvance, (i+1)·cardAdvance)`. A uniform wheel that still points at
+ * the right place.
+ *
+ * **Everything anchors on the focus line**: the middle of each pane,
+ * {@link FOCUS_LINE}. The whole model is one sentence: *the pack across the
+ * middle of the list is the pack whose card is across the middle of the wheel.*
+ * Mixing anchors is how the two panes come to disagree: highlight the section
+ * under one coordinate while scrolling the wheel to another and the highlighted
+ * card sits somewhere the wheel never scrolled to, which is what a jump target
+ * aligned to the viewport top did for as long as this file existed.
+ *
+ * A card therefore tracks its pack's **centre**: the pack's whole extent maps
+ * onto the half-card either side of its own card, so the card is centred when
+ * the pack is, and hands over to its neighbour half a card either way. That
+ * bound (half a card, never more) is what keeps the highlighted card the
+ * nearest one to the line at every scroll position.
+ */
+import type { PackPalette } from '../../lib/packPalette';
+
+/** One group's vertical extent within the list's scroll content, measured from
+ *  the rendered DOM by the component. */
+export interface SectionExtent {
+    /** Group id: a pack id, `''` for "in no pack", `RECENTS_ID` for recents. */
+    id: string;
+    /** Distance from the top of the scroll content to this section's top, px. */
+    top: number;
+    /** Height, px. Always > 0: `groupByPack` drops empty groups, so a zero
+     *  here is a measurement fault, and these functions clamp rather than
+     *  divide by it. */
+    height: number;
+}
+
+export interface WheelGeometry {
+    /** Uniform per-card advance (card height + gap), px. */
+    cardAdvance: number;
+    /**
+     * Distance from the top of the wheel's scroll content to the first card's
+     * top, px: the wheel's leading pad.
+     *
+     * The pad is half a viewport minus half a card, which is what lets the
+     * *first* and *last* cards reach the centre. Without it the wheel can only
+     * centre the cards in its middle, and every mapping near an end lands on a
+     * clamp instead: the stack sits against the top of the column, and the
+     * focused card drifts away from the centre exactly when the list is at a
+     * boundary. Measured from the DOM alongside `cardAdvance`, so the mapping
+     * cannot disagree with the layout it describes.
+     */
+    wheelLead: number;
+    /** The wheel scrollport's height, px. */
+    wheelViewport: number;
+    /** The list scrollport's height, px. */
+    listViewport: number;
+    /**
+     * How far each pane can actually scroll, read from the DOM.
+     *
+     * **Measured, not inferred.** Deriving these from `sections` looks
+     * equivalent and is not: a scrollport's real range includes padding, gaps
+     * and trailing space that section extents know nothing about, and any
+     * disagreement makes the mapping quietly stop moving the pane it drives
+     * (`wheelMax` reading 0 pins the wheel; a short `listMax` clamps every jump
+     * to the same place). If it comes from the DOM, it cannot drift from it.
+     */
+    listScrollMax: number;
+    wheelScrollMax: number;
+    /** Sections in render order. Empty when the search matches nothing. */
+    sections: SectionExtent[];
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * One CSS `LayoutUnit`: 1/64 px, the quantum the engine lays out in. No
+ * difference smaller than this describes anything that could be drawn
+ * differently.
+ */
+const LAYOUT_EPSILON = 1 / 64;
+
+/**
+ * Whether two geometries describe the same layout, to within what a layout can
+ * express.
+ *
+ * Exists because these numbers are measured fractionally. An exact comparison
+ * would call a sub-pixel reflow a change, write it, and keep the frame loop
+ * awake over differences no pixel can show, where whole-px metrics used to
+ * absorb that chatter by rounding it away.
+ */
+export function sameGeometry(a: WheelGeometry, b: WheelGeometry | null): boolean {
+    if (!b) return false;
+    const near = (x: number, y: number) => Math.abs(x - y) < LAYOUT_EPSILON;
+    return (
+        near(a.cardAdvance, b.cardAdvance) &&
+        near(a.wheelLead, b.wheelLead) &&
+        near(a.wheelViewport, b.wheelViewport) &&
+        near(a.listViewport, b.listViewport) &&
+        near(a.listScrollMax, b.listScrollMax) &&
+        near(a.wheelScrollMax, b.wheelScrollMax) &&
+        a.sections.length === b.sections.length &&
+        a.sections.every(
+            (s, i) =>
+                s.id === b.sections[i].id &&
+                near(s.top, b.sections[i].top) &&
+                near(s.height, b.sections[i].height),
+        )
+    );
+}
+
+/**
+ * Where the focus line sits, as a fraction of each pane's height.
+ *
+ * The middle, and the same for both panes, because that is the relation being
+ * modelled: **the pack across the middle of the list is the pack whose card is
+ * across the middle of the wheel.**
+ *
+ * Not a quarter of the way down, which was tried. The wheel needs the line
+ * centred more than the list needs it high: a quarter leaves only a quarter of
+ * the column above the line, so any pack more than a few back is scrolled off
+ * the top of it, and the remaining three-quarters below sits empty. The bands
+ * inherit the same skew and fan steeply downward. A rolodex wants to fan
+ * symmetrically about its focus.
+ */
+export const FOCUS_LINE = 0.5;
+
+/**
+ * The band of colour joining the focused card to the section it points at,
+ * in the coordinates of the box both panes sit in.
+ *
+ * The wheel compresses: a card is one uniform height whatever the size of the
+ * pack behind it. The ribbon is that compression made visible: it leaves the
+ * card at card height and arrives at the section at section height, so a big
+ * pack fans out and a small one pinches in, and scrolling reshapes it
+ * continuously as the focus moves.
+ */
+export interface Ribbon {
+    /** The card's trailing edge, and the extent it leaves at. */
+    x0: number;
+    top0: number;
+    bottom0: number;
+    /** The section's leading edge, and the extent it arrives at. */
+    x1: number;
+    top1: number;
+    bottom1: number;
+}
+
+/**
+ * Where the panes sit and how wide a card is, in the coordinates of the box
+ * that holds them both, with the two exceptions at the end, which are what
+ * place that box in the viewport.
+ *
+ * Layout, not position: every field here changes only when something resizes,
+ * so it is measured on the resize observer and never in the frame loop. That is
+ * what lets a band be *computed* rather than read back: the alternative,
+ * asking the DOM for each card's and section's rectangle every frame, both
+ * forces a synchronous layout and returns the card transforms from the frame
+ * before, since those are applied after the loop yields.
+ */
+export interface PaneLayout {
+    /** The wheel scrollport's vertical extent. */
+    wheelTop: number;
+    wheelBottom: number;
+    /** The list scrollport's vertical extent. */
+    listTop: number;
+    listBottom: number;
+    /** The vertical line every card's trailing edge sits on. One number for
+     *  every card at every scale, because the rolodex curve is anchored there
+     *  (`transform-origin: right center`); a card recedes by shrinking away
+     *  from this edge, never across it. */
+    cardRight: number;
+    /** Where a section's leading edge is. */
+    sectionLeft: number;
+    /** A card's own height, which is the advance less the gap between cards. */
+    cardHeight: number;
+    /**
+     * Each card's own top, in the wheel's scroll-content coordinates:
+     * **measured per card, never extrapolated from a pitch.**
+     *
+     * `cardAdvance` is the right model for the *mapping*, where the wheel
+     * really is uniform by design. It is the wrong one for locating a painted
+     * box. Layout is uniform in fractional CSS px, but paint snaps each box to
+     * the device-pixel grid on its own, so off 100% zoom the painted pitch is
+     * not uniform at all (52, 51, 52, 52, 51), and no single number describes
+     * it however precisely it is measured. Worse, locating card `i` at
+     * `i · cardAdvance` multiplies whatever error the pitch carries by the
+     * card's index, so a band that leaves its first card cleanly is pixels away
+     * from its sixth. Measuring the line costs one rect per card on a resize
+     * and makes both problems unrepresentable.
+     */
+    cardTops: number[];
+    /** Where a card's leading edge is. Cards share one column, so one number
+     *  serves them all: the counterpart of `sectionLeft`. */
+    cardLeft: number;
+    /** The explorer's own box. The field is sized to this in both axes, so
+     *  every surface that samples it is sampling the same image, which is what
+     *  an angled beam needs, since it varies across x as well as y. */
+    width: number;
+    height: number;
+    /**
+     * The explorer's top-left in *viewport* coordinates: where the field is
+     * anchored, as `width` and `height` are how large it is.
+     *
+     * Every other number here is explorer-local, because that is the frame the
+     * bands are drawn in. These two cannot be: the sections hold the field still
+     * with `background-attachment: fixed`, whose positioning area is the
+     * viewport, so the offset that places the image has to be expressed there.
+     * Measured with the rest of the layout, which is what keeps it a constant
+     * between resizes rather than something the frame loop has to publish.
+     */
+    viewportLeft: number;
+    viewportTop: number;
+}
+
+/**
+ * One pack's band, ready to draw.
+ *
+ * There is one of these per pack *on screen*, not one for the focused pack. A
+ * single band would have to change hands whenever the focus did, and the two
+ * cards it would move between are a whole card apart at that moment: every
+ * pack boundary would flick it across that gap. Drawing them all makes that
+ * transition unrepresentable: a pack leaving has its band shrink to nothing as
+ * its last row goes, while the next one's grows from nothing.
+ */
+export interface PackBand {
+    /** The group's id, as a list key. */
+    id: string;
+    ribbon: Ribbon;
+    /** The pack's palette, and the fade its own card is under, so a band sinks
+     *  into the modal's black exactly as the card it leaves does. The band is
+     *  the middle of the pack, so it is filled and rimmed like the card and
+     *  the section either side of it. */
+    palette: PackPalette;
+    opacity: number;
+}
+
+/**
+ * How thick the pack's rim of light is, px.
+ *
+ * Lives here rather than in the stylesheet because the three columns carve the
+ * rim two different ways (the card and the section as a border width, the band
+ * as a clip-path computed from this file), and one number reaching CSS through
+ * `--pack-rim-width` is one number, where a token beside the palette and a
+ * constant here would be the same number written twice.
+ */
+export const PACK_RIM = 2;
+
+/** One of the ribbon's edges, displaced. Positive offsets move down the
+ *  screen, so a rim inside the bottom edge is a negative one. */
+interface RibbonLevel {
+    edge: 'top' | 'bottom';
+    offset: number;
+}
+
+/**
+ * The closed region between two ribbon-parallel curves: two cubics with their
+ * control points on the midline, which is what gives the band a settled S-curve
+ * instead of a wedge.
+ *
+ * Both curves share the same control abscissa, so the two edges bend in step and
+ * the strip keeps an even thickness through the turn.
+ *
+ * Always wound the same way (left to right along `upper`, back along `lower`)
+ * so that two strips in one path still fill where they overlap under the nonzero
+ * rule. A band pinched thinner than twice the rim is the case that needs it.
+ */
+function ribbonStrip(r: Ribbon, upper: RibbonLevel, lower: RibbonLevel): string {
+    const mid = (r.x0 + r.x1) / 2;
+    const ends = (l: RibbonLevel): [number, number] =>
+        l.edge === 'top'
+            ? [r.top0 + l.offset, r.top1 + l.offset]
+            : [r.bottom0 + l.offset, r.bottom1 + l.offset];
+    const [u0, u1] = ends(upper);
+    const [l0, l1] = ends(lower);
+    return (
+        `M ${r.x0} ${u0}` +
+        ` C ${mid} ${u0}, ${mid} ${u1}, ${r.x1} ${u1}` +
+        ` L ${r.x1} ${l1}` +
+        ` C ${mid} ${l1}, ${mid} ${l0}, ${r.x0} ${l0}` +
+        ` Z`
+    );
+}
+
+/** The whole ribbon: the strip from its top edge to its bottom one. What the
+ *  band's surface fills. */
+export function ribbonPath(r: Ribbon): string {
+    return ribbonStrip(r, { edge: 'top', offset: 0 }, { edge: 'bottom', offset: 0 });
+}
+
+/**
+ * The ribbon's rim: a strip inside its top edge and another inside its bottom,
+ * as one path. What the band's *light* is clipped to.
+ *
+ * The two vertical ends carry no rim, because they are interior to the pack:
+ * the ribbon is the middle of a shape that begins at the card and finishes at
+ * the section, and a cap at either end would rule a line straight down the join
+ * the whole design exists to make continuous. The card and the section suppress
+ * their own facing edges the same way, by carrying no border there.
+ */
+export function ribbonRimPath(r: Ribbon, width = PACK_RIM): string {
+    return (
+        ribbonStrip(r, { edge: 'top', offset: 0 }, { edge: 'top', offset: width }) +
+        ' ' +
+        ribbonStrip(r, { edge: 'bottom', offset: -width }, { edge: 'bottom', offset: 0 })
+    );
+}
+
+/**
+ * What the rim leaves: the ribbon inside both strips, which is where the band
+ * carries the light at the body's share of it rather than at full strength.
+ *
+ * Spelled out as its own region because the band's rim is a clip and not a
+ * border. The card and the section state the same two strengths as one mask,
+ * whose partial alpha inside the ring is what a box can express and a curve
+ * cannot; a clip-path is all or nothing, so the two strengths have to become
+ * two regions. Disjoint ones: the core begins exactly where the rim ends, so
+ * that neither is painted over the other.
+ *
+ * Where the band is pinched thinner than two rims the core inverts and collapses
+ * to nothing of consequence: the rim strips have met and already cover the
+ * whole thickness, and the ribbon's own clip bounds whatever the crossing
+ * describes.
+ */
+export function ribbonCorePath(r: Ribbon, width = PACK_RIM): string {
+    return ribbonStrip(r, { edge: 'top', offset: width }, { edge: 'bottom', offset: -width });
+}
+
+/**
+ * Trim a section's extent to what the list is actually showing.
+ *
+ * A pack taller than the viewport runs off both ends of it, and a ribbon drawn
+ * to the untrimmed extent would fan out past the scrollport onto the search
+ * field and the dialog's edge. `null` when the section is off-screen entirely,
+ * which is the case where there is nothing to draw.
+ */
+export function visibleSpan(
+    top: number,
+    bottom: number,
+    portTop: number,
+    portBottom: number,
+): { top: number; bottom: number } | null {
+    const t = Math.max(top, portTop);
+    const b = Math.min(bottom, portBottom);
+    return b > t ? { top: t, bottom: b } : null;
+}
+
+/** The furthest either pane can be scrolled. Zero when its content fits, which
+ *  is what makes a short wheel inert rather than a special case. */
+export function listMax(g: WheelGeometry): number {
+    return Math.max(0, g.listScrollMax);
+}
+export function wheelMax(g: WheelGeometry): number {
+    return Math.max(0, g.wheelScrollMax);
+}
+
+/**
+ * Which section contains list *content* coordinate `y`, and how far through it
+ * in `[0, 1)`. The shared core of both directions.
+ *
+ * Clamps at both ends: a `y` above the first section reads as its start, below
+ * the last as its end. `null` only when there are no sections at all.
+ */
+export function sectionAt(
+    y: number,
+    sections: SectionExtent[],
+): { index: number; fraction: number } | null {
+    if (sections.length === 0) return null;
+    if (y < sections[0].top) return { index: 0, fraction: 0 };
+    // Searched from the end for the last section that has *begun*, rather than
+    // for the one containing `y`. The difference is everything the sections do
+    // not cover: the list is a flex column with a gap, so between every pair is
+    // a band belonging to neither, and the trailing spacer is one more. A
+    // containment test matches nothing there and has to fall out of the loop
+    // onto some answer, which was "the last section", throwing the wheel to
+    // its far end for as long as the focus line was in a 12px gap.
+    for (let i = sections.length - 1; i >= 0; i--) {
+        const s = sections[i];
+        if (y >= s.top) {
+            // Clamped, so a gap reads as the end of the section above it and
+            // the next reads as its own start, the same wheel position, which
+            // is what makes crossing one cost no movement at all.
+            return { index: i, fraction: s.height > 0 ? clamp((y - s.top) / s.height, 0, 1) : 0 };
+        }
+    }
+    return { index: 0, fraction: 0 };
+}
+
+/** The list content coordinate currently on the focus line. */
+function listFocus(listScrollTop: number, g: WheelGeometry): number {
+    return listScrollTop + g.listViewport * FOCUS_LINE;
+}
+
+/** The wheel content coordinate currently on the focus line. */
+function wheelFocus(wheelScrollTop: number, g: WheelGeometry): number {
+    return wheelScrollTop + g.wheelViewport * FOCUS_LINE;
+}
+
+/** Where card `slot` sits in the wheel's scroll content. Fractional slots are
+ *  meaningful: 1.5 is the point halfway between the second and third cards,
+ *  which is where the wheel rests halfway between two packs. */
+function cardCentre(slot: number, g: WheelGeometry): number {
+    return g.wheelLead + (slot + 0.5) * g.cardAdvance;
+}
+
+/** The pads the wheel needs for its first and last cards to reach the focus
+ *  line. Asymmetric, because the line is: the component applies them, and
+ *  `wheelLead` is the measurement of the top one, which is what the mapping
+ *  reads. */
+export function wheelPadTop(g: WheelGeometry): number {
+    return Math.max(0, g.wheelViewport * FOCUS_LINE - g.cardAdvance / 2);
+}
+export function wheelPadBottom(g: WheelGeometry): number {
+    return Math.max(0, g.wheelViewport * (1 - FOCUS_LINE) - g.cardAdvance / 2);
+}
+
+/**
+ * List scrollTop → the wheel scrollTop that puts the same section under the
+ * wheel's centre.
+ *
+ * Clamped into `[0, wheelMax]`, so when the wheel's cards fit their viewport
+ * this is constantly 0 and the wheel simply does not move.
+ */
+export function listToWheel(listScrollTop: number, g: WheelGeometry): number {
+    const at = sectionAt(listFocus(listScrollTop, g), g.sections);
+    if (!at) return 0;
+    // `- 0.5` because a card tracks its pack's *centre*: the pack's whole
+    // extent maps onto the half-card either side of its own card, so the card
+    // is on the line at `fraction = 0.5` and hands over to its neighbour half a
+    // card either way. Dropping the term instead ties the card to the pack's
+    // start, which puts the wheel on a *boundary between* two cards whenever a
+    // pack starts: the state a tap produces.
+    const centre = cardCentre(at.index + at.fraction - 0.5, g);
+    return clamp(centre - g.wheelViewport * FOCUS_LINE, 0, wheelMax(g));
+}
+
+/**
+ * The inverse of {@link listToWheel} on the interior where neither side is
+ * clamped. **Not a total inverse**: wherever either pane saturates, the round
+ * trip lands at the clamp instead of where it started, because the mapping is a
+ * compression (a tall section occupies one card either way).
+ */
+export function wheelToList(wheelScrollTop: number, g: WheelGeometry): number {
+    if (g.sections.length === 0) return 0;
+    // The inverse of `cardCentre(index + fraction - 0.5)`.
+    const centre = wheelFocus(wheelScrollTop, g) - g.wheelLead;
+    const raw = g.cardAdvance > 0 ? centre / g.cardAdvance : 0;
+    const index = clamp(Math.floor(raw), 0, g.sections.length - 1);
+    const fraction = clamp(raw - index, 0, 1);
+    const s = g.sections[index];
+    return clamp(s.top + fraction * s.height - g.listViewport * FOCUS_LINE, 0, listMax(g));
+}
+
+/**
+ * The list scrollTop that a tap on card `index` commands: the section centred
+ * on the focus line.
+ *
+ * **Centred, not aligned to the viewport top.** This was the oldest bug in the
+ * explorer. Everything else anchors on the centre, and a jump that put the
+ * section's top at the top of the viewport left the line half a viewport
+ * lower, inside the *next* pack, for any pack shorter than the viewport. So
+ * tapping a card selected its neighbour, scrolled the wheel to a card nobody
+ * had touched, and drew the projection to that one. Landing the section's *top*
+ * on the line instead fixes the selection but drops the pack below the middle
+ * of the screen, with its predecessor filling everything above.
+ *
+ * A jump target has to satisfy the same anchor the highlight reads, or the two
+ * disagree by construction. The end spacers are what make this reachable for
+ * the first and last packs.
+ */
+export function scrollTopForSection(index: number, g: WheelGeometry): number {
+    const s = g.sections[clamp(index, 0, g.sections.length - 1)];
+    if (!s) return 0;
+    return clamp(s.top + (s.height - g.listViewport) / 2, 0, listMax(g));
+}
+
+/** The section under the list viewport's centre, for highlighting its card.
+ *  `null` when there are no sections. */
+export function focusedSection(listScrollTop: number, g: WheelGeometry): number | null {
+    return sectionAt(listFocus(listScrollTop, g), g.sections)?.index ?? null;
+}
+
+/**
+ * The rolodex transform for card `index` at a given wheel position.
+ *
+ * Derived arithmetically rather than from a per-card `getBoundingClientRect`,
+ * so styling every card costs no layout. `t` is the card centre's signed
+ * distance from the scrollport centre, normalized so ±1 is the scrollport edge.
+ *
+ * The card at the centre is the one the list is showing, so it alone is at full
+ * strength; the rest recede. `opacity` is how they recede, and against the
+ * picker's black slab that reads as sinking into the background rather than
+ * merely going faint, which is the point, since a column of saturated pack
+ * colours at equal weight has no focus at all. The falloff is superlinear so
+ * the neighbours stay legible while the far ends genuinely go dark.
+ */
+export interface CardCurve {
+    t: number;
+    rotateX: number;
+    scale: number;
+    opacity: number;
+    /**
+     * Where this card's top edge sits inside the wheel's scrollport, px.
+     *
+     * What lets a card's background belong to the *pane* rather than to the
+     * card. Paint applied in card coordinates travels with the card, so it looks
+     * identical whether the wheel is still or flying and there is nothing for the
+     * eye to read as a surface catching light. Offsetting the paint by this
+     * anchors it to the column instead: the light stays where it is and the
+     * cards slide under it, which is the whole of the effect.
+     */
+    paneY: number;
+}
+
+/** A card with nothing applied to it. What a card renders as while the
+ *  geometry has not caught up with a group list that just changed: flat and
+ *  full strength, rather than collapsed to a scale of zero. */
+export const FLAT_CURVE: CardCurve = { t: 0, rotateX: 0, scale: 1, opacity: 1, paneY: 0 };
+
+/**
+ * How far the eye sits from the rolodex, px: the card's own `perspective()`.
+ *
+ * Here rather than in the card's stylesheet because the band has to leave from
+ * the card's *painted* edge, and cannot work out where that is without it.
+ * `PackCard` reads it back for the transform, so the two cannot disagree.
+ */
+const CARD_PERSPECTIVE = 420;
+
+/**
+ * The rolodex curve as CSS, and the origin it is taken about.
+ *
+ * Stated here rather than in the card's markup because {@link cardEdge} is a
+ * hand-worked copy of what the compositor does with this exact transform list,
+ * and a copy is only safe while the two cannot be edited apart. The origin
+ * travels with it for the same reason and is the easier one to lose: `cardEdge`
+ * projects about the card's centre and the band leaves from a fixed abscissa,
+ * and *both* of those are true only because the origin is the trailing edge.
+ * Moving it would leave every band drawn from a line no card is on, with
+ * nothing in this file mentioning the property that did it.
+ */
+export function cardTransform(curve: CardCurve): { transform: string; origin: string } {
+    return {
+        transform: `perspective(${CARD_PERSPECTIVE}px) rotateX(${curve.rotateX}deg) scale(${curve.scale})`,
+        origin: 'right center',
+    };
+}
+
+/**
+ * A card's trailing edge as it is actually drawn, as offsets from its centre.
+ *
+ * `scale` and `rotateX` describe the card before the perspective divide, and
+ * that divide is not symmetric: the edge turning toward the eye is magnified
+ * and the one turning away is shrunk. So a card paints shorter than
+ * `cardHeight * scale` and off-centre about its own middle; a band leaving
+ * from half that height overshoots the shape drawn at both ends, by a couple of
+ * pixels that a flat opaque card hid and a tinted one with a lit rim does not.
+ */
+export function cardEdge(curve: CardCurve, cardHeight: number): { top: number; bottom: number } {
+    const half = (cardHeight * curve.scale) / 2;
+    const radians = (curve.rotateX * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    // `rotateX` sends local y to (y·cos, z = y·sin) and the perspective divides
+    // by `1 - z/p`. That denominator cannot approach zero here (`y` is half a
+    // card and `p` is hundreds of pixels), so there is no degenerate case.
+    const project = (y: number) => (y * cos) / (1 - (y * sin) / CARD_PERSPECTIVE);
+    return { top: project(-half), bottom: project(half) };
+}
+
+export function cardCurve(index: number, wheelScrollTop: number, g: WheelGeometry): CardCurve {
+    // Normalized against the *longer* side of the focus line, so `t` reaches
+    // ±1 at the far edge of the column rather than saturating partway down it.
+    const span = g.wheelViewport * Math.max(FOCUS_LINE, 1 - FOCUS_LINE);
+    const t =
+        span > 0 ? clamp((cardCentre(index, g) - wheelFocus(wheelScrollTop, g)) / span, -1, 1) : 0;
+    const away = Math.abs(t);
+    return {
+        t,
+        // Cards tilt away from the viewer toward the ends, the way a physical
+        // rolodex reads.
+        rotateX: -t * 34,
+        scale: 1 - away * 0.16,
+        opacity: 1 - Math.pow(away, 1.5) * 0.82,
+        paneY: cardCentre(index, g) - g.cardAdvance / 2 - wheelScrollTop,
+    };
+}
+
+/** Everything about the two panes at one instant, as read from the DOM. */
+export interface Sample {
+    listScrollTop: number;
+    wheelScrollTop: number;
+    /** Which pane the artist is driving. Taken from input events rather than
+     *  from scroll events: a scroll event cannot tell a finger from the echo
+     *  of a programmatic write, and a `pointerdown` can. */
+    driver: 'list' | 'wheel';
+}
+
+/** Where both panes belong, and how every card should be drawn there. */
+export interface Frame {
+    listScrollTop: number;
+    wheelScrollTop: number;
+    focused: number | null;
+    curves: CardCurve[];
+}
+
+/**
+ * The whole presentation of one frame, from one sample.
+ *
+ * This exists to make a timing bug unspeakable rather than to add behaviour:
+ * every part of it was already computed by the functions above, but each was
+ * called at a different moment, from a different source, on a different
+ * schedule: the wheel's position from the list's `scroll` event, the card
+ * transforms from the wheel's own `scroll` event a frame later, the highlight
+ * from a third read. A programmatic `scrollTop` write lands synchronously while
+ * the `scroll` event it provokes does not, so the transforms described where
+ * the cards had been rather than where they now were, for one painted frame per
+ * write. Composing the four here means they cannot be fed different numbers.
+ *
+ * The driven pane's position is derived; the driver's is passed through
+ * untouched, so nothing ever writes back to the pane under the artist's hand.
+ * `curves` and `focused` are computed from the *results*, not the sample, so
+ * they describe where the panes are going in this frame rather than where they
+ * came from.
+ */
+export function present(sample: Sample, g: WheelGeometry): Frame {
+    const listScrollTop =
+        sample.driver === 'wheel' ? wheelToList(sample.wheelScrollTop, g) : sample.listScrollTop;
+    const wheelScrollTop =
+        sample.driver === 'wheel' ? sample.wheelScrollTop : listToWheel(listScrollTop, g);
+    return {
+        listScrollTop,
+        wheelScrollTop,
+        focused: focusedSection(listScrollTop, g),
+        curves: g.sections.map((_, i) => cardCurve(i, wheelScrollTop, g)),
+    };
+}
+
+/**
+ * A band for every pack on screen, from the same numbers the wheel is being
+ * driven with this frame.
+ *
+ * Computed, not measured. Both ends therefore describe where their pane will be
+ * once this frame is painted, rather than where the DOM says it was before the
+ * frame's `scrollTop` write, and the card end matches the card's *painted*
+ * edge, projected by its own curve, instead of the upright box a tilted card
+ * still reports.
+ *
+ * **Both ends abut; neither overlaps.** A pack's surface carries alpha, so it
+ * may be painted over any pixel once and only once: two of them stacked is not
+ * the same colour twice, it is a darker colour, and an overlap is a strip of
+ * that darker colour down the very join the projection exists to make
+ * invisible. A band used to run a few pixels under its section to buy immunity
+ * to the half-pixel seam subpixel layout can open between boxes that merely
+ * abut. That trade only held while every surface was opaque: it exchanges a
+ * seam that might appear for a doubling that always does, and it showed on
+ * every pack except the derived ones, which wear the theme's opaque greys. Two
+ * edges on one measured coordinate antialias to full coverage between them, and
+ * whatever residue is left is a fraction of a tint rather than a tint twice.
+ *
+ * A pack contributes nothing when either end has scrolled out of its pane,
+ * which is what makes the set of bands change continuously: one shrinks away as
+ * its last row leaves while the next grows from nothing.
+ */
+/** Card `i`'s measured top, falling back to the uniform pitch only when the
+ *  line is short, which happens for the frame between a pack being added and
+ *  the resize observer measuring it, and never once the two agree. */
+function cardTop(l: PaneLayout, g: WheelGeometry, i: number): number {
+    return l.cardTops[i] ?? g.wheelLead + i * g.cardAdvance;
+}
+
+export function packBands(
+    frame: Frame,
+    g: WheelGeometry,
+    l: PaneLayout,
+    packs: Array<{ id: string; palette: PackPalette }>,
+): PackBand[] {
+    const out: PackBand[] = [];
+    const n = Math.min(packs.length, g.sections.length, frame.curves.length);
+    for (let i = 0; i < n; i++) {
+        const s = g.sections[i];
+        const top = l.listTop + s.top - frame.listScrollTop;
+        const arrives = visibleSpan(top, top + s.height, l.listTop, l.listBottom);
+        if (!arrives) continue;
+
+        // The card's *own* box, not the slot it occupies. A slot is the card
+        // plus the gap to the next one, so its centre sits half a gap below the
+        // card's, enough to ride visibly low against every card in the column.
+        // The mapping is free to think in slots, since a uniform offset there
+        // is invisible; a band drawn against a card is not.
+        //
+        // And the card's edge as the perspective paints it, not as its scale
+        // alone would put it: the two agree only on the focused card, and
+        // everywhere else the band would leave from a line the card is not
+        // drawing.
+        //
+        // The card's top comes from `cardTops`, which is measured. Reading it
+        // from the pitch instead would put card `i` off by `i` times whatever
+        // the pitch rounded away (see `PaneLayout.cardTops`).
+        const centre =
+            l.wheelTop + cardTop(l, g, i) + l.cardHeight / 2 - frame.wheelScrollTop;
+        const edge = cardEdge(frame.curves[i], l.cardHeight);
+        const leaves = visibleSpan(
+            centre + edge.top,
+            centre + edge.bottom,
+            l.wheelTop,
+            l.wheelBottom,
+        );
+        if (!leaves) continue;
+
+        out.push({
+            id: packs[i].id,
+            palette: packs[i].palette,
+            opacity: frame.curves[i].opacity,
+            ribbon: {
+                x0: l.cardRight,
+                top0: leaves.top,
+                bottom0: leaves.bottom,
+                x1: l.sectionLeft,
+                top1: arrives.top,
+                bottom1: arrives.bottom,
+            },
+        });
+    }
+    return out;
+}

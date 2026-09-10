@@ -1,5 +1,5 @@
 //! A set of pixel-bearing node ids whose GPU textures must be kept alive
-//! while an undo action sits on the stack — and disposed when the action
+//! while an undo action sits on the stack, and disposed when the action
 //! is evicted, *if* the subtree they belong to is currently detached from
 //! the document tree.
 //!

@@ -52,7 +52,7 @@ fn flood_fill_after_upward_resize_does_not_panic() {
     let layer = engine.add_raster_layer(None);
 
     // Expand upward, doubling height: canvas window (0, -32, 64×64); the layer
-    // extent stays at (0, 0, 64×32) — resize only moves the window in the plane.
+    // extent stays at (0, 0, 64×32); resize only moves the window in the plane.
     engine.resize_canvas(CanvasRect::from_xywh(0, -(h as i32), w, 2 * h));
     assert_eq!(engine.canvas_dimensions(), (w, 2 * h));
 

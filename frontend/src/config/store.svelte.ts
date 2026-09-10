@@ -6,7 +6,7 @@ import {
 import { storage, readJson, writeJson } from '../storage';
 import type { Catalog, ParamInfo } from '../engine/protocol_gen';
 
-/** The prefs a settings catalog holds — each section is one catalog with a
+/** The prefs a settings catalog holds: each section is one catalog with a
  *  single entry whose `params` are that section's prefs. */
 export function sectionPrefs(section: Catalog): ParamInfo[] {
     return section.entries[0]?.params ?? [];
@@ -28,7 +28,7 @@ import { validateOverrides } from './validate';
  * layer, so switching editors is just `config.set('app.baseSettings', ...)`.
  *
  * On-disk envelope: `{ "version": <CONFIG_VERSION>, "values": {...} }`.
- * Pre-release we discard mismatched-version files outright (per CLAUDE.md
+ * Pre-release we discard mismatched-version files outright (per CONTRIBUTING.md
  * "No Migrations"); the field exists so post-release migrations have a
  * discriminator to key off.
  */
@@ -58,7 +58,7 @@ class ConfigStore {
     /** Subscribers fired after every mutation. */
     #listeners: ChangeListener[] = [];
 
-    /** True when no base editor has been picked yet — drives the
+    /** True when no base editor has been picked yet. Drives the
      *  first-run PresetPicker. */
     needsPresetChoice = $state(false);
 
@@ -189,8 +189,8 @@ class ConfigStore {
         this.#fire();
     }
 
-    /** Clear every user override **except** `app.baseSettings` — the
-     *  picker choice survives a global reset. */
+    /** Clear every user override **except** `app.baseSettings` (the
+     *  picker choice survives a global reset). */
     resetAllOverrides() {
         config_reset_all();
         const next: Record<string, unknown> = {};
@@ -250,12 +250,12 @@ export const config = new ConfigStore();
 
 /**
  * Resolve an action's effective trigger list. The full binding lives in
- * `hotkeys.<id>` under the three-layer config — defaults.yaml + overlay +
+ * `hotkeys.<id>` under the three-layer config: defaults.yaml + overlay +
  * user override. Multi-binding actions (e.g. `commandPalette` from
  * `$mod+Shift+KeyP` + `$mod+KeyF`) are joined with `|` by the YAML parser;
  * we split them back into a list here.
  *
- * Empty string means "no trigger" — used by overlays that explicitly want to
+ * Empty string means "no trigger", used by overlays that explicitly want to
  * disable a binding the previous layer set (e.g. Photoshop sets
  * `hotkeys.isolateLayer = ""`).
  */
@@ -278,7 +278,7 @@ export function effectiveHotkey(actionId: string): string {
  * a human-readable shortcut string (e.g. `"Shift+R"`, `"Ctrl+A"` / `"Cmd+A"`,
  * `"⌘+click"`). Accepts bindings with an optional site/scope prefix
  * (`"layerPanel:Delete"`, `"@paint:KeyB"`, `"canvas@paint:$mod+drag"`) and
- * strips it before formatting — only the chord is user-facing.
+ * strips it before formatting; only the chord is artist-facing.
  *
  * The chord vocabulary lives in Rust (`config::chord`), because the metadata
  * export ships chords already rendered and a second copy of that table here
@@ -292,10 +292,10 @@ export function formatHotkey(binding: string | undefined): string | undefined {
 }
 
 /**
- * An action's shortcut as shown to the user: its first effective binding,
+ * An action's shortcut as shown to the artist: its first effective binding,
  * formatted. This is the single entry point for anything that displays a
- * hotkey for an action id — menus, the command palette, tooltips. Reactive to
- * the config, so displays re-render whenever the user rebinds or switches
+ * hotkey for an action id: menus, the command palette, tooltips. Reactive to
+ * the config, so displays re-render whenever the artist rebinds or switches
  * editor overlays.
  */
 export function hotkeyLabel(actionId: string): string | undefined {

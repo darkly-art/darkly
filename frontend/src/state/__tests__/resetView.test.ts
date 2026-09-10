@@ -5,7 +5,7 @@ let inst: DarklyInstance;
 beforeEach(() => {
     inst = new DarklyInstance();
     // `requestFrame` schedules a rAF + touches the engine; neither exists in the
-    // node test env. Stub it — we only assert the view-state mutation.
+    // node test env. Stub it; we only assert the view-state mutation.
     inst.requestFrame = vi.fn();
 });
 
@@ -51,7 +51,7 @@ describe('fitToScreen', () => {
 
         expect(inst.panX).toBe(0);
         expect(inst.panY).toBe(0);
-        // Orientation is untouched — this is framing, not a reset.
+        // Orientation is untouched: this is framing, not a reset.
         expect(inst.rotation).toBe(1.234);
         expect(inst.mirrorH).toBe(true);
         // Small doc enlarges past 1:1 to fill the viewport.

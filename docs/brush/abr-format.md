@@ -1,10 +1,10 @@
-# ABR Format — Reverse Engineering Analysis
+# ABR Format: Reverse Engineering Analysis
 
 ## Overview
 
-ABR (Adobe Brush) is a closed, proprietary binary format used by Adobe Photoshop to store brush presets. Adobe has **never published a specification** for versions beyond 1. The official "Adobe Photoshop 6.0 File Formats Specification" (November 2000, included in this repo at `Brush-Converter/ps6ffspecsv2.pdf`, page 50) documents only version 1 — the original format with computed and sampled brushes. Everything about modern ABR (versions 2, 6, 10) has been reverse-engineered by the community.
+ABR (Adobe Brush) is a closed, proprietary binary format used by Adobe Photoshop to store brush presets. Adobe has **never published a specification** for versions beyond 1. The official "Adobe Photoshop 6.0 File Formats Specification" (November 2000, included in this repo at `Brush-Converter/ps6ffspecsv2.pdf`, page 50) documents only version 1: the original format with computed and sampled brushes. Everything about modern ABR (versions 2, 6, 10) has been reverse-engineered by the community.
 
-Despite being proprietary, ABR is the de facto standard for brush distribution. Thousands of brush packs exist in ABR format, and every major art application (Krita, GIMP, Procreate, CSP, Affinity, Substance Painter, 3DCoat) attempts to import them — with varying degrees of failure.
+Despite being proprietary, ABR is the de facto standard for brush distribution. Thousands of brush packs exist in ABR format, and every major art application (Krita, GIMP, Procreate, CSP, Affinity, Substance Painter, 3DCoat) attempts to import them, with varying degrees of failure.
 
 ## File Structure
 
@@ -40,10 +40,10 @@ Versions 3, 4, 5, 7, 8, 9 do not exist. The jump from 2→6 and 6→10 correspon
 ```
 
 Each brush is either:
-- **Type 1: Computed brush** — procedural parameters (diameter, hardness, roundness, angle, spacing). Fixed 14 bytes of data.
-- **Type 2: Sampled brush** — raster image data
+- **Type 1: Computed brush** - procedural parameters (diameter, hardness, roundness, angle, spacing). Fixed 14 bytes of data.
+- **Type 2: Sampled brush** - raster image data
 
-#### Computed Brush (Type 1) — From Official Spec
+#### Computed Brush (Type 1): From Official Spec
 
 ```
 Offset  Size  Field
@@ -55,7 +55,7 @@ Offset  Size  Field
 12      2     hardness        (0-100%)
 ```
 
-This is enough to reconstruct a procedural brush. **No implementation (GIMP, Krita) currently generates brushes from this data** — they all skip type 1 brushes with a "FIXME: support it!" comment.
+This is enough to reconstruct a procedural brush. **No implementation (GIMP, Krita) currently generates brushes from this data**; they all skip type 1 brushes with a "FIXME: support it!" comment.
 
 #### Sampled Brush (Type 2)
 
@@ -63,7 +63,7 @@ This is enough to reconstruct a procedural brush. **No implementation (GIMP, Kri
 Offset  Size  Field
 0       4     miscellaneous   (ignored)
 4       2     spacing         (0-999)
-[v2 only: UCS-2 name — length-prefixed 16-bit characters]
+[v2 only: UCS-2 name - length-prefixed 16-bit characters]
 +0      1     anti-aliasing   (0=off, 1=on)
 +1      8     bounds          (4x int16: top, left, bottom, right)
 +9      16    bounds_long     (4x int32: top, left, bottom, right)
@@ -89,10 +89,10 @@ Modern ABR files use Photoshop's "8BIM" tagged section system:
 
 ```
 [header: version=6/10, subversion=1/2]
-[8BIM section: "samp" — sampled brush tip images]
-[8BIM section: "patt" — pattern/texture data]
-[8BIM section: "desc" — ActionDescriptor brush parameters]
-[optional: "phry" — additional metadata]
+[8BIM section: "samp" - sampled brush tip images]
+[8BIM section: "patt" - pattern/texture data]
+[8BIM section: "desc" - ActionDescriptor brush parameters]
+[optional: "phry" - additional metadata]
 ```
 
 Each 8BIM section:
@@ -103,13 +103,13 @@ Each 8BIM section:
 12      var   data
 ```
 
-#### The `samp` Section — Brush Tip Images
+#### The `samp` Section: Brush Tip Images
 
 Contains one or more sampled brush images. Each brush record:
 ```
 0       4     item_length
-[sub1: 47 bytes fixed header — contains UUID, short coords, unknown]
-[sub2: 301 bytes fixed header — contains UUID, extra metadata]
+[sub1: 47 bytes fixed header - contains UUID, short coords, unknown]
+[sub2: 301 bytes fixed header - contains UUID, extra metadata]
 +0      4     top
 +4      4     left
 +8      4     bottom
@@ -121,7 +121,7 @@ Contains one or more sampled brush images. Each brush record:
 
 The 47/301 byte fixed header contains a UUID that links this brush tip to its descriptor in the `desc` section. The UUID is a standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` ASCII string embedded in the header bytes.
 
-#### The `patt` Section — Patterns/Textures
+#### The `patt` Section: Patterns/Textures
 
 Contains embedded patterns used for texture brushes. Each pattern:
 ```
@@ -143,9 +143,9 @@ Pattern pixel data can be multi-channel (1, 3, or 4 channels) with per-channel R
 
 After the pixel data, patterns may have trailing metadata including vector path blocks (for vector shape masks).
 
-#### The `desc` Section — ActionDescriptors (Brush Parameters)
+#### The `desc` Section: ActionDescriptors (Brush Parameters)
 
-This is the most complex and most valuable section. It contains serialized Photoshop ActionDescriptors — the same binary format Photoshop uses internally for actions, scripts, and preset serialization.
+This is the most complex and most valuable section. It contains serialized Photoshop ActionDescriptors: the same binary format Photoshop uses internally for actions, scripts, and preset serialization.
 
 ```
 0       4     descriptor_version
@@ -157,8 +157,8 @@ This is the most complex and most valuable section. It contains serialized Photo
 ClassID:
   4     name_length     (0 = implicit 4-byte code follows)
   var   class_id        (e.g. "null", "brushPreset", "computedBrush")
-  pad   alignment to 4 bytes (sometimes — heuristic-dependent)
-  4     num_items       (sometimes 2 bytes — heuristic-dependent)
+  pad   alignment to 4 bytes (sometimes, heuristic-dependent)
+  4     num_items       (sometimes 2 bytes, heuristic-dependent)
 
 Per item:
   4/1   key_length      (0 = implicit 4-byte OSType code; or 1-byte compact length)
@@ -182,69 +182,69 @@ Per item:
 **Known descriptor keys (reverse-engineered by community):**
 
 *Brush tip:*
-- `Nm  ` — brush name (TEXT)
-- `Dmtr` — diameter (UntF, pixels)
-- `Hrdn` — hardness (UntF, percent)
-- `Angl` — angle (UntF, degrees)
-- `Rndn` — roundness (UntF, percent)
-- `Spcn` — spacing (UntF, percent)
-- `Intr` — interpreted (bool)
-- `flipX` / `flipY` — flip flags (bool)
+- `Nm  ` - brush name (TEXT)
+- `Dmtr` - diameter (UntF, pixels)
+- `Hrdn` - hardness (UntF, percent)
+- `Angl` - angle (UntF, degrees)
+- `Rndn` - roundness (UntF, percent)
+- `Spcn` - spacing (UntF, percent)
+- `Intr` - interpreted (bool)
+- `flipX` / `flipY` - flip flags (bool)
 
 *Dynamics:*
-- `useTipDynamics` — enable tip dynamics (bool)
-- `szVr` — size variation / size jitter (Objc → descriptor with curve data)
-- `minimumDiameter` — minimum diameter percent (UntF)
-- `angleDynamics` — angle jitter (Objc)
-- `roundnessDynamics` — roundness jitter (Objc)
-- `minimumRoundness` — minimum roundness (UntF)
-- `tiltScale` — tilt scale factor (UntF)
-- `fStp` — flow step? (unknown exact meaning)
-- `jitter` — generic jitter parameter
+- `useTipDynamics` - enable tip dynamics (bool)
+- `szVr` - size variation / size jitter (Objc → descriptor with curve data)
+- `minimumDiameter` - minimum diameter percent (UntF)
+- `angleDynamics` - angle jitter (Objc)
+- `roundnessDynamics` - roundness jitter (Objc)
+- `minimumRoundness` - minimum roundness (UntF)
+- `tiltScale` - tilt scale factor (UntF)
+- `fStp` - flow step? (unknown exact meaning)
+- `jitter` - generic jitter parameter
 
 *Scatter:*
-- `useScatter` — enable scatter (bool)
+- `useScatter` - enable scatter (bool)
 
 *Texture:*
-- `useTexture` — enable texture (bool)
+- `useTexture` - enable texture (bool)
 - Pattern UUID references link to `patt` section entries
 
 *Dual Brush:*
-- `dualBrush` — dual brush settings (Objc → nested descriptor)
+- `dualBrush` - dual brush settings (Objc → nested descriptor)
 
 *Color Dynamics:*
-- `useColorDynamics` — enable color dynamics (bool)
+- `useColorDynamics` - enable color dynamics (bool)
 
 *Paint Dynamics:*
-- `usePaintDynamics` — enable paint dynamics (bool)
+- `usePaintDynamics` - enable paint dynamics (bool)
 
 *Other:*
-- `Wtdg` — wet edges (bool)
-- `Nose` — noise (bool)
-- `Rpt ` — protect texture (bool)
-- `computedBrush` — marks a computed (procedural) brush
-- `brushGroup` / `useBrushGroup` — brush grouping
-- `bVTy` — brush variation type (enum)
+- `Wtdg` - wet edges (bool)
+- `Nose` - noise (bool)
+- `Rpt ` - protect texture (bool)
+- `computedBrush` - marks a computed (procedural) brush
+- `brushGroup` / `useBrushGroup` - brush grouping
+- `bVTy` - brush variation type (enum)
 
 *Curve/dynamics descriptors contain:*
-- `inpt` — input source (enum: pressure, tilt, stylus wheel, etc.)
-- `grad` — gradient curve data (Objc with color stops)
-- `Cl  ` — color (Objc)
-- `Ofst` — offset
-- `Type` — type
-- `Loc ` — location
-- `Mdpn` — midpoint
+- `inpt` - input source (enum: pressure, tilt, stylus wheel, etc.)
+- `grad` - gradient curve data (Objc with color stops)
+- `Cl  ` - color (Objc)
+- `Ofst` - offset
+- `Type` - type
+- `Loc ` - location
+- `Mdpn` - midpoint
 
 ### The Format's Achilles Heel
 
 The ActionDescriptor format is deeply inconsistent:
-- Key lengths are sometimes 4-byte standard, sometimes 1-byte compact — **no reliable way to tell** except heuristics and lookup tables
+- Key lengths are sometimes 4-byte standard, sometimes 1-byte compact; **no reliable way to tell** except heuristics and lookup tables
 - Object name lengths are sometimes 4-byte, sometimes 2-byte
 - ClassID padding is sometimes 4-byte aligned, sometimes compact
 - Boolean values have 0-3 bytes of padding with no flag to indicate how much
 - Number of items in a descriptor is sometimes 4-byte, sometimes 2-byte
 
-The `abr_solver.py` in `Brush-Converter/` handles this through a combination of **known-key lookup tables** and **heuristic probing** — checking if upcoming bytes look like valid keys/types and choosing the interpretation that makes structural sense. This is fragile and version-dependent, explaining why ABR import breaks so often across applications.
+The `abr_solver.py` in `Brush-Converter/` handles this through a combination of **known-key lookup tables** and **heuristic probing**: checking if upcoming bytes look like valid keys/types and choosing the interpretation that makes structural sense. This is fragile and version-dependent, explaining why ABR import breaks so often across applications.
 
 ## State of Community Reverse Engineering
 
@@ -255,7 +255,7 @@ The `abr_solver.py` in `Brush-Converter/` handles this through a combination of 
 | **v1/v2 brush tips** | 100% | Fully documented in official spec |
 | **v1 computed brush params** | 100% | In official spec but rarely implemented |
 | **v6/v10 brush tip images** | ~95% | Well understood, minor edge cases with multi-channel depth |
-| **8BIM section structure** | 100% | samp, patt, desc, phry — all identified |
+| **8BIM section structure** | 100% | samp, patt, desc, phry (all identified) |
 | **Pattern extraction** | ~80% | Multi-channel decode works, vector masks partially understood |
 | **ActionDescriptor structure** | ~70% | Core types parsed, but padding/alignment is heuristic |
 | **Brush parameter keys** | ~60% | Major keys identified, many undocumented ones remain |
@@ -275,21 +275,21 @@ The `abr_solver.py` in `Brush-Converter/` handles this through a combination of 
 
 ### GIMP (`brush/gimp/app/core/gimpbrush-load.c`)
 - **Versions:** 1, 2, 6 (sub 1/2), 10 (sub 1/2)
-- **What it reads:** `samp` section only — brush tip images
+- **What it reads:** `samp` section only (brush tip images)
 - **What it ignores:** `desc` (all dynamics/settings), `patt` (all textures), computed brushes (type 1)
 - **Telling comment, line 911:** `spacing = 25; /* real value needs 8BIMdesc section parser */`
 - **Language:** C (GLib/GIO)
 
 ### Krita (`krita/libs/brush/kis_abr_brush_collection.cpp`)
-- **Versions:** 1, 2, 6 (sub 1/2) — **v10 not supported**
-- **What it reads:** `samp` section only — brush tip images, converted to grayscale QImage
+- **Versions:** 1, 2, 6 (sub 1/2); **v10 not supported**
+- **What it reads:** `samp` section only (brush tip images), converted to grayscale QImage
 - **What it ignores:** Everything else. Comment: `XXX: call extra setters`
 - **Limitations:** Read-only, not serializable, no individual brush loading
 - **Language:** C++ (Qt)
 
 ### PSBrushExtract (`brush/PSBrushExtract/psbrushextract.py`)
 - **Approach:** Scans entire file for ActionDescriptor type markers (`UntF`, `bool`, `long`, `doub`, `enum`, `TEXT`, `Objc`, `VlLs`)
-- **What it reads:** All parameter values from `desc` section — key names, types, and values
+- **What it reads:** All parameter values from `desc` section: key names, types, and values
 - **What it doesn't do:** No structured descriptor parsing (no nesting), no image extraction (separate script), no pattern extraction
 - **Output:** Flat list of key-value pairs
 - **Language:** Python, AGPLv3
@@ -313,19 +313,19 @@ The `abr_solver.py` in `Brush-Converter/` handles this through a combination of 
 
 **Yes, but with clear expectations.** ABR is the lingua franca of brush distribution. Artists will expect it. But:
 
-1. **Import brush tips — this is the baseline.** Every competitor does this. The `samp` section is well-understood and straightforward to implement (grayscale bitmaps with PackBits RLE).
+1. **Import brush tips: this is the baseline.** Every competitor does this. The `samp` section is well-understood and straightforward to implement (grayscale bitmaps with PackBits RLE).
 
-2. **Import patterns/textures from `patt` section** — this goes beyond what GIMP/Krita do and would be a differentiator.
+2. **Import patterns/textures from `patt` section**: this goes beyond what GIMP/Krita do and would be a differentiator.
 
-3. **Parse descriptors from `desc` section** — this is the hardest part but also the most valuable. Even partial extraction of spacing, diameter, hardness, angle, dynamics enables would make our import dramatically better than competitors.
+3. **Parse descriptors from `desc` section**: this is the hardest part but also the most valuable. Even partial extraction of spacing, diameter, hardness, angle, dynamics enables would make our import dramatically better than competitors.
 
 4. **Don't try to write ABR.** The format is too fragile and heuristic-dependent for reliable round-tripping. Use our own format for presets.
 
 ### Should Our Brush System Be Inspired by ABR?
 
-**No.** ABR is a serialization format, not a brush system design. It reflects Photoshop's internal architecture — which is itself showing its age (the "snowflake engine" problem that Krita inherits).
+**No.** ABR is a serialization format, not a brush system design. It reflects Photoshop's internal architecture, which is itself showing its age (the "snowflake engine" problem that Krita inherits).
 
-What's worth studying from ABR is the **parameter vocabulary** — it represents what the industry considers the minimum viable feature set for a professional brush:
+What's worth studying from ABR is the **parameter vocabulary**; it represents what the industry considers the minimum viable feature set for a professional brush:
 - Tip shape (computed or sampled)
 - Spacing
 - Dynamics mapped to: pressure, tilt, stylus wheel, velocity, fade, etc.
@@ -336,4 +336,4 @@ What's worth studying from ABR is the **parameter vocabulary** — it represents
 - Color dynamics (H/S/B jitter, foreground/background jitter)
 - Wet edges, noise, smoothing
 
-These are the features artists expect. How we implement them should be our own architecture — but this parameter list is the compatibility target.
+These are the features artists expect. How we implement them should be our own architecture, but this parameter list is the compatibility target.

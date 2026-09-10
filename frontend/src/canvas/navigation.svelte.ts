@@ -57,8 +57,8 @@ class NavigationState {
         }
     }
 
-    /** The cursor the canvas should display. While the user is navigating
-     *  (trigger key held) nav owns the cursor outright — otherwise a tool that
+    /** The cursor the canvas should display. While the artist is navigating
+     *  (trigger key held) nav owns the cursor outright: otherwise a tool that
      *  hides the native cursor (e.g. the brush's `'none'`, drawing its own ring)
      *  would shadow the grab/rotate cursor and the drag gesture would show
      *  nothing. Off the nav path, the active tool's cursor wins, falling back to
@@ -115,7 +115,7 @@ class NavigationState {
             );
         }
 
-        return true; // consumed — don't dispatch to tool
+        return true; // consumed: don't dispatch to tool
     }
 
     onPointerMove(e: PointerEvent, canvasEl?: HTMLCanvasElement) {
@@ -170,7 +170,7 @@ class NavigationState {
     /** Unsnapped absolute rotation accumulated over a two-finger gesture.
      *  Driving `app.rotation` from this raw truth (not the snapped previous
      *  value) is what stops small in-zone deltas being swallowed by the
-     *  cardinal dead-zone. Touch-only — the pointer path never touches it. */
+     *  cardinal dead-zone. Touch-only: the pointer path never touches it. */
     private rawRotation = 0;
 
     /** Latched while two fingers have been seen this gesture; survives a
@@ -263,7 +263,7 @@ class NavigationState {
         }
 
         // Rotation: accumulate the angular delta on the unsnapped raw, then
-        // snap for display. No Alt on touch — cardinal detent only.
+        // snap for display. No Alt on touch: cardinal detent only.
         this.rawRotation -= curAngle - prevAngle;
         app.rotation = this.snapCanvasRotation(this.rawRotation, false);
     }

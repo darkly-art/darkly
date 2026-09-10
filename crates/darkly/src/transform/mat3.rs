@@ -1,10 +1,10 @@
-//! Projective (3×3 homography) math — the perspective generalization of the
+//! Projective (3×3 homography) math: the perspective generalization of the
 //! affine helpers in [`super`]. Like its sibling, this module is
 //! **consumer-agnostic**: pure `f32` math, no `gpu`/`layer`/`document` deps.
 //!
 //! Affine is the special case of a [`Mat3`] whose bottom row is `[0, 0, 1]`
 //! (so `w ≡ 1` and the perspective divide is a no-op). The GPU commit path
-//! consumes [`Mat3`] uniformly — perspective falls out of the same shader.
+//! consumes [`Mat3`] uniformly: perspective falls out of the same shader.
 //!
 //! The rect→quad homography ([`homography_from_corners`]) is a port of GIMP's
 //! `gimp_transform_matrix_perspective` (`app/core/gimp-transform-utils.c`),
@@ -46,7 +46,7 @@ pub fn mat3_multiply(a: &Mat3, b: &Mat3) -> Mat3 {
 
 /// Transform a point by a projective matrix, applying the perspective divide.
 /// Returns `(x/w, y/w)`; `w` near zero yields a point at infinity (large
-/// values) — callers that build bounds must clamp (see
+/// values): callers that build bounds must clamp (see
 /// `FloatingContent::transformed_bounds`).
 pub fn mat3_apply(m: &Mat3, x: f32, y: f32) -> (f32, f32) {
     let px = m[0] * x + m[1] * y + m[2];
@@ -85,7 +85,7 @@ pub fn mat3_inverse(m: &Mat3) -> Option<Mat3> {
 /// four destination corners `[TL, TR, BR, BL]` (the source rect's corners at
 /// `(0,0)`, `(w,0)`, `(w,h)`, `(0,h)`).
 ///
-/// Returns `None` on degenerate input — a collapsed quad, or one that folds a
+/// Returns `None` on degenerate input: a collapsed quad, or one that folds a
 /// corner behind the camera (a destination corner whose homogeneous `w` is
 /// non-positive). Both the live drag preview and the final commit gate on
 /// this, so a mid-drag corner sweeping toward infinity can't produce a garbage
@@ -114,7 +114,7 @@ pub fn homography_from_corners(src_w: f32, src_h: f32, corners: [(f32, f32); 4])
 
     // trafo = unit-square → quad (row-major 3×3).
     let trafo: Mat3 = if dx3.abs() < 1e-12 && dy3.abs() < 1e-12 {
-        // Affine (parallelogram) — no perspective term.
+        // Affine (parallelogram): no perspective term.
         [
             t_x2 - t_x1,
             t_x3 - t_x1,

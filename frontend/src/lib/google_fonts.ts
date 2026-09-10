@@ -10,8 +10,8 @@
  * TTF to the engine via the personal font library.
  *
  * The Phase-0 spike proved parley honors a weight scrub against a variable face,
- * so we request a single variable file per family (`css2?family=X:wght@min..max`)
- * — one blob covers every weight.
+ * so we request a single variable file per family (`css2?family=X:wght@min..max`):
+ * one blob covers every weight.
  *
  * Google splits a family's woff2 by unicode subset (one file per script). The
  * engine maps one family → one blob, so we import the **Latin** subset (Darkly's
@@ -30,7 +30,7 @@ export interface CatalogFont {
     category: string;
     axes: CatalogAxis[];
     /** The family ships an italic face (a `*i` style in Google's metadata).
-     *  Italic is a separate face blob, not a variation axis — see `importFont`. */
+     *  Italic is a separate face blob, not a variation axis (see `importFont`). */
     italic: boolean;
     subsets: string[];
     popularity: number;
@@ -54,7 +54,7 @@ export function loadCatalog(): Promise<CatalogFont[]> {
 /** Build a keyless css2 URL for one face of `family`. Requests the full `wght`
  *  range as a single variable file when the family has a `wght` axis (per the
  *  spike); otherwise the static family. `opts.italic` selects the **italic**
- *  face instead of the upright one — Google serves italic via the css2 `ital`
+ *  face instead of the upright one; Google serves italic via the css2 `ital`
  *  pseudo-axis for any family that ships italic files, not only the rare
  *  families with a true `ital` variation axis, so the caller gates this on the
  *  catalog's `italic` flag (see `CatalogFont.italic`), never on the axis list.
@@ -62,7 +62,7 @@ export function loadCatalog(): Promise<CatalogFont[]> {
  *  Deliberately never subsets via `&text=`: that switches Google to the dynamic
  *  `/l/font` endpoint, which is unreliable for cross-origin `@font-face` loads
  *  (its cached edges can omit `Access-Control-Allow-Origin`, so the browser
- *  blocks the font). The plain css2 URL yields the standard `/s/…woff2` — the
+ *  blocks the font). The plain css2 URL yields the standard `/s/…woff2`: the
  *  universally CORS-enabled Google Fonts embed. See [`previewUrl`]. */
 export function cssUrl(family: string, axes: CatalogAxis[], opts: { italic?: boolean } = {}): string {
     const name = family.trim().replace(/\s+/g, '+');
@@ -80,7 +80,7 @@ export function cssUrl(family: string, axes: CatalogAxis[], opts: { italic?: boo
     return `${CSS2}?family=${spec}&display=swap`;
 }
 
-/** Stylesheet URL for previewing a font in its own face — a `<link>` the browser
+/** Stylesheet URL for previewing a font in its own face: a `<link>` the browser
  *  loads natively (no decode). Uses the plain css2 embed (the CORS-safe `/s/`
  *  woff2 path), so it loads the full Latin subset once: a custom preview string
  *  then renders from already-loaded glyphs with no per-keystroke refetch, and no
@@ -98,7 +98,7 @@ function extractFontUrls(css: string): string[] {
     return urls;
 }
 
-/** Pick the Latin subset block's font URL from a css2 response — the `@font-face`
+/** Pick the Latin subset block's font URL from a css2 response: the `@font-face`
  *  whose `unicode-range` covers basic Latin (`U+0000-00FF`). Falls back to the
  *  last URL (Google orders Latin last) when ranges can't be parsed. */
 function pickLatinUrl(css: string): string | null {
@@ -144,7 +144,7 @@ async function importFace(family: string, href: string): Promise<string[]> {
  * (`font.italic`) register a second blob under the same family name, so parley's
  * `FontStyle::Italic` has a real face to shape against. Returns the family names
  * the decoded font contributed (empty on failure). Idempotent via the library's
- * content-hash dedup — importing the same font twice costs nothing.
+ * content-hash dedup: importing the same font twice costs nothing.
  */
 export async function importFont(font: CatalogFont): Promise<string[]> {
     const families = await importFace(font.family, cssUrl(font.family, font.axes));

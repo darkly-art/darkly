@@ -224,7 +224,7 @@
         ctx.fillRect(cx2, cy, W - cx2, cy2 - cy); // right band
     });
 
-    // Refit when the stage resizes (but never mid-drag — the fit is held then).
+    // Refit when the stage resizes (but never mid-drag: the fit is held then).
     $effect(() => {
         void previewW;
         if (!dragging) refit();
@@ -261,7 +261,7 @@
     const ANCHORS = [0, 0.5, 1];
 </script>
 
-<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="md">
+<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="lg">
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="dim-row">
             <label class="field">

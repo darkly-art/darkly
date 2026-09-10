@@ -1,8 +1,8 @@
 <!--
-  Levels editor — a histogram with a single input slider beneath it (black ● /
+  Levels editor: a histogram with a single input slider beneath it (black ● /
   gamma ▲ / white ●), bound to a Levels transfer `[inBlack, inWhite, gamma,
   outBlack, outWhite]`. Only the input triplet is edited here; the output range
-  stays at its defaults. Values are normalized [0,1] except gamma (raw 0.1–10).
+  stays at its defaults. Values are normalized [0,1] except gamma (raw 0.1-10).
 
   Slider interaction is ported from Krita's `KisInputLevelsSliderWithGamma` /
   `KisLevelsSlider` (`libs/widgets/`, Krita team, GPL-3.0): gamma is stored as an
@@ -99,7 +99,7 @@
         ctx.clearRect(0, 0, cv.width, cv.height);
         const bins = histogram;
         if (!bins || bins.length === 0) return;
-        // Linear scale (Krita's default) — raw counts, normalized to the peak.
+        // Linear scale (Krita's default): raw counts, normalized to the peak.
         const max = Math.max(1, ...bins);
         const h = cv.height;
         const n = bins.length;
@@ -110,7 +110,7 @@
         }
     });
 
-    // Groove: the tone the transfer produces across the input range — black
+    // Groove: the tone the transfer produces across the input range, black
     // below inBlack, white above inWhite, pow(t, 1/gamma) between.
     $effect(() => {
         const cv = grooveCanvas;

@@ -1,5 +1,4 @@
 name: Blur
-category: Effects
 description: Softens whatever is already on the layer instead of laying down color.
 nodes:
   pen_input:

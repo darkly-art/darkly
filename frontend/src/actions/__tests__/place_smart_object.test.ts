@@ -28,7 +28,7 @@ import { decodeToRgba, placeSmartObjectFromBlob } from '../place_smart_object';
 // registry (and every tool's options component) in behind it. Imported at the
 // top level, not lazily inside a test: `vi.mock` is hoisted above this either
 // way, and paying that compile inside a test body puts it under the 5s test
-// timeout, where a loaded machine intermittently blows through it — and the
+// timeout, where a loaded machine intermittently blows through it, and the
 // call it left in flight then lands during the *next* test, tripping that one
 // too. Collection has no such deadline.
 import { handleDroppedFile } from '../index';

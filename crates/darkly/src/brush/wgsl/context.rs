@@ -2,7 +2,7 @@
 //!
 //! [`CompileWgslCtx`] is the state struct every node's
 //! `BrushNodeEvaluator::compile_wgsl` is called with. [`NodeWgsl`] is
-//! what the node returns — decls, body lines, output expressions, plus
+//! what the node returns: decls, body lines, output expressions, plus
 //! any per-dab or uniform fields the node contributes. [`InputBinding`]
 //! resolves how a port shows up in emitted WGSL (a substituted upstream
 //! expression vs. a literalized default). [`ShaderMode`] tags which of
@@ -31,7 +31,7 @@ pub struct NodeWgsl {
     /// so the unmodulated disc edge is at `length = 1`), `local_dist: f32`
     /// (= `length(local_uv)`), `theta: f32` (= `atan2(local_uv.y, local_uv.x)`),
     /// `target_pos: vec2<f32>` (fragment's position in the target
-    /// texture's pixel space — canvas px for stroke, mask texels for
+    /// texture's pixel space: canvas px for stroke, mask texels for
     /// preview), and any function declared in `decls` or by upstream
     /// nodes.
     pub body: String,
@@ -48,7 +48,7 @@ pub struct NodeWgsl {
     /// terminal node owns. Spliced into the assembled shader after
     /// the framework's three intrinsic bind groups (group 0: uniforms,
     /// group 1: dabs, group 2: selection). Only the terminal node
-    /// should set this — the per-brush pipeline build must match the
+    /// should set this; the per-brush pipeline build must match the
     /// declared layout. Empty for every non-terminal node.
     ///
     /// Use case: terminals like `watercolor` need bindings
@@ -64,7 +64,7 @@ pub struct NodeWgsl {
     /// the terminal's `body` must then return `FsOut(...)`.
     ///
     /// These are the per-texel accumulators a terminal writes alongside
-    /// the stroke scratch in one instanced draw — the blend unit
+    /// the stroke scratch in one instanced draw; the blend unit
     /// accumulates each under its own law, and the terminal's pipeline
     /// declares a matching colour target per name. Stroke mode only:
     /// the cursor-preview skeleton has no accumulators to write and
@@ -77,10 +77,10 @@ pub struct NodeWgsl {
 /// How an input port resolves when emitting WGSL.
 #[derive(Clone, Debug)]
 pub enum InputBinding {
-    /// Port is wired to an upstream output — substitute this WGSL
+    /// Port is wired to an upstream output, so substitute this WGSL
     /// expression at every use site.
     Wired(String),
-    /// Port is disconnected — embed this authored value as a WGSL
+    /// Port is disconnected, so embed this authored value as a WGSL
     /// constant (or read it as a compile-time enum/string/curve value).
     Default(InputValue),
 }
@@ -98,8 +98,8 @@ impl InputBinding {
 
     /// The concrete `f32` value of an unwired (default) binding, or `None`
     /// when the input is wired (a per-dab expression with no compile-time
-    /// value). Use to read a static parameter as an actual number — e.g. to
-    /// build a compile-time bake-spec key — rather than as a WGSL string.
+    /// value). Use to read a static parameter as an actual number (e.g. to
+    /// build a compile-time bake-spec key) rather than as a WGSL string.
     pub fn as_f32_literal(&self) -> Option<f32> {
         match self {
             Self::Wired(_) => None,
@@ -139,7 +139,7 @@ impl InputBinding {
 
     /// Read a disconnected input's compile-time enum / branch-selector
     /// index. Enum inputs are non-wirable (the connect guard rejects a wire),
-    /// so a `Wired` binding never reaches here — it falls back to `0`.
+    /// so a `Wired` binding never reaches here and simply falls back to `0`.
     pub fn enum_index(&self) -> i32 {
         match self {
             Self::Default(v) => v.as_enum_index(),
@@ -178,11 +178,11 @@ pub struct CompileWgslCtx<'a> {
     /// Output port names that have at least one downstream consumer
     /// in the graph. Nodes whose outputs are produced into the dab
     /// record (pen_input, random) only need to emit fields for
-    /// consumed ports — unwired outputs cost nothing.
+    /// consumed ports; unwired outputs cost nothing.
     pub consumed_outputs: HashSet<String>,
     /// Shared, ordered, deduped accumulator of the `@group(3)` texture
     /// slots the graph's nodes request. Each entry is a
-    /// [`ResolvedSource`] — a named registry texture (`image`) or a
+    /// [`ResolvedSource`]: a named registry texture (`image`) or a
     /// baked procedural tile (`noise`). Mutated through
     /// [`Self::request_source`] / [`Self::request_texture`]; the compiler
     /// reads the final list out after walking every node and copies it
@@ -234,7 +234,7 @@ impl CompileWgslCtx<'_> {
     }
 
     /// Reserve (or look up) a `@group(3)` binding slot for a resolved
-    /// texture source. Returns the slot index — `0` for the first
+    /// texture source. Returns the slot index, `0` for the first
     /// distinct source in the graph, `1` for the second, and so on.
     /// Re-requesting an equal source (same name, or same [`BakeSpec`])
     /// returns the existing slot, so brushes that reference one field
@@ -243,7 +243,7 @@ impl CompileWgslCtx<'_> {
     /// Use the returned index to reference the texture in emitted WGSL
     /// as `graph_tex_{slot}` (the shared sampler is always `graph_smp`).
     /// The compiler resolves each source at per-brush pipeline-build
-    /// time — [`ResolvedSource::Named`] against the
+    /// time: [`ResolvedSource::Named`] against the
     /// [`crate::gpu::texture_registry::TextureRegistry`],
     /// [`ResolvedSource::Baked`] against the bake cache.
     pub fn request_source(&self, source: ResolvedSource) -> u32 {
@@ -256,14 +256,14 @@ impl CompileWgslCtx<'_> {
         idx
     }
 
-    /// Reserve (or look up) a slot for a named registry texture — the
+    /// Reserve (or look up) a slot for a named registry texture, the
     /// [`ResolvedSource::Named`] shim over [`Self::request_source`].
     pub fn request_texture(&self, name: &str) -> u32 {
         self.request_source(ResolvedSource::Named(name.to_string()))
     }
 
     /// Reserve (or look up) a slot for a texture the requesting node
-    /// republishes every flush — the [`ResolvedSource::Live`] shim over
+    /// republishes every flush, the [`ResolvedSource::Live`] shim over
     /// [`Self::request_source`].
     ///
     /// Unlike [`Self::request_texture`], the view is not resolved against
@@ -282,7 +282,7 @@ impl CompileWgslCtx<'_> {
 /// Which of the two compiled shader variants is being assembled.
 ///
 /// The upstream graph contributes the same per-fragment shape /
-/// color / flow expressions in both modes — only the outer skeleton
+/// color / flow expressions in both modes, only the outer skeleton
 /// differs:
 ///
 /// - **`Stroke`**: instanced quad-per-dab vertex stage; `sel` sampled
@@ -293,7 +293,7 @@ impl CompileWgslCtx<'_> {
 ///   terminal bindings.
 ///
 /// The two modes share `node_decls`, `dab_layout`, and
-/// `uniform_layout` — every brush stores both WGSL strings side-by-side
+/// `uniform_layout`; every brush stores both WGSL strings side-by-side
 /// on [`crate::brush::wgsl::CompiledBrush`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ShaderMode {

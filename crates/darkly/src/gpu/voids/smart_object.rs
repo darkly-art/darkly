@@ -1,4 +1,4 @@
-//! Smart object — a placed image that survives being resized.
+//! Smart object: a placed image that survives being resized.
 //!
 //! A thin config over the shared [`crate::gpu::textured_void`] machinery. The
 //! "source texture → inverse-transform sample → layer texture" pipeline lives
@@ -18,7 +18,7 @@
 //! frames or keeps the animation clock running.
 //!
 //! [`ContentFit::Natural`] anchors the image in the document plane at its own
-//! pixel size, so cropping the canvas doesn't slide it across the artwork —
+//! pixel size, so cropping the canvas doesn't slide it across the artwork,
 //! unlike a camera, which is anchored to the window and keeps filling it.
 
 use crate::gpu::textured_void::{self, ContentFit, TexturedVoidConfig};
@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn opts_into_the_transform_gizmo() {
         // The whole feature is "resize it freely", so the layer has to accept a
-        // live transform — that is what `TransformCapability::Live` resolves to.
+        // live transform: that is what `TransformCapability::Live` resolves to.
         assert!(register().supports_live_transform);
     }
 

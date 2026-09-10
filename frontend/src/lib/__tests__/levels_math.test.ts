@@ -65,7 +65,7 @@ describe('handle constraints', () => {
         expect(clampOutput(0.9)).toBeCloseTo(0.9, 6);
         expect(clampOutput(-0.2)).toBe(0);
         expect(clampOutput(1.5)).toBe(1);
-        // Nothing forbids outBlack > outWhite — inversion is allowed.
+        // Nothing forbids outBlack > outWhite; inversion is allowed.
         const outBlack = clampOutput(0.9);
         const outWhite = clampOutput(0.1);
         expect(outBlack).toBeGreaterThan(outWhite);

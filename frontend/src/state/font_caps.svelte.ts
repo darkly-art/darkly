@@ -1,5 +1,5 @@
 /**
- * Font capabilities cache — what a family can do (variable axes + a real italic
+ * Font capabilities cache: what a family can do (variable axes + a real italic
  * face), fetched from the engine's `font_axes` request and cached per family so
  * the text-properties panel can render font-driven controls without refetching
  * on every keystroke.

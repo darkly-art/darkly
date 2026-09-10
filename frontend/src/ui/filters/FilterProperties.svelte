@@ -14,7 +14,7 @@
     const showsLevels = $derived((node.params ?? []).some((p) => p.kind === 'levels'));
     // Stable primitive id: a layer-tree refresh replaces the `node` object but
     // keeps the same id, so keying the effect on this (not `node.id`) stops it
-    // re-running — and re-fetching the histogram — on every param edit.
+    // re-running (and re-fetching the histogram) on every param edit.
     const filterId = $derived(node.id);
 
     let histogramBins = $state<Uint32Array | null>(null);

@@ -3,7 +3,7 @@
  * export readback and encode it to an image Blob off the WASM main thread.
  *
  * `rgbaToBlob` (OffscreenCanvas `putImageData → convertToBlob`) is the single
- * home for RGBA→image encoding — `saveDocument.ts` reuses it for the `.darkly`
+ * home for RGBA→image encoding; `saveDocument.ts` reuses it for the `.darkly`
  * zip's internal `composite.png` too, so the encode core exists once.
  */
 
@@ -17,7 +17,7 @@ const MIME: Record<ImageFormat, string> = {
     webp: 'image/webp',
 };
 
-// JPEG/WebP quality is fixed at 0.92 — the historical export default; PNG is
+// JPEG/WebP quality is fixed at 0.92: the historical export default; PNG is
 // lossless and ignores it.
 const QUALITY = 0.92;
 

@@ -3,12 +3,12 @@
 //! plane, so its repeat period is `BakeSpec::FIELD_SPAN` field units. When that
 //! period was 16 field units the grain visibly tiled; the fix makes the period
 //! large (`FIELD_SPAN = 128`) while leaving the tile *resolution* (memory)
-//! unchanged — the texels stretch across a longer period rather than the tile
+//! unchanged: the texels stretch across a longer period rather than the tile
 //! growing.
 //!
 //! This test fails against the old 16-unit field and passes against the fixed
 //! one, without asserting the constant itself: it bakes the real tile and checks
-//! that a shift of *16 field units* — the entire old repeat period — no longer
+//! that a shift of *16 field units* (the entire old repeat period) no longer
 //! reproduces the field. Under the old period that shift was a full wrap
 //! (perfect self-correlation); under the large period it lands on unrelated
 //! content, as decorrelated as a reference taken half the tile away.
@@ -60,8 +60,8 @@ fn baked_field_does_not_repeat_at_the_old_period() {
     assert!(shift > 0, "old-period shift must be positive");
 
     // Mean |Δ| between each column and the one `shift` texels away (the old
-    // repeat offset), and — as a self-calibrating "unrelated" reference on the
-    // same backend — between each column and the one half a tile away. Half a
+    // repeat offset), and, as a self-calibrating "unrelated" reference on the
+    // same backend, between each column and the one half a tile away. Half a
     // tile is 8 field units under the old period and 64 under the new, so it is
     // guaranteed-unrelated content either way.
     let far = res / 2;
@@ -77,12 +77,12 @@ fn baked_field_does_not_repeat_at_the_old_period() {
     let delta_old_period = mean(shift);
     let delta_unrelated = mean(far);
 
-    // The field must change substantially over the old period — as much as it
+    // The field must change substantially over the old period, as much as it
     // does over a known-unrelated distance. Under the old 16-unit period the
     // shift was a full wrap, so `delta_old_period` was ~0 and this fails.
     assert!(
         delta_old_period > delta_unrelated * 0.5,
         "field still self-similar at the old 16-unit period: Δ@old-period {delta_old_period:.2} \
-         vs Δ@unrelated {delta_unrelated:.2} — the grain visibly repeats",
+         vs Δ@unrelated {delta_unrelated:.2}: the grain visibly repeats",
     );
 }

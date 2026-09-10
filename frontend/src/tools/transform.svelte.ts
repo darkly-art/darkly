@@ -1,5 +1,5 @@
 /**
- * Transform tool — thin orchestration over the generic transform gizmo.
+ * Transform tool: thin orchestration over the generic transform gizmo.
  *
  * The tool's only job is to decide *which consumer binding* drives the gizmo
  * for the current selection, then forward pointer/keyboard events. The gizmo
@@ -10,7 +10,7 @@
  *   - vector layer  → per-object: hit-test the click; on a hit attach that
  *                     object's transform binding. A different *axis* than the
  *                     whole-layer capability below, so it isn't a
- *                     `TransformCapability` arm — vector knowledge stays here.
+ *                     `TransformCapability` arm: vector knowledge stays here.
  *   - `live`        → a void's persistent transform property (camera, …).
  *   - `destructive` → floating extract/commit (raster paste & move).
  *   - `none`        → inert: no gizmo, no cursor change.
@@ -20,7 +20,7 @@
  *
  * Two tools share this implementation behind a toolbar cluster: `transform`
  * (free / affine) and `transform_perspective` (enters perspective). They are
- * one class with two entry modes — only `entryMode` differs — so there's one
+ * one class with two entry modes (only `entryMode` differs), so there's one
  * gizmo, one set of handlers, one mode registry. Mid-session the right-click
  * menu (`TransformModeMenu`) switches modes freely.
  *
@@ -50,7 +50,7 @@ class TransformTool extends ToolBase {
 
     /** The mode this variant enters with. `0` (free) is the document default
      *  and is never force-applied (so re-entering an already-perspective object
-     *  with the free tool doesn't silently downgrade it — that's an explicit
+     *  with the free tool doesn't silently downgrade it: that's an explicit
      *  right-click-menu action). A non-zero `entryMode` is seeded on attach so
      *  picking "Perspective" starts in perspective. */
     private readonly entryMode: number;
@@ -92,7 +92,7 @@ class TransformTool extends ToolBase {
      *
      *  Engine access is routed through the tool session, and `layerId` is
      *  captured *before* the first await: reaching any line past an await proves
-     *  the session survived — same layer, same tool — so the captured id is
+     *  the session survived (same layer, same tool), so the captured id is
      *  still the one being transformed. A layer/tool change mid-sequence kills
      *  the session, and the next `send` rejects with `ToolSessionCancelled`
      *  (swallowed upstream), so we never attach a binding to a layer that's no
@@ -133,7 +133,7 @@ class TransformTool extends ToolBase {
         if (!canvasEl) return;
         this.gizmo = new TransformGizmo(canvasEl, this.sessionAccess);
         // Fire-and-forget: if the session dies mid-activate (a rapid re-switch
-        // or layer change), activate() rejects with ToolSessionCancelled —
+        // or layer change), activate() rejects with ToolSessionCancelled:
         // swallow it here since onActivate can't await it.
         void runHook(this.activate());
     }
@@ -146,7 +146,7 @@ class TransformTool extends ToolBase {
     }
 
     claimsPointer(): boolean {
-        // Once a gizmo is up, the canvas belongs to the tool — handle drags,
+        // Once a gizmo is up, the canvas belongs to the tool: handle drags,
         // body translate, and outside-bbox rotate are all transform gestures.
         // Claiming prevents global drag chords from intercepting our gestures.
         return this.gizmo?.active ?? false;
@@ -168,7 +168,7 @@ class TransformTool extends ToolBase {
         if (!this.gizmo.active) {
             // A click landing on a vector object attaches a per-object gizmo.
             // `hit_test_vector_object` returns -1 for a miss or a non-vector
-            // layer, so this gate doubles as the "is it a vector layer" check —
+            // layer, so this gate doubles as the "is it a vector layer" check:
             // no separate kind query, no `TransformCapability::Vector` arm.
             const engine = this.engine;
             const layerId = this.inst.activeLayerId;
@@ -213,12 +213,12 @@ class TransformTool extends ToolBase {
         const engine = this.engine;
         // Pick up an async floating extract once its content-bounds readback
         // lands (begin_transform may defer a frame). Never auto-attaches
-        // voids — those attach explicitly via activate(), so Enter/Escape
+        // voids: those attach explicitly via activate(), so Enter/Escape
         // can end the session without it immediately reappearing.
         //
         // The engine read is session-routed: if a tool/layer change ran
         // onDeactivate (nulling `gizmo`) mid-await, the resumed request
-        // rejects and unwinds here — so the `gizmo` deref below can't hit null.
+        // rejects and unwinds here, so the `gizmo` deref below can't hit null.
         if (!this.gizmo.active && engine) {
             if (await engine.api.hasFloating()) {
                 if (await this.gizmo?.attach(floatingTransformBinding(this.sessionAccess))) {
@@ -238,7 +238,7 @@ class TransformTool extends ToolBase {
         if (engine && (await engine.api.hasFloating())) {
             // Activating the floating's own target layer (e.g.
             // paste-as-floating creates a new layer and selects it) is part of
-            // the floating workflow, not a user-switched-away signal.
+            // the floating workflow, not an artist-switched-away signal.
             const id = await engine.api.floatingTargetLayer();
             if (id !== null && id === this.inst.activeLayerId) {
                 return;
@@ -271,13 +271,13 @@ function transformDescriptor(opts: { id: string; entry: number }): ToolDescripto
     };
 }
 
-/** Free (affine) transform — pan / scale / rotate. The cluster default. */
+/** Free (affine) transform: pan / scale / rotate. The cluster default. */
 export const transformTool: ToolDescriptor = transformDescriptor({
     id: 'transform',
     entry: 0,
 });
 
-/** Perspective transform — enters the four-corner homography mode directly. */
+/** Perspective transform: enters the four-corner homography mode directly. */
 export const transformPerspectiveTool: ToolDescriptor = transformDescriptor({
     id: 'transform_perspective',
     entry: 1,

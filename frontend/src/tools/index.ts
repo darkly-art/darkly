@@ -25,7 +25,7 @@ toolRegistry.register(transformTool);
 toolRegistry.register(transformPerspectiveTool);
 
 // Cluster buttons mirror their default tool's icon (rect_select's dashed
-// square for selection; fill's bucket for fill) — the cluster owns no
+// square for selection; fill's bucket for fill): the cluster owns no
 // independent icon, only routing. See `ToolCluster.svelte`.
 toolClusterRegistry.register({
     id: 'select',

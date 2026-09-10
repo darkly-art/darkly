@@ -16,25 +16,25 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "mirrorViewH",
         display_name: "Mirror View",
-        description: "Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.",
+        description: "Flip the canvas horizontally for fresh-eyes review. View-only: the document is unchanged.",
         icon: "fa6-solid:left-right",
     },
     ActionDef {
         id: "resetView",
         display_name: "Reset View",
-        description: "Reset rotation, mirror, pan, and zoom-to-fit. View-only — the document is unchanged.",
+        description: "Reset rotation, mirror, pan, and zoom-to-fit. View-only: the document is unchanged.",
         icon: "fa6-solid:expand",
     },
     ActionDef {
         id: "fitToScreen",
         display_name: "Fit to Screen",
-        description: "Zoom and recenter so the whole canvas fills the viewport, keeping the current rotation and mirror. View-only — the document is unchanged.",
+        description: "Zoom and recenter so the whole canvas fills the viewport, keeping the current rotation and mirror. View-only: the document is unchanged.",
         icon: "fa6-solid:maximize",
     },
     ActionDef {
         id: "centerView",
         display_name: "Center View",
-        description: "Recenter the canvas in the viewport without changing zoom, rotation, or mirror. View-only — the document is unchanged.",
+        description: "Recenter the canvas in the viewport without changing zoom, rotation, or mirror. View-only: the document is unchanged.",
         icon: "fa6-solid:crosshairs",
     },
     ActionDef {

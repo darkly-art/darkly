@@ -7,7 +7,7 @@
     import BrushBarEntryModal from './BrushBarEntryModal.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
-    // Position is graph-space — the brush bar lives on the canvas
+    // Position is graph-space: the brush bar lives on the canvas
     // alongside the other nodes, panning and zooming with them. Default
     // sits a comfortable margin above and to the left of the origin so
     // the auto-laid-out brush graph doesn't overlap it on first open.
@@ -48,14 +48,14 @@
 
     // Drag-reorder state. `liveOrder` shadows the engine's port list
     // during a drag so the rows can shuffle in real time on every
-    // `dragover` — `animate:flip` rides those reactive reorders and
+    // `dragover`; `animate:flip` rides those reactive reorders and
     // slides the rows past the cursor. On drop we commit the final
     // index to the engine in one call; on cancel/escape we just drop
     // the shadow and revert to whatever the engine still says.
     let dragKey = $state<string | null>(null);
     let liveOrder = $state<ExposedPortInfo[] | null>(null);
 
-    /** Rows the brush bar actually renders — the live drag shadow when
+    /** Rows the brush bar actually renders: the live drag shadow when
      *  a drag is in flight, otherwise the engine's order. */
     let displayPorts = $derived(liveOrder ?? brushGraph.exposedPorts);
 
@@ -96,7 +96,7 @@
     }
 
     function onRowDragLeave() {
-        // No-op — leaving one row to enter another is fine; the next
+        // No-op: leaving one row to enter another is fine; the next
         // dragover sets the new target. Leaving the whole list is
         // handled by dragend.
     }

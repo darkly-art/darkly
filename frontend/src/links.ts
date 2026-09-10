@@ -1,4 +1,4 @@
-/** Canonical external links to Darkly's web presence. Single source of truth —
+/** Canonical external links to Darkly's web presence. Single source of truth:
  *  imported by the About modal and the Help menu actions so a URL change lands
  *  in one place. */
 export const links = {

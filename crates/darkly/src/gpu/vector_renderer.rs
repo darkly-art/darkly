@@ -7,9 +7,9 @@
 //! layer's `Rgba8Unorm` + `STORAGE_BINDING` texture. The existing blend
 //! pipeline then composites that texture like any other layer.
 //!
-//! The renderer is a swappable backend behind the kurbo/peniko data model — a
-//! future move to `vello_cpu`/`vello_hybrid` is a contained change here, not a
-//! document-model rewrite (see the text-tool plan, §0).
+//! The renderer is a swappable backend behind the kurbo/peniko data model:
+//! a future move to `vello_cpu`/`vello_hybrid` is a contained change here,
+//! not a document-model rewrite (see the text-tool plan, §0).
 
 use std::num::NonZeroUsize;
 
@@ -20,7 +20,7 @@ use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene}
 /// Vello renders via compute shaders that bind more storage buffers/textures
 /// than the conservative WebGL2/downlevel floors Darkly otherwise targets. The
 /// bumped values sit within the WebGPU spec's *guaranteed minimums*, so any
-/// real WebGPU device satisfies them — the only cost is dropping pre-WebGPU
+/// real WebGPU device satisfies them; the only cost is dropping pre-WebGPU
 /// (WebGL2) fallback, an accepted trade for GPU-rendered text (text-tool plan
 /// §0, "Chromium-first WebGPU / STORAGE_BINDING surface"). Every device that
 /// may host a vector layer (production wasm + native test devices) must be
@@ -45,7 +45,7 @@ impl VectorRenderer {
             device,
             RendererOptions {
                 use_cpu: false,
-                // Area AA is the recommended default and keeps startup cheap —
+                // Area AA is the recommended default and keeps startup cheap:
                 // no MSAA pipeline permutations to compile.
                 antialiasing_support: AaSupport::area_only(),
                 num_init_threads: NonZeroUsize::new(1),
@@ -58,7 +58,7 @@ impl VectorRenderer {
 
     /// Rasterize `scene` into `view` (the vector layer's storage texture).
     /// `view` must back an `Rgba8Unorm` + `STORAGE_BINDING` texture of the
-    /// given dimensions — see [`crate::gpu::atlas::LayerTexture::with_bounds_storage`].
+    /// given dimensions; see [`crate::gpu::atlas::LayerTexture::with_bounds_storage`].
     /// Vello submits its own command buffer; call this before the compositor's
     /// blend pass so the downstream sample reads fresh pixels.
     pub fn render(
@@ -71,7 +71,7 @@ impl VectorRenderer {
         height: u32,
     ) {
         let params = RenderParams {
-            // Transparent background — the layer composites over what's below.
+            // Transparent background: the layer composites over what's below.
             base_color: peniko::Color::from_rgba8(0, 0, 0, 0),
             width,
             height,

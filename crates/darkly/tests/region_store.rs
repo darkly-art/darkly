@@ -253,8 +253,8 @@ fn region_store_r8_format() {
 
 /// Regression: brush stroke undo flow saves the FULL layer at stroke start,
 /// then commits only the diff sub-rect at stroke end. On undo, the buffer
-/// must hold the pre-stroke pixels at the sub-rect's *layer-space* location
-/// — not whatever pixels happened to live at scratch's top-left.
+/// must hold the pre-stroke pixels at the sub-rect's *layer-space* location,
+/// not whatever pixels happened to live at scratch's top-left.
 ///
 /// Was broken when scratch was switched to "always indexed at (0,0)":
 /// commit_region read scratch[0..w, 0..h] regardless of the rect's xy, so
@@ -289,7 +289,7 @@ fn region_store_save_full_commit_subrect() {
 
     let mut store = RegionScratch::new(&device, w, h);
 
-    // Stroke begin — save the full layer.
+    // Stroke begin: save the full layer.
     let mut enc = encoder(&device);
     let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
     submit(&queue, enc);
@@ -306,7 +306,7 @@ fn region_store_save_full_commit_subrect() {
     }
     write_texture(&queue, &tex, w, h, 4, &painted);
 
-    // Stroke end — diff_rect would return the painted center; commit that sub-rect.
+    // Stroke end: diff_rect would return the painted center; commit that sub-rect.
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
         &mut enc,
@@ -340,7 +340,7 @@ fn region_store_save_full_commit_subrect() {
 /// reproduces the AAR's geometry (canvas rescaled large to 1920×1080, then the
 /// layer grows up-left by (256, 256) but only taller). With the copy now sized
 /// by the live old extent and clamped to the destination, the overflow this
-/// once guarded is no longer constructible from the API — the scope just
+/// once guarded is no longer constructible from the API; the scope just
 /// confirms the reallocated copy stays in bounds.
 #[test]
 fn region_store_grow_offset_does_not_overflow_scratch() {
@@ -350,7 +350,7 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
     let mut store = RegionScratch::new(&device, 1920, 1080);
 
     // Layer at canvas (0, 0) sized 1664×1024 grows up-left to a new extent at
-    // (-256, -256) — a (256, 256) rebase offset, only taller (1280), not wider.
+    // (-256, -256), a (256, 256) rebase offset, only taller (1280), not wider.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut enc = encoder(&device);
     store.grow_scratch_preserving(
@@ -375,7 +375,7 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
 /// with a sentinel (stale bytes from a prior, larger op), overwrite only a
 /// smaller layer extent with a live value, grow, then assert the grown scratch
 /// holds `live` exactly over the rebased old extent and the **format default**
-/// everywhere else in the full target texture — no surviving sentinel.
+/// everywhere else in the full target texture: no surviving sentinel.
 ///
 /// Run for both formats: R8's default (white) diverges from RGBA's (transparent),
 /// so it's the format the `scratch_default_clear` path can get wrong.
@@ -451,7 +451,7 @@ fn assert_grow_clears_stale(
 }
 
 /// Realloc variant: a grow that reallocates (offset ≠ 0) must not copy the full
-/// old capacity — only the live old extent — leaving stale bytes right of / below
+/// old capacity (only the live old extent), leaving stale bytes right of / below
 /// the rebased live region. Old extent `(0,0,1024,800)`, new `(-64,-64,1600,1200)`;
 /// the (64,64) offset forces a realloc, capacity stays 1920×1200 via the monotonic
 /// max. Fails against the capacity-clamped copy.
@@ -475,7 +475,7 @@ fn region_store_grow_realloc_clears_stale_tail_r8() {
 
 /// In-place variant: a grow right/down *within* capacity (offset (0,0), dims ≤
 /// capacity) used to early-return with no clear, leaving the bands between old
-/// and new extent stale. Old extent `(0,0,1024,800)`, new `(0,0,1600,1000)` —
+/// and new extent stale. Old extent `(0,0,1024,800)`, new `(0,0,1600,1000)`:
 /// bands `[1024,1600)` and `[800,1000)` keep sentinel bytes. This case forces
 /// the unified realloc path: an extent-exact copy in the realloc branch alone
 /// would not fix it.
@@ -498,7 +498,7 @@ fn region_store_grow_within_capacity_clears_stale_bands_r8() {
 }
 
 /// Lock in the new debug-mode contract: `commit_region` must reject a rect
-/// that escapes the saved snapshot. Caller bug, not RegionScratch bug — but
+/// that escapes the saved snapshot. Caller bug, not RegionScratch bug, but
 /// the assert turns "silent corruption from reading uninitialised scratch"
 /// into "loud panic during dev/test."
 #[cfg(debug_assertions)]

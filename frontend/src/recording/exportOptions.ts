@@ -1,5 +1,5 @@
 /**
- * Timelapse export options — pure helpers behind the export modal and the
+ * Timelapse export options, pure helpers behind the export modal and the
  * export pipeline: aspect-ratio grouping of recorded segments, the
  * stretch / fit / fill conversion geometry, aspect-locked resolution
  * derivation, and input sanitization. No DOM, no WebCodecs: everything
@@ -7,10 +7,10 @@
  *
  * A recording holds one segment per encoder run; the document's aspect
  * ratio can change between runs (canvas resize / crop). Export renders to
- * a single output canvas, so the user picks a target aspect ratio (one of
+ * a single output canvas, so the artist picks a target aspect ratio (one of
  * those present in the recording) and how segments of *other* aspect
  * ratios are converted onto it. Grouping uses the true document canvas
- * dims stored per segment — encoder dims are macroblock-aligned (width) /
+ * dims stored per segment; encoder dims are macroblock-aligned (width) /
  * even (height) fits whose ratio is perturbed at small sizes.
  */
 import { alignDim, WIDTH_ALIGN, HEIGHT_ALIGN } from './codec';
@@ -23,7 +23,7 @@ export const EXPORT_MAX_DIM = 4096;
 export const EXPORT_MIN_FPS = 1;
 export const EXPORT_MAX_FPS = 120;
 
-/** Default GIF long edge — a size suggestion the modal seeds, not a cap. */
+/** Default GIF long edge: a size suggestion the modal seeds, not a cap. */
 export const GIF_LONG_EDGE = 480;
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ export interface AspectGroup {
     /** Human label: a named ratio (`16:9`), small exact terms, or decimal. */
     label: string;
     frameCount: number;
-    /** Encoder dims of the group's largest segment — the native output
+    /** Encoder dims of the group's largest segment: the native output
      *  resolution offered as the default. */
     nativeWidth: number;
     nativeHeight: number;
@@ -80,7 +80,7 @@ function gcd(a: number, b: number): number {
 }
 
 /** Group segments by exact document aspect ratio, in order of first
- *  appearance. `defaultIndex` is the last segment's group — the document's
+ *  appearance. `defaultIndex` is the last segment's group, the document's
  *  final shape, the likeliest export target. */
 export function groupSegmentsByAspect(metas: SegmentMeta[]): {
     groups: AspectGroup[];
@@ -144,7 +144,7 @@ export function aspectLabel(arW: number, arH: number): string {
 // ---------------------------------------------------------------------------
 
 /** Sanitize one output dimension: floor to a multiple of `step` (width 16,
- *  height 2 — see `alignDim`) and clamp to `EXPORT_MAX_DIM`. GIF has no
+ *  height 2, see `alignDim`) and clamp to `EXPORT_MAX_DIM`. GIF has no
  *  macroblocks, but sharing the one rule keeps the modal and pipeline
  *  coherent at a cost of ≤15 px on GIF width. */
 function clampDim(v: number, step: number): number {
@@ -194,7 +194,7 @@ export function gifDelayMs(fps: number): number {
 
 /** True when the encoded packets can pass straight through to the muxer:
  *  every segment shares one decoder config and the output resolution is
- *  exactly the packets' — a container can't rescale. The playback rate
+ *  exactly the packets', since a container can't rescale. The playback rate
  *  never matters (packets are re-stamped either way). */
 export function canPassthrough(metas: SegmentMeta[], outW: number, outH: number): boolean {
     if (metas.length === 0) return false;

@@ -1,11 +1,11 @@
-//! Tests for [`darkly::brush::warp_field`] — the displacement field that
+//! Tests for [`darkly::brush::warp_field`]: the displacement field that
 //! backs liquify's scratch, and the single resample that turns it into
 //! pixels.
 //!
 //! The load-bearing property is *exactness*. The resolve rewrites the
 //! whole layer on every pen event, and almost every pixel of it has a
 //! zero displacement. If the resolve were off by half a texel, every one
-//! of those pixels would be softened on every commit — which is the very
+//! of those pixels would be softened on every commit, which is the very
 //! defect the warp field exists to remove, reintroduced one layer down
 //! and invisible to a contrast metric. So these assertions are
 //! byte-identity, not tolerance: a tolerance would hide the bug.
@@ -122,7 +122,7 @@ fn resolve_through(field: &[[f32; 2]], source: &[u8]) -> Vec<u8> {
 }
 
 /// **The texel-exactness guard.** A zero field must reproduce the source
-/// byte for byte — not approximately.
+/// byte for byte, not approximately.
 ///
 /// Every pen event resolves the entire layer, and outside the brush disc
 /// the field is exactly zero. A half-texel UV error here would low-pass
@@ -192,7 +192,7 @@ fn warp_field_resolve_leaves_untouched_pixels_exact() {
 }
 
 /// An integer displacement lands on texel centres, so a correct bilinear
-/// fetch returns source texels verbatim — the output is a pure shifted
+/// fetch returns source texels verbatim: the output is a pure shifted
 /// copy with **no** blended values anywhere.
 ///
 /// This is what "the image is resampled once" means concretely: one
@@ -214,7 +214,7 @@ fn warp_field_resolve_is_single_resample() {
                 pixel(&out, x, y),
                 pixel(&source, sx, sy),
                 "at ({x}, {y}): an integer displacement must copy source \
-                 texel ({sx}, {sy}) verbatim — a blended value here means \
+                 texel ({sx}, {sy}) verbatim; a blended value here means \
                  the fetch is misaligned",
             );
         }

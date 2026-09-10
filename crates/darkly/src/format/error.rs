@@ -27,7 +27,7 @@ pub enum LoadError {
     /// The `requires` inventory was absent, malformed, or disagreed with
     /// the body (caught by the per-variant safety net during deserialize).
     /// We control the writer; an absent `requires` is malformed, not
-    /// "older format" — there is no older format.
+    /// "older format"; there is no older format.
     CorruptManifest { reason: String },
 
     /// Encountered a `type_id` in the body that isn't in the binary's
@@ -94,14 +94,14 @@ impl From<serde_json::Error> for LoadError {
 
 impl LoadError {
     /// Stable wire shape for the JS-side UI. The UI's `LoadErrorToast`
-    /// switches on `kind` to format the precise diagnostic — "please
+    /// switches on `kind` to format the precise diagnostic: "please
     /// update Darkly" for `containerTooNew` / `unsupportedFeatures`,
     /// "this file is malformed" for `corruptManifest`, raw message for
     /// `io` / `zip` / `json`.
     ///
     /// Returned via the WASM bridge as a JSON string inside the
     /// `JsError` payload (rather than serde-deriving on the enum
-    /// itself — `std::io::Error` doesn't serialize and we'd rather
+    /// itself, since `std::io::Error` doesn't serialize and we'd rather
     /// keep the structured payload narrowly scoped to the UI contract).
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::json;

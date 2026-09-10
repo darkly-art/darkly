@@ -3,7 +3,7 @@
 //! Each save point records the cumulative bounding box of all dabs placed
 //! up to that point and the polyline vector index the dab was placed on.
 //! This lets the stabilizer rewind to any dab index by looking up the
-//! region that needs to be restored — no GPU readback required.
+//! region that needs to be restored, with no GPU readback required.
 //!
 //! Save points also store a `RenderCheckpoint` (the stroke engine's render
 //! state at that dab) so the checkpoint ring can restore engine state and
@@ -92,7 +92,7 @@ impl SavePointStore {
     /// Update the render state on ALL save points that share the given
     /// vector index.  Called at the end of each vector index iteration so
     /// every save point for that segment represents "everything through
-    /// this vector index is fully processed" — the checkpoint restore
+    /// this vector index is fully processed": the checkpoint restore
     /// starts from the next vector index.
     pub fn finalize_render_state(&mut self, vector_index: usize, render_state: RenderCheckpoint) {
         for sp in self.points.iter_mut().rev() {
@@ -117,6 +117,7 @@ mod tests {
             last_dab_size: [10.0, 10.0],
             last_dab_pos: None,
             dab_count: 0,
+            stamp_angle: None,
         }
     }
 

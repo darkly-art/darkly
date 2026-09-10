@@ -1,8 +1,8 @@
-//! Orthogonal (90°-multiple) transform GPU pass — exact pixel permutation.
+//! Orthogonal (90°-multiple) transform GPU pass: exact pixel permutation.
 //!
 //! Flips and 90° rotations relabel texels without resampling, so this pass
 //! `textureLoad`s each destination texel from its inverse-mapped source index
-//! (no sampler, no filtering, no premultiply) — output is bit-identical to the
+//! (no sampler, no filtering, no premultiply), and output is bit-identical to the
 //! input up to the permutation. Contrast `rescale.rs`, which genuinely
 //! resamples. One primitive serves both whole-document ops (canvas flip/rotate,
 //! per node + the selection mask) and layer/selection flip (a masked in-place
@@ -90,9 +90,9 @@ pub struct OrthoTransformPass {
     remap_r8: wgpu::RenderPipeline,
     mirror_rgba: wgpu::RenderPipeline,
     mirror_r8: wgpu::RenderPipeline,
-    /// `[src texture, params]` — used by `fs_remap`.
+    /// `[src texture, params]` (used by `fs_remap`).
     remap_bgl: wgpu::BindGroupLayout,
-    /// `[src texture, params, mask texture]` — used by `fs_mirror_masked`.
+    /// `[src texture, params, mask texture]` (used by `fs_mirror_masked`).
     mirror_bgl: wgpu::BindGroupLayout,
 }
 
@@ -107,7 +107,7 @@ fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Texture {
-            // Sampled with textureLoad — no hardware filtering.
+            // Sampled with textureLoad: no hardware filtering.
             sample_type: wgpu::TextureSampleType::Float { filterable: false },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,

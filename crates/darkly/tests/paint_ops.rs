@@ -67,6 +67,7 @@ fn gpu_gradient_linear_interpolation() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0, // start: top-left
         128.0,
@@ -130,6 +131,7 @@ fn gpu_gradient_undo() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0,
         64.0,
@@ -575,6 +577,7 @@ fn gpu_gradient_on_mask() {
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, w, h),
         0.0,
         0.0,
         64.0,
@@ -606,7 +609,7 @@ fn gpu_gradient_on_mask() {
 // Fill rect with selection (used by flood fill stamp)
 // ============================================================================
 
-/// Fill rect with a custom mask — verify masked and unmasked regions.
+/// Fill rect with a custom mask: verify masked and unmasked regions.
 #[test]
 fn gpu_fill_rect_with_mask() {
     let (device, queue) = test_device();
@@ -711,13 +714,15 @@ fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
         darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
     );
 
-    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x.
-    // No selection so the full layer renders.
+    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x,
+    // drawn over the whole canvas window. No selection so every canvas pixel
+    // the layer covers renders.
     let mut enc = encoder(&device);
     target.linear_gradient(
         &mut enc,
         &pipelines,
         &queue,
+        darkly::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
         0.0,
         0.0,
         100.0,
@@ -730,21 +735,21 @@ fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
 
-    // Canvas (0, 0) is at layer-local (50, 50) — gradient start, should be white.
+    // Canvas (0, 0) is at layer-local (50, 50): gradient start, should be white.
     let start = pixel_at(&pixels, lw, 50, 50, 4);
     assert!(
         start[0] > 200,
         "canvas (0,0) should be near-white (gradient start), got R={}",
         start[0]
     );
-    // Canvas (100, 0) is at layer-local (150, 50) — gradient end, should be black.
+    // Canvas (100, 0) is at layer-local (150, 50): gradient end, should be black.
     let end = pixel_at(&pixels, lw, 150, 50, 4);
     assert!(
         end[0] < 55,
         "canvas (100,0) should be near-black (gradient end), got R={}",
         end[0]
     );
-    // Canvas (50, 0) is at layer-local (100, 50) — midpoint, ~127.
+    // Canvas (50, 0) is at layer-local (100, 50): midpoint, ~127.
     let mid = pixel_at(&pixels, lw, 100, 50, 4);
     assert!(
         mid[0] > 80 && mid[0] < 175,

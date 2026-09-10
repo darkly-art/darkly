@@ -1,7 +1,7 @@
 //! Decoding images and placing them as smart objects.
 //!
-//! Split out of `actions/index.ts` so the modules that need only this — the
-//! clipboard actions, the void picker — don't pull in the whole action
+//! Split out of `actions/index.ts` so the modules that need only this (the
+//! clipboard actions, the void picker) don't pull in the whole action
 //! registry's dependency graph with it.
 
 import { app } from '../state/app.svelte';
@@ -13,7 +13,7 @@ import { toast } from '../state/toast.svelte';
  *  Two reasons, both real: the pixels cross the WASM boundary as a copy, so a
  *  huge source costs a proportional transfer (4096² RGBA is already 64 MB), and
  *  a smart object keeps its source resident in VRAM alongside a mip chain.
- *  4096 is comfortably above any logo or photograph a user places and well
+ *  4096 is comfortably above any logo or photograph an artist places and well
  *  inside every backend's `maxTextureDimension2D`. */
 const MAX_SOURCE_DIM = 4096;
 
@@ -21,11 +21,11 @@ const MAX_SOURCE_DIM = 4096;
 export type DecodedImage = { width: number; height: number; rgba: Uint8Array };
 
 /** Decode any image blob to raw RGBA, downscaling anything past
- *  [`MAX_SOURCE_DIM`]. The single decode path — every caller that needs pixels
+ *  [`MAX_SOURCE_DIM`]. The single decode path: every caller that needs pixels
  *  out of a `Blob`/`File` goes through here rather than repeating the
  *  `createImageBitmap` → `OffscreenCanvas` → `getImageData` dance.
  *
- *  Returns `null` on decode failure; the caller owns the user-facing message,
+ *  Returns `null` on decode failure; the caller owns the artist-facing message,
  *  since what to say depends on how the image arrived. */
 export async function decodeToRgba(blob: Blob): Promise<DecodedImage | null> {
     let bitmap: ImageBitmap;
@@ -36,7 +36,7 @@ export async function decodeToRgba(blob: Blob): Promise<DecodedImage | null> {
         return null;
     }
 
-    // Resize during decode when oversized — `createImageBitmap`'s own
+    // Resize during decode when oversized: `createImageBitmap`'s own
     // resampler is better than anything we'd do afterwards, and it avoids
     // ever materializing the full-size buffer.
     const longest = Math.max(bitmap.width, bitmap.height);
@@ -64,7 +64,7 @@ export async function decodeToRgba(blob: Blob): Promise<DecodedImage | null> {
     return { width, height, rgba: new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer) };
 }
 
-/** Place an image blob as a smart object in the CURRENT document — a layer
+/** Place an image blob as a smart object in the CURRENT document: a layer
  *  that holds the image at its own resolution and displays it through a stored
  *  transform, so resizing it stays lossless.
  *

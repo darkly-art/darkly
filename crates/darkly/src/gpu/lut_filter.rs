@@ -1,7 +1,7 @@
 //! Shared scaffold for parametric tone filters that realize as a 256×2 LUT.
 //!
 //! Curves and Levels are the same GPU pipeline: each bakes eight per-channel
-//! transfer functions — in Krita's RGBA virtual-channel order
+//! transfer functions, in Krita's RGBA virtual-channel order:
 //!
 //!   RGB (composite), Red, Green, Blue, Alpha, Hue, Saturation, Lightness
 //!

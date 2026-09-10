@@ -9,3 +9,9 @@ rustflags = [
 
 [env]
 CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+[alias]
+# Refill the generated regions of the repository's markdown from the registries.
+# `cargo sync-docs -- --check` reports drift without writing; `tests/docs_md.rs`
+# asserts the same thing, so CI catches a stale region either way.
+sync-docs = "run --quiet -p darkly --bin sync-docs"

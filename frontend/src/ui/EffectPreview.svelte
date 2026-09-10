@@ -9,7 +9,7 @@
         type PreviewVariant,
     } from './preview_frames';
 
-    /** What a picker card knows about its entry — the subset of a catalog entry
+    /** What a picker card knows about its entry: the subset of a catalog entry
      *  this component needs to decide what to show. */
     export interface PreviewEntry {
         type: string;
@@ -26,7 +26,7 @@
     const POLL_FRAMES = 180;
 
     let canvasEl = $state<HTMLCanvasElement | null>(null);
-    /** The one frame shown at rest — a card asks for this on mount, so opening
+    /** The one frame shown at rest: a card asks for this on mount, so opening
      *  a picker costs one frame per card rather than a whole sequence each. */
     let still = $state<PreviewData | null>(null);
     /** The sequence, requested the first time the pointer arrives and kept for
@@ -47,7 +47,7 @@
 
     /** What is on screen: the sequence while hovering and loaded, else the
      *  still. Falling back to the still means the hand-off costs nothing
-     *  visually — the sequence's own frame at this point *is* the still. */
+     *  visually: the sequence's own frame at this point *is* the still. */
     function current(): ImageData | null {
         if (hovering && anim) return anim.frames[frameIdx % anim.frames.length];
         return still?.frames[0] ?? null;
@@ -73,7 +73,7 @@
     async function tick(now: number) {
         rafHandle = 0;
         if (awaiting) {
-            // Still generating — kick the engine's render loop so it pumps the
+            // Still generating: kick the engine's render loop so it pumps the
             // next slice of frames and drains the landed readbacks, then check.
             if (framesRemaining <= 0 || !app.engine) {
                 awaiting = null;
@@ -93,7 +93,7 @@
                 }
                 // Deliberately not drawn here. The canvas sizes itself from the
                 // frames that landed, and assigning a canvas's `width` or
-                // `height` clears it — so painting in the same turn as the state
+                // `height` clears it, so painting in the same turn as the state
                 // change races Svelte's flush and loses. The next tick runs after
                 // that flush, which is where the first frame goes on screen.
                 lastDrawn = null;
@@ -138,13 +138,13 @@
 
     function leave() {
         hovering = false;
-        // Abandon a sequence still in flight — the pointer has gone, and the
+        // Abandon a sequence still in flight: the pointer has gone, and the
         // engine drops the job when nothing polls it.
         if (awaiting === 'animated') awaiting = null;
         schedule();
     }
 
-    // Kick off a fresh still whenever the entry changes. No caching — the engine
+    // Kick off a fresh still whenever the entry changes. No caching: the engine
     // re-renders against the current document each time the picker opens.
     $effect(() => {
         void catalog;

@@ -1,4 +1,4 @@
-//! Undo actions for per-node property flags shared by every entity kind —
+//! Undo actions for per-node property flags shared by every entity kind:
 //! layers, groups, and filters alike.
 //!
 //! Structural add/remove of a filter needs no action of its own: a filter is an
@@ -15,7 +15,7 @@ use crate::document::Document;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
-/// Undo action for toggling visibility on any node — layer, group, or filter.
+/// Undo action for toggling visibility on any node: layer, group, or filter.
 /// Stores the current value and swaps it on undo/redo.
 pub struct NodeVisibleAction {
     node_id: LayerId,
@@ -48,7 +48,7 @@ impl UndoAction for NodeVisibleAction {
     }
 }
 
-/// Undo action for toggling lock on any node — layer, group, or filter.
+/// Undo action for toggling lock on any node: layer, group, or filter.
 pub struct NodeLockedAction {
     node_id: LayerId,
     saved: bool,

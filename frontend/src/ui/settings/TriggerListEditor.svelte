@@ -20,7 +20,7 @@
         action: Action;
         /** When true, each row shows an editable scope <select>. When
          *  false, non-global scope is still surfaced via a small read-only
-         *  chip so the user knows the binding isn't unconditional. */
+         *  chip so the artist knows the binding isn't unconditional. */
         showScope: boolean;
     };
     let { action, showScope }: Props = $props();
@@ -29,20 +29,20 @@
      *  because it's the implicit global fallback, offered as "Anywhere". */
     const pickableSites = $derived(sites.all().filter(s => s.name !== 'keyboard'));
 
-    /** Persistent rows — read from config and re-evaluated on every
+    /** Persistent rows: read from config and re-evaluated on every
      *  store mutation via the `void config.get('')` reactivity tap. */
     const stored = $derived.by(() => {
         void config.get('');
         return readTriggers(action.id);
     });
 
-    /** Ephemeral rows — added by "+ Add trigger" but not yet captured into.
+    /** Ephemeral rows: added by "+ Add trigger" but not yet captured into.
      *  Lives in component state instead of config because
      *  `serializeTriggers` filters out empty-chord rows on write (to keep
      *  storage clean of ghost overrides). If we wrote a fresh empty row
      *  through config, it'd be filtered out before the reactive re-read
      *  could surface it, and "Add trigger" would visibly do nothing.
-     *  Promoted to `stored` the moment the user captures a chord; dropped
+     *  Promoted to `stored` the moment the artist captures a chord; dropped
      *  silently on ×, modal close, or reset. */
     let pending = $state<Trigger[]>([]);
 
@@ -66,7 +66,7 @@
     });
 
     /** Index of the row to auto-start capture on. Set by "+ Add trigger"
-     *  to save the user a click; cleared on next mutation. */
+     *  to save the artist a click; cleared on next mutation. */
     let pendingAutostart = $state<number | null>(null);
 
     /** Compose a binding string from kind + site + chord. Mouse chords
@@ -128,8 +128,8 @@
 
     function onCapture(index: number, newChord: string) {
         if (!newChord) {
-            // Cleared via Backspace/Delete — drop the row entirely so the
-            // user doesn't end up with a ghost row that can't dispatch.
+            // Cleared via Backspace/Delete: drop the row entirely so the
+            // artist doesn't end up with a ghost row that can't dispatch.
             removeTrigger(index);
             return;
         }

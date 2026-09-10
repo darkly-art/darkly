@@ -16,7 +16,7 @@
     const value = $derived(config.get(pref.name));
     const hasOverride = $derived(config.hasOverride(pref.name));
     /** Layer-below-user value (overlay → defaults). Drives the tooltip's
-     *  "Reset to …" description so the user can see what would be revealed. */
+     *  "Reset to …" description so the artist can see what would be revealed. */
     const baseValue = $derived(config.baseValue(pref.name));
     const resetTitle = $derived(
         baseValue == null ? 'Reset' : `Reset to ${String(baseValue)}`,

@@ -107,7 +107,7 @@ describe('autoLayout generation guard (regression)', () => {
         state.graph = graphWith('1', '2', '3');
         const aWrite = state.autoLayout({}); // A's engine call is now in flight
 
-        // Before A's layout lands, brush B loads — a fresh generation.
+        // Before A's layout lands, brush B loads: a fresh generation.
         state.beginLayoutGeneration();
         state.graph = graphWith('1', '2', '3', '4', '5');
 
@@ -124,7 +124,7 @@ describe('autoLayout generation guard (regression)', () => {
 
 describe('beginLayoutGeneration invalidates node-id-keyed caches', () => {
     // Image thumbnails are keyed by `image_${nodeId}`, and node ids restart per
-    // brush — so a stale bitmap would alias onto a reused id under the next
+    // brush, so a stale bitmap would alias onto a reused id under the next
     // graph. ImageBitmap is GPU-backed and must be closed, not just dropped.
     it('closes and clears image thumbnails on a fresh graph', () => {
         const close = vi.fn();

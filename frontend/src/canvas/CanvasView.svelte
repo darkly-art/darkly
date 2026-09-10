@@ -19,11 +19,11 @@
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
-     *  to this instance — the multi-tab shell uses this to render N
+     *  to this instance: the multi-tab shell uses this to render N
      *  CanvasViews, each bound to its own pre-created instance.
      *
      *  When omitted, CanvasView calls `initEditor` and binds to the global
-     *  `app` proxy — the existing single-instance behaviour. */
+     *  `app` proxy (the existing single-instance behaviour). */
     let { instance: providedInstance = undefined as DarklyInstance | undefined } = $props();
 
     /** The instance this view is bound to. For multi-tab CanvasViews this is
@@ -93,7 +93,7 @@
             // bg layer on top.
             //
             // An `onHandleReady` callback also signals "I'll provide
-            // content the moment the handle is alive" — that's the
+            // content the moment the handle is alive"; that's the
             // Open flow seeding either an `open_document(bytes)` or a
             // `paste_image(...)` of the picked file. Skipping the bg
             // seed in that case avoids the wasted allocation that
@@ -108,13 +108,13 @@
                 providedInstance.canvasEl = canvas;
             } else if (providedInstance) {
                 // Multi-tab, first-mount path: shell put a fresh instance in
-                // the strip but its async handle creation is up to us — the
+                // the strip but its async handle creation is up to us; the
                 // canvas only exists once Svelte mounts it. `config.get`
                 // requires WASM+config to be initialised, so prime that
                 // first.
                 await ensureProcessInit();
                 // Per-tab dim override (`shell.open(name, {w,h})`) wins
-                // over the global default — the Open flow for images
+                // over the global default: the Open flow for images
                 // sizes the canvas to the file's intrinsic dimensions.
                 const dims = providedInstance.pendingDims;
                 const docW = dims?.width ?? (config.get('canvas.width') as number);
@@ -144,7 +144,7 @@
             }
 
             // Push the initial UI theme colors so preset-thumbnail bakes
-            // match the user's current theme from frame one.
+            // match the artist's current theme from frame one.
             theme.pushToWasm();
             pixelFilter.syncFromConfig();
 
@@ -179,15 +179,15 @@
 
     function onPointerDown(e: PointerEvent) {
         // Prevent browser from synthesising fling/scroll gestures from pen
-        // input — touch-action:none only covers touch, not pen (Chromium bug).
+        // input: touch-action:none only covers touch, not pen (Chromium bug).
         e.preventDefault();
 
         // Pull keyboard focus onto the canvas. `bindingSite` normally does this
         // via a synthetic `mousedown`, but the `preventDefault()` above
         // suppresses pointer→mouse compatibility events, so it never fires here.
         // Without this, a focused properties-panel field (text editor textarea,
-        // an align/font `<select>`) keeps focus and swallows tool keys —
-        // Enter/Escape to a transform gizmo, for one. A canvas interaction
+        // an align/font `<select>`) keeps focus and swallows tool keys
+        // (Enter/Escape to a transform gizmo, for one). A canvas interaction
         // means the canvas owns the keyboard; tools that want a field focused
         // (the text editor) re-focus it explicitly afterwards.
         canvas?.focus();
@@ -196,7 +196,7 @@
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
-                // Touch consumed by navigation — end any in-progress tool stroke
+                // Touch consumed by navigation: end any in-progress tool stroke
                 if (inst.session) {
                     void runHook(inst.tool(inst.activeToolId)?.onPointerUp?.(e));
                 }
@@ -216,7 +216,7 @@
         const claimed = !!(inst.session && tool?.claimsPointer?.(e, pos.x, pos.y));
 
         // Drag-bound actions consume the pointer lifecycle before the
-        // active tool sees it — unless the tool claimed it.
+        // active tool sees it, unless the tool claimed it.
         if (!claimed && dispatchDrag('canvas', e, { x: pos.x, y: pos.y })) return;
 
         canvas.setPointerCapture(e.pointerId);
@@ -269,7 +269,7 @@
         // hover updates so its overlay (e.g. the brush's dab preview) can't
         // fight the engaged cursor. Pointerdown is already short-circuited
         // by `dispatchDrag` matching the chord; this covers the hover-only
-        // case. Still request a frame — a chord's onMove may have queued
+        // case. Still request a frame: a chord's onMove may have queued
         // work (e.g. a pick that needs `pollPick` to commit next frame).
         if (!isToolHoverSuppressed()) {
             void runHook(inst.tool(inst.activeToolId)?.onPointerMove?.(e, pos.x, pos.y));
@@ -323,7 +323,7 @@
         inst.requestFrame();
     }
 
-    // `dragover` MUST preventDefault for a subsequent `drop` to fire —
+    // `dragover` MUST preventDefault for a subsequent `drop` to fire:
     // browser default is "block the drop, fall back to navigation".
     function onCanvasDragOver(e: DragEvent) {
         if (!e.dataTransfer?.types?.includes('Files')) return;
@@ -335,7 +335,7 @@
     // tab (mirrors the Open action), image pastes as a layer in the
     // current tab (the gesture says "I want this here"), and Alt+drop
     // places the image as a smart object instead. Multi-file
-    // is intentionally not supported in v1 — too many ambiguous
+    // is intentionally not supported in v1: too many ambiguous
     // semantics (open all? merge into one doc? layer-import all?).
     function onCanvasDrop(e: DragEvent) {
         const file = e.dataTransfer?.files?.[0];
@@ -348,7 +348,7 @@
 
     function onKeyDown(e: KeyboardEvent) {
         // Keys typed into a text field (the text-properties editor, a rename
-        // box, etc.) are content, not canvas shortcuts — they must never pan,
+        // box, etc.) are content, not canvas shortcuts; they must never pan,
         // trigger a tool keybind, or dismiss a tool overlay. This is a window
         // listener, so a textarea keystroke would otherwise bubble up to here.
         if (isEditableTarget(e.target)) return;
@@ -362,13 +362,13 @@
     }
 
     // The single owner of this instance's tool-session lifecycle. Every session
-    // input — engine/canvas readiness, tool change, active-layer change, an
-    // explicit reactivation request — flows through here in one $effect, so all
+    // input (engine/canvas readiness, tool change, active-layer change, an
+    // explicit reactivation request) flows through here in one $effect, so all
     // deltas coalesce into ONE {@link planToolTransition} (at most one rebind).
     // The plan is applied in order: deactivate the outgoing tool through its
     // still-alive session, rebind (begin a fresh session), then activate /
     // dismiss the incoming tool through it. Because the session is per-instance,
-    // there is no focus dimension — each tab drives its own session, and a
+    // there is no focus dimension: each tab drives its own session, and a
     // background tab finishing init can never steal the focused tab's session.
     // See `tools/tool_session.ts`.
     let prevTransition: ToolTransitionState = {
@@ -401,12 +401,12 @@
             // Deactivate through the still-alive outgoing session.
             inst.tool(prevTransition.toolId)?.onDeactivate?.();
         }
-        // Begin a fresh session for the incoming activation, killing the old one
-        // — any op parked on an await from before now rejects on resume.
+        // Begin a fresh session for the incoming activation, killing the old one;
+        // any op parked on an await from before now rejects on resume.
         if (plan.rebind) inst.beginToolSession();
         // `onActivate` / `dismissOverlay` are async and await engine round-trips
         // through the live session, so wrap them like every hook call site: a
-        // mid-await session death rejects with ToolSessionCancelled — a no-op to
+        // mid-await session death rejects with ToolSessionCancelled, a no-op to
         // swallow, not an unhandled rejection.
         if (plan.activate) void runHook(inst.tool(next.toolId)?.onActivate?.());
         if (plan.dismiss) void runHook(inst.tool(next.toolId)?.dismissOverlay?.());
@@ -446,7 +446,7 @@
 />
 
 <div class="canvas-container">
-    <!-- `canvas` is a binding site for keyboard scope only — its mouse/drag
+    <!-- `canvas` is a binding site for keyboard scope only: its mouse/drag
          pipeline (nav → tool-claim → chord → tool default) is ordered
          inside `onPointerDown`, so `mouse: false` keeps `bindingSite` from
          duplicating that dispatch. -->

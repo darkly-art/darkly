@@ -28,7 +28,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "newVoid",
         display_name: "New Void",
-        description: "Add a void — a layer filled from a procedural or live source (noise, camera, screen share, …).",
+        description: "Add a void: a layer filled from a procedural or live source (noise, camera, screen share, …).",
         icon: "tabler:galaxy",
     },
     ActionDef {
@@ -90,6 +90,12 @@ const ACTIONS: &[ActionDef] = &[
         display_name: "Merge Down",
         description: "Merge the active layer into the one below it, or combine multiple selected layers into a single layer.",
         icon: "fa6-solid:arrows-down-to-line",
+    },
+    ActionDef {
+        id: "convertLayerToSmartObject",
+        display_name: "Convert to Smart Object",
+        description: "Turn the selected layer into a smart object: the pixels are kept as an embedded original, so you can resize the layer freely without losing quality.",
+        icon: "tabler:photo-scan",
     },
     ActionDef {
         id: "flatten",

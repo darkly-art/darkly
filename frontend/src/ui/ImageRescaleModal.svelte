@@ -9,7 +9,7 @@
     let oldW = $state(1);
     let oldH = $state(1);
 
-    // Target dimensions in pixels — the model. Inputs (`wInput`/`hInput`) are
+    // Target dimensions in pixels: the model. Inputs (`wInput`/`hInput`) are
     // shown in the current `unit` and converted to/from these.
     let pxW = $state(1);
     let pxH = $state(1);
@@ -84,7 +84,7 @@
         const w = clampDim(pxW);
         const h = clampDim(pxH);
         app.engine?.api.rescaleImage({ new_width: w, new_height: h });
-        // New dims are known synchronously this JS turn — recenter the
+        // New dims are known synchronously this JS turn; recenter the
         // coordinate transforms before any pointer event reads them.
         app.syncCanvasRect();
         app.refreshLayerTree();

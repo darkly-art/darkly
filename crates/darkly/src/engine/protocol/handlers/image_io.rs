@@ -11,7 +11,7 @@ use crate::engine::protocol::{bad_payload, ProtocolError, RequestRegistration, R
 use crate::engine::SavePurpose;
 use crate::layer::LayerId;
 
-/// `{ snapshot? }` — a `snapshot` save (autosave to OPFS) leaves the dirty flag
+/// `{ snapshot? }`: a `snapshot` save (autosave to OPFS) leaves the dirty flag
 /// set; a file save (the default) clears it.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -20,7 +20,7 @@ pub struct StartSaveDocumentReq {
     pub snapshot: bool,
 }
 
-/// `{ width, height, active_layer_id }` — place decoded image bytes (carried in
+/// `{ width, height, active_layer_id }`: place decoded image bytes (carried in
 /// the binary side-channel) as a smart object. `active_layer_id` is `-1` when
 /// there is no anchor, matching the paste requests.
 #[derive(Deserialize)]

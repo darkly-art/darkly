@@ -1,7 +1,7 @@
 <script lang="ts">
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
-    import { BUNDLED_ICON_NAMES } from '../../icons/bundle.generated';
+    import IconPicker from '../IconPicker.svelte';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
 
     type Props = {
@@ -19,8 +19,8 @@
     let iconInput = $state('');
 
     // Slider bounds, in the same display space the control renders in.
-    // Only scalars have them — a toggle or a dropdown has no travel to
-    // re-range — so the whole section is hidden for other kinds.
+    // Only scalars have them (a toggle or a dropdown has no travel to
+    // re-range), so the whole section is hidden for other kinds.
     let minInput = $state(0);
     let maxInput = $state(1);
     let advancedOpen = $state(false);
@@ -32,10 +32,10 @@
         Number.isFinite(minInput) && Number.isFinite(maxInput) && minInput < maxInput,
     );
 
-    /** Re-seed the inputs whenever the modal opens for a fresh entry —
+    /** Re-seed the inputs whenever the modal opens for a fresh entry:
      *  the engine emits the current effective values (registration
      *  fallbacks applied) so the placeholders/values match what the
-     *  brush user actually sees. */
+     *  artist using the brush actually sees. */
     $effect(() => {
         if (open && entry) {
             labelInput = entry.label;
@@ -89,31 +89,12 @@
                     class="text-input description"
                     bind:value={descriptionInput}
                     rows="4"
-                    placeholder="Shown as a tooltip to the brush user."
+                    placeholder="Shown as a tooltip to the artist using the brush."
                 ></textarea>
             </label>
             <div class="field">
                 <span class="field-label">Icon</span>
-                <div class="icon-picker">
-                    <button
-                        type="button"
-                        class="icon-cell none"
-                        class:selected={!iconInput}
-                        onclick={() => (iconInput = '')}
-                        title="No icon"
-                    >None</button>
-                    {#each BUNDLED_ICON_NAMES as name (name)}
-                        <button
-                            type="button"
-                            class="icon-cell"
-                            class:selected={iconInput === name}
-                            onclick={() => (iconInput = name)}
-                            title={name}
-                        >
-                            <Icon {name} />
-                        </button>
-                    {/each}
-                </div>
+                <IconPicker bind:value={iconInput} allowNone />
             </div>
             {#if scalar}
                 <div class="field">
@@ -130,7 +111,7 @@
                         <div class="advanced">
                             <p class="hint">
                                 Slider range for this brush. Narrow it onto the values that
-                                actually do something, or re-center it — a range of −1 to 1
+                                actually do something, or re-center it: a range of −1 to 1
                                 gives a control that works in both directions.
                             </p>
                             <div class="range-row">
@@ -195,41 +176,6 @@
         resize: vertical;
         min-height: 78px;
         line-height: 1.4;
-    }
-    .icon-picker {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
-        gap: 4px;
-        max-height: 180px;
-        overflow-y: auto;
-        padding: 6px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-    }
-    .icon-cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 34px;
-        font-size: 15px;
-        color: var(--text);
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        cursor: pointer;
-        font-family: inherit;
-    }
-    .icon-cell:hover {
-        background: var(--bg-hover);
-    }
-    .icon-cell.selected {
-        border-color: var(--accent);
-        color: var(--accent);
-    }
-    .icon-cell.none {
-        font-size: 10px;
-        color: var(--text-muted);
     }
     .disclosure {
         display: flex;

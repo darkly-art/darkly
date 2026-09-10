@@ -4,16 +4,25 @@
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
     import { brushSession, focusedBrushTool } from '../tools/brush.svelte';
-    import BrushPicker from './brush_picker/BrushPicker.svelte';
-    import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
     import Icon from '../icons/Icon.svelte';
     import { tooltipForAction } from '../config/store.svelte';
-    import { watchDismiss } from '../lib/dismiss';
+    import BrushExplorer from './brush_explorer/BrushExplorer.svelte';
+    import { brushLibrary } from '../state/brush_library.svelte';
+    import { packPalette } from '../lib/packPalette';
 
-    let brushPickerOpen = $state(false);
-    let brushPickerTrigger: HTMLButtonElement | undefined = $state();
+    /** The explorer's open flag. Local: the trigger owns the dialog, and
+     *  picking a brush closes it, so nothing else needs to reach it. */
+    let explorerOpen = $state(false);
+
+    /** The active brush's pack colours, so the trigger is recognisably the same
+     *  object as the tile it was picked from. Always a palette (a brush in no
+     *  pack, and an edited graph that is no named brush at all, both get the
+     *  neutral one), so the button paints one declaration and never asks
+     *  whether a pack is behind it. */
+    const activePalette = $derived(brushLibrary.paletteForBrush(brushGraph.activeBrush));
 
     function ensureInit() {
         if (!brushGraph.graph && app.engine) brushGraph.init();
@@ -22,18 +31,12 @@
     function toggleBuilder() {
         ensureInit();
         brushGraph.isOpen = !brushGraph.isOpen;
-        // Leaving the builder also leaves fullscreen — otherwise reopening
+        // Leaving the builder also leaves fullscreen, otherwise reopening
         // would silently spring back to a window-filling panel.
         if (!brushGraph.isOpen) brushGraph.fullscreen = false;
     }
 
-    function selectBrush(brush: BrushInfo) {
-        ensureInit();
-        brushGraph.loadBrush(brush.name);
-        brushPickerOpen = false;
-    }
-
-    /** Transient feedback while a scrub is being dragged. Local only — the
+    /** Transient feedback while a scrub is being dragged. Local only: the
      *  engine recompiles the graph and re-derives its previews on every
      *  exposed-port write, which is work the values a drag passes through
      *  don't warrant. */
@@ -41,16 +44,16 @@
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
     }
 
-    /** The value the user settled on. Refreshes the on-canvas hover overlay
+    /** The value the artist settled on. Refreshes the on-canvas hover overlay
      *  afterward so the brush outline reflects the new value without waiting
-     *  for a pointer move — same courtesy the `[` / `]` hotkeys extend. */
+     *  for a pointer move, the same courtesy the `[` / `]` hotkeys extend. */
     async function commitExposedPort(nodeId: string, portName: string, displayValue: number) {
         brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
         await brushGraph.setExposedPortValue(nodeId, portName, displayValue);
         focusedBrushTool()?.refreshHoverOverlay();
     }
 
-    /** Flip a Bool exposed port — toggles the input value between 0 and 1 via
+    /** Flip a Bool exposed port: toggles the input value between 0 and 1 via
      *  the display-space exposed-port setter (Bool reads as `value >= 0.5`). */
     function handleExposedBool(nodeId: string, portName: string, current: boolean) {
         const next = current ? 0 : 1;
@@ -67,10 +70,6 @@
         brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
     }
 
-    // A pointerdown outside the brush picker (trigger + panel, both tagged
-    // data-keep-open="brush-picker") closes it.
-    $effect(() => watchDismiss('brush-picker', () => (brushPickerOpen = false)));
-
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
         app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
@@ -78,7 +77,7 @@
 
     // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
     // liquify, watercolor) report `supportsErase = false`. Reactively
-    // force erase-mode off when the user switches to one of them so the
+    // force erase-mode off when the artist switches to one of them so the
     // session flag and the engine flag don't drift out of sync with the
     // hidden toggle. Re-runs on every graph change because both reads
     // are $state-tracked.
@@ -92,18 +91,18 @@
 
 <ToolBarLayout>
     {#snippet center()}
-        <!-- The brush picker is the leading control in the same wrapping row
-             as the scrubs — a black rounded button that wraps alongside them.
-             Its dropdown menu anchors to this button. -->
+        <!-- The leading control in the same wrapping row as the scrubs: a
+             rounded button, in the colours of the pack the active brush came
+             from, that wraps alongside them. It opens the brush explorer, which
+             takes the screen and closes again as soon as a brush is picked. -->
         <div class="brush-picker-section">
             <button
-                bind:this={brushPickerTrigger}
                 class="brush-picker-button bar-control"
-                data-keep-open="brush-picker"
-                onclick={() => { ensureInit(); brushPickerOpen = !brushPickerOpen; }}
-                title="Select brush"
+                use:packPalette={activePalette}
+                onclick={() => { ensureInit(); explorerOpen = true; }}
+                title="Browse brushes"
             >
-                <!-- Live preview of the active graph — same component the
+                <!-- Live preview of the active graph: same component the
                      picker's tiles use, so preset and custom states render
                      identically. The value switches between the preset name
                      and "Custom". The preview stands in for a scrub's icon. -->
@@ -114,15 +113,10 @@
                     <span class="bar-control-label">Brush</span>
                     <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 </span>
-                <svg class="chevron" class:flipped={brushPickerOpen} width="10" height="6" viewBox="0 0 10 6">
-                    <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                </svg>
             </button>
-
-            {#if brushPickerOpen}
-                <BrushPicker anchor={brushPickerTrigger} onSelect={selectBrush} onClose={() => (brushPickerOpen = false)} />
-            {/if}
         </div>
+
+        <BrushExplorer bind:open={explorerOpen} />
 
         {#each brushGraph.exposedPorts as port}
             {#if port.data.kind === 'scalar'}
@@ -174,7 +168,7 @@
              itself; this toggle just mirrors it and pushes the engine flag.
              Hidden for brushes whose terminal opts out of erase (smudge,
              liquify, watercolor) via `supports_erase = false` on its node
-             registration — for those brushes flipping `gpu.blend_mode`
+             registration: for those brushes flipping `gpu.blend_mode`
              would do nothing, so the toggle would be a lie. -->
         {#if brushGraph.supportsErase}
             <Scrub
@@ -208,7 +202,6 @@
     /* Anchor for the dropdown menu; the button itself sizes to content so it
      * wraps in the scrub row like any other control. */
     .brush-picker-section {
-        position: relative;
         flex-shrink: 0;
     }
 
@@ -234,14 +227,14 @@
         outline: none;
         color: var(--accent);
     }
-    /* The popup list still uses the OS surface — theme it so options stay
+    /* The popup list still uses the OS surface; theme it so options stay
      * legible on the dark bar. */
     .exposed-enum-select option {
         background: var(--bg-active);
         color: var(--text);
     }
 
-    /* Width-bound wrapper for the embedded preview strip — the strip
+    /* Width-bound wrapper for the embedded preview strip: the strip
      * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width picks the
      * trigger preview's height. 64px → ~17px tall, matching the scrubs. */
     .trigger-preview {
@@ -250,11 +243,48 @@
         flex-shrink: 0;
     }
 
-    /* Shared `.bar-control` supplies the look (fill, radius, padding, gap,
-     * label/value metrics) so this matches the scrubs; only the button reset
-     * and the name's truncation are picker-specific. */
+    /* Shared `.bar-control` supplies the metrics (radius, padding, gap,
+     * label/value type) so this matches the scrubs; what is picker-specific is
+     * the button reset, the name's truncation, and the pack.
+     *
+     * The pack is worn as a rim in its vivid pair and a wash of its surface,
+     * which is the order a pack card spends its palette in: the pair on the
+     * edge, the surface on the body. The pair runs as a gradient because
+     * refraction is chroma bent and is drawn with it, never alone
+     * (`brush/pack.rs`), at half strength, so the chip carries the pack without
+     * outranking the scrubs it sits in a row with.
+     *
+     * A gradient cannot be a border colour, so the border is transparent and
+     * the ring is painted as the bottom background layer: clipped to the border
+     * box, with the body's two layers clipped to the padding box on top of it,
+     * so what shows through the transparent border is exactly the ring.
+     * `border-image` would be the direct spelling and is not usable here: it
+     * ignores `border-radius` and would square off the chip's corners.
+     *
+     * The body's own layers are opaque in the right order: a pack's surface may
+     * carry alpha, and what it is meant to let through is the control it is
+     * dressing (hence `--bg` beneath it), not the ring or the tool bar behind
+     * it.
+     *
+     * The padding gives back what the border takes, so the chip stands exactly
+     * as tall as the borderless scrubs it wraps alongside. */
     .brush-picker-button {
-        border: none;
+        --pack-rim-fill:
+            linear-gradient(
+                90deg,
+                color-mix(in srgb, var(--pack-chroma) 50%, transparent),
+                color-mix(in srgb, var(--pack-refraction) 50%, transparent))
+            border-box;
+        --bar-control-fill:
+            linear-gradient(var(--pack-surface) 0 0) padding-box,
+            linear-gradient(var(--bg) 0 0) padding-box,
+            var(--pack-rim-fill);
+        --bar-control-fill-hover:
+            linear-gradient(var(--pack-surface) 0 0) padding-box,
+            linear-gradient(var(--bg-hover) 0 0) padding-box,
+            var(--pack-rim-fill);
+        border: 2px solid transparent;
+        padding: 2px 8px;
         cursor: pointer;
     }
     .brush-picker-button .name {
@@ -262,15 +292,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .chevron {
-        flex-shrink: 0;
-        color: var(--text-muted);
-        transition: transform 0.2s ease-out;
-    }
-    .chevron.flipped {
-        transform: rotate(180deg);
     }
 
     .error-badge {

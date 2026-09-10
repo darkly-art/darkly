@@ -5,7 +5,7 @@ import { rustActionDocs } from './rust_action_docs';
 
 // An action is two halves joined by id: its documentation is authored in Rust
 // (`crates/darkly/src/actions/`) and its handler closes over Svelte runes here.
-// Nothing at either end can tell that the other half is missing — a handler with
+// Nothing at either end can tell that the other half is missing: a handler with
 // no metadata renders as a bare id in the menus, and metadata with no handler is
 // a palette row and a hotkey that do nothing. This is the test that notices.
 //

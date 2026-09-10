@@ -47,7 +47,7 @@ describe('beginScrubDrag', () => {
         expect(onCommit).toHaveBeenCalledWith(25);
     });
 
-    it('is idempotent — pointerup and lostpointercapture both landing commit once', () => {
+    it('is idempotent: pointerup and lostpointercapture both landing commit once', () => {
         const { drag, onCommit, onFinish } = harness();
         drag.move(15, 0);
         drag.end();
