@@ -61,14 +61,14 @@ export type WheelNode = WheelLeaf | WheelBranch;
 
 /** The name a node shows along its arc, or null for one that shows none.
  *
- *  A brush is identified by its stroke and a swatch by its own colour; only a
- *  branch, whose mark is generic (packs ship a handful of shared `mdi:` marks),
- *  has to be named. Asked here rather than at each consumer because the
- *  geometry needs it to know how much arc a sector wants and the component
- *  needs it to draw one, and those two must never disagree about which sectors
- *  carry text. */
+ *  Asked here rather than at each consumer because the geometry needs it to
+ *  know how much arc a sector wants and the component needs it to draw one,
+ *  and those two must never disagree about which sectors carry text. */
 export function wheelLabel(node: WheelNode): string | null {
-    return node.kind === 'branch' && node.visual.kind === 'icon' ? node.label : null;
+    // A swatch is its own colour and has nothing a name would add. Everything
+    // else is named: a pack because its mark is generic, a brush because one
+    // miniature stroke among a fan of miniature strokes is not an identity.
+    return node.visual.kind === 'swatch' ? null : node.label;
 }
 
 /** An arc of ring 0: spans `[a0, a0 + span)` in increasing screen theta

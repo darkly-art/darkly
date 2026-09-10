@@ -33,11 +33,14 @@ export const HUB_R = 28;
  *  reach of the whole gesture. A name costs nothing here, being 9 px of ink
  *  centred in the band whatever the band is.
  *
- *  Ring 0's outer edge sits well inside Krita's 92 px colour-donut outer, and
- *  deliberately: Krita's ring is the whole of its palette, where this is the
- *  first of up to four, and the wheel's outermost edge is still wider than
- *  Krita's 385 px disc. */
-export const RING_T = 48;
+ *  Ring 0's outer edge sits outside Krita's 92 px colour-donut outer, and the
+ *  wheel's outermost edge is wider than Krita's 385 px disc. That is the price
+ *  of a stroke preview a painter can actually tell apart: the chip is laid
+ *  along the radius so the band's depth carries the stroke's *length*, which
+ *  makes this constant, and only this constant, the thing that decides how big
+ *  a brush reads. At 48 the chip was 42 px long and the strokes were not
+ *  distinguishable from one another. */
+export const RING_T = 60;
 
 /** Angular step per child sector, 22.5°: half of the 45° slots Blender's
  *  8-item pie gives at radius ~100, on a wheel whose fans sit further out
@@ -50,6 +53,17 @@ export const CHILD_STEP = Math.PI / 8;
  *  arc a label needs is arithmetic and this is one of its terms; the component
  *  reads it back out as `--mark` to size the glyph itself. */
 export const MARK = 13;
+
+/** A brush chip's two dimensions, px: its length down the radius and its width
+ *  across the arc.
+ *
+ *  The stroke bake is 8:3 and the chip is laid along the sector's outward
+ *  radial direction, so the ring's depth carries the stroke's length instead of
+ *  cropping it. `CHIP_ARC` is therefore the short side, and it is the side that
+ *  costs arc, which is why the geometry needs it and the component reads both
+ *  back out as CSS. */
+export const CHIP_LONG = 54;
+export const CHIP_ARC = 20;
 
 /** The least a sector may be shrunk to pay for a widening sibling, as a
  *  fraction of its own span.
@@ -141,7 +155,10 @@ function fanWidening(
         // Not yet measured: contributes nothing, rather than a guess that the
         // next frame would have to walk back.
         if (nameLen === undefined) continue;
-        wanted = Math.max(wanted, labelDemand(nameLen) / labelRadius(s) - s.span);
+        wanted = Math.max(
+            wanted,
+            labelDemand(markWidth(s.node), nameLen) / labelRadius(s) - s.span,
+        );
     }
     // Crowded is asked of the *uncapped* need, so a fan too small to pay for
     // the room it needs still knows it is crowded. Reading it off the capped
@@ -184,7 +201,7 @@ function markNames(
         const nameLen = measuredName(s, widths);
         s.showsName = nameLen !== undefined
             && (!crowded || i === selected)
-            && labelDemand(nameLen) <= labelArcLen(s) + FIT_EPS;
+            && labelDemand(markWidth(s.node), nameLen) <= labelArcLen(s) + FIT_EPS;
     });
 }
 
@@ -230,14 +247,20 @@ function expandFan(fan: SectorGeom[], selected: number, extra: number): void {
  * pack and no narrower than it, and it is why this is one pass rather than a
  * layout followed by a correction.
  *
- * Note the widening is keyed on `path`, not on what the pointer is momentarily
- * over. A leaf hit leaves `path` at its parent (see `advance`), so a pack stays
- * wide and readable for as long as the painter is choosing a brush inside it.
+ * `selection` is which member of each ring's fan is the widened one. It is
+ * `path` extended by the highlighted sector's own index, because the two answer
+ * different halves of the question: `path` is the chain of *branches* the
+ * painter has opened, and a leaf never joins it (`advance` drops it), so a
+ * widening keyed on `path` alone could never select a brush. Extending it means
+ * a pack keeps its place in the chain while the pen is out among its brushes,
+ * so the pack stays wide *and* the brush under the pen widens. Which rings are
+ * drawn at all, and which of them is unbounded, still follow `path`.
  */
 export function layoutWheel(
     tree: WheelTree,
     path: number[],
     widths: ReadonlyMap<string, number> = NO_WIDTHS,
+    selection: number[] = path,
 ): SectorGeom[] {
     const out: SectorGeom[] = [];
 
@@ -260,7 +283,7 @@ export function layoutWheel(
         // A section is a fan: it owns an arc and divides it, so it is the
         // group that pays for one of its own widening, and the group that
         // decides together whether its names are drawn.
-        const rootSel = path.length > 0 ? path[0] - base : -1;
+        const rootSel = selection.length > 0 ? selection[0] - base : -1;
         const selected = rootSel >= 0 && rootSel < n ? rootSel : -1;
         const { crowded, extra } = fanWidening(fan, widths);
         if (selected >= 0) expandFan(fan, selected, extra);
@@ -291,7 +314,7 @@ export function layoutWheel(
             node,
             showsName: false,
         }));
-        const childSel = path[k + 1];
+        const childSel = selection[k + 1];
         const selected = childSel !== undefined && childSel >= 0 && childSel < n
             ? childSel : -1;
         const { crowded, extra } = fanWidening(fan, widths);
@@ -370,6 +393,20 @@ export function labelRadius(s: SectorGeom): number {
  *  along a curve rather than across a flex gap. */
 const LABEL_GAP = 5;
 
+/** How much arc a node's mark occupies, px.
+ *
+ *  The mark is whatever stands beside the name: a pack's glyph, a brush's
+ *  chip. Both are placed on the arc rather than laid out in a box, so both cost
+ *  the run a known width, and the run's arithmetic wants that width without
+ *  caring which kind of thing supplied it. A swatch has no run to be part of. */
+export function markWidth(node: WheelNode): number {
+    switch (node.visual.kind) {
+        case 'icon': return MARK;
+        case 'brush': return CHIP_ARC;
+        case 'swatch': return 0;
+    }
+}
+
 /** How much arc a sector has to set its label run in, px. */
 export function labelArcLen(s: SectorGeom): number {
     const { a0, a1, r } = labelArc(s);
@@ -380,8 +417,8 @@ export function labelArcLen(s: SectorGeom): number {
  *
  *  One definition, shared by the fitter (which asks whether it has this much)
  *  and the widening (which asks for this much). */
-export function labelDemand(nameLen: number): number {
-    return MARK + LABEL_GAP + nameLen;
+export function labelDemand(markW: number, nameLen: number): number {
+    return markW + LABEL_GAP + nameLen;
 }
 
 /** Slack on the fit comparison, px.
@@ -417,18 +454,21 @@ export function labelPlacement(s: SectorGeom, nameLen: number): LabelPlacement {
     const { a0, a1, r } = labelArc(s);
     const sign = a1 > a0 ? 1 : -1;
     const arcLen = labelArcLen(s);
+    const markW = markWidth(s.node);
     // A mark with no name beside it is centred on its own, gap and all: a gap
-    // to nothing would push it off centre by half of one.
-    const run = MARK + (nameLen > 0 ? LABEL_GAP + nameLen : 0);
+    // to nothing would push it off centre by half of one. That is also the
+    // resting state of every brush chip, which is why this is the one path
+    // that places them, named or not.
+    const run = markW + (nameLen > 0 ? LABEL_GAP + nameLen : 0);
     const start = arcLen / 2 - run / 2;
-    const markA = a0 + (sign * (start + MARK / 2)) / r;
+    const markA = a0 + (sign * (start + markW / 2)) / r;
     return {
         markA,
         // The middle of the band, which is where the ink beside it is centered
         // whichever side of its baseline that ink grows.
         markR: (s.r0 + s.r1) / 2,
         markTurn: markA + (sign * Math.PI) / 2,
-        textOffset: start + MARK + LABEL_GAP + nameLen / 2,
+        textOffset: start + markW + LABEL_GAP + nameLen / 2,
     };
 }
 
@@ -470,6 +510,19 @@ export function sectorAt(layout: SectorGeom[], dx: number, dy: number): Hit {
  * truncates the chain to k entries, which is exactly "retrace the rings you
  * came through".
  */
+/** The fan member to widen on each ring: the expansion path, extended by the
+ *  highlighted sector when that sector is deeper than the path reaches.
+ *
+ *  The companion to `advance`. That one answers "which branches are open",
+ *  which deliberately forgets leaves; this one answers "what is the pen on",
+ *  which must not. Feeding both to `layoutWheel` is what lets a pack stay open
+ *  and wide while one of its brushes is the thing being aimed at. */
+export function selectionPath(path: number[], highlight: Hit): number[] {
+    return highlight.kind === 'sector' && highlight.sector.path.length > path.length
+        ? highlight.sector.path
+        : path;
+}
+
 export function advance(path: number[], hit: Hit): number[] {
     switch (hit.kind) {
         case 'hub': return [];

@@ -37,6 +37,20 @@ const NAMES = [
     'Wet Blending Set', 'Charcoal and Graphite', 'Textured Impasto Rounds',
 ];
 
+/** How many brushes each generated pack holds, cycled.
+ *
+ *  Varied for the same reason the names are: a fan's behaviour turns on how
+ *  many members it divides its arc among, so a generator that gave every pack
+ *  the same count would exercise one case. The values are chosen for what each
+ *  one reaches: `1` is the lone-member fan that has nobody to take room from
+ *  (the `n < 2` guard), `2` the smallest fan that can widen at all, and the
+ *  larger counts crowd ring 2 hard enough that no brush name fits at rest,
+ *  which is what puts a name under the pen and nowhere else.
+ *
+ *  Capped by the library's actual size at generation time: a pack cannot hold
+ *  more brushes than exist. */
+const SIZES = [13, 1, 8, 2, 11, 4, 13, 6, 10, 3, 12, 7, 9, 5];
+
 /** Marks a generated pack wears, cycled alongside the names. */
 const ICONS = [
     'fa6-solid:pen-nib', 'fa6-solid:paintbrush', 'fa6-solid:brush',
@@ -99,11 +113,17 @@ async function seed(count: number): Promise<void> {
         made++;
         // A pack whose members all dangle contributes no branch to the wheel
         // at all, so an empty one would test nothing.
-        const member = brushes[i % brushes.length];
-        try {
-            await app.engine.api.packAddBrush({ pack: id, brush: member.id });
-        } catch (e) {
-            console.warn(`[dev packs] could not fill '${id}'`, e);
+        const size = Math.min(SIZES[i % SIZES.length], brushes.length);
+        for (let k = 0; k < size; k++) {
+            // Offset by the pack index so neighbouring packs hold different
+            // brushes: a ring where every fan opens onto the same strokes says
+            // nothing about telling one brush from another.
+            const member = brushes[(i + k) % brushes.length];
+            try {
+                await app.engine.api.packAddBrush({ pack: id, brush: member.id });
+            } catch (e) {
+                console.warn(`[dev packs] could not add '${member.id}' to '${id}'`, e);
+            }
         }
     }
     await brushLibrary.refresh();
@@ -115,7 +135,9 @@ async function seed(count: number): Promise<void> {
     } else if (made < count) {
         toast.show('error', `Generated only ${made} of ${count} brush packs: ${firstError}`);
     } else {
-        toast.show('success', `Generated ${made} brush packs.`);
+        toast.show('success',
+            `Generated ${made} brush packs, holding up to `
+            + `${Math.min(Math.max(...SIZES), brushes.length)} brushes each.`);
     }
 }
 

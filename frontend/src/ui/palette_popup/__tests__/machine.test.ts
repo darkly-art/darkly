@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { reduce, CLOSED, type MachineState } from '../machine';
-import { HUB_R, RING_T, hitKey } from '../wheel_geometry';
+import {
+    HUB_R,
+    RING_T,
+    hitKey,
+    layoutWheel,
+    midAngle,
+    selectionPath,
+} from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
@@ -221,6 +228,87 @@ const sweep = (tree: WheelTree, widths: Map<string, number>, steps = 4000) => {
     }
     return seen;
 };
+
+/** A pack of `n` brushes, reached at ring 2 through one full-circle Library. */
+const brushPackTree = (names: string[]): WheelTree => ({
+    sections: [{
+        a0: 0,
+        span: 2 * Math.PI,
+        nodes: [{
+            ...branch('library', [branch('pack', names.map(n => ({
+                kind: 'leaf' as const,
+                id: n,
+                label: n,
+                visual: { kind: 'brush' as const, name: n, icon: null },
+                palette: NEUTRAL_PALETTE,
+                select: () => {},
+            })))]),
+            spread: 'full' as const,
+        }],
+    }],
+});
+
+describe('hovering a brush', () => {
+    const names = Array.from({ length: 12 }, (_, i) => `brush${i}`);
+    const widths = new Map(names.map(l => [l, 140]));
+    const RING2_MID = HUB_R + 2 * RING_T + RING_T / 2;
+
+    /** The layout as the wheel currently draws it, which is what the next
+     *  pointer sample is resolved against. */
+    const drawn = (tree: WheelTree, st: MachineState, w = widths) => {
+        const e = engaged(st);
+        return layoutWheel(tree, e.path, w, selectionPath(e.path, e.highlight));
+    };
+
+    /** Open, into the Library, then into its pack. The single pack spans the
+     *  whole circle, so its brush fan is centred on the pack's own mid-angle
+     *  rather than anywhere in particular: the probe angle is read off the
+     *  layout instead of guessed. */
+    const intoPack = (tree: WheelTree, w = widths) => {
+        let s = reduce(CLOSED, down(), tree, w).state;
+        s = reduce(s, moveAt(0, RING0_MID), tree, w).state;
+        const pack = drawn(tree, s, w).find(g => g.ring === 1);
+        return reduce(s, moveAt(midAngle(pack!), RING1_MID), tree, w).state;
+    };
+
+    it('widens the brush under the pen and names it', () => {
+        // A leaf never enters the expansion path (`advance` drops it), so a
+        // widening keyed on the path alone can never select one, and every
+        // brush stays its resting width with no name however long the pen
+        // hovers it.
+        const tree = brushPackTree(names);
+        let s = intoPack(tree);
+        const before = drawn(tree, s).filter(g => g.ring === 2);
+        expect(before.length).toBe(names.length);
+        const rest = before[0].span;
+        expect(before.some(g => g.showsName)).toBe(false);
+
+        s = reduce(s, moveAt(midAngle(before[4]), RING2_MID), tree, widths).state;
+        const hit = engaged(s).highlight;
+        expect(hit.kind).toBe('sector');
+        const idx = hit.kind === 'sector' ? hit.sector.path[2] : -1;
+        expect(idx).toBe(4);
+
+        const after = drawn(tree, s).filter(g => g.ring === 2);
+        expect(after[idx].span).toBeGreaterThan(rest);
+        expect(after[idx].showsName).toBe(true);
+        expect(after.filter(g => g.showsName)).toHaveLength(1);
+    });
+
+    it('keeps the pack it belongs to widened while a brush is hovered', () => {
+        // The other half of the same question: reaching past a pack for one of
+        // its brushes must not collapse the pack ring under the pen.
+        const tree = brushPackTree(names);
+        let s = intoPack(tree);
+        const packSpan = (st: MachineState) =>
+            drawn(tree, st).filter(g => g.ring === 1)[0].span;
+        const held = packSpan(s);
+        const brush = drawn(tree, s).filter(g => g.ring === 2)[7];
+        s = reduce(s, moveAt(midAngle(brush), RING2_MID), tree, widths).state;
+        expect(engaged(s).path).toEqual([0, 0]);
+        expect(packSpan(s)).toBeCloseTo(held, 9);
+    });
+});
 
 describe('widened fan stability', () => {
     it('enters every pack, in order, on a slow sweep of a crowded ring', () => {

@@ -22,7 +22,7 @@
  * pointer id latched at DOWN screens out every other pointer, so a palm
  * touch mid-thread can neither commit nor cancel the gesture.
  */
-import { advance, layoutWheel, sectorAt, type Hit } from './wheel_geometry';
+import { advance, layoutWheel, sectorAt, selectionPath, type Hit } from './wheel_geometry';
 import type { WheelTree } from './model';
 
 export type MachineState =
@@ -87,7 +87,8 @@ export function reduce(
             // screen when it moved, i.e. the one the previous path produced.
             // That is what makes "hit-test what is drawn" literally true.
             const hit = sectorAt(
-                layoutWheel(tree, state.path, widths),
+                layoutWheel(tree, state.path, widths,
+                    selectionPath(state.path, state.highlight)),
                 event.x - state.center.x,
                 event.y - state.center.y,
             );

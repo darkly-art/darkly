@@ -6,8 +6,11 @@
         midAngle,
         labelArc,
         labelPlacement,
+        selectionPath,
         HUB_R,
         MARK,
+        CHIP_LONG,
+        CHIP_ARC,
         type SectorGeom,
     } from './wheel_geometry';
     import { wheelLabel, wheelLabels } from './model';
@@ -17,8 +20,10 @@
 
     const engaged = $derived(
         palettePopup.state.kind === 'engaged' ? palettePopup.state : null);
-    const layout = $derived(
-        engaged ? layoutWheel(palettePopup.tree, engaged.path, palettePopup.labelWidths) : []);
+    const layout = $derived(engaged
+        ? layoutWheel(palettePopup.tree, engaged.path, palettePopup.labelWidths,
+            selectionPath(engaged.path, engaged.highlight))
+        : []);
     const highlightKey = $derived(engaged ? hitKey(engaged.highlight) : '');
 
     /** Paint order (SVG paints in document order): deeper rings first, so a
@@ -152,17 +157,23 @@
      *  inner edge), and the node's palette, which its face is written in. In
      *  the string rather than through `use:packPalette`, because Svelte writes
      *  a whole-string `style` attribute through `cssText` and would erase what
-     *  the action set on the same element. */
-    function badgeStyle(s: SectorGeom, cx: number, cy: number): string {
-        const mid = midAngle(s);
-        const r = (s.r0 + s.r1) / 2;
-        const ux = Math.cos(mid);
-        const uy = Math.sin(mid);
-        const d = r - s.r0;
-        return `left: ${(cx + r * ux).toFixed(1)}px; top: ${(cy + r * uy).toFixed(1)}px;`
+     *  the action set on the same element.
+     *
+     *  A chip is placed by `labelPlacement`, the same run that places a pack's
+     *  glyph beside its name: unnamed it centres on its sector exactly as it
+     *  always did, and named it slides along the arc to leave room for the
+     *  name. One placement rather than two means the chip and the name cannot
+     *  drift apart, and the resting case falls out of the named one rather
+     *  than being written twice. */
+    function badgeStyle(s: SectorGeom, nameLen: number, cx: number, cy: number): string {
+        const place = labelPlacement(s, nameLen);
+        const ux = Math.cos(place.markA);
+        const uy = Math.sin(place.markA);
+        const d = place.markR - s.r0;
+        return `left: ${(cx + place.markR * ux).toFixed(1)}px;`
+            + ` top: ${(cy + place.markR * uy).toFixed(1)}px;`
             + ` --px: ${(-ux * d * POP).toFixed(1)}px; --py: ${(-uy * d * POP).toFixed(1)}px;`
-            + ` --rot: ${mid.toFixed(4)}rad;`
-
+            + ` --rot: ${place.markA.toFixed(4)}rad;`
             + ` ${packPaletteStyle(s.node.palette)}`;
     }
 
@@ -216,6 +227,7 @@
             style:--cx="{cx}px" style:--cy="{cy}px"
             style:--pop={POP} style:--corner="{CORNER}px"
             style:--mark="{MARK}px"
+            style:--chip-long="{CHIP_LONG}px" style:--chip-arc="{CHIP_ARC}px"
             style:--pack-rim-width="{PACK_RIM}px">
         <svg>
             {#each drawOrder as s (key(s))}
@@ -283,7 +295,7 @@
                 <!-- Nothing is drawn until the name has been measured: whether
                      it is drawn at all is decided by the measurement, and a
                      guess would have to be walked back a frame later. -->
-                {#if label !== null && nameLen !== undefined && s.node.visual.kind === 'icon'}
+                {#if label !== null && nameLen !== undefined}
                     {@const place = labelPlacement(s, s.showsName ? nameLen : 0)}
                     <defs>
                         <path id={arcId(s)} d={labelArcPath(s, cx, cy)} />
@@ -299,14 +311,16 @@
                          either names all of its packs or names only the one
                          under the pen, and never a scattering of whichever
                          names happened to be short. -->
-                    <g class="mark" style={packPaletteStyle(s.node.palette)}
-                       transform="translate({(cx + place.markR * Math.cos(place.markA)).toFixed(2)}
-                                            {(cy + place.markR * Math.sin(place.markA)).toFixed(2)})
-                                  rotate({(place.markTurn * 180 / Math.PI).toFixed(2)})">
-                        <g transform="translate({-MARK / 2} {-MARK / 2})">
-                            <Icon name={s.node.visual.icon} inline={false} />
+                    {#if s.node.visual.kind === 'icon'}
+                        <g class="mark" style={packPaletteStyle(s.node.palette)}
+                           transform="translate({(cx + place.markR * Math.cos(place.markA)).toFixed(2)}
+                                                {(cy + place.markR * Math.sin(place.markA)).toFixed(2)})
+                                      rotate({(place.markTurn * 180 / Math.PI).toFixed(2)})">
+                            <g transform="translate({-MARK / 2} {-MARK / 2})">
+                                <Icon name={s.node.visual.icon} inline={false} />
+                            </g>
                         </g>
-                    </g>
+                    {/if}
                     {#if s.showsName}
                         <text class="pack-name name" style={packPaletteStyle(s.node.palette)}
                               style:fill="url(#{packId(s)})">
@@ -330,8 +344,9 @@
             <!-- Only a brush gets a badge. A branch's mark rides its arc
                  beside its name, and a swatch is its own sector's colour. -->
             {#if visual.kind === 'brush'}
+                {@const w = palettePopup.labelWidths.get(s.node.label)}
                 <div class="badge pack-face {PALETTE_CLASS}"
-                     style={badgeStyle(s, cx, cy)}>
+                     style={badgeStyle(s, s.showsName && w !== undefined ? w : 0, cx, cy)}>
                     <div class="chip brush-thumbs">
                         <BrushThumb name={visual.name} icon={visual.icon} />
                     </div>
@@ -495,8 +510,8 @@
         align-items: center;
         justify-content: center;
         box-sizing: border-box;
-        width: 42px;
-        height: 16px;
+        width: var(--chip-long);
+        height: var(--chip-arc);
         font-size: 7px;
         transform: rotate(var(--rot));
     }

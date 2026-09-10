@@ -7,10 +7,14 @@ import {
     midAngle,
     labelArc,
     labelArcLen,
+    labelPlacement,
     labelRadius,
     labelDemand,
+    markWidth,
     HUB_R,
     RING_T,
+    MARK,
+    CHIP_ARC,
     CHILD_STEP,
     type SectorGeom,
     type Hit,
@@ -481,7 +485,8 @@ describe('showsName', () => {
         for (let i = 0; i < n; i++) {
             const fan = ringOf(layoutWheel(packs(n), [0, i], widthsOf(names, px)), 1);
             expect(fan[i].showsName).toBe(true);
-            expect(labelDemand(px)).toBeLessThanOrEqual(labelArcLen(fan[i]) + 1e-6);
+            expect(labelDemand(markWidth(fan[i].node), px))
+                .toBeLessThanOrEqual(labelArcLen(fan[i]) + 1e-6);
         }
     });
 
@@ -492,6 +497,79 @@ describe('showsName', () => {
         const names = namesOf(n);
         const fan = ringOf(layoutWheel(packs(n), [0, 2], widthsOf(names, 5000)), 1);
         expect(fan.some(s => s.showsName)).toBe(false);
+    });
+});
+
+describe('brush names', () => {
+    /** One pack of `n` brushes, reached at ring 2. Brush leaves carry a chip
+     *  rather than a glyph, so they exercise the run with the other mark. */
+    const brushTree = (names: string[]): WheelTree => ({
+        sections: [{
+            a0: 0,
+            span: 2 * Math.PI,
+            nodes: [{
+                ...branch('library', [branch('pack', names.map(n => ({
+                    kind: 'leaf' as const,
+                    id: n,
+                    label: n,
+                    visual: { kind: 'brush' as const, name: n, icon: null },
+                    palette: NEUTRAL_PALETTE,
+                    select: () => {},
+                })))]),
+                spread: 'full' as const,
+            }],
+        }],
+    });
+
+    it('measures a brush against its chip, not against a glyph', () => {
+        expect(markWidth({
+            kind: 'leaf', id: 'b', label: 'b', palette: NEUTRAL_PALETTE, select: () => {},
+            visual: { kind: 'brush', name: 'b', icon: null },
+        })).toBe(CHIP_ARC);
+        expect(markWidth(branch('p', []))).toBe(MARK);
+    });
+
+    it('names the brush under the pen and no other', () => {
+        const names = ['b0', 'b1', 'b2', 'b3', 'b4', 'b5'];
+        const fan = ringOf(layoutWheel(brushTree(names), [0, 0, 3],
+            widthsOf(names, 140)), 2);
+        expect(fan.map(s => s.showsName)).toEqual(fan.map((_, i) => i === 3));
+    });
+
+    it('widens the brush under the pen enough to hold its name', () => {
+        const names = ['b0', 'b1', 'b2', 'b3', 'b4', 'b5'];
+        const px = 140;
+        for (const i of [0, 2, 5]) {
+            const fan = ringOf(layoutWheel(brushTree(names), [0, 0, i],
+                widthsOf(names, px)), 2);
+            expect(fan[i].showsName).toBe(true);
+            expect(labelDemand(CHIP_ARC, px))
+                .toBeLessThanOrEqual(labelArcLen(fan[i]) + 1e-6);
+        }
+    });
+
+    it('leaves a brush fan alone when no name is measured', () => {
+        const names = ['b0', 'b1', 'b2'];
+        const withNames = layoutWheel(brushTree(names), [0, 0, 1], new Map());
+        expect(ringOf(withNames, 2).some(s => s.showsName)).toBe(false);
+    });
+
+    it('centres an unnamed chip on its sector, and slides a named one aside', () => {
+        const names = ['b0', 'b1', 'b2', 'b3'];
+        const bare = ringOf(layoutWheel(brushTree(names), [0, 0, 1], new Map()), 2)[1];
+        expect(labelPlacement(bare, 0).markA).toBeCloseTo(midAngle(bare), 12);
+
+        // Named, the chip gives up half of the gap and the name to sit beside
+        // them, both centred on the arc together. Which *way* it slides is not
+        // asserted: `labelArc` reverses its direction of travel across the
+        // horizontal so names stay readable, and the chip travels with it.
+        const nameLen = 140;
+        const named = ringOf(layoutWheel(brushTree(names), [0, 0, 1],
+            widthsOf(names, nameLen)), 2)[1];
+        const offset = Math.abs(labelPlacement(named, nameLen).markA - midAngle(named))
+            * labelArc(named).r;
+        // `labelDemand(0, n)` is the gap plus the name, the run without a mark.
+        expect(offset).toBeCloseTo(labelDemand(0, nameLen) / 2, 9);
     });
 });
 
@@ -638,7 +716,8 @@ describe('layoutWheel widening', () => {
         for (let i = 0; i < n; i++) {
             const s = ringOf(layoutWheel(tree16, [0, i], widthsOf(names, px)), 1)[i];
             expect(labelRadius(s)).toBeLessThanOrEqual((s.r0 + s.r1) / 2);
-            expect(labelArcLen(s) + 1e-9).toBeGreaterThanOrEqual(labelDemand(px));
+            expect(labelArcLen(s) + 1e-9)
+                .toBeGreaterThanOrEqual(labelDemand(markWidth(s.node), px));
         }
     });
 });
