@@ -52,7 +52,7 @@ fn drain_rich_copy(engine: &mut DarklyEngine) -> String {
 /// Returns `(name, opacity, blend_mode_type_id, modifier_count)`.
 fn raster_props(engine: &DarklyEngine, id: LayerId) -> (String, f32, String, usize) {
     let id_f = id.to_ffi() as f64;
-    let tree = engine.layer_tree();
+    let tree = engine.layer_tree().layers;
     for info in tree {
         if let LayerInfo::Raster {
             id: lid,
@@ -128,7 +128,7 @@ fn rich_paste_records_mask_presence_v1() {
     let mut source = test_engine(w, h);
     let layer = source.add_raster_layer(None);
     paint_dot(&mut source, layer, 16.0, 16.0);
-    source.add_mask(layer);
+    source.add_mask(layer).expect("add mask");
 
     source.copy_layer_rich(layer);
     let json = drain_rich_copy(&mut source);

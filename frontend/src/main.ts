@@ -2,6 +2,7 @@ import './themes/dark.css';
 import './themes/light.css';
 import './styles/reset.css';
 import './styles/tokens.css';
+import './styles/drop-indicator.css';
 import App from './App.svelte';
 import BrushInspector from './ui/brush_inspector/BrushInspector.svelte';
 import GpuErrorPage from './ui/GpuErrorPage.svelte';

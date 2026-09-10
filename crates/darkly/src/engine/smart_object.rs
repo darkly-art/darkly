@@ -137,11 +137,7 @@ impl DarklyEngine {
         width: u32,
         height: u32,
     ) -> Result<LayerId, String> {
-        let parent = self.doc.parent_of(node_id);
-        let position = self
-            .doc
-            .position_in_parent(node_id)
-            .ok_or("Layer not in tree")?;
+        let slot = self.doc.slot_of(node_id).ok_or("Layer not in tree")?;
         let (name, visible, locked, opacity, blend_mode) = {
             let node = self.doc.find_node(node_id).ok_or("Layer missing")?;
             (
@@ -181,16 +177,7 @@ impl DarklyEngine {
         );
         self.sync_void_persistent_frame(id);
 
-        self.finish_bake(
-            vec![BakeSourceSlot {
-                id: node_id,
-                parent,
-                position,
-            }],
-            id,
-            parent,
-            position,
-        );
+        self.finish_bake(vec![BakeSourceSlot { id: node_id, slot }], id, slot);
         Ok(id)
     }
 }

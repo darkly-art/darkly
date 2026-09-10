@@ -7,7 +7,7 @@
         node: { id: number; pipeline: string; params: ParamInfo[] };
     } = $props();
 
-    const filterLabel = $derived(app.displayName('filters', node.pipeline));
+    const filterLabel = $derived(app.displayName('effects', node.pipeline));
 
     // --- Input histogram (Levels only) ---------------------------------------
     const HIST_BINS = 256;

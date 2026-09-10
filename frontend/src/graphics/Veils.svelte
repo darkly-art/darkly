@@ -28,9 +28,15 @@
     export const GAP_X = 28;
     export const ROW_GAP = 22;
 
-    /** The catalog this graphic depicts. Names the output file, and is what a
-     *  `<!-- darkly:catalog-graphic catalog=veils -->` region asks for. */
-    export const catalog = 'veils';
+    /** What this graphic depicts: the Veils group of the effect catalog. A veil
+     *  and a filter are the same kind of thing to the engine and differ only in
+     *  where they render, so they share one catalog and separate by category.
+     *
+     *  Together these name the output file, and are what a
+     *  `<!-- darkly:catalog-graphic catalog=effects category=Veils -->` region
+     *  asks for. */
+    export const catalog = 'effects';
+    export const category = 'Veils';
 
     export interface Entry {
         name: string;
@@ -43,7 +49,7 @@
      *  Not called `props`: a module-level `props` would make the instance
      *  script's `$props()` parse as a store subscription to it. */
     export function graphicProps(ctx: GraphicContext) {
-        const c = ctx.catalog(catalog);
+        const c = ctx.catalog(catalog, category);
         return {
             title: c.title,
             entries: c.entries.map(e => ({

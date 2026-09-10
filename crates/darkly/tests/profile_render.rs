@@ -65,7 +65,7 @@ fn run_paint_benchmark(
         let paint_us = t_paint.elapsed().as_micros();
 
         let t_render = Instant::now();
-        let submitted = compositor.render_offscreen(device, queue, doc);
+        let submitted = compositor.render_offscreen(device, queue, doc, None);
         let render_us = t_render.elapsed().as_micros();
 
         timings.push(FrameTiming {
@@ -114,7 +114,7 @@ fn profile_render_pipeline() {
 
     // Warm up: first render composites everything (full canvas)
     let t_warmup = Instant::now();
-    let _ = compositor.render_offscreen(&device, &queue, &mut doc);
+    let _ = compositor.render_offscreen(&device, &queue, &mut doc, None);
     let warmup_us = t_warmup.elapsed().as_micros();
     eprintln!(
         "warmup (full composite): {:.1}ms",

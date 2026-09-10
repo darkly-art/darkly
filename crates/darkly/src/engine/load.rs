@@ -15,7 +15,7 @@
 //! 3. **Container version**: newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
 //! 4. **`requires` inventory**: diffed against the four registries
-//!    (veils, blend modes, layer kinds, filters); any miss →
+//!    (effects, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
 //! 5. **Full schema parse + staging-doc construction**: any
@@ -24,8 +24,8 @@
 //!    and the file is corrupt → [`LoadError::CorruptManifest`].
 //!
 //! Only after every check passes does [`install_staging`] swap the
-//! document, replace the compositor, upload pixels, and restore veils.
-//! That phase has no fallible operations; by construction the install
+//! document, replace the compositor, and upload pixels.
+//! That phase has no fallible operations: by construction the install
 //! either completes or panics (a logic bug to fix at the source).
 //!
 //! The staging-doc construction is registry-driven: each entity's
@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use super::DarklyEngine;
 use crate::document::filter;
 use crate::document::layer_kind::{self, IdMap};
-use crate::document::{Document, Entity};
+use crate::document::{Document, Entity, TreeSlot};
 use crate::format::error::LoadError;
 use crate::format::manifest::{Manifest, ManifestPixelRef, ManifestRequires};
 use crate::format::unzip::unzip_entries;
@@ -136,7 +136,7 @@ fn pre_check_requires_present(raw: &serde_json::Value) -> Result<(), LoadError> 
 }
 
 /// Cross-reference the manifest's `requires` inventory against the
-/// binary's four registries (veils, blend modes, layer kinds,
+/// binary's four registries (effects, blend modes, layer kinds,
 /// filters). Any miss collects a `"<registry>/<type_id>"` entry and
 /// the load is refused with [`LoadError::UnsupportedFeatures`].
 fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Result<(), LoadError> {
@@ -163,10 +163,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
         }
     }
 
-    let veil_registry = engine.compositor.veil_chain().registry();
-    for id in &requires.veil {
-        if !veil_registry.has(id) {
-            missing.push(format!("veil/{id}"));
+    let effect_registry = engine.compositor.effect_registry();
+    for id in &requires.effect {
+        if !effect_registry.has(id) {
+            missing.push(format!("effect/{id}"));
         }
     }
 
@@ -201,6 +201,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 ///    source of truth, and the `parent` SecondaryMap is derived from it.
 fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
+    // The manifest root's children replace the fresh root's wholesale below,
+    // orphaning the divider `Document::new` created. Remember it so the
+    // normalization pass can adopt the file's divider or re-link this one.
+    let fresh_divider = doc.divider_id();
     doc.name = manifest.name.clone();
     doc.canvas_origin =
         crate::coord::CanvasPoint::new(manifest.canvas.origin_x, manifest.canvas.origin_y);
@@ -364,7 +368,87 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         }
     }
 
+    // The one place the divider invariant is established by hand. Load builds
+    // the tree from the manifest and derives the parent map directly, so
+    // `link` (where every other path holds the invariant) is never called.
+    normalize_divider(&mut doc, fresh_divider)?;
+
     Ok((doc, id_map))
+}
+
+/// Re-establish "the root holds exactly one divider" on a freshly loaded tree,
+/// and degrade rather than trust a hand-edited file: nothing may sit above the
+/// divider that cannot render in screen space.
+///
+/// - The manifest carries exactly one root-level divider → adopt it and purge
+///   the orphaned fresh one.
+/// - No divider (an older or hand-edited file) → the fresh one re-links at the
+///   top, so nothing is viewport-only.
+/// - A nested divider, or more than one → `CorruptManifest`; neither is a
+///   state any producer writes.
+fn normalize_divider(doc: &mut Document, fresh_divider: LayerId) -> Result<(), LoadError> {
+    let root = doc.root_id();
+    let dividers: Vec<LayerId> = doc
+        .all_node_ids_in_order()
+        .into_iter()
+        .filter(|&id| {
+            doc.find_node(id)
+                .is_some_and(|n| n.is_screen_space_boundary())
+        })
+        .collect();
+    match dividers.as_slice() {
+        [] => {
+            let top = doc.children_of(root).len();
+            doc.reinsert_entity(
+                fresh_divider,
+                TreeSlot {
+                    parent: None,
+                    position: top,
+                },
+            );
+        }
+        [one] if doc.parent_of(*one) == Some(root) => {
+            doc.remove_entity(fresh_divider);
+        }
+        _ => {
+            return Err(LoadError::CorruptManifest {
+                reason: "the viewport divider must appear exactly once, at the root".to_string(),
+            });
+        }
+    }
+
+    // Degrade on load, refuse on move: relink the divider above the longest
+    // qualifying suffix if the file put something ineligible above it, so a
+    // hand-edited file cannot ask for a raster to be rendered after the view
+    // transform, and still opens.
+    let div = doc.divider_id();
+    let run_blocked = doc.screen_space_run().iter().any(|&c| {
+        doc.find_node(c)
+            .is_some_and(|n| !n.supports_screen_space(doc))
+    });
+    if run_blocked {
+        let qualifying = doc
+            .children_of(root)
+            .iter()
+            .rev()
+            .take_while(|&&c| {
+                c != div
+                    && doc
+                        .find_node(c)
+                        .is_some_and(|n| n.supports_screen_space(doc))
+            })
+            .count();
+        doc.detach_for_undo(div);
+        let pos = doc.children_of(root).len() - qualifying;
+        doc.reinsert_entity(
+            div,
+            TreeSlot {
+                parent: None,
+                position: pos,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Walk every group node's `children` and every host node's `filters`,
@@ -429,19 +513,14 @@ fn install_staging(
 
     upload_loaded_pixels(engine, manifest, &id_map, entries);
 
-    // The veil chain sizes to the surface in production (via
-    // `resize()`); on a freshly-loaded compositor it's still 0×0,
-    // and `add_veil`'s `ensure_textures` would no-op silently and
-    // then unwrap on `views`. Seed to canvas dimensions so the
-    // restore path always sees a sized viewport: the next real
+    // The screen-space run sizes to the surface in production (via
+    // `resize()`); on a freshly-loaded compositor it's still 0×0, so its
+    // instances would have no pair to bind. Seed to canvas dimensions so the
+    // first frame after a load always sees a sized viewport: the next real
     // resize cascades to the right surface size automatically.
-    engine.compositor.veil_chain_mut().resize(
-        &engine.gpu.device,
-        &engine.gpu.queue,
-        engine.doc.width,
-        engine.doc.height,
-    );
-    restore_veils(engine, manifest);
+    engine
+        .compositor
+        .resize_screen_run(engine.doc.width, engine.doc.height);
     ensure_selection_state(engine);
     // Register embedded fonts before `sync_compositor_layers` realizes the
     // vector scenes, so text shapes with its real face on the first frame
@@ -639,31 +718,6 @@ fn register_embedded_fonts(
     }
 }
 
-/// Rebuild the veil chain from `manifest.veils`. The `requires`
-/// pre-check has already refused any veil the binary doesn't know
-/// about, so any miss here is a logic bug: the registry must have
-/// changed between pre-check and restore (impossible without a
-/// concurrent mutation we don't allow).
-fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
-    engine.compositor.veil_chain_mut().clear_veils();
-    for veil in &manifest.veils {
-        let type_id = veil.instance.type_id.clone();
-        let params = veil.instance.params.clone();
-        if !engine.compositor.veil_chain().registry().has(&type_id) {
-            log::error!(
-                "load: veil '{type_id}' missing despite requires pre-check; \
-                 registry drift?"
-            );
-            continue;
-        }
-        engine.add_veil_layer(&type_id, &params);
-        if !veil.visible {
-            let last = engine.compositor.veil_chain().count().saturating_sub(1);
-            engine.set_veil_visible(last, false);
-        }
-    }
-}
-
 /// Allocate the selection-filter GPU state: mirrors the engine
 /// constructor's eager allocation.
 fn ensure_selection_state(engine: &mut DarklyEngine) {
@@ -711,10 +765,14 @@ mod tests {
         // We don't go through save here: we just hand-build a manifest
         // shape that mirrors what a real save would produce, then assert
         // the staging doc's structure.
-        let root_id: u64 = 1;
-        let group_id: u64 = 2;
-        let raster_id: u64 = 3;
-        let mask_id: u64 = 4;
+        // Manifest ids are `LayerId::to_ffi` outputs (generation in the high
+        // bits): a bare small integer is not a valid wire id and would only
+        // resolve by slot-index coincidence.
+        let ffi = |idx: u64| (1u64 << 32) | idx;
+        let root_id: u64 = ffi(1);
+        let group_id: u64 = ffi(2);
+        let raster_id: u64 = ffi(3);
+        let mask_id: u64 = ffi(4);
 
         let manifest = Manifest {
             format: crate::format::manifest::FORMAT_TAG.to_string(),
@@ -800,7 +858,6 @@ mod tests {
                 }),
             }],
             selection_id: None,
-            veils: Vec::new(),
             fonts: Vec::new(),
         };
 

@@ -5,6 +5,7 @@ use peniko::Brush;
 use serde::{Deserialize, Serialize};
 
 use crate::coord::CanvasRect;
+use crate::document::Document;
 use crate::gpu::blend_mode::{self, BlendModeRegistration};
 use crate::gpu::params::ParamValue;
 
@@ -228,7 +229,7 @@ impl VoidLayer {
 /// non-passthrough (isolated) group.
 ///
 /// State is exactly: a `pipeline` id naming which
-/// [`crate::gpu::filter::FilterPipelineRegistry`] transform to run (e.g.
+/// [`crate::gpu::effect::EffectRegistry`] transform to run (e.g.
 /// `"invert"`), plus that transform's parameter values. There is no pixel
 /// buffer: the compositor runs the shared filter pipeline over the running
 /// accumulator each frame.
@@ -236,13 +237,12 @@ pub struct FilterLayer {
     pub id: LayerId,
     pub common: NodeCommon,
     pub blend: BlendProps,
-    /// Stable `type_id` from [`crate::gpu::filter::FilterPipelineRegistry`]
-    /// (e.g. `"invert"`). Named `pipeline` rather than `filter_type` because
-    /// `filters` (below) already means the attached mask/selection list: two
-    /// "filter" fields on one struct would be a footgun.
+    /// Stable `type_id` from [`crate::gpu::effect::EffectRegistry`] (e.g.
+    /// `"invert"`). Named `pipeline` rather than `effect_type` because
+    /// `filters` (below) already means the attached mask/selection list.
     pub pipeline: String,
-    /// Parameter values matching the filter pipeline's schema, in order. Empty
-    /// for parameter-free filters like invert.
+    /// Parameter values matching the effect's schema, in order. Empty for
+    /// parameter-free effects like invert.
     pub params: Vec<ParamValue>,
     /// Attached mask / selection filters (same polymorphic list every layer
     /// kind carries).
@@ -483,6 +483,32 @@ impl VectorLayer {
     }
 }
 
+/// The viewport divider: the screen-space boundary as a node among the root's
+/// children. Canvas space is everything below it, screen space everything
+/// above. It has no content of its own and never composites; its entire
+/// document meaning is its index in the root's children list.
+///
+/// `blend` and `filters` exist only to keep [`Layer`]'s uniform accessors
+/// total, nothing ever reads them (the compositor skips the divider, and
+/// `can_have_mask` is false).
+pub struct DividerLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    pub filters: Vec<LayerId>,
+}
+
+impl DividerLayer {
+    pub fn new(id: LayerId) -> Self {
+        DividerLayer {
+            id,
+            common: NodeCommon::new("Viewport Divider".to_string()),
+            blend: BlendProps::new(),
+            filters: Vec::new(),
+        }
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -681,6 +707,13 @@ impl LayerNode {
         }
     }
 
+    /// Whether this node is the screen-space boundary: the divider among the
+    /// root's children. Read off the kind registration, so no consumer ever
+    /// compares `type_id`.
+    pub fn is_screen_space_boundary(&self) -> bool {
+        self.kind().screen_space_boundary
+    }
+
     /// Convenience for the wire format / save file: just the stable `type_id`
     /// string from `kind()`.
     pub fn type_id(&self) -> &'static str {
@@ -693,28 +726,128 @@ impl LayerNode {
     /// delegates back through `ctx` into a compositor-private method that
     /// owns the GPU work: variant *knows itself*, compositor *does the
     /// work*.
-    pub fn compose_into(&self, ctx: &mut crate::gpu::compositor::CompositionContext<'_>) {
+    pub fn compose_into(&self, ctx: &mut crate::gpu::compose_walk::CompositionContext<'_>) {
         match self {
-            LayerNode::Layer(layer) => ctx.compose_layer(layer),
+            LayerNode::Layer(layer) => layer.compose_into(ctx),
             LayerNode::Group(group) => ctx.compose_group(group),
+        }
+    }
+
+    /// Whether this node's compose arm has the GPU resources it needs to draw
+    /// anything at all.
+    ///
+    /// Sibling of [`Self::compose_into`], and dispatched the same way: every
+    /// arm that can silently return without drawing answers for itself, so the
+    /// walk never enumerates which kinds can no-op. The walk's cache consults
+    /// this so a child that contributes nothing is recorded as such: a child
+    /// whose resources appear or vanish changes the group's output exactly as
+    /// a pixel edit would.
+    ///
+    /// Answers `true` whenever it cannot be sure: recording a drawing child as
+    /// absent would let a later edit to it go unnoticed, while recording an
+    /// absent child as drawing only costs a recomposite.
+    pub fn compose_ready(&self, compositor: &crate::gpu::compositor::Compositor) -> bool {
+        match self {
+            LayerNode::Layer(layer) => layer.compose_ready(compositor),
+            // A passthrough group draws through its children; an isolated one
+            // needs its own accumulator to compose them into first.
+            LayerNode::Group(g) => g.passthrough || compositor.has_group_state(g.id),
         }
     }
 
     /// Whether this node transforms the running parent accumulator *in place*
     /// (the composite of everything below it) rather than blending its own
     /// discrete texture in. A passthrough group inlines its children into the
-    /// parent; a filter layer runs its pipeline over the accumulator. Both want
-    /// a snapshot+lerp detour when they carry a visible mask, so the compositor
-    /// keys its mask-snapshot resource off this predicate instead of
-    /// enumerating which kinds qualify: a new in-place kind is purely additive.
-    /// Isolated groups, raster, and void layers blend a texture and answer
-    /// `false`.
+    /// parent; an effect layer runs its pipeline over the accumulator. The
+    /// compositor routes on this predicate instead of enumerating which kinds
+    /// qualify, so a new in-place kind is purely additive. Isolated groups,
+    /// raster, vector and void layers blend a texture and answer `false`.
     pub fn composites_in_place(&self) -> bool {
         match self {
             LayerNode::Group(g) => g.passthrough,
             LayerNode::Layer(Layer::Filter(_)) => true,
             LayerNode::Layer(_) => false,
         }
+    }
+
+    /// Whether this node may sit above the screen-space boundary: whether it
+    /// can be realized after the view transform, on the presented image, rather
+    /// than inside the canvas-space tree walk.
+    ///
+    /// A structural question only: visibility is never consulted, because
+    /// toggling an eye must not change what a document exports. A node carrying
+    /// a mask answers `false` whatever its kind: mask textures are canvas-space
+    /// R8 at the full canvas rect and are sampled in plane coordinates, so
+    /// applying one to a view-transformed image mixes coordinate frames. Mask
+    /// *presence* is what disqualifies, not mask visibility, for the same reason
+    /// visibility is ignored.
+    ///
+    /// An **empty** group answers `true`: it composites nothing in either
+    /// space, so there is nothing it could render wrongly. Its contents cannot
+    /// later betray it either, because the placement rules hold on the way in
+    /// rather than on the way out: a move that would put a non-effect inside a
+    /// group above the divider is refused, and an insert is redirected to the
+    /// nearest legal slot outside it.
+    pub fn supports_screen_space(&self, doc: &Document) -> bool {
+        self.screen_space_blocker(doc).is_none()
+    }
+
+    /// What stops `self` from sitting above the boundary (the offending node
+    /// (`self`, or the first descendant of it that cannot be there) paired with
+    /// why) or `None` if nothing does.
+    /// [`Self::supports_screen_space`] is this, asked as a yes/no.
+    ///
+    /// One rule with two callers: the boundary machinery wants the bool, and a
+    /// refused move wants something to say. Carrying the reason here rather
+    /// than re-deriving it at the call site is what keeps those two from
+    /// drifting apart, and returning a `&'static str` keeps the per-frame read
+    /// path allocation-free. The phrase completes "…*name* **reason**", so the
+    /// layer that talks to the user owns the sentence, not the wording of the
+    /// rule.
+    ///
+    /// The conditions are the ones documented on
+    /// [`Self::supports_screen_space`]: a mask disqualifies whatever the kind,
+    /// a leaf answers from its kind's registration, and a group qualifies
+    /// exactly when its children do.
+    pub fn screen_space_blocker(&self, doc: &Document) -> Option<(LayerId, &'static str)> {
+        if doc.has_mask(self.id()) {
+            return Some((self.id(), "has a mask, which only exists in canvas space"));
+        }
+        match self {
+            // Leaves answer from their own kind's registration, so a new kind
+            // that can run after the view transform opts in from its own file.
+            LayerNode::Layer(_) => {
+                if self.kind().leaf_renders_after_view_transform {
+                    None
+                } else {
+                    Some((self.id(), "can only be composited onto the canvas"))
+                }
+            }
+            // A group is eligible exactly when everything it holds is. Above
+            // the divider the run is consumed flattened, so a group composites
+            // nothing of its own there: its passthrough flag, opacity and
+            // blend mode are read only in canvas space, and cross the divider
+            // untouched so they re-apply when the group moves back down.
+            LayerNode::Group(g) => g
+                .children
+                .iter()
+                .find_map(|c| doc.find_node(*c)?.screen_space_blocker(doc)),
+        }
+    }
+
+    /// Whether this node's in-place result has to be captured *before* it runs.
+    ///
+    /// A passthrough group's "after" is written by an arbitrary number of child
+    /// passes straight into the parent accumulator, so the only way to keep its
+    /// "before" is to copy the accumulator first. An effect layer instead
+    /// writes into a scratch target, so both images exist without a copy: one
+    /// full-canvas `copy_texture_to_texture` per effect per frame that the
+    /// snapshot path would have cost.
+    ///
+    /// Answered by the node rather than asked about it, so the compositor never
+    /// branches on which kind it is looking at.
+    pub fn needs_before_snapshot(&self) -> bool {
+        matches!(self, LayerNode::Group(g) if g.passthrough)
     }
 }
 
@@ -738,6 +871,7 @@ pub enum Layer {
     Void(VoidLayer),
     Filter(FilterLayer),
     Vector(VectorLayer),
+    Divider(DividerLayer),
 }
 
 impl Layer {
@@ -768,6 +902,40 @@ impl Layer {
             // `frontend/src/tools/transform.svelte.ts`) rather than this
             // layer-level capability, so a vector layer reports `None` here.
             Layer::Vector(_) => TransformCapability::None,
+            // The divider has nothing to transform.
+            Layer::Divider(_) => TransformCapability::None,
+        }
+    }
+
+    /// Composite this layer into its parent group's accumulators. The
+    /// variant dispatch is owned by `Layer` (sibling of
+    /// [`LayerNode::compose_into`], one level down) so the compositor never
+    /// asks which kind it received; each arm delegates back through `ctx`
+    /// into a compositor-private method that owns the GPU work. A new
+    /// in-place layer kind slots in here, editing this file only.
+    pub fn compose_into(&self, ctx: &mut crate::gpu::compose_walk::CompositionContext<'_>) {
+        match self {
+            // An effect layer transforms the running group accumulator in
+            // place (everything composited below it) rather than blending a
+            // texture in, so it takes a separate arm from the raster/void
+            // blend path.
+            Layer::Filter(f) => ctx.compose_effect(f),
+            _ => ctx.compose_layer(self),
+        }
+    }
+
+    /// Whether this layer's compose arm has what it needs to draw, sibling of
+    /// [`Self::compose_into`], one level down from
+    /// [`LayerNode::compose_ready`].
+    pub fn compose_ready(&self, compositor: &crate::gpu::compositor::Compositor) -> bool {
+        match self {
+            // The effect arm needs a realized instance and the shared apply
+            // scratch; without either it composes as a no-op.
+            Layer::Filter(f) => compositor.effect_arm_ready(f.id),
+            // A divider is structure, never pixels.
+            Layer::Divider(_) => false,
+            // Raster, void and vector all blend their own node texture.
+            _ => compositor.has_node_texture(self.id()),
         }
     }
 
@@ -777,7 +945,7 @@ impl Layer {
     /// running group accumulator instead of contributing a texture of its own,
     /// so it is realized by `compose_filter_arm`, not the content walk.
     pub fn is_blend_content(&self) -> bool {
-        !matches!(self, Layer::Filter(_))
+        !matches!(self, Layer::Filter(_) | Layer::Divider(_))
     }
 
     /// The registration record for this layer's kind. Arms reference each kind
@@ -786,12 +954,13 @@ impl Layer {
     /// [`LayerNode::kind`] delegates here and adds the group arm.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{filter, raster, vector, void};
+        use crate::document::layer_kinds::{divider, filter, raster, vector, void};
         match self {
             Layer::Raster(_) => registry().get(raster::TYPE_ID).unwrap(),
             Layer::Void(_) => registry().get(void::TYPE_ID).unwrap(),
             Layer::Filter(_) => registry().get(filter::TYPE_ID).unwrap(),
             Layer::Vector(_) => registry().get(vector::TYPE_ID).unwrap(),
+            Layer::Divider(_) => registry().get(divider::TYPE_ID).unwrap(),
         }
     }
 
@@ -838,7 +1007,7 @@ impl Layer {
             Layer::Raster(_) => true,
             // Document-side fact, so this needs no GPU query.
             Layer::Void(v) => v.frame.is_some(),
-            Layer::Filter(_) | Layer::Vector(_) => false,
+            Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => false,
         }
     }
 
@@ -848,6 +1017,7 @@ impl Layer {
             Layer::Void(v) => v.id,
             Layer::Filter(f) => f.id,
             Layer::Vector(v) => v.id,
+            Layer::Divider(d) => d.id,
         }
     }
 
@@ -857,6 +1027,7 @@ impl Layer {
             Layer::Void(v) => &v.common,
             Layer::Filter(f) => &f.common,
             Layer::Vector(v) => &v.common,
+            Layer::Divider(d) => &d.common,
         }
     }
 
@@ -866,6 +1037,7 @@ impl Layer {
             Layer::Void(v) => &mut v.common,
             Layer::Filter(f) => &mut f.common,
             Layer::Vector(v) => &mut v.common,
+            Layer::Divider(d) => &mut d.common,
         }
     }
 
@@ -875,6 +1047,7 @@ impl Layer {
             Layer::Void(v) => &v.blend,
             Layer::Filter(f) => &f.blend,
             Layer::Vector(v) => &v.blend,
+            Layer::Divider(d) => &d.blend,
         }
     }
 
@@ -884,6 +1057,7 @@ impl Layer {
             Layer::Void(v) => &mut v.blend,
             Layer::Filter(f) => &mut f.blend,
             Layer::Vector(v) => &mut v.blend,
+            Layer::Divider(d) => &mut d.blend,
         }
     }
 
@@ -893,6 +1067,7 @@ impl Layer {
             Layer::Void(v) => &v.filters,
             Layer::Filter(f) => &f.filters,
             Layer::Vector(v) => &v.filters,
+            Layer::Divider(d) => &d.filters,
         }
     }
 
@@ -902,6 +1077,7 @@ impl Layer {
             Layer::Void(v) => &mut v.filters,
             Layer::Filter(f) => &mut f.filters,
             Layer::Vector(v) => &mut v.filters,
+            Layer::Divider(d) => &mut d.filters,
         }
     }
 
@@ -912,14 +1088,14 @@ impl Layer {
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&r.pixels),
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             Layer::Raster(r) => Some(&mut r.pixels),
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
@@ -939,7 +1115,7 @@ impl Layer {
     pub fn void_state(&self) -> Option<(&[ParamValue], &crate::transform::Transform)> {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
-            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 }

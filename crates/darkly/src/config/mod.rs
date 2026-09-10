@@ -22,7 +22,10 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// Forward-compatible changes don't need a bump: new prefs get default
 /// values, removed pref keys are dropped by `validateOverrides`, and
-/// numeric range changes are clamped.
+/// numeric range changes are clamped. A rename is only a bump when the old
+/// value has to be *carried across*: a rename with no migration is a removal
+/// plus an addition, which validation already cleans, and bumping would throw
+/// away every unrelated override (hotkeys included) to reclaim one stale key.
 pub const CONFIG_VERSION: u32 = 1;
 
 /// A configuration value.
@@ -496,7 +499,7 @@ mod tests {
     fn defaults_from_yaml() {
         reset_state();
         // Agnostic defaults present without picking an editor.
-        assert_eq!(get_i64("animation.veil_divisor"), 2);
+        assert_eq!(get_i64("animation.screen_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
         // Autosave section (schema in sections/autosave.rs, defaults in yaml).
         assert!(get_bool("autosave.enabled"));

@@ -70,7 +70,7 @@ impl DarklyEngine {
     /// arbitrary wire string, and there is nothing to render.
     ///
     /// Fully isolated from the live document: the effect instance is built fresh
-    /// against the preview target's own textures, so the artist's veil chain,
+    /// against the preview target's own textures, so the user's layer stack,
     /// layer stack and compositor surface are never touched.
     pub fn start_preview(&mut self, catalog: &str, type_id: &str, variant: PreviewVariant) {
         let Some((catalog, mech)) = mechanism(catalog) else {
@@ -259,8 +259,12 @@ impl DarklyEngine {
             // Refresh the composite so the preview reflects the current
             // document, even with no surface present yet (mirrors
             // `start_export`).
-            self.compositor
-                .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+            self.compositor.render_offscreen(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut self.doc,
+                self.isolated_node,
+            );
         }
         let (w, h) = (
             self.compositor.canvas_width(),

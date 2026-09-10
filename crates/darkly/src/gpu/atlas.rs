@@ -109,6 +109,23 @@ impl LayerTexture {
         t
     }
 
+    /// Allocate a texture at `extent` matching an existing node texture's
+    /// `format`: the reallocation constructor behind resize/staging paths,
+    /// which are format-agnostic. The format is this type's own fact, so the
+    /// per-format dispatch (and its unsupported-format panic) lives here.
+    pub fn new_for_format(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        extent: CanvasRect,
+    ) -> Self {
+        match format {
+            wgpu::TextureFormat::R8Unorm => Self::new_mask_with_extent(device, queue, extent),
+            wgpu::TextureFormat::Rgba8Unorm => Self::with_bounds(device, extent),
+            other => panic!("LayerTexture::new_for_format: unsupported format {other:?}"),
+        }
+    }
+
     fn with_format(
         device: &wgpu::Device,
         queue: Option<&wgpu::Queue>,

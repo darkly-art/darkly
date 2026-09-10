@@ -3,6 +3,7 @@ mod brush_graph;
 pub(crate) mod brush_library;
 mod canvas_resize;
 mod canvas_transform;
+mod catalogs;
 mod clipboard;
 mod duplicate;
 mod export;
@@ -26,7 +27,6 @@ mod selection_support;
 mod smart_object;
 pub mod types;
 mod undo_dispatch;
-mod veils;
 mod voids;
 
 pub use brush_graph::{ExposedPortInfo, ExposedValue};
@@ -37,7 +37,7 @@ pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
 pub use types::{
-    ClipboardExport, EngineState, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo,
+    ClipboardExport, EngineState, LayerInfo, LayerTree, ModifierInfo, ParamInfo, StrokeOp,
 };
 
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
@@ -649,6 +649,14 @@ pub struct DarklyEngine {
     /// boundary; wraparound is irrelevant since the JS comparison is
     /// `!==`, not `>`.
     pub(crate) thumbnail_version: u32,
+    /// Per-node cursor into the compositor's pixel revisions: the tick each
+    /// node's thumbnail readback was last queued for.
+    ///
+    /// The queue semantics the compositor's old drain-once dirty set provided,
+    /// now owned by the consumer that needs them: the write path no longer
+    /// knows thumbnails exist, and a second consumer would keep its own cursor
+    /// rather than contend for the same drain.
+    pub(crate) thumbnails_queued: std::collections::HashMap<LayerId, crate::gpu::revisions::Tick>,
 
     /// Set once a layer-grow request has been refused for hitting
     /// `MAX_LAYER_DIM`, used to log the cap warning at most once per
@@ -791,6 +799,7 @@ impl DarklyEngine {
             active_save_job: None,
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
+            thumbnails_queued: std::collections::HashMap::new(),
             layer_growth_capped: false,
             brush_perf: BrushPerfCounters::default(),
             brush_full_rerender_events: 0,
@@ -819,6 +828,11 @@ impl DarklyEngine {
             selection_mod_id,
             engine.brush_pipelines.selection_bind_group_layout(),
         );
+
+        // Push the persisted pixel-filter preference so a fresh session
+        // presents through it. The compositor starts at auto and never reads
+        // config itself; the engine owns the push path.
+        engine.set_pixel_filter(&crate::config::get_str("display.pixelFilter"));
 
         engine
     }
@@ -871,6 +885,40 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_frame_needs_more(&self) -> bool {
         self.frame_needs_more()
+    }
+
+    /// Put the viewport divider above the top `count` root children: the
+    /// count-era vocabulary many tests set their stage in, expressed as the
+    /// ordinary divider move it now is. Panics when the tree cannot support
+    /// the request, so a mis-built stage fails loudly at the call site.
+    /// Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_set_screen_space_boundary(&mut self, count: usize) {
+        let divider = self.doc.divider_id();
+        let children: Vec<crate::layer::LayerId> = self
+            .doc
+            .children_of(self.doc.root_id())
+            .iter()
+            .copied()
+            .filter(|&c| c != divider)
+            .collect();
+        assert!(
+            count <= children.len(),
+            "test_set_screen_space_boundary({count}) with only {} children",
+            children.len()
+        );
+        let target = if count == 0 {
+            crate::document::MoveTarget::IntoGroupTop(self.doc.root_id())
+        } else {
+            crate::document::MoveTarget::Before(children[children.len() - count])
+        };
+        self.move_layer(divider, target)
+            .expect("test boundary move must be legal");
+        assert_eq!(
+            self.doc.screen_space_run().len(),
+            count,
+            "boundary landed at the requested position"
+        );
     }
 
     /// Mark a present as owed, mimicking the compositor's `Lost`/`Outdated`
@@ -988,6 +1036,12 @@ impl DarklyEngine {
         self.compositor.test_node_texture_count()
     }
 
+    /// Number of compositor `GroupState`s currently allocated. Test-only
+    /// metric for the bake-leak regression test.
+    pub fn test_group_state_count(&self) -> usize {
+        self.compositor.test_group_state_count()
+    }
+
     /// Force-drain both undo stacks and run `on_evict` on every entry,
     /// releasing any tombstoned GPU textures the actions own. Test-only
     /// hook for leak-cycle assertions that need to observe the post-
@@ -1096,14 +1150,31 @@ impl DarklyEngine {
         )
     }
 
+    /// Force an offscreen composite and report whether it did any work. `false`
+    /// means the compositor was already clean: the signal a test needs to
+    /// assert that a steady frame stays quiescent.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_render_offscreen(&mut self) -> bool {
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        )
+    }
+
     /// Blocking readback of the root composited canvas. For test assertions
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the
     /// compositor (no surface to present to).
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_canvas(&mut self) -> Vec<u8> {
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        );
         let texture = self.compositor.composited_texture();
         let w = self.compositor.canvas_width();
         let h = self.compositor.canvas_height();
@@ -1125,8 +1196,12 @@ impl DarklyEngine {
     /// pre-present composite cache.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_present(&mut self) -> Vec<u8> {
-        self.compositor
-            .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
+        self.compositor.test_present_to_canvas(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        )
     }
 
     /// Blocking readback of the present pass through the **production** view
@@ -1143,7 +1218,94 @@ impl DarklyEngine {
             &mut self.doc,
             viewport_w,
             viewport_h,
+            self.isolated_node,
         )
+    }
+
+    /// Blocking readback of the present pass **plus the screen-space run**,
+    /// into a `viewport_w × viewport_h` target. The only harness that can
+    /// observe a viewport-only effect at all: every composite-level readback
+    /// is taken before the run exists.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_screen_run(&mut self, viewport_w: u32, viewport_h: u32) -> Vec<u8> {
+        self.compositor.test_present_through_screen_run(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            viewport_w,
+            viewport_h,
+            self.isolated_node,
+        )
+    }
+
+    /// Blocking readback of the root canvas composited from scratch: every
+    /// revision source is bumped first, so no derived artifact can be reused.
+    ///
+    /// The reference the incremental composite is checked against, if the two
+    /// differ, some mutation failed to bump a source the composite depends on.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_canvas_from_scratch(&mut self) -> Vec<u8> {
+        self.compositor.test_invalidate_all();
+        self.test_readback_canvas()
+    }
+
+    /// Composites actually encoded: see
+    /// [`crate::gpu::compositor::Compositor::composite_runs`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_composite_runs(&self) -> u64 {
+        self.compositor.composite_runs()
+    }
+
+    /// Group walks that resumed from a captured prefix. Lets a reuse test
+    /// prove it exercised the resume path rather than silently full-walking.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_walk_resumes(&self) -> u64 {
+        self.compositor.walk_resumes()
+    }
+
+    /// Group walks that found nothing below them changed.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_walk_all_clean(&self) -> u64 {
+        self.compositor.walk_all_clean()
+    }
+
+    /// Which accumulator half the root group's composite currently lives in.
+    /// The walk flips halves once per advancing child, so this alternates
+    /// with the stack's shape: the instrument a test uses to prove it
+    /// actually exercised both halves rather than one twice.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_root_output_half(&self) -> usize {
+        self.compositor.root_output_half()
+    }
+
+    /// Bump the compositor's `targets` revision alone: see
+    /// [`crate::gpu::compositor::Compositor::test_bump_targets`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_bump_targets(&mut self) {
+        self.compositor.test_bump_targets();
+    }
+
+    /// Cumulative count of from-scratch effect-instance builds: see
+    /// [`crate::gpu::compositor::Compositor::effect_rebuilds`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_effect_rebuilds(&self) -> u64 {
+        self.compositor.effect_rebuilds()
+    }
+
+    /// The resolution an effect layer renders at: see
+    /// [`crate::gpu::compositor::Compositor::effect_reduced_size`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_effect_reduced_size(&self, id: LayerId) -> Option<(u32, u32)> {
+        self.compositor.effect_reduced_size(id)
+    }
+
+    /// The flattened screen-space chain: see
+    /// [`crate::document::Document::screen_space_effects`]. The run itself is
+    /// observable through `layer_tree`; this is the list the present pass
+    /// actually walks, which differs from it whenever a run member is a group.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_screen_space_effects(&self) -> Vec<LayerId> {
+        self.doc.screen_space_effects()
     }
 
     /// Test-only animation tick. Headless `render()` returns early without
@@ -1431,38 +1593,5 @@ mod tests {
         assert!(json.get("min").is_none());
         assert!(json.get("max").is_none());
         assert!(json.get("value").is_none());
-    }
-
-    #[test]
-    fn veil_info_serializes_correctly() {
-        let info = VeilInfo {
-            type_id: "pixelate".into(),
-            visible: true,
-            index: 0,
-            params: vec![
-                ParamInfo::from_def(&ParamDef::int("scale", 1, 32, 2), Some(&ParamValue::Int(4))),
-                ParamInfo::from_def(
-                    &ParamDef::boolean("soft", true),
-                    Some(&ParamValue::Bool(false)),
-                ),
-            ],
-        };
-        let json = serde_json::to_value(&info).unwrap();
-        assert_eq!(json["type"], "pixelate");
-        // Per the no-duplicate-display-name rule, only the type_id ships
-        // with the instance: display name is resolved by the UI via the
-        // veil_types() registry table.
-        assert!(json.get("displayName").is_none());
-        assert_eq!(json["visible"], true);
-        assert_eq!(json["index"], 0);
-
-        let params = json["params"].as_array().unwrap();
-        assert_eq!(params.len(), 2);
-        assert_eq!(params[0]["kind"], "int");
-        assert_eq!(params[0]["name"], "scale");
-        assert_eq!(params[0]["value"], 4);
-        assert_eq!(params[1]["kind"], "bool");
-        assert_eq!(params[1]["name"], "soft");
-        assert_eq!(params[1]["value"], false);
     }
 }

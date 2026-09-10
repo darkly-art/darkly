@@ -64,9 +64,39 @@ pub struct LayerKindRegistration {
     /// (or out) here, in its own file, and the UI follows automatically.
     pub can_have_mask: bool,
 
-    /// May the artist rename instances of this kind? Drives the layer panel's
+    /// May a *leaf* of this kind be realized after the view transform, on the
+    /// presented image, rather than inside the canvas-space tree walk? A kind
+    /// qualifies when its output is a function of the image it is handed, so it
+    /// does not care which space that image is in: true for effects, false for
+    /// anything that owns canvas-space pixels or geometry.
+    ///
+    /// Leaf-only, hence the name: groups are not leaves and answer by recursing
+    /// over their children, so a group's registration says `false` here while a
+    /// group may perfectly well sit above the boundary. Consult
+    /// [`crate::layer::LayerNode::supports_screen_space`], never this field, to
+    /// ask the question about a node.
+    pub leaf_renders_after_view_transform: bool,
+
+    /// May the user rename instances of this kind? Drives the layer panel's
     /// double-click-to-rename gate.
     pub can_rename: bool,
+
+    /// May instances of this kind be removed from the document? Consulted by
+    /// the remove ops and by merge (which consumes its sources). `false` for
+    /// structural singletons the document cannot lose: the viewport divider.
+    pub can_delete: bool,
+
+    /// May instances of this kind be duplicated? `false` for kinds whose
+    /// instance is a structural singleton.
+    pub can_duplicate: bool,
+
+    /// Is this kind's single instance the screen-space boundary: the node
+    /// among the root's children that splits canvas space (below it) from
+    /// screen space (above it)? Implies root-only placement, `can_delete:
+    /// false`, and `can_duplicate: false`. Consult through
+    /// [`crate::layer::LayerNode::is_screen_space_boundary`]; no consumer
+    /// compares `type_id`.
+    pub screen_space_boundary: bool,
 
     /// Does the panel show a live pixel thumbnail for this kind (vs the
     /// static [`Self::icon`])? `true` only for kinds with a GPU texture the

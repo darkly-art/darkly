@@ -575,6 +575,48 @@ impl PortableValue {
     }
 }
 
+/// Positional readers for a schema-ordered parameter vector.
+///
+/// Every effect decodes its parameters by position and has to answer the same
+/// question the same way: what is at slot `i`, and what do I use when it is
+/// absent or carries the wrong variant? These are that answer, in one place, so
+/// a module's `read_params` reads as a list of slots rather than a column of
+/// `match` arms.
+///
+/// Tolerant by design, matching the untagged-degradation posture the document
+/// paths already have: an `Int` is accepted where a `Float` is expected,
+/// because a whole float degrades to `Int` on a def-less path, and anything
+/// else falls back to the caller's default rather than failing.
+pub trait ParamSlots {
+    fn float_at(&self, index: usize, default: f32) -> f32;
+    fn int_at(&self, index: usize, default: i32) -> i32;
+    fn bool_at(&self, index: usize, default: bool) -> bool;
+}
+
+impl ParamSlots for [ParamValue] {
+    fn float_at(&self, index: usize, default: f32) -> f32 {
+        match self.get(index) {
+            Some(ParamValue::Float(v)) => *v,
+            Some(ParamValue::Int(v)) => *v as f32,
+            _ => default,
+        }
+    }
+
+    fn int_at(&self, index: usize, default: i32) -> i32 {
+        match self.get(index) {
+            Some(ParamValue::Int(v)) => *v,
+            _ => default,
+        }
+    }
+
+    fn bool_at(&self, index: usize, default: bool) -> bool {
+        match self.get(index) {
+            Some(ParamValue::Bool(v)) => *v,
+            _ => default,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,11 +649,7 @@ mod tests {
         }
 
         let mut checked = 0usize;
-        for reg in crate::gpu::filter::FilterPipelineRegistry::new().types() {
-            check(reg.type_id, reg.params);
-            checked += reg.params.len();
-        }
-        for reg in crate::gpu::veil::VeilRegistry::new().types() {
+        for reg in crate::gpu::effect::EffectRegistry::new().registrations() {
             check(reg.type_id, reg.params);
             checked += reg.params.len();
         }

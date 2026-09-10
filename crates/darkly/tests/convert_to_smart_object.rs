@@ -39,7 +39,7 @@ fn rgba_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
 fn is_smart_object(engine: &DarklyEngine, id: LayerId) -> bool {
     use darkly::engine::LayerInfo;
     let target = id.to_ffi() as f64;
-    engine.layer_tree().iter().any(|info| {
+    engine.layer_tree().layers.iter().any(|info| {
         matches!(
             info,
             LayerInfo::Void { id, void_type, .. }
@@ -555,7 +555,7 @@ fn converting_a_masked_layer_is_refused() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
     paint_dot(&mut engine, layer, 32.0, 32.0, [0.0, 1.0, 1.0]);
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     engine.render(0.0);
 
     assert!(
@@ -573,12 +573,12 @@ fn converting_a_group_is_refused() {
     let mut engine = test_engine(64, 64);
     let group = engine.add_group(None);
     engine.render(0.0);
-    let tree_before = engine.layer_tree().len();
+    let tree_before = engine.layer_tree().layers.len();
 
     assert!(!engine.can_convert_layer_to_smart_object(group));
     assert!(engine.convert_layer_to_smart_object(group).is_err());
     assert_eq!(
-        engine.layer_tree().len(),
+        engine.layer_tree().layers.len(),
         tree_before,
         "the tree is untouched by the refusal",
     );

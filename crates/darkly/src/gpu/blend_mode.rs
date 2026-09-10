@@ -161,15 +161,19 @@ pub fn registry() -> &'static BlendModeRegistry {
     REGISTRY.get_or_init(BlendModeRegistry::new)
 }
 
-/// Assemble the composite shader's WGSL source by splicing each registered
-/// blend mode's `wgsl_math` into the `// @blend-switch` marker in
-/// `shaders/composite.wgsl`. Called once when the blend pipeline is built;
-/// the output is one monolithic shader string fed to `create_shader_module`.
+/// Prepend the shared blend library to `template`, splicing each registered
+/// blend mode's `wgsl_math` into the library's switch marker as it goes. The
+/// output is one monolithic shader string fed to `create_shader_module`.
 ///
-/// Per-mode arms are emitted in `gpu_value` order so the `case` numbers
-/// match what the rest of the engine reads from `BlendModeRegistration.gpu_value`.
-pub fn build_composite_source() -> String {
-    const TEMPLATE: &str = include_str!("../../shaders/composite.wgsl");
+/// Two callers, because two shaders blend: `composite.wgsl` puts a layer over
+/// the accumulator, and `in_place_apply.wgsl` puts a transform's result over
+/// the image it transformed. Splicing here rather than in either of them is
+/// what keeps a new blend mode a single file in `gpu/blend_modes/`.
+///
+/// Per-mode arms are emitted in `gpu_value` order so the `case` numbers match
+/// what the rest of the engine reads from `BlendModeRegistration.gpu_value`.
+pub fn build_blend_source(template: &str) -> String {
+    const LIB: &str = include_str!("../../shaders/lib/blend.wgsl");
     const MARKER: &str = "// @blend-switch";
 
     let mut arms = String::new();
@@ -181,8 +185,19 @@ pub fn build_composite_source() -> String {
     }
     arms.push_str("        default: { Cs = fg.rgb; }\n");
 
-    let trimmed_arms = arms.trim_end_matches('\n');
-    TEMPLATE.replacen(MARKER, trimmed_arms, 1)
+    let lib = LIB.replacen(MARKER, arms.trim_end_matches('\n'), 1);
+    format!("{lib}\n{template}")
+}
+
+/// The layer-composite shader, blend library spliced in.
+pub fn build_composite_source() -> String {
+    build_blend_source(include_str!("../../shaders/composite.wgsl"))
+}
+
+/// The in-place apply shader, blend library spliced in. Serves effect layers
+/// and masked passthrough groups alike.
+pub fn build_in_place_apply_source() -> String {
+    build_blend_source(include_str!("../../shaders/in_place_apply.wgsl"))
 }
 
 #[cfg(test)]

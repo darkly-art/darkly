@@ -212,7 +212,7 @@ fn invert_mask_negates_r8_and_round_trips() {
     let (w, h) = (16u32, 16u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
 
     // Make the mask non-uniform: a black dab on the default-white mask.
@@ -243,7 +243,7 @@ fn invert_mask_with_selection_only_inverts_selected_region() {
     let (w, h) = (12u32, 12u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
     let before = e.test_readback_layer(mask);
 
@@ -361,7 +361,7 @@ fn invert_mask_with_selection_after_crop() {
     let (w, h) = (32u32, 32u32);
     let mut e = test_engine(w, h);
     let layer = e.add_raster_layer(None);
-    e.add_mask(layer);
+    e.add_mask(layer).expect("add mask");
     let mask = e.test_mask_id(layer).expect("mask present");
 
     // Non-uniform mask so the selection clip is meaningful.
@@ -401,7 +401,7 @@ fn invert_mask_with_selection_after_crop() {
 //
 // A *filter layer* is a non-destructive node in the layer tree that transforms
 // the composite of everything below it (the running group accumulator) via the
-// same `gpu/filters/*` pipeline the destructive path uses; pixels below are
+// same `gpu/effects/*` pipeline the destructive path uses: pixels below are
 // never modified. These tests pin the feature's promises: it inverts what's
 // below it, it leaves what's above untouched, an isolated group scopes it, and
 // (the core guarantee) it is non-destructive (toggle / delete restores the
@@ -554,7 +554,7 @@ fn masked_filter_layer_confines_inversion() {
         false,
         0.0,
     );
-    engine.add_mask(filter);
+    engine.add_mask(filter).expect("add mask");
     let mask = engine.test_mask_id(filter).expect("mask present on filter");
     engine.clear_selection();
     engine.test_flush_readbacks();
@@ -620,7 +620,7 @@ fn masked_filter_layer_in_isolated_group_lerps_against_group_accum() {
         false,
         0.0,
     );
-    engine.add_mask(filter);
+    engine.add_mask(filter).expect("add mask");
     engine.clear_selection();
     engine.test_flush_readbacks();
     engine.render(0.0);
@@ -726,7 +726,7 @@ fn filter_defaults(e: &DarklyEngine, type_id: &str) -> Vec<ParamValue> {
 /// from the engine's layer-tree query.
 fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
     let ffi = id.to_ffi() as f64;
-    for node in e.layer_tree() {
+    for node in e.layer_tree().layers {
         if let LayerInfo::Filter {
             id: nid, params, ..
         } = &node
@@ -746,7 +746,7 @@ fn filter_layer_params(e: &DarklyEngine, id: LayerId) -> Vec<ParamValue> {
 /// layer-tree query.
 fn filter_layer_icon(e: &DarklyEngine, id: LayerId) -> String {
     let ffi = id.to_ffi() as f64;
-    for node in e.layer_tree() {
+    for node in e.layer_tree().layers {
         if let LayerInfo::Filter { id: nid, icon, .. } = &node {
             if *nid == ffi {
                 return icon.to_string();

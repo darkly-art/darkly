@@ -10,7 +10,7 @@
 //! comments, which render as nothing:
 //!
 //! ```markdown
-//! <!-- darkly:catalog-table catalog=veils -->
+//! <!-- darkly:catalog-table catalog=effects -->
 //! …whatever the fragment writes…
 //! <!-- /darkly:catalog-table -->
 //! ```
@@ -84,6 +84,12 @@ impl FragmentCtx<'_> {
             .get(key)
             .copied()
             .ok_or_else(|| FragmentError(format!("`{key}` is required")))
+    }
+
+    /// A declared argument's value, or `None` when the region omits it. For an
+    /// argument that narrows what a fragment renders rather than naming it.
+    pub fn arg_opt(&self, key: &str) -> Option<&str> {
+        self.args.get(key).copied()
     }
 
     /// A repository-relative path, rewritten to reach the same file from the
@@ -220,8 +226,8 @@ fn open_marker(line: &str) -> Option<(&str, &str)> {
 ///
 /// A marker in a code block is an example, not a region. Documentation about
 /// this system has to be able to show the syntax it is documenting:
-/// `CONTRIBUTING.md` does, and without this it would rewrite its own
-/// explanation into a table of veils.
+/// `docs/generated-markdown.md` does, and without this it would rewrite its own
+/// explanation into a table of effects.
 #[derive(Default)]
 struct Fence(Option<(char, usize)>);
 
@@ -504,7 +510,7 @@ mod tests {
     /// The one fragment shipped today, rendered into the smallest file that can
     /// hold it. Used by the tests that care about the machinery rather than the
     /// table.
-    const OPEN: &str = "<!-- darkly:catalog-table catalog=veils -->";
+    const OPEN: &str = "<!-- darkly:catalog-table catalog=effects -->";
     const CLOSE: &str = "<!-- /darkly:catalog-table -->";
 
     #[test]
@@ -544,9 +550,9 @@ mod tests {
     }
 
     /// A marker in a code block is documentation *about* the syntax, and
-    /// `CONTRIBUTING.md` is full of it. Rewriting an explanation into a veil
-    /// table was this tool's first act on the repository, before fences were
-    /// understood.
+    /// `docs/generated-markdown.md` is full of it. Rewriting an explanation
+    /// into an effects table was this tool's first act on the repository,
+    /// before fences were understood.
     #[test]
     fn markers_inside_a_code_fence_are_examples() {
         let text = format!("Like so:\n\n```markdown\n{OPEN}\n…\n{CLOSE}\n```\n\nSee?\n");
@@ -587,7 +593,7 @@ mod tests {
 
     #[test]
     fn an_unknown_argument_is_an_error() {
-        let text = "<!-- darkly:catalog-table catalog=veils sort=name -->\n<!-- /darkly:catalog-table -->\n";
+        let text = "<!-- darkly:catalog-table catalog=effects sort=name -->\n<!-- /darkly:catalog-table -->\n";
         let err = render(text).unwrap_err();
         assert!(
             matches!(err.kind, SyncErrorKind::UnknownArg { .. }),

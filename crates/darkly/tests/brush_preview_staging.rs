@@ -55,7 +55,7 @@ fn luminance_sd(pixels: &[u8]) -> f32 {
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|px| luminance(px))
+        .map(|p| luminance(p))
         .collect();
     let mean = lums.iter().sum::<f32>() / lums.len() as f32;
     (lums.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / lums.len() as f32).sqrt()

@@ -215,6 +215,22 @@ pub enum LayerInfo {
         modifiers: Vec<ModifierInfo>,
         children: Vec<LayerInfo>,
     },
+    /// The viewport divider: the screen-space boundary's row. Carries only
+    /// identity: it has no user-editable properties, and the panel renders it
+    /// from its own template rather than the generic layer row.
+    #[serde(rename_all = "camelCase")]
+    Divider { id: f64 },
+}
+
+/// The root's children, top-first: panel order. The viewport divider is one
+/// of the rows ([`LayerInfo::Divider`]), so the boundary needs no side
+/// channel: everything above the divider row renders in screen space.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct LayerTree {
+    /// Root children, top-first: panel order.
+    pub layers: Vec<LayerInfo>,
 }
 
 /// Serializable view of a single modifier attached to a host. Carries enough
@@ -235,19 +251,6 @@ pub struct ModifierInfo {
     /// See [`LayerInfo::Raster::editable`]: a modifier is editable when
     /// neither it nor its host (nor any ancestor of the host) is locked.
     pub editable: bool,
-}
-
-/// Per-instance view of a veil in the chain. `type` is the registry `type_id`;
-/// resolve to a display label via `veil_types()`; never duplicate it here.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-pub struct VeilInfo {
-    #[serde(rename = "type")]
-    pub type_id: String,
-    pub visible: bool,
-    pub index: usize,
-    pub params: Vec<ParamInfo>,
 }
 
 /// Range and default rendered for reading: each number converted into its
@@ -579,7 +582,7 @@ pub struct ClipboardExport {
 pub(crate) fn node_to_layer_info(
     doc: &crate::document::Document,
     void_registry: &crate::gpu::void::VoidRegistry,
-    filter_registry: &crate::gpu::filter::FilterPipelineRegistry,
+    effect_registry: &crate::gpu::effect::EffectRegistry,
     node_id: crate::layer::LayerId,
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
@@ -658,13 +661,13 @@ pub(crate) fn node_to_layer_info(
                 }
             }
             Layer::Filter(f) => {
-                let param_defs = filter_registry.params(&f.pipeline);
+                let param_defs = effect_registry.params(&f.pipeline);
                 let params = param_defs
                     .iter()
                     .enumerate()
                     .map(|(j, def)| ParamInfo::from_def(def, f.params.get(j)))
                     .collect();
-                let pipeline_icon = filter_registry.icon(&f.pipeline);
+                let pipeline_icon = effect_registry.icon(&f.pipeline);
                 LayerInfo::Filter {
                     id: f.id.to_ffi() as f64,
                     name: f.common.name.clone(),
@@ -714,6 +717,9 @@ pub(crate) fn node_to_layer_info(
                     .filter_map(|mid| doc.find_filter(*mid).map(|m| modifier_to_info(doc, m)))
                     .collect(),
             },
+            Layer::Divider(d) => LayerInfo::Divider {
+                id: d.id.to_ffi() as f64,
+            },
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,
@@ -741,7 +747,7 @@ pub(crate) fn node_to_layer_info(
                 .children
                 .iter()
                 .rev()
-                .filter_map(|cid| node_to_layer_info(doc, void_registry, filter_registry, *cid))
+                .filter_map(|cid| node_to_layer_info(doc, void_registry, effect_registry, *cid))
                 .collect(),
         },
     };

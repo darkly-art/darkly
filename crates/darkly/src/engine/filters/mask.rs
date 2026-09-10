@@ -23,24 +23,35 @@ impl DarklyEngine {
     /// Attach a mask filter to a host layer or group, allocating its GPU
     /// texture in the unified node-texture pool. If a selection is active,
     /// the mask is seeded from the selection (one-click "selection → mask").
+    ///
+    /// Refuses loudly when the host is above the viewport divider: a mask is
+    /// canvas-space data, so acquiring one would disqualify the host from the
+    /// space it is in. Kind cannot change in place and moves are validated, so
+    /// this is the only in-place disqualifier.
     #[handler]
-    pub fn add_mask(&mut self, id: LayerId) {
+    pub fn add_mask(&mut self, id: LayerId) -> Result<(), String> {
         if !self.doc.is_node_editable(id) {
-            return;
+            return Ok(());
         }
         // UI invariant: at most one mask per host. The model supports N; we
         // refuse here so that `add_mask_filter` doesn't silently create a
         // second one.
         // host unknown → bail (true keeps the existing semantics).
-        if self.doc.find_node(id).is_none() {
-            return;
-        }
+        let Some(node) = self.doc.find_node(id) else {
+            return Ok(());
+        };
         if self.doc.has_mask(id) {
-            return;
+            return Ok(());
+        }
+        if self.doc.in_screen_space_region(id) {
+            return Err(format!(
+                "\"{}\" can't take a mask in viewport space: a mask only exists in canvas space.",
+                node.common().name
+            ));
         }
 
         let Some(mod_id) = self.add_mask_unseeded(id) else {
-            return;
+            return Ok(());
         };
 
         // If a selection is active, seed the mask pixels from the selection.
@@ -59,8 +70,9 @@ impl DarklyEngine {
         // dirty per the write-site invariant.
         self.compositor.mark_dirty();
 
-        let position = self.doc.position_in_parent(mod_id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(mod_id, Some(id), position)));
+        let slot = self.doc.slot_of(mod_id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(mod_id, slot)));
+        Ok(())
     }
 
     /// Allocate an empty (unseeded) mask filter on `id`: create the filter,
@@ -183,7 +195,7 @@ impl DarklyEngine {
 
         // Captured before the detach severs the parent link the position is
         // read from, so undo restores the mask at its original index.
-        let mask_position = self.doc.position_in_parent(modifier_id).unwrap_or(0);
+        let mask_slot = self.doc.slot_of(modifier_id).unwrap_or_default();
         let detached = self.doc.detach_for_undo(modifier_id).is_some();
         self.compositor.dispose_node_texture(modifier_id);
         self.compositor.dispose_mask_snapshot_state(host_id);
@@ -197,8 +209,7 @@ impl DarklyEngine {
         if detached {
             actions.push(Box::new(EntityRemoveAction::new(
                 modifier_id,
-                Some(host_id),
-                mask_position,
+                mask_slot,
                 Vec::new(),
             )));
         }
@@ -383,7 +394,7 @@ impl DarklyEngine {
         // pending mask-region restore can land.
         // Captured before the detach severs the parent link the position is
         // read from, so undo restores the mask at its original index.
-        let mask_position = self.doc.position_in_parent(mask_id).unwrap_or(0);
+        let mask_slot = self.doc.slot_of(mask_id).unwrap_or_default();
         let detached = self.doc.detach_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_mask_snapshot_state(id);
@@ -391,8 +402,7 @@ impl DarklyEngine {
         if detached {
             actions.push(Box::new(EntityRemoveAction::new(
                 mask_id,
-                Some(id),
-                mask_position,
+                mask_slot,
                 Vec::new(),
             )));
         }
@@ -420,8 +430,9 @@ impl DarklyEngine {
 
         if !already_had_mask {
             // add_mask itself seeds from the active selection (see above), so
-            // we're done after that single call.
-            self.add_mask(id);
+            // we're done after that single call. A refusal (viewport-space
+            // host) leaves nothing to seed.
+            let _ = self.add_mask(id);
             return;
         }
 

@@ -17,9 +17,9 @@ use crate::document::filter;
 use crate::document::layer_kind;
 use crate::gpu::blend_mode;
 use crate::gpu::context::GpuContext;
+use crate::gpu::effect::EffectRegistry;
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::test_utils::test_device;
-use crate::gpu::veil::VeilRegistry;
 use crate::nodegraph::Graph;
 
 /// Build a default `Vec<ParamValue>` from a `&[ParamDef]` schema. Mirrors
@@ -30,17 +30,14 @@ fn defaults_of(params: &[ParamDef]) -> Vec<ParamValue> {
 }
 
 /// Headless `DarklyEngine` plus the per-test viewport bookkeeping. The
-/// veil chain sizes off the viewport, which is 0×0 in headless mode by
-/// default; kitchen-sink populates a chain, so we seed the size
+/// screen-space run sizes off the viewport, which is 0×0 in headless mode by
+/// default: kitchen-sink puts effects above the divider, so we seed the size
 /// manually like the engine/save inline tests do.
 fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = crate::engine::DarklyEngine::new(gpu, width, height);
-    engine
-        .compositor
-        .veil_chain_mut()
-        .resize(&engine.gpu.device, &engine.gpu.queue, width, height);
+    engine.compositor.resize_screen_run(width, height);
     engine
 }
 
@@ -57,27 +54,30 @@ fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
 fn round_trip_every_veil() {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    let format = gpu.surface_format();
-    let mut registry = VeilRegistry::new();
+    // Effects compile only against a format they declare in `targets`, and the
+    // screen-space chain runs at the accumulator format, so that is what a
+    // round-trip instantiates against.
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut registry = EffectRegistry::new();
 
-    // `VeilRegistry::types()` returns (type_id, display_name, description,
-    // params). The params shape comes from the static `&[ParamDef]` in each
-    // registration. Cloning into a Vec keeps the borrow scoped so
-    // `create_veil` can take `&mut registry` below without contention with
-    // the iteration.
+    // Cloning the (type_id, params) pairs into a Vec keeps the borrow scoped so
+    // `instance` can take `&mut registry` below without contending with the
+    // iteration.
     let types: Vec<(&'static str, &'static [ParamDef])> = registry
-        .types()
+        .registrations()
         .into_iter()
         .map(|reg| (reg.type_id, reg.params))
         .collect();
     assert!(
         !types.is_empty(),
-        "veil registry must contain at least one veil"
+        "the effect registry must contain at least one effect"
     );
 
     for (type_id, params_schema) in types {
         let defaults = defaults_of(params_schema);
-        let veil = registry.create_veil(type_id, &defaults, &gpu.device, format);
+        let veil = registry
+            .instance(type_id, &defaults, &gpu.device, format)
+            .expect("registered effect");
 
         // Serialize via the canonical wire envelope.
         let json = serialize_instance(veil.type_id(), veil.param_values())
@@ -88,7 +88,9 @@ fn round_trip_every_veil() {
             .unwrap_or_else(|e| panic!("deserialize veil '{type_id}' failed: {e}"));
         assert_eq!(payload.type_id, type_id);
 
-        let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+        let restored = registry
+            .instance(&payload.type_id, &payload.params, &gpu.device, format)
+            .expect("registered effect");
         assert_eq!(
             restored.type_id(),
             veil.type_id(),
@@ -119,8 +121,8 @@ fn chromatic_aberration_veil_round_trips_non_default_list() {
 
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    let format = gpu.surface_format();
-    let mut registry = VeilRegistry::new();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut registry = EffectRegistry::new();
 
     let params = vec![ParamValue::List(vec![
         BTreeMap::from([
@@ -137,12 +139,16 @@ fn chromatic_aberration_veil_round_trips_non_default_list() {
         ]),
     ])];
 
-    let veil = registry.create_veil("chromatic_aberration", &params, &gpu.device, format);
+    let veil = registry
+        .instance("chromatic_aberration", &params, &gpu.device, format)
+        .expect("registered effect");
     let json =
         serialize_instance(veil.type_id(), veil.param_values()).expect("serialize CA veil failed");
     let payload = deserialize_instance(&json).expect("deserialize CA veil failed");
     assert_eq!(payload.type_id, "chromatic_aberration");
-    let restored = registry.create_veil(&payload.type_id, &payload.params, &gpu.device, format);
+    let restored = registry
+        .instance(&payload.type_id, &payload.params, &gpu.device, format)
+        .expect("registered effect");
     assert_eq!(
         restored.param_values(),
         params,
@@ -437,16 +443,18 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // both Group structure and parent/children id rewiring on load.
     let group = engine.add_group(None);
     if let Some(first_layer) = raster_ids.first() {
-        engine.move_layer(
-            *first_layer,
-            crate::document::MoveTarget::IntoGroupTop(group),
-        );
+        engine
+            .move_layer(
+                *first_layer,
+                crate::document::MoveTarget::IntoGroupTop(group),
+            )
+            .expect("move succeeds");
     }
 
     // Mask filter on one of the rasters, exercising mask kind +
     // its parent-host wiring.
     if let Some(target) = raster_ids.get(1).copied() {
-        engine.add_mask(target);
+        engine.add_mask(target).expect("add mask");
     }
 
     // Selection mask: `select_all` flips selection.active and
@@ -454,19 +462,26 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // eagerly at engine init.
     engine.select_all();
 
-    // One of every veil: keep params at default, leave visibility on.
-    let veil_types: Vec<(&'static str, &'static [ParamDef])> = engine
+    // One effect layer of every registered effect, at default params. They go
+    // in as ordinary layers; the run below then puts some of them above the
+    // divider, so the round-trip covers both spaces.
+    let effect_types: Vec<(&'static str, &'static [ParamDef])> = engine
         .compositor
-        .veil_chain()
-        .registry()
-        .types()
+        .effect_registry()
+        .registrations()
         .into_iter()
         .map(|reg| (reg.type_id, reg.params))
         .collect();
-    for (type_id, schema) in veil_types {
+    let effect_count = effect_types.len();
+    for (type_id, schema) in effect_types {
         let defaults = defaults_of(schema);
-        engine.add_veil_layer(type_id, &defaults);
+        engine
+            .add_filter_layer(type_id, defaults, None)
+            .expect("registered effect is addable");
     }
+    // Half of them viewport-only, so the divider's position is a value the
+    // round-trip has to carry rather than a default that survives by accident.
+    engine.test_set_screen_space_boundary(effect_count / 2);
 
     // One of every void type: adds a void layer at root for each
     // registered void kind, with schema defaults. Closes the kitchen-sink
@@ -490,8 +505,8 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     // `layer_kind/filter` participates in the save round-trip test.
     let filter_types: Vec<String> = engine
         .compositor
-        .filter_pipeline_registry()
-        .types()
+        .effect_registry()
+        .registrations()
         .into_iter()
         .map(|reg| reg.type_id.to_string())
         .collect();
@@ -744,7 +759,7 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
     original.end_stroke();
     original.render(0.0);
 
-    original.add_mask(host);
+    original.add_mask(host).expect("add mask");
     let mask_id = original.host_mask_id(host).expect("mask");
     // Black dab on the mask → a distinct hidden region.
     original.begin_stroke(mask_id).unwrap();
@@ -1044,7 +1059,6 @@ fn synth_minimal_manifest() -> Manifest {
         }],
         modifiers: Vec::new(),
         selection_id: None,
-        veils: Vec::new(),
         fonts: Vec::new(),
     }
 }
@@ -1116,19 +1130,19 @@ fn refuse_missing_requires() {
 }
 
 #[test]
-fn refuse_unknown_veil() {
+fn refuse_unknown_effect() {
     let mut engine = kitchen_sink_engine(4, 4);
     let prior = engine.document_ptr_for_test();
     let mut manifest = synth_minimal_manifest();
-    manifest.requires.veil = vec!["future_lens_flare".to_string()];
+    manifest.requires.effect = vec!["future_lens_flare".to_string()];
     let bytes = synth_zip_from_manifest(&manifest);
 
     let err = engine.open_document(&bytes).expect_err("must refuse");
     match err {
         LoadError::UnsupportedFeatures { missing } => {
             assert!(
-                missing.iter().any(|m| m == "veil/future_lens_flare"),
-                "diagnostic should name veil/future_lens_flare, got {missing:?}"
+                missing.iter().any(|m| m == "effect/future_lens_flare"),
+                "diagnostic should name effect/future_lens_flare, got {missing:?}"
             );
         }
         other => panic!("expected UnsupportedFeatures, got {other:?}"),
@@ -1256,7 +1270,10 @@ fn open_document_leaves_engine_untouched_on_refuse() {
     let prior_name = engine.doc.name.clone();
 
     let mut manifest = synth_minimal_manifest();
-    manifest.requires.veil.push("future_lens_flare".to_string());
+    manifest
+        .requires
+        .effect
+        .push("future_lens_flare".to_string());
     let bytes = synth_zip_from_manifest(&manifest);
     let _err = engine.open_document(&bytes).expect_err("must refuse");
 
@@ -1285,8 +1302,8 @@ fn legacy_type_id_migration() {
     // Today: assert every registered veil resolves to itself in its
     // registry: confirms the registry interface is the dispatch
     // surface the migration will plug into.
-    let registry = VeilRegistry::new();
-    for reg in registry.types() {
+    let registry = EffectRegistry::new();
+    for reg in registry.registrations() {
         assert!(
             registry.has(reg.type_id),
             "legacy migration scaffold: registry must resolve every registered \

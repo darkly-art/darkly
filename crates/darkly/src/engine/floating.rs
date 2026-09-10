@@ -287,9 +287,12 @@ impl DarklyEngine {
         // Position relative to the active node. `resolve_anchor_target` maps a
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
-        // it, the same anchor resolution the document's `add_*` helpers use.
+        // it: the same anchor resolution the document's `add_*` helpers use.
+        // A paste is an add, not a move: `place_layer` takes the boundary
+        // policy, so an anchor above the viewport divider cannot pull a raster
+        // into the run.
         let target = self.doc.resolve_anchor_target(active_layer_id);
-        self.doc.move_layer(new_id, target);
+        self.doc.place_layer(new_id, target);
 
         // Upload RGBA to floating source texture; the compositor renders it
         // as a preview overlay until commit.
@@ -1010,9 +1013,8 @@ impl DarklyEngine {
                 );
             });
 
-            let parent = self.doc.parent_of(layer_id);
-            let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-            self.push_undo(Box::new(EntityAddAction::new(layer_id, parent, pos)));
+            let slot = self.doc.slot_of(layer_id).unwrap_or_default();
+            self.push_undo(Box::new(EntityAddAction::new(layer_id, slot)));
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
@@ -1283,9 +1285,8 @@ impl DarklyEngine {
         // target, so there is nothing to restore.
         self.discard_floating();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(crate::undo::EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(crate::undo::EntityAddAction::new(id, slot)));
         self.compositor.mark_dirty();
         Ok(id)
     }
@@ -1388,9 +1389,8 @@ impl DarklyEngine {
             extraction.width,
             extraction.height,
         )?;
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        actions.push(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        actions.push(Box::new(EntityAddAction::new(id, slot)));
         self.push_transform_undo(actions);
         self.compositor.mark_dirty();
         Ok(id)

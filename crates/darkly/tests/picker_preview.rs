@@ -89,9 +89,8 @@ fn preview(
 struct Offscreen {
     gpu: (wgpu::Device, wgpu::Queue),
     target: PreviewTarget,
-    veils: darkly::gpu::veil::VeilRegistry,
+    effects: darkly::gpu::effect::EffectRegistry,
     voids: darkly::gpu::void::VoidRegistry,
-    filters: darkly::gpu::filter::FilterPipelineRegistry,
     _source: wgpu::Texture,
 }
 
@@ -135,9 +134,8 @@ impl Offscreen {
         Offscreen {
             gpu: (device, queue),
             target,
-            veils: darkly::gpu::veil::VeilRegistry::new(),
+            effects: darkly::gpu::effect::EffectRegistry::new(),
             voids: darkly::gpu::void::VoidRegistry::new(),
-            filters: darkly::gpu::filter::FilterPipelineRegistry::new(),
             _source: texture,
         }
     }
@@ -203,16 +201,11 @@ impl Offscreen {
         let (device, queue) = (self.gpu.0.clone(), self.gpu.1.clone());
         let Offscreen {
             target,
-            veils,
+            effects,
             voids,
-            filters,
             ..
         } = self;
-        let regs = PreviewRegistries {
-            veils,
-            voids,
-            filters,
-        };
+        let regs = PreviewRegistries { effects, voids };
         let mut seq = PreviewSequence::open(mech, regs, type_id, variant)
             .unwrap_or_else(|| panic!("`{catalog}/{type_id}` opens"));
         seq.seek(start);
@@ -432,7 +425,7 @@ fn every_animated_entry_actually_moves() {
 #[test]
 fn the_driver_is_sink_agnostic() {
     let mut off = Offscreen::new();
-    let blocking = off.render("veils", "frozen");
+    let blocking = off.render("effects", "frozen");
 
     // The recording sink defers the readback the way the engine defers it to a
     // scheduler: finish and submit inside the capture, read back afterwards.
@@ -442,19 +435,14 @@ fn the_driver_is_sink_agnostic() {
     {
         let Offscreen {
             target,
-            veils,
+            effects,
             voids,
-            filters,
             ..
         } = &mut off;
-        let regs = PreviewRegistries {
-            veils,
-            voids,
-            filters,
-        };
+        let regs = PreviewRegistries { effects, voids };
         let (_, mech) = preview_mechanisms()
             .into_iter()
-            .find(|(id, _)| *id == "veils")
+            .find(|(id, _)| *id == "effects")
             .unwrap();
         let mut seq =
             PreviewSequence::open(mech, regs, "frozen", PreviewVariant::Animated).unwrap();
@@ -501,11 +489,11 @@ fn the_driver_is_sink_agnostic() {
 #[test]
 fn picker_preview_runs_the_animation_not_the_defaults() {
     let mut engine = headless_engine(256, 256);
-    let anim = darkly::gpu::veil::VeilRegistry::new()
+    let anim = darkly::gpu::effect::EffectRegistry::new()
         .preview("frozen")
         .expect("frozen declares a preview");
 
-    let (w, h, fps, frames) = preview(&mut engine, "veils", "frozen", PreviewVariant::Animated);
+    let (w, h, fps, frames) = preview(&mut engine, "effects", "frozen", PreviewVariant::Animated);
 
     assert_eq!(frames.len(), anim.frames as usize);
     assert_eq!(fps, anim.fps, "the wire fps is the entry's own");
@@ -529,9 +517,9 @@ fn picker_preview_runs_the_animation_not_the_defaults() {
 #[test]
 fn filter_picker_preview_renders_through_the_offscreen_path() {
     let mut engine = headless_engine(256, 256);
-    let (w, h, _, frames) = preview(&mut engine, "filters", "hsv", PreviewVariant::Animated);
+    let (w, h, _, frames) = preview(&mut engine, "effects", "hsv", PreviewVariant::Animated);
 
-    let anim = darkly::gpu::filter::FilterPipelineRegistry::new()
+    let anim = darkly::gpu::effect::EffectRegistry::new()
         .preview("hsv")
         .unwrap();
     assert_eq!(frames.len(), anim.frames as usize);
@@ -543,7 +531,7 @@ fn filter_picker_preview_renders_through_the_offscreen_path() {
 #[test]
 fn a_still_preview_is_one_frame() {
     let mut engine = headless_engine(256, 256);
-    let (w, h, _, frames) = preview(&mut engine, "filters", "invert", PreviewVariant::Animated);
+    let (w, h, _, frames) = preview(&mut engine, "effects", "invert", PreviewVariant::Animated);
     assert_eq!(frames.len(), 1, "invert declares a still");
     assert_eq!(frames[0].len(), (w * h * 4) as usize);
 }
@@ -569,15 +557,15 @@ fn a_void_previews_from_scratch_at_the_canvas_aspect() {
 #[test]
 fn a_preview_completes_across_ticks() {
     let mut engine = headless_engine(256, 256);
-    engine.start_preview("veils", "frozen", PreviewVariant::Animated);
+    engine.start_preview("effects", "frozen", PreviewVariant::Animated);
     assert!(
         engine
-            .poll_preview("veils", "frozen", PreviewVariant::Animated)
+            .poll_preview("effects", "frozen", PreviewVariant::Animated)
             .is_none(),
         "start_preview must enqueue, not generate"
     );
 
-    let total = darkly::gpu::veil::VeilRegistry::new()
+    let total = darkly::gpu::effect::EffectRegistry::new()
         .preview("frozen")
         .unwrap()
         .frames;
@@ -587,12 +575,12 @@ fn a_preview_completes_across_ticks() {
     engine.test_flush_readbacks();
     assert!(
         engine
-            .poll_preview("veils", "frozen", PreviewVariant::Animated)
+            .poll_preview("effects", "frozen", PreviewVariant::Animated)
             .is_none(),
         "one tick encoded more than PREVIEW_FRAMES_PER_TICK frames"
     );
 
-    let (_, _, _, frames) = drain(&mut engine, "veils", "frozen", PreviewVariant::Animated);
+    let (_, _, _, frames) = drain(&mut engine, "effects", "frozen", PreviewVariant::Animated);
     assert_eq!(frames.len(), total as usize);
 }
 
@@ -602,20 +590,20 @@ fn a_preview_completes_across_ticks() {
 #[test]
 fn the_two_variants_are_separate_jobs() {
     let mut engine = headless_engine(256, 256);
-    let anim = darkly::gpu::veil::VeilRegistry::new()
+    let anim = darkly::gpu::effect::EffectRegistry::new()
         .preview("frozen")
         .unwrap();
 
     // What a picker card costs on mount: one frame.
-    engine.start_preview("veils", "frozen", PreviewVariant::Still);
+    engine.start_preview("effects", "frozen", PreviewVariant::Still);
     // And what hovering it costs, requested while the still is still in flight:
     // the order a real card produces.
-    engine.start_preview("veils", "frozen", PreviewVariant::Animated);
+    engine.start_preview("effects", "frozen", PreviewVariant::Animated);
 
-    let (sw, sh, _, still) = drain(&mut engine, "veils", "frozen", PreviewVariant::Still);
+    let (sw, sh, _, still) = drain(&mut engine, "effects", "frozen", PreviewVariant::Still);
     assert_eq!(still.len(), 1, "a still is one frame");
 
-    let (aw, ah, _, animated) = drain(&mut engine, "veils", "frozen", PreviewVariant::Animated);
+    let (aw, ah, _, animated) = drain(&mut engine, "effects", "frozen", PreviewVariant::Animated);
     assert_eq!(animated.len(), anim.frames as usize);
     assert_eq!((sw, sh), (aw, ah), "both variants share the target's size");
 
@@ -634,13 +622,13 @@ fn the_two_variants_are_separate_jobs() {
 fn polling_a_completed_preview_releases_it() {
     let mut engine = headless_engine(128, 128);
     let v = PreviewVariant::Animated;
-    assert_eq!(preview(&mut engine, "filters", "invert", v).3.len(), 1);
+    assert_eq!(preview(&mut engine, "effects", "invert", v).3.len(), 1);
     assert!(
-        engine.poll_preview("filters", "invert", v).is_none(),
+        engine.poll_preview("effects", "invert", v).is_none(),
         "a completed preview must be handed over once"
     );
 
-    assert_eq!(preview(&mut engine, "filters", "invert", v).3.len(), 1);
+    assert_eq!(preview(&mut engine, "effects", "invert", v).3.len(), 1);
 }
 
 /// A request naming a catalog or a type the binary does not ship is a no-op:
@@ -650,9 +638,8 @@ fn an_unknown_catalog_or_type_is_a_no_op() {
     let mut engine = headless_engine(64, 64);
     for (catalog, type_id) in [
         ("nope", "frozen"),
-        ("veils", "does_not_exist"),
+        ("effects", "does_not_exist"),
         ("voids", "does_not_exist"),
-        ("filters", "does_not_exist"),
         // A catalog with no offscreen mechanism: previewable as a documentation
         // asset, with nothing for a picker to open.
         ("blendModes", "multiply"),
@@ -672,29 +659,23 @@ fn an_unknown_catalog_or_type_is_a_no_op() {
 /// Generating a preview of any catalog leaves the document exactly as it was.
 ///
 /// The isolation the whole offscreen path exists for: a preview builds its own
-/// instance against its own textures, so the live veil chain, layer stack and
-/// active layer are never touched.
+/// instance against its own textures, so the live layer stack and active layer
+/// are never touched.
 #[test]
 fn preview_generation_never_mutates_the_document() {
     let mut engine = headless_engine(128, 128);
-    let before_layers = engine.layer_tree().len();
-    let before_veils = engine.veil_list().len();
+    let before_layers = engine.layer_tree().layers.len();
 
     for (catalog, type_id) in [
-        ("veils", "black_and_white"),
+        ("effects", "black_and_white"),
         ("voids", "noise"),
-        ("filters", "invert"),
+        ("effects", "invert"),
     ] {
         preview(&mut engine, catalog, type_id, PreviewVariant::Animated);
         assert_eq!(
-            engine.layer_tree().len(),
+            engine.layer_tree().layers.len(),
             before_layers,
             "`{catalog}/{type_id}` changed the layer tree"
-        );
-        assert_eq!(
-            engine.veil_list().len(),
-            before_veils,
-            "`{catalog}/{type_id}` changed the veil chain"
         );
     }
 }
