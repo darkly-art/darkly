@@ -201,7 +201,10 @@ mod tests {
                 entry.display_name
             );
         }
-        assert!(out.contains("alt=\"Veils:"), "category title missing: {out}");
+        assert!(
+            out.contains("alt=\"Veils:"),
+            "category title missing: {out}"
+        );
         assert!(
             out.contains("src=\"docs/images/graphics/effects-veils.jpg\""),
             "unexpected src: {out}"
