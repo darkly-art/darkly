@@ -3859,8 +3859,8 @@ fn paste_while_editing_mask_places_layer_at_top_level() {
 }
 
 /// The document model must expose the selection as a typed [`Filter`] —
-/// not as a parallel `Option<AlphaMask>` slot. `Document.selection` is a
-/// Filter with `kind = Selection(...)`, addressable through the same
+/// not as a parallel bespoke slot beside the filter list. `Document.selection`
+/// is a Filter with `kind = Selection(...)`, addressable through the same
 /// `Filter::pixels()` interface as a mask.
 #[test]
 fn document_selection_is_a_typed_modifier() {

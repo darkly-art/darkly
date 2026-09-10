@@ -1055,45 +1055,6 @@ fn contour_segments_r8_circle_geometry() {
     );
 }
 
-/// Verify contour_segments_r8 matches AlphaMask::contour_segments for the
-/// same rectangular shape.
-#[test]
-fn contour_segments_r8_matches_tile_version() {
-    let (w, h) = (128u32, 128u32);
-
-    let mut flat = vec![0u8; (w * h) as usize];
-    for y in 20..60 {
-        for x in 30..90 {
-            flat[(y * w + x) as usize] = 255;
-        }
-    }
-    let r8_segs = mask::contour_segments_r8(&flat, w, h, 127);
-
-    let tile_mask = darkly::tile::AlphaMask::from_r8(&flat, w, h);
-    let tile_segs = tile_mask.contour_segments(0.5);
-
-    assert_eq!(
-        r8_segs.len(),
-        tile_segs.len(),
-        "r8 ({}) and tile ({}) segment counts should match",
-        r8_segs.len(),
-        tile_segs.len()
-    );
-
-    let eps = 0.01;
-    let close = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < eps && (a[1] - b[1]).abs() < eps;
-    for (i, r8) in r8_segs.iter().enumerate() {
-        let found = tile_segs.iter().any(|t| {
-            (close(r8.0, t.0) && close(r8.1, t.1)) || (close(r8.0, t.1) && close(r8.1, t.0))
-        });
-        assert!(
-            found,
-            "r8 segment {i} ({:?} -> {:?}) not in tile output",
-            r8.0, r8.1
-        );
-    }
-}
-
 // ============================================================================
 // Selection-modify commands: grow / shrink / border / smooth / feather /
 // antialias. These inspect the R8 selection mask directly via

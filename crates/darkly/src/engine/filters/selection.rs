@@ -594,8 +594,8 @@ impl DarklyEngine {
     }
 
     /// Separable Gaussian blur (H then V) of the selection mask, wrapped in one
-    /// undo step. σ = radius / 2, kernel extent ±ceil(radius) — matching
-    /// [`crate::mask::gaussian_kernel`]. Shared by feather / antialias.
+    /// undo step. σ = radius / 2, kernel extent ±ceil(radius). Shared by
+    /// feather / antialias.
     fn blur_selection(&mut self, radius: f32) {
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
