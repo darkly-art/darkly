@@ -19,6 +19,7 @@ import {
     rasterize,
     decodeJpeg,
     worstTileRmse,
+    graphicName,
 } from '../../../scripts/render-doc-graphics.mjs';
 import type { GraphicContext } from '../context';
 
@@ -57,16 +58,21 @@ afterAll(async () => {
     await close?.();
 });
 
-function staleMessage(catalog: string): string {
+function staleMessage(name: string): string {
     return (
-        `${catalog}.jpg is stale; re-render it:\n` +
+        `${name}.jpg is stale; re-render it:\n` +
         '  cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json\n' +
         '  node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json'
     );
 }
 
-function sidecarFor(catalog: string): Sidecar {
-    return JSON.parse(readFileSync(path.join(GRAPHICS, `${catalog}.hash.json`), 'utf8'));
+function sidecarFor(name: string): Sidecar {
+    return JSON.parse(readFileSync(path.join(GRAPHICS, `${name}.hash.json`), 'utf8'));
+}
+
+/** The stem of the files one graphic owns, from what it declares it depicts. */
+function nameOf(g: Loaded): string {
+    return graphicName(g.component.catalog as string, g.component.category as string | undefined);
 }
 
 function stillUri(catalogId: string, typeId: string): string {
@@ -78,24 +84,27 @@ function stillUri(catalogId: string, typeId: string): string {
 }
 
 /** A context over exactly what the committed image was rendered from: the
- *  recorded entries and the real committed stills. */
-function committedContext(catalog: string, title: string): GraphicContext {
-    const { entries } = sidecarFor(catalog);
+ *  recorded entries and the real committed stills. The sidecar's entries are
+ *  already the narrowed set, so the category argument needs no handling here. */
+function committedContext(name: string, title: string): GraphicContext {
+    const { entries } = sidecarFor(name);
     return { catalog: (id: string) => ({ id, title, entries }), still: stillUri };
 }
 
 /** Titles come from the Rust registries, which need a cargo build the frontend
- *  suite does not have. The catalog id is enough for these assertions. */
-const TITLES: Record<string, string> = { veils: 'Veils' };
+ *  suite does not have. A graphic that names a category titles itself with it,
+ *  which is the one case this map does not have to cover. */
+const TITLES: Record<string, string> = {};
 
 function svgFor(g: Loaded): string {
-    const catalog = g.component.catalog as string;
+    const name = nameOf(g);
+    const category = g.component.category as string | undefined;
     return renderGraphic(
         g.component,
         g.source,
         g.file,
         render,
-        committedContext(catalog, TITLES[catalog] ?? catalog),
+        committedContext(name, category ?? TITLES[name] ?? name),
     );
 }
 
@@ -163,12 +172,11 @@ describe('documentation graphics', () => {
 
     it('every graphic renders a real picture', () => {
         for (const g of loaded) {
-            const catalog = g.component.catalog as string;
             const raster = rasterize(svgFor(g));
 
             // Dimensions come from the component's own exported constants
             // rather than being restated here, so a layout change fails this.
-            const count = sidecarFor(catalog).entries.length;
+            const count = sidecarFor(nameOf(g)).entries.length;
             expect({ width: raster.width, height: raster.height }, g.file).toEqual(
                 (g.component.size as (n: number) => unknown)(count),
             );
@@ -214,8 +222,8 @@ describe('documentation graphics', () => {
 
     it('every committed image is up to date with its component and stills', () => {
         for (const g of loaded) {
-            const catalog = g.component.catalog as string;
-            const committed = sidecarFor(catalog);
+            const name = nameOf(g);
+            const committed = sidecarFor(name);
             const svg = svgFor(g);
             const raster = rasterize(svg);
 
@@ -223,7 +231,7 @@ describe('documentation graphics', () => {
                 width: committed.width,
                 height: committed.height,
             });
-            expect(normalizedHash(svg), staleMessage(catalog)).toBe(committed.svg);
+            expect(normalizedHash(svg), staleMessage(name)).toBe(committed.svg);
         }
     });
 
@@ -239,8 +247,8 @@ describe('documentation graphics', () => {
     // raise the threshold rather than deleting the check.
     it.each([0.06])('every committed image matches its pixels (worst-tile RMSE < %s)', limit => {
         for (const g of loaded) {
-            const catalog = g.component.catalog as string;
-            const file = path.join(GRAPHICS, `${catalog}.jpg`);
+            const name = nameOf(g);
+            const file = path.join(GRAPHICS, `${name}.jpg`);
             expect(existsSync(file), `${file} is missing`).toBe(true);
 
             const committed = decodeJpeg(readFileSync(file));
@@ -250,7 +258,7 @@ describe('documentation graphics', () => {
                 width: fresh.width,
                 height: fresh.height,
             });
-            expect(worstTileRmse(committed, fresh), staleMessage(catalog)).toBeLessThan(limit);
+            expect(worstTileRmse(committed, fresh), staleMessage(name)).toBeLessThan(limit);
         }
     });
 });

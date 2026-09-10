@@ -86,6 +86,12 @@ impl FragmentCtx<'_> {
             .ok_or_else(|| FragmentError(format!("`{key}` is required")))
     }
 
+    /// A declared argument's value, or `None` when the region omits it. For an
+    /// argument that narrows what a fragment renders rather than naming it.
+    pub fn arg_opt(&self, key: &str) -> Option<&str> {
+        self.args.get(key).copied()
+    }
+
     /// A repository-relative path, rewritten to reach the same file from the
     /// markdown that links to it. Markdown resolves relative links against the
     /// file, not the root, so a fragment that emitted root-relative paths would

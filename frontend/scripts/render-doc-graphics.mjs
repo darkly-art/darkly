@@ -55,6 +55,19 @@ const GRAPHICS_SRC = path.join(FRONTEND, 'src', 'graphics');
  *  if you move this, move that. */
 const GRAPHICS_DIR = 'docs/images/graphics';
 
+/** The file stem of a catalog graphic: the catalog id, plus the category when a
+ *  graphic depicts one, so one catalog can carry a picture per category without
+ *  two of them claiming the same file.
+ *
+ *  CANONICAL TWIN of `graphic_name` in
+ *  `crates/darkly/src/docs_md/fragments/catalog_graphic.rs`, which links the
+ *  file this writes. If you change one, change the other. */
+export function graphicName(catalog, category) {
+    return category
+        ? `${catalog}-${category.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
+        : catalog;
+}
+
 /** CANONICAL TWIN of `STILLS_DIR` in `crates/darkly/src/docs_md/mod.rs`, which
  *  is also where `render_docs --stills` writes. */
 const STILLS_DIR = 'docs/images/previews';
@@ -97,10 +110,17 @@ function parseArgs(argv) {
  */
 export function diskContext(metadata, { stillsRoot = path.join(REPO, STILLS_DIR) } = {}) {
     return {
-        catalog(id) {
+        catalog(id, category) {
             const found = (metadata.catalogs ?? []).find(c => c.id === id);
             if (!found) throw new Error(`no catalog \`${id}\` in the metadata export`);
-            return found;
+            if (!category) return found;
+            const entries = found.entries.filter(e => e.category === category);
+            if (!entries.length) {
+                throw new Error(`catalog \`${id}\` has no entries in category \`${category}\``);
+            }
+            // The category names the narrowed view, matching the alt text the
+            // Rust fragment generates for the same region.
+            return { ...found, title: category, entries };
         },
         still(catalogId, typeId) {
             const file = path.join(stillsRoot, catalogId, `${typeId}.jpg`);
@@ -231,7 +251,7 @@ export function worstTileRmse(a, b, cols = 8, rows = 6) {
  * matches its inputs" is this one's.
  */
 function sidecar(component, ctx, svg, raster) {
-    const catalog = ctx.catalog(component.catalog);
+    const catalog = ctx.catalog(component.catalog, component.category);
     return {
         svg: normalizedHash(svg),
         width: raster.width,
@@ -307,7 +327,7 @@ async function main() {
             const svg = renderGraphic(component, source, file, render, ctx);
             const raster = rasterize(svg);
 
-            const name = component.catalog;
+            const name = graphicName(component.catalog, component.category);
             fs.writeFileSync(path.join(args.out, `${name}.jpg`), encodeJpeg(raster));
             fs.writeFileSync(
                 path.join(args.out, `${name}.hash.json`),

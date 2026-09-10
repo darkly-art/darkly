@@ -49,8 +49,8 @@ Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*
 
 Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
 
-<!-- darkly:catalog-graphic catalog=veils -->
-<img src="docs/images/graphics/veils.jpg" alt="Veils: Black and White, Chromatic Aberration, Frozen, Grain, Lens Blur, Painting, Pixelate, Rainy Glass, VHS, Watercolor">
+<!-- darkly:catalog-graphic catalog=effects category=Veils -->
+<img src="docs/images/graphics/effects-veils.jpg" alt="Veils: Chromatic Aberration, Frozen, Grain, Lens Blur, Painting, Pixelate, Rainy Glass, VHS">
 <!-- /darkly:catalog-graphic -->
 
 Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:
