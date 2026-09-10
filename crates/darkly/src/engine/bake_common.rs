@@ -143,11 +143,12 @@ impl DarklyEngine {
             self.doc.detach_for_undo(source.id);
         }
 
-        // Detach + reinsert is the exact-slot landing: the result was anchored
-        // relative to a source that has just been detached, so its current
-        // position means nothing.
-        self.doc.detach_for_undo(result_id);
-        self.doc.reinsert_entity(result_id, slot);
+        // `slot` is derived from a source that has just been detached, not a
+        // slot this node ever held, so it goes through the placement policy
+        // rather than being restored verbatim: with the sources gone, that
+        // index can land above the viewport divider, where a raster does not
+        // render at all.
+        self.doc.place_at_slot(result_id, slot);
 
         // Re-read rather than trusting the requested slot: `reinsert_entity`
         // clamps, and undo has to reverse where the node actually landed.

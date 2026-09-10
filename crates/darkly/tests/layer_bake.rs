@@ -724,3 +724,48 @@ fn merge_down_leaks_no_group_state() {
         "repeated merges must not accumulate group state"
     );
 }
+
+/// Regression: a bake result must land in canvas space, whatever index the
+/// sources it replaces used to occupy.
+///
+/// The result's slot is derived from the topmost source, and it is read off the
+/// tree *before* the sources detach. Restoring that index verbatim afterwards
+/// walks the result up past everything the detach shifted down, and with a
+/// divider among the root's children that is enough to strand a raster above
+/// it, where nothing composites it into the canvas. Merging is a
+/// restructuring, so the pixels have to survive it.
+#[test]
+fn merge_result_lands_below_the_divider() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let lower = engine.add_raster_layer(None);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, upper, 16.0, 16.0, [0.0, 1.0, 0.0]);
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
+    let result = engine.merge_layers(vec![lower, upper]).expect("merge ok");
+
+    // `layers` is top-first, so everything before the divider row is the
+    // viewport treatment and everything after it is the document's content.
+    let rows = engine.layer_tree().layers;
+    let divider = rows
+        .iter()
+        .position(|n| matches!(n, LayerInfo::Divider { .. }))
+        .expect("the root always holds the divider");
+    let landed = rows
+        .iter()
+        .position(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == result.to_ffi() as f64))
+        .expect("result in tree");
+    assert!(
+        landed > divider,
+        "the baked raster belongs to the document, not the viewport treatment"
+    );
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "a result stranded above the divider composites into nothing"
+    );
+}
