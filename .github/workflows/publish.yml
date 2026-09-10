@@ -36,16 +36,22 @@ jobs:
 
       # --allow-dirty: the version lines above are rewritten but not committed.
       # cargo publish compiles each crate as its verification step (no GPU
-      # needed), and refuses to overwrite an already-published version.
-      # darkly-macros first: `darkly`'s path dependency pins it to this exact
-      # version, so it must exist on the index before `darkly` is published.
-      # cargo publish blocks until the crate lands in the index before returning.
-      - name: Publish darkly-macros
+      # needed). darkly-macros goes first: `darkly` pins it to this exact
+      # version, so it must exist on the index before `darkly` is published,
+      # and cargo publish blocks until the crate lands there before returning.
+      # A version already on the index is skipped rather than failing, so a
+      # release that broke halfway can be re-run on the same tag.
+      - name: Publish darkly-macros, then darkly
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p darkly-macros --allow-dirty
-
-      - name: Publish darkly
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p darkly --allow-dirty
+        run: |
+          for crate in darkly-macros darkly; do
+            # Sparse-index layout for names of four characters or more:
+            # <first two>/<next two>/<name>, one JSON object per version.
+            index="https://index.crates.io/${crate:0:2}/${crate:2:2}/$crate"
+            if curl -sf "$index" | grep -q "\"vers\":\"$VERSION\""; then
+              echo "$crate $VERSION is already on crates.io, skipping"
+            else
+              cargo publish -p "$crate" --allow-dirty
+            fi
+          done

@@ -14,9 +14,15 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/darkly-art/darkly"
 
 [workspace.dependencies]
-# Local crates
+# Local crates. `darkly` is only ever consumed by `darkly-wasm`, which is
+# never published, so a bare path is enough. `darkly-macros` ships to crates.io
+# as a dependency of `darkly`: publishing strips `path` and substitutes the
+# registry version, so a path-only dep would leave the published manifest with
+# no version requirement at all. The version here is vestigial in the same way
+# the crates' own versions are (see docs/versioning.md); the release workflow
+# rewrites all three to the tag being published.
 darkly = { path = "crates/darkly" }
-darkly-macros = { path = "crates/darkly-macros" }
+darkly-macros = { path = "crates/darkly-macros", version = "0.1.0" }
 
 # Proc-macro toolchain (the `#[handlers]` engine-bridge macro + build.rs scan)
 syn = { version = "3", features = ["full", "visit"] }

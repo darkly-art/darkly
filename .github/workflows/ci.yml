@@ -39,6 +39,18 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  package:
+    name: cargo package (crates.io manifests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Catches manifest defects that only surface at release time, when a `v*`
+      # tag runs .github/workflows/publish.yml: a dependency published without
+      # a version requirement, a missing readme, an unpackageable path. Manifest
+      # checks only, so --no-verify skips the compile the real publish does.
+      - run: cargo package -p darkly-macros -p darkly --no-verify
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
