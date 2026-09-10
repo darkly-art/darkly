@@ -1,5 +1,5 @@
 // Lens blur post-processing veil.
-// Golden-angle spiral disk blur with exponential brightness accumulation —
+// Golden-angle spiral disk blur with exponential brightness accumulation:
 // bright pixels form characteristic circular bokeh highlights.
 // Based on Shadertoy bokeh techniques by Dave Hoskins et al.
 //   https://www.shadertoy.com/playlist/fXlGDN

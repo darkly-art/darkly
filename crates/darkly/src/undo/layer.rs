@@ -200,7 +200,7 @@ pub struct BakeLayersAction {
 
     pub result_id: LayerId,
     pub result_slot: TreeSlot,
-    /// The baked result's pixel-bearing node ids — typically just
+    /// The baked result's pixel-bearing node ids: typically just
     /// `[result_id]`. Disposed at evict time **only if the action was
     /// undone** (result currently detached).
     result_tombstones: Tombstones,

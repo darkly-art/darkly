@@ -6,12 +6,12 @@
 // get it prepended by `gpu::blend_mode::build_blend_source`.
 //
 // The `case` arms of `blend_rgb` are generated at runtime from the blend-mode
-// registry — each `crates/darkly/src/gpu/blend_modes/<name>.rs` declares its
+// registry: each `crates/darkly/src/gpu/blend_modes/<name>.rs` declares its
 // own WGSL math, and `gpu::blend_mode::build_blend_source` splices them into
 // the marker below before compilation. Edit a blend mode's `.rs` file, not
 // this switch.
 
-// Color Burn — Krita KoCompositeOpFunctions.h:329–361.
+// Color Burn: Krita KoCompositeOpFunctions.h:329-361.
 // d=1 is a stable point; s=0 forces full burn. NaN/Inf are masked rather
 // than relying on IEEE behavior (WGSL doesn't guarantee it across backends).
 fn pd_color_burn(s: vec3f, d: vec3f) -> vec3f {
@@ -23,7 +23,7 @@ fn pd_color_burn(s: vec3f, d: vec3f) -> vec3f {
     return out;
 }
 
-// Color Dodge — Krita KoCompositeOpFunctions.h:376–403.
+// Color Dodge: Krita KoCompositeOpFunctions.h:376-403.
 // s=1 lights up only where the destination has signal.
 fn pd_color_dodge(s: vec3f, d: vec3f) -> vec3f {
     let safe_denom = max(vec3f(1.0) - s, vec3f(1e-7));
@@ -34,14 +34,14 @@ fn pd_color_dodge(s: vec3f, d: vec3f) -> vec3f {
     return out;
 }
 
-// Soft Light — Photoshop variant (Krita KoCompositeOpFunctions.h:513–529).
+// Soft Light: Photoshop variant (Krita KoCompositeOpFunctions.h:513-529).
 fn pd_soft_light(s: vec3f, d: vec3f) -> vec3f {
     let lighten = d + (2.0 * s - vec3f(1.0)) * (sqrt(d) - d);
     let darken = d - (vec3f(1.0) - 2.0 * s) * d * (vec3f(1.0) - d);
     return select(darken, lighten, s > vec3f(0.5));
 }
 
-// HSL helpers — PDF 11.3.5.3 / W3C Compositing-1, matching Krita's HSY model
+// HSL helpers: PDF 11.3.5.3 / W3C Compositing-1, matching Krita's HSY model
 // (luma weights from KoColorSpaceMaths.h:912).
 fn pd_lum(c: vec3f) -> f32 {
     return dot(c, vec3f(0.299, 0.587, 0.114));

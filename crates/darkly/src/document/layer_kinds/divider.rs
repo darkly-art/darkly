@@ -1,4 +1,4 @@
-//! Divider layer kind — the screen-space boundary as a node in the tree.
+//! Divider layer kind: the screen-space boundary as a node in the tree.
 //!
 //! The divider is the single node among the root's children that splits canvas
 //! space (children below it) from screen space (children above it). Making the
@@ -6,7 +6,7 @@
 //! moving it is an ordinary layer move, and undo of either is the ordinary
 //! `LayerMoveAction`.
 //!
-//! The divider carries no user-editable state — no pixels, no blend that is
+//! The divider carries no user-editable state: no pixels, no blend that is
 //! ever read, no name the panel shows editable. Its entire document meaning is
 //! its position, which lives in the root's children list like any node's. The
 //! structural invariant (exactly one, always a direct child of the root) is
@@ -62,7 +62,7 @@ mod tests {
     use super::*;
 
     /// The divider round-trips through its registered serializer with an empty
-    /// body — position is the root's business, and nothing else survives.
+    /// body: position is the root's business, and nothing else survives.
     #[test]
     fn divider_body_round_trips_empty() {
         let doc = crate::document::Document::new(8, 8);

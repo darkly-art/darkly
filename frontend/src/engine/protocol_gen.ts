@@ -607,7 +607,7 @@ export type LayerTransformCapabilityReq = { id: number, };
 
 export type LayerTree = { 
 /**
- * Root children, top-first — panel order.
+ * Root children, top-first: panel order.
  */
 layers: Array<LayerInfo>, };
 

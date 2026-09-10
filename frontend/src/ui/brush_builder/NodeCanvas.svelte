@@ -217,7 +217,7 @@
     }
 
     /** Middle-drag pans the graph, and it does so from the capture phase so the
-     *  gesture belongs to the canvas no matter what sits under the cursor —
+     *  gesture belongs to the canvas no matter what sits under the cursor:
      *  nodes, port dots and sliders all claim pointerdown for their own drags
      *  and would otherwise swallow it. Text fields are the exception: middle
      *  click pastes the primary selection there on X11. */

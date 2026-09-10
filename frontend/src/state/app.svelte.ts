@@ -298,7 +298,7 @@ export class DarklyInstance {
         this.voidCaptureKind = capKinds;
     }
 
-    // Active layer — the "primary" layer within the selection. Drives the
+    // Active layer: the "primary" layer within the selection. Drives the
     // properties panel, paint target, shift-click anchor, and per-row
     // emphasis. Always a member of `selectedLayerIds` when that set is
     // non-empty; null iff the set is empty.
@@ -344,7 +344,7 @@ export class DarklyInstance {
     // viewport-only.
     layerTree = $state<any[]>([]);
 
-    /** The rows the panel draws, in panel order, with their indent depth — what
+    /** The rows the panel draws, in panel order, with their indent depth: what
      *  a drag resolves its drop against. Derived from the live tree rather than
      *  the reconciler's pre-mutation snapshot, because a drag reads the panel as
      *  it is currently rendered. */

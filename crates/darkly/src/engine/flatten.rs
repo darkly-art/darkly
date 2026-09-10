@@ -18,7 +18,7 @@ impl DarklyEngine {
         let root_id = self.doc.root_id();
         // "Flatten the document" means the document's content. The
         // screen-space run is a viewport treatment that no export contains, so
-        // it is neither baked into the result nor consumed by the flatten —
+        // it is neither baked into the result nor consumed by the flatten,
         // taking `children_of(root)` here would delete it without baking it.
         let top_level: Vec<LayerId> = self.doc.canvas_space_children().to_vec();
         if top_level.is_empty() {

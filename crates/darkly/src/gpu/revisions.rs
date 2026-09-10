@@ -1,4 +1,4 @@
-//! One monotonic clock, many named sources — the compositor's single answer
+//! One monotonic clock, many named sources: the compositor's single answer
 //! to "is this derived thing still valid?".
 //!
 //! # The model
@@ -7,8 +7,8 @@
 //! wrong and which no other tracked fact implies. Mutating one bumps it,
 //! advancing the shared clock and stamping the source with the new value.
 //!
-//! A **derived artifact** — the composite, the presented frame, a cached
-//! content-bounds result, an effect instance's bind groups — records the
+//! A **derived artifact** (the composite, the presented frame, a cached
+//! content-bounds result, an effect instance's bind groups) records the
 //! [`Tick`] it was built at and owns an explicit list of the sources it
 //! depends on. Validity is a comparison performed **where the value is
 //! consumed**, never a flag pushed from the mutation site.
@@ -16,7 +16,7 @@
 //! That inversion is the point. Forgetting to bump a source is the same class
 //! of bug as forgetting a `mark_dirty()` call: stale output until the next
 //! coarse bump. Forgetting to *check* is impossible, because there is no flag
-//! to consult and no invalidate call to omit — reading a derived value runs
+//! to consult and no invalidate call to omit, reading a derived value runs
 //! the comparison as part of getting it.
 //!
 //! Because every source stamps the same clock, "did any of these change since
@@ -42,7 +42,7 @@ pub struct Revisions {
 
     /// Any document-shaped change: tree structure, layer properties, filter
     /// and void params, canvas geometry, isolation, selection edits,
-    /// undo/redo, load. Deliberately coarse — this is what `mark_dirty()`
+    /// undo/redo, load. Deliberately coarse: this is what `mark_dirty()`
     /// means.
     document: Tick,
 
@@ -52,13 +52,13 @@ pub struct Revisions {
     /// revision lives here with the pixels.
     node_pixels: HashMap<LayerId, Tick>,
 
-    /// Maintained maximum of `node_pixels` — not a mirror of it, and written
+    /// Maintained maximum of `node_pixels`, not a mirror of it, and written
     /// only by [`Self::bump_node_pixels`]. Lets a consumer that cares about
     /// "any node's pixels" avoid walking the map every frame.
     node_pixels_any: Tick,
 
     /// Per-node: this node's rendered appearance advanced without a document
-    /// edit or an authored pixel write — an animated void's or effect's clock
+    /// edit or an authored pixel write, an animated void's or effect's clock
     /// tick, a camera void's frame upload. Separate from `node_pixels`
     /// because the consumers differ: the composite needs "authored pixels or
     /// advanced appearance", while thumbnails, content bounds and histograms
@@ -67,11 +67,11 @@ pub struct Revisions {
     animation: HashMap<LayerId, Tick>,
 
     /// Maintained maximum of `animation`, written only by
-    /// [`Self::bump_animation`] — the same aggregate shape as
+    /// [`Self::bump_animation`]: the same aggregate shape as
     /// `node_pixels_any`, so the frame gate stays a max-compare.
     animation_any: Tick,
 
-    /// A GPU render target was recreated — accumulators, the screen-run pair,
+    /// A GPU render target was recreated: accumulators, the screen-run pair,
     /// the canvas apply scratch. Compositor-internal identity, invisible to
     /// the document, and deliberately *not* an input to the frame gates: see
     /// [`Self::latest_composite_input`].
@@ -191,7 +191,7 @@ impl Revisions {
     /// Latest change across every source the composite reads.
     ///
     /// `targets` is excluded on purpose. A target bump alone schedules no
-    /// work — it is consumed only when rebuilding effect instances whose bind
+    /// work: it is consumed only when rebuilding effect instances whose bind
     /// groups point at replaced textures, and every out-of-band bump is
     /// already paired with its own scheduling bump. Excluding it is also what
     /// keeps a frame from rescheduling itself forever: `targets` is the one
@@ -203,7 +203,7 @@ impl Revisions {
             .max(self.animation_any)
     }
 
-    /// Latest change across every source a presented frame reflects — the
+    /// Latest change across every source a presented frame reflects: the
     /// composite's inputs plus everything downstream of it.
     pub fn latest_visual(&self) -> Tick {
         self.latest_composite_input().max(self.present_inputs)

@@ -24,7 +24,7 @@ impl Compositor {
     /// The bake runs through a transient `GroupState` keyed by slotmap's
     /// null `LayerId` so it doesn't collide with any real group. After
     /// composing, the final accum is `copy_texture_to_texture`'d into the
-    /// destination's GPU texture — no CPU readback — and the transient
+    /// destination's GPU texture (no CPU readback) and the transient
     /// state (three canvas-sized textures, plus any blend bind groups the
     /// walk cached against it) is released before returning. Merge and
     /// flatten are user-action-rate operations, so the per-bake
@@ -44,7 +44,7 @@ impl Compositor {
             return;
         }
 
-        // Sentinel parent id — slotmap's null key never collides with a
+        // Sentinel parent id: slotmap's null key never collides with a
         // minted LayerId, so we can stash a transient GroupState here.
         let bake_parent = LayerId::from_ffi(0);
         self.revisions.bump_targets();
@@ -73,8 +73,8 @@ impl Compositor {
 
         // Refresh per-host projection uniforms so masked leaves in the baked
         // subtree composite through the same projection path the live render
-        // uses. Session isolation must not filter the bake — it represents
-        // "what would these layers look like, composited as-is" — so the
+        // uses. Session isolation must not filter the bake (it represents
+        // "what would these layers look like, composited as-is") so the
         // walk runs with no isolation target.
         self.sync_projection_states(device, queue, doc, None);
 

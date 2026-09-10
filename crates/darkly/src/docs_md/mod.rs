@@ -220,8 +220,8 @@ fn open_marker(line: &str) -> Option<(&str, &str)> {
 ///
 /// A marker in a code block is an example, not a region. Documentation about
 /// this system has to be able to show the syntax it is documenting:
-/// `CONTRIBUTING.md` does, and without this it would rewrite its own
-/// explanation into a table of veils.
+/// `docs/generated-markdown.md` does, and without this it would rewrite its own
+/// explanation into a table of effects.
 #[derive(Default)]
 struct Fence(Option<(char, usize)>);
 
@@ -544,9 +544,9 @@ mod tests {
     }
 
     /// A marker in a code block is documentation *about* the syntax, and
-    /// `CONTRIBUTING.md` is full of it. Rewriting an explanation into a veil
-    /// table was this tool's first act on the repository, before fences were
-    /// understood.
+    /// `docs/generated-markdown.md` is full of it. Rewriting an explanation
+    /// into an effects table was this tool's first act on the repository,
+    /// before fences were understood.
     #[test]
     fn markers_inside_a_code_fence_are_examples() {
         let text = format!("Like so:\n\n```markdown\n{OPEN}\n…\n{CLOSE}\n```\n\nSee?\n");

@@ -100,7 +100,7 @@ fn previewable() -> Vec<Previewable> {
 /// Every effect, every blend mode and `noise` declares a preview.
 ///
 /// Driven off the **registries** rather than a hand-written list, so adding an
-/// effect without a preview fails here — which is the whole point of putting
+/// effect without a preview fails here, which is the whole point of putting
 /// the declaration on the registration.
 #[test]
 fn every_previewable_entry_declares_a_preview() {
@@ -300,7 +300,7 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Fourteen effects, one void, sixteen blend modes and thirteen brushes —
+/// Fourteen effects, one void, sixteen blend modes and thirteen brushes:
 /// counted **per catalog**. A bare total of forty-four would not notice a whole
 /// catalog dropping out and another gaining entries.
 #[test]
@@ -525,7 +525,7 @@ fn every_asset_has_real_motion() {
 /// Determinism across a reused device is what lets forty-six assets share one
 /// `Gpu`, and it is where a renderer that left state behind shows up. One entry
 /// per catalog rather than all forty-six, because the cost is two full
-/// sequences each and the failure mode is per-renderer, not per-entry — except
+/// sequences each and the failure mode is per-renderer, not per-entry: except
 /// for brushes, which get
 /// [`every_brush_renders_the_same_bytes_twice`] over the whole catalog.
 #[test]
@@ -552,7 +552,7 @@ fn rendering_an_entry_twice_is_deterministic() {
 ///
 /// Compared against the target's *loaded* source rather than `subject_rgba`,
 /// because the offscreen path area-averages the 2× subject before the filter
-/// sees it — pinning the raw subject would be pinning the resample. Rendered
+/// sees it, pinning the raw subject would be pinning the resample. Rendered
 /// after every other effect through the same session, so it also pins that none
 /// of them left state behind.
 #[test]

@@ -87,7 +87,7 @@ fn undoing_a_mask_removal_restores_it_on_its_host() {
     assert_eq!(
         e.layer_tree().layers.len(),
         3,
-        "undo must not add a row — the mask belongs to its host, not the root"
+        "undo must not add a row: the mask belongs to its host, not the root"
     );
 }
 

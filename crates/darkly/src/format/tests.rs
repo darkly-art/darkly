@@ -31,7 +31,7 @@ fn defaults_of(params: &[ParamDef]) -> Vec<ParamValue> {
 
 /// Headless `DarklyEngine` plus the per-test viewport bookkeeping. The
 /// screen-space run sizes off the viewport, which is 0×0 in headless mode by
-/// default — kitchen-sink puts effects above the divider, so we seed the size
+/// default: kitchen-sink puts effects above the divider, so we seed the size
 /// manually like the engine/save inline tests do.
 fn kitchen_sink_engine(width: u32, height: u32) -> crate::engine::DarklyEngine {
     let (device, queue) = test_device();
@@ -55,7 +55,7 @@ fn round_trip_every_veil() {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
     // Effects compile only against a format they declare in `targets`, and the
-    // screen-space chain runs at the accumulator format — so that is what a
+    // screen-space chain runs at the accumulator format, so that is what a
     // round-trip instantiates against.
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut registry = EffectRegistry::new();

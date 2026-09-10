@@ -5,7 +5,7 @@
     /** The divider row. An ordinary tree node: dragging it issues the same
      *  `moveLayers` call as any row (an illegal drop surfaces the engine's
      *  refusal as a toast), and its two halves are drop targets for the two
-     *  spaces it separates — above it is viewport-only, below it is canvas.
+     *  spaces it separates: above it is viewport-only, below it is canvas.
      *  `select: false` keeps a grab from touching the layer selection. */
     let {
         divider,
@@ -18,7 +18,7 @@
 <div
     class="divider"
     class:empty
-    title="Effects above this line change how the canvas looks on screen. They are not part of the image — exports, Flatten and Merge ignore them."
+    title="Effects above this line change how the canvas looks on screen. They are not part of the image: exports, Flatten and Merge ignore them."
     draggable="true"
     use:layerDropTarget={{
         rowId: divider.id,

@@ -25,7 +25,7 @@ const flat = [layer(3), layer(2), layer(1)];
 describe('indexLayerTree', () => {
     it('makes the divider a drop row but never a selectable node', () => {
         // Regression (`docs/plans/divider-as-a-node.md`): the divider must be
-        // a row — the gaps around it are the two sides of the boundary — while
+        // a row (the gaps around it are the two sides of the boundary) while
         // staying out of selection, reselection, and keyboard order.
         const index = indexLayerTree([
             layer(2),

@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 /// Smith/Heckbert scanline fill: `VecDeque<(y, start, end)>` holds whole
 /// horizontal segments, not per-pixel work, so queue depth is bounded by the
 /// number of distinct segments in the fill region (O(perimeter)) rather than
-/// by the pixel count. The `mask` is a flat `Vec<u8>` indexed directly — the
+/// by the pixel count. The `mask` is a flat `Vec<u8>` indexed directly: the
 /// shape to avoid here is per-pixel HashMap dispatch, which turns the fill
 /// superlinear on large regions.
 pub fn flood_fill_rgba(

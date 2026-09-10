@@ -622,7 +622,7 @@ impl DarklyEngine {
             if !self.doc.is_node_editable(id) {
                 continue;
             }
-            // The boundary is never grouped — a selection that includes the
+            // The boundary is never grouped: a selection that includes the
             // divider groups everything else, like the locked-layer skip.
             if self
                 .doc
@@ -631,7 +631,7 @@ impl DarklyEngine {
             {
                 continue;
             }
-            // Drop any id whose ancestor is also in the batch — moving
+            // Drop any id whose ancestor is also in the batch, moving
             // the ancestor brings the descendant along; processing both
             // would yank the descendant out of its group.
             if ids
@@ -693,7 +693,7 @@ impl DarklyEngine {
         // Through the placement policy, not verbatim: the slot is derived from
         // the topmost source's old index, and a group holding canvas-only
         // content must be redirected below the divider rather than landed
-        // above it. A group of viewport effects goes exactly where asked —
+        // above it. A group of viewport effects goes exactly where asked,
         // taking the topmost source's side of the divider with it. Positions
         // clamp on attach, so an index left dangling by the detached sources
         // lands at the end of the list.
@@ -1150,7 +1150,7 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids, filter, vector, and divider layers store no pixels —
+            // Voids, filter, vector, and divider layers store no pixels:
             // their "bounds" concept is the canvas itself, which callers can
             // ask for directly via `canvas_dimensions`.
             Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
@@ -1219,13 +1219,13 @@ impl DarklyEngine {
             return self.detach_modifier_for_remove(id);
         }
         // A kind that cannot be deleted (the viewport divider) is refused at
-        // the mutation chokepoint, so every removal path — single, batch,
-        // merge cleanup — gets the gate without repeating it.
+        // the mutation chokepoint, so every removal path (single, batch,
+        // merge cleanup) gets the gate without repeating it.
         if self.doc.find_node(id).is_some_and(|n| !n.kind().can_delete) {
             return None;
         }
         let slot = self.doc.slot_of(id).unwrap_or_default();
-        // Collect tombstones before detaching — `detach_for_undo` severs
+        // Collect tombstones before detaching: `detach_for_undo` severs
         // the parent links `collect_pixel_node_ids` walks to enumerate
         // the subtree.
         let tombstones = self.collect_pixel_node_ids(id);
@@ -1587,8 +1587,8 @@ impl DarklyEngine {
             return self.isolated_node;
         }
         self.isolated_node = id;
-        // Resync host uniforms — the `isolated` flag on a host flips
-        // depending on whether one of its filters is the new target — and
+        // Resync host uniforms (the `isolated` flag on a host flips
+        // depending on whether one of its filters is the new target) and
         // mark dirty so the next frame recomposites: the render walk reads
         // `engine.isolated_node` per frame, but nothing else tells the
         // compositor a frame is owed.
@@ -1602,7 +1602,7 @@ impl DarklyEngine {
         self.isolated_node
     }
 
-    /// True when the host's `isolated` blend uniform should fire — i.e. the
+    /// True when the host's `isolated` blend uniform should fire: i.e. the
     /// current isolation target is one of `host_id`'s filters (the user
     /// asked to see the mask channel as grayscale on canvas). Isolating the
     /// host itself doesn't trigger this; the host renders normally and the

@@ -1,7 +1,7 @@
 //! Error types surfaced by the `.darkly` load path.
 //!
 //! Every refusal carries enough information for the UI's `LoadErrorToast`
-//! (Phase 5) to format a precise diagnostic — "this file needs
+//! (Phase 5) to format a precise diagnostic: "this file needs
 //! `effect/lens_flare`, please update Darkly" rather than "load failed."
 //!
 //! The variants here are the full closed set for load; the save path is
@@ -20,7 +20,7 @@ pub enum LoadError {
 
     /// The file's `requires` inventory names features the binary's
     /// registries don't know about. Each entry is `"<registry>/<type_id>"`
-    /// — e.g. `"effect/lens_flare"`, `"blend_mode/divide"`,
+    ///: e.g. `"effect/lens_flare"`, `"blend_mode/divide"`,
     /// `"layer_kind/text"`, `"filter/clip"`.
     UnsupportedFeatures { missing: Vec<String> },
 

@@ -653,7 +653,7 @@ pub struct DarklyEngine {
     /// node's thumbnail readback was last queued for.
     ///
     /// The queue semantics the compositor's old drain-once dirty set provided,
-    /// now owned by the consumer that needs them — the write path no longer
+    /// now owned by the consumer that needs them: the write path no longer
     /// knows thumbnails exist, and a second consumer would keep its own cursor
     /// rather than contend for the same drain.
     pub(crate) thumbnails_queued: std::collections::HashMap<LayerId, crate::gpu::revisions::Tick>,
@@ -887,7 +887,7 @@ impl DarklyEngine {
         self.frame_needs_more()
     }
 
-    /// Put the viewport divider above the top `count` root children — the
+    /// Put the viewport divider above the top `count` root children: the
     /// count-era vocabulary many tests set their stage in, expressed as the
     /// ordinary divider move it now is. Panics when the tree cannot support
     /// the request, so a mis-built stage fails loudly at the call site.
@@ -1151,7 +1151,7 @@ impl DarklyEngine {
     }
 
     /// Force an offscreen composite and report whether it did any work. `false`
-    /// means the compositor was already clean — the signal a test needs to
+    /// means the compositor was already clean: the signal a test needs to
     /// assert that a steady frame stays quiescent.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_render_offscreen(&mut self) -> bool {
@@ -1224,7 +1224,7 @@ impl DarklyEngine {
 
     /// Blocking readback of the present pass **plus the screen-space run**,
     /// into a `viewport_w × viewport_h` target. The only harness that can
-    /// observe a viewport-only effect at all — every composite-level readback
+    /// observe a viewport-only effect at all: every composite-level readback
     /// is taken before the run exists.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_screen_run(&mut self, viewport_w: u32, viewport_h: u32) -> Vec<u8> {
@@ -1241,7 +1241,7 @@ impl DarklyEngine {
     /// Blocking readback of the root canvas composited from scratch: every
     /// revision source is bumped first, so no derived artifact can be reused.
     ///
-    /// The reference the incremental composite is checked against — if the two
+    /// The reference the incremental composite is checked against, if the two
     /// differ, some mutation failed to bump a source the composite depends on.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_canvas_from_scratch(&mut self) -> Vec<u8> {
@@ -1249,7 +1249,7 @@ impl DarklyEngine {
         self.test_readback_canvas()
     }
 
-    /// Composites actually encoded — see
+    /// Composites actually encoded: see
     /// [`crate::gpu::compositor::Compositor::composite_runs`].
     #[cfg(any(test, feature = "testing"))]
     pub fn test_composite_runs(&self) -> u64 {
@@ -1271,35 +1271,35 @@ impl DarklyEngine {
 
     /// Which accumulator half the root group's composite currently lives in.
     /// The walk flips halves once per advancing child, so this alternates
-    /// with the stack's shape — the instrument a test uses to prove it
+    /// with the stack's shape: the instrument a test uses to prove it
     /// actually exercised both halves rather than one twice.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_root_output_half(&self) -> usize {
         self.compositor.root_output_half()
     }
 
-    /// Bump the compositor's `targets` revision alone — see
+    /// Bump the compositor's `targets` revision alone: see
     /// [`crate::gpu::compositor::Compositor::test_bump_targets`].
     #[cfg(any(test, feature = "testing"))]
     pub fn test_bump_targets(&mut self) {
         self.compositor.test_bump_targets();
     }
 
-    /// Cumulative count of from-scratch effect-instance builds — see
+    /// Cumulative count of from-scratch effect-instance builds: see
     /// [`crate::gpu::compositor::Compositor::effect_rebuilds`].
     #[cfg(any(test, feature = "testing"))]
     pub fn test_effect_rebuilds(&self) -> u64 {
         self.compositor.effect_rebuilds()
     }
 
-    /// The resolution an effect layer renders at — see
+    /// The resolution an effect layer renders at: see
     /// [`crate::gpu::compositor::Compositor::effect_reduced_size`].
     #[cfg(any(test, feature = "testing"))]
     pub fn test_effect_reduced_size(&self, id: LayerId) -> Option<(u32, u32)> {
         self.compositor.effect_reduced_size(id)
     }
 
-    /// The flattened screen-space chain — see
+    /// The flattened screen-space chain: see
     /// [`crate::document::Document::screen_space_effects`]. The run itself is
     /// observable through `layer_tree`; this is the list the present pass
     /// actually walks, which differs from it whenever a run member is a group.

@@ -110,7 +110,7 @@ impl LayerTexture {
     }
 
     /// Allocate a texture at `extent` matching an existing node texture's
-    /// `format` — the reallocation constructor behind resize/staging paths,
+    /// `format`: the reallocation constructor behind resize/staging paths,
     /// which are format-agnostic. The format is this type's own fact, so the
     /// per-format dispatch (and its unsupported-format panic) lives here.
     pub fn new_for_format(

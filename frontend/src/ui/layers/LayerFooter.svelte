@@ -174,7 +174,7 @@
     }
 
     /* The add button keeps the split button's larger glyph, but not its
-       trailing margin — that separated the welded plus+chevron unit from the
+       trailing margin, that separated the welded plus+chevron unit from the
        rest, and a lone button just takes the footer's gap like its neighbours. */
     .footer > .footer-btn.add-layer {
         font-size: 18px;

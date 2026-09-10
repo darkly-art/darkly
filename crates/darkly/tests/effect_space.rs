@@ -1,4 +1,4 @@
-//! The screen-space boundary — the divider that splits the root's children
+//! The screen-space boundary: the divider that splits the root's children
 //! into what the document exports and what only the viewport shows.
 //!
 //! Everything here is about *space*, not about effects: which side of the line
@@ -68,7 +68,7 @@ fn effect_anchored(engine: &mut DarklyEngine, pipeline: &str, anchor: Option<Lay
         .unwrap_or_else(|| panic!("`{pipeline}` should be addable as an effect layer"))
 }
 
-/// Read the boundary through the layer-tree response — the same view the panel
+/// Read the boundary through the layer-tree response: the same view the panel
 /// consumes, so these assertions fail if the engine and the UI ever disagree
 /// about where the line is.
 fn tree_json(engine: &DarklyEngine) -> serde_json::Value {
@@ -135,7 +135,7 @@ fn root_row_count(engine: &DarklyEngine) -> usize {
     tree_json(engine)["layers"].as_array().expect("rows").len()
 }
 
-/// Root rows, top-first — the panel's order.
+/// Root rows, top-first: the panel's order.
 fn root_rows(engine: &DarklyEngine) -> Vec<LayerId> {
     tree_json(engine)["layers"]
         .as_array()
@@ -145,7 +145,7 @@ fn root_rows(engine: &DarklyEngine) -> Vec<LayerId> {
         .collect()
 }
 
-/// Children of a root-level group row, top-first — the panel's order.
+/// Children of a root-level group row, top-first: the panel's order.
 fn group_children(engine: &DarklyEngine, group: LayerId) -> Vec<LayerId> {
     tree_json(engine)["layers"]
         .as_array()
@@ -176,7 +176,7 @@ fn passthrough_flag(engine: &DarklyEngine, group: LayerId) -> bool {
 // What the boundary is
 // ---------------------------------------------------------------------------
 
-/// The stored count — not tree position, not layer kind — is what decides which
+/// The stored count (not tree position, not layer kind) is what decides which
 /// space a node renders in.
 #[test]
 fn boundary_partitions_the_root_into_two_spaces() {
@@ -201,7 +201,7 @@ fn boundary_partitions_the_root_into_two_spaces() {
     assert_eq!(
         root_row_count(&engine),
         4,
-        "and everything is canvas-space again — three nodes plus the divider row"
+        "and everything is canvas-space again: three nodes plus the divider row"
     );
 }
 
@@ -269,7 +269,7 @@ fn screen_space_effect_is_visible_only_after_the_present_pass() {
 // ---------------------------------------------------------------------------
 
 /// The most important test here. Every structural door funnels through
-/// `Document::link`, so none of them can put a raster above the boundary — and
+/// `Document::link`, so none of them can put a raster above the boundary, and
 /// a new insertion path that *would* need this test edited is exactly the
 /// coverage that matters.
 #[test]
@@ -283,7 +283,7 @@ fn a_raster_can_never_be_placed_above_the_boundary() {
     let expected = vec![e1, e2, e3];
     assert_eq!(run_ids(&engine), expected);
 
-    // Anchored nowhere — resolves to the top of the root, which is inside the
+    // Anchored nowhere: resolves to the top of the root, which is inside the
     // run.
     let added = engine.add_raster_layer(None);
     assert!(!in_run(&engine, added));
@@ -299,13 +299,13 @@ fn a_raster_can_never_be_placed_above_the_boundary() {
     engine.duplicate_node(base).expect("duplicate");
     assert_eq!(run_ids(&engine), expected, "duplicate of a canvas raster");
 
-    // Grouping wraps its sources in a fresh group — a kind that is only
+    // Grouping wraps its sources in a fresh group: a kind that is only
     // eligible when everything inside it is.
     engine.group_layers(vec![base, added]).expect("group");
     assert_eq!(run_ids(&engine), expected, "group_layers");
 
     // An explicit move that targets the top of the stack. Unlike every path
-    // above it, a move states an intent about *placement* — so it is refused
+    // above it, a move states an intent about *placement*, so it is refused
     // outright rather than quietly landed somewhere else.
     let err = engine
         .move_layers(vec![anchored], MoveTarget::After(e3))
@@ -457,8 +457,8 @@ fn boundary_move_is_one_undo_step() {
 /// The pair of cases a bare index-plus-count cannot both satisfy, and the
 /// reason undo carries the side rather than deriving it.
 ///
-/// `E_x` and `E_a` occupy the *same index* at the moment they are reinserted —
-/// the lowest slot the run could start at — so position alone cannot say which
+/// `E_x` and `E_a` occupy the *same index* at the moment they are reinserted
+/// (the lowest slot the run could start at) so position alone cannot say which
 /// of them belongs in it.
 #[test]
 fn undo_restores_run_membership_exactly() {
@@ -493,7 +493,7 @@ fn undo_restores_run_membership_exactly() {
     assert_eq!(run_ids(&engine), vec![ea, eb]);
 }
 
-/// The boundary is document state, so it round-trips — and a file that asks for
+/// The boundary is document state, so it round-trips, and a file that asks for
 /// more than the tree supports loads clamped rather than rendering a raster
 /// after the view transform.
 #[test]
@@ -534,7 +534,7 @@ fn boundary_survives_save_load_round_trip() {
 }
 
 /// Drive a save to completion and return the `.darkly` bytes, optionally
-/// rewriting `screen_space_count` in the manifest on the way out — the stand-in
+/// rewriting `screen_space_count` in the manifest on the way out: the stand-in
 /// for a hand-edited or future-written file.
 fn save_to_zip(engine: &mut DarklyEngine, override_count: Option<u64>) -> Vec<u8> {
     engine
@@ -579,7 +579,7 @@ fn effect_instances_are_not_rebuilt_every_frame() {
     }
     let settled = engine.test_effect_rebuilds();
 
-    // Now paint, which dirties the composite every frame — the case that was
+    // Now paint, which dirties the composite every frame: the case that was
     // slow. Nothing structural changes, so nothing may be rebuilt.
     for i in 0..8 {
         engine.begin_stroke(raster).unwrap();
@@ -611,8 +611,8 @@ fn effect_instances_are_not_rebuilt_every_frame() {
 /// Dragging a run member down next to a canvas-space layer takes it out of the
 /// run.
 ///
-/// Crossing the divider does not change a node's index — the lowest
-/// viewport-only child and the topmost canvas child are the same position — so
+/// Crossing the divider does not change a node's index (the lowest
+/// viewport-only child and the topmost canvas child are the same position) so
 /// the order of the children cannot express the move. What does express it is
 /// *what the node was dropped next to*: a layer dropped beside a canvas-space
 /// layer is canvas-space. Reported as "dragging a veil beneath the viewport
@@ -627,7 +627,7 @@ fn dragging_a_run_member_below_the_divider_takes_it_out_of_the_run() {
     engine.test_set_screen_space_boundary(3);
     assert_eq!(run_ids(&engine), vec![bottom, middle, top]);
 
-    // The gesture: drop the lowest run member just above the raster — the slot
+    // The gesture: drop the lowest run member just above the raster, the slot
     // directly below the divider, which is the position it already occupies.
     engine
         .move_layers(vec![bottom], MoveTarget::After(raster))
@@ -688,7 +688,7 @@ fn animated_grain(engine: &mut DarklyEngine) -> LayerId {
 }
 
 /// Drain startup async work and clear the flags `frame_needs_more` reports
-/// independently of animation demand — headless renders never reach
+/// independently of animation demand: headless renders never reach
 /// `finish_present`, so `needs_present` would otherwise stay stuck set from
 /// engine setup. What `frame_needs_more` returns afterwards is the animation
 /// answer alone.
@@ -712,7 +712,7 @@ fn tick_animations(engine: &mut DarklyEngine) {
 
 /// Regression: a canvas-space animated effect is the document's only animated
 /// content. It must keep the frame loop alive and advance its clock across
-/// frames — the canvas tick and `needs_animation()` were both gated on animated
+/// frames: the canvas tick and `needs_animation()` were both gated on animated
 /// *voids* only, so the effect froze unless a void coincidentally existed.
 #[test]
 fn canvas_space_animated_effect_animates() {
@@ -731,7 +731,7 @@ fn canvas_space_animated_effect_animates() {
     // The boundary is at 0, so the effect is canvas-space.
     let fx = animated_grain(&mut engine);
 
-    // Composite once — that realizes and syncs the effect instance — then clear
+    // Composite once (that realizes and syncs the effect instance) then clear
     // the transient flags again.
     let before = engine.test_readback_canvas();
     engine.test_flush_readbacks();
@@ -750,7 +750,7 @@ fn canvas_space_animated_effect_animates() {
          identical bytes mean the canvas gate never fired"
     );
 
-    // Hiding it silences the loop — the predicate honors effective visibility
+    // Hiding it silences the loop: the predicate honors effective visibility
     // like every other animation gate. The hide is itself a document change
     // that owes one frame; a headless engine has no surface to present on, so
     // absorb that debt the same way the composite above was absorbed, leaving
@@ -765,7 +765,7 @@ fn canvas_space_animated_effect_animates() {
 
 /// The mirror case, which is what pins both spaces to one mechanism rather than
 /// two: the same effect above the divider animates too. This passed before the
-/// canvas gate was fixed and must keep passing after — it is the coverage for
+/// canvas gate was fixed and must keep passing after: it is the coverage for
 /// the screen predicate's enumeration source moving from the document's
 /// screen-space run to the realized instance's own space tag.
 #[test]
@@ -826,7 +826,7 @@ fn reordering_inside_the_run_keeps_every_member() {
 // ---------------------------------------------------------------------------
 
 /// A group above the divider is passthrough, unmasked and holds only effects,
-/// so it contributes no compositing of its own — the effects inside it are the
+/// so it contributes no compositing of its own: the effects inside it are the
 /// run as far as the present chain is concerned. Eligibility already said so
 /// (`a_group_is_eligible_exactly_when_its_contents_are`); this pins that the
 /// pixels agree.
@@ -857,7 +857,7 @@ fn an_effect_inside_a_run_group_still_runs_on_the_presented_image() {
 }
 
 /// The flattened run must interleave a group's effects with its root-level
-/// siblings in document order — a group is a container, not a separate chain.
+/// siblings in document order: a group is a container, not a separate chain.
 /// Two inverts, one nested and one not, cancel; if the nested one were dropped
 /// or run against the wrong pair, the surface would stay inverted.
 #[test]
@@ -928,7 +928,7 @@ fn moving_a_group_holding_a_raster_into_viewport_space_is_refused() {
     engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![e]);
 
-    // A group of an effect *and* a raster — eligible but for the raster.
+    // A group of an effect *and* a raster: eligible but for the raster.
     let group = engine
         .group_layers(vec![raster])
         .expect("group the raster alone");
@@ -949,7 +949,7 @@ fn moving_a_group_holding_a_raster_into_viewport_space_is_refused() {
     );
 }
 
-/// A refusal must not cost the user their undo history — it never got as far as
+/// A refusal must not cost the user their undo history: it never got as far as
 /// pushing one, so the stack still holds whatever came before.
 #[test]
 fn a_legal_viewport_arrangement_survives_undo_and_redo() {
@@ -983,7 +983,7 @@ fn a_legal_viewport_arrangement_survives_undo_and_redo() {
     assert_eq!(engine.test_screen_space_effects(), chain);
 }
 
-/// An add states no intent about placement, so it is never refused — it lands
+/// An add states no intent about placement, so it is never refused: it lands
 /// at the nearest slot the rules allow. For a raster anchored inside a run
 /// group that is the topmost canvas-space slot; for an effect it is exactly
 /// where it was asked to go.
@@ -996,7 +996,7 @@ fn adding_into_a_run_group_lands_at_the_nearest_legal_slot() {
     engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![group]);
 
-    // Anchored on the effect inside the group — the slot asked for is above
+    // Anchored on the effect inside the group: the slot asked for is above
     // the divider, which a raster may not occupy. Had it landed there the
     // group would have been disqualified and the run would be empty, so the
     // run surviving intact is what proves the redirect happened.
@@ -1012,7 +1012,7 @@ fn adding_into_a_run_group_lands_at_the_nearest_legal_slot() {
         "the group still holds only the effect"
     );
 
-    // An effect asked for the same slot belongs there, and gets it —
+    // An effect asked for the same slot belongs there, and gets it,
     // joining the chain is only possible from inside the group.
     let nested = effect_anchored(&mut engine, "grain", Some(a));
     assert_eq!(
@@ -1084,7 +1084,7 @@ fn a_freshly_created_group_is_never_swept_into_the_run() {
 }
 
 // ---------------------------------------------------------------------------
-// Drag placement — a move is a statement about position, and the engine
+// Drag placement: a move is a statement about position, and the engine
 // honors it verbatim
 // ---------------------------------------------------------------------------
 
@@ -1117,7 +1117,7 @@ fn dragging_a_group_into_the_run_lands_where_dropped() {
 
 /// The same drop with an *empty* group. Emptiness gives it no claim on the
 /// divider, but the drop's reference already states the side, and the position
-/// is the user's — it must not be redirected to the run's floor.
+/// is the user's: it must not be redirected to the run's floor.
 #[test]
 fn dragging_an_empty_group_into_the_run_lands_where_dropped() {
     let mut engine = test_engine(16, 16);
@@ -1142,7 +1142,7 @@ fn dragging_an_empty_group_into_the_run_lands_where_dropped() {
     );
 }
 
-/// Undo and redo of that drop restore the recorded slot exactly — redo must
+/// Undo and redo of that drop restore the recorded slot exactly: redo must
 /// not replay through any placement guess.
 #[test]
 fn empty_group_run_move_round_trips_through_undo_and_redo() {
@@ -1216,7 +1216,7 @@ fn dropping_onto_a_run_group_header_lands_on_top() {
     );
 }
 
-/// `before group` is a sibling slot below the whole group — never a slot
+/// `before group` is a sibling slot below the whole group: never a slot
 /// inside it. The panel's collapsed-header below-zone means exactly this.
 #[test]
 fn before_group_is_a_sibling_below_the_whole_group() {
@@ -1242,7 +1242,7 @@ fn before_group_is_a_sibling_below_the_whole_group() {
 }
 
 /// A paste is an add, not a move: anchored on a run member, the new raster is
-/// placed at the nearest legal slot — the canvas floor — and the run survives.
+/// placed at the nearest legal slot (the canvas floor) and the run survives.
 #[test]
 fn pasting_with_a_run_member_anchor_preserves_the_run() {
     let mut engine = test_engine(16, 16);
@@ -1267,8 +1267,8 @@ fn pasting_with_a_run_member_anchor_preserves_the_run() {
 // Passthrough above the divider
 // ---------------------------------------------------------------------------
 
-/// A group's passthrough flag is meaningless above the divider — the run is
-/// consumed flattened — so unchecking it must not silently drop the group's
+/// A group's passthrough flag is meaningless above the divider (the run is
+/// consumed flattened) so unchecking it must not silently drop the group's
 /// effects out of the present chain.
 #[test]
 fn unchecking_passthrough_on_a_run_group_keeps_effects_running() {

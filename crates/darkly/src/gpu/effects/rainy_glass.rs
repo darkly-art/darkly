@@ -181,7 +181,7 @@ impl Effect for RainyGlass {
     }
 
     /// The preview is a span of the effect's own clock, so positioning it is
-    /// setting the time directly — scaled by `speed`, so a slower instance
+    /// setting the time directly: scaled by `speed`, so a slower instance
     /// covers less of its motion over the same preview.
     fn seek(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) {
         self.time = PREVIEW_SECONDS * t * self.speed;

@@ -1,14 +1,14 @@
 //! The one kind of image transform Darkly has: an **effect**.
 //!
-//! An effect is a registered, parameterized transform of an image — a
+//! An effect is a registered, parameterized transform of an image: a
 //! `type_id`, a [`ParamDef`] schema, a WGSL pipeline and a preview. One
 //! instance exists per place the effect is used; the pipeline behind it is
 //! `Arc`'d by [`EffectRegistry`] and shared across every instance of its type
 //! and target format.
 //!
-//! The same instance serves every path an effect can be invoked through —
-//! a layer in the tree, the screen-space chain, a destructive apply over a
-//! node region, a picker preview — because all four hand it a ping-pong pair
+//! The same instance serves every path an effect can be invoked through
+//! (a layer in the tree, the screen-space chain, a destructive apply over a
+//! node region, a picker preview) because all four hand it a ping-pong pair
 //! and ask it to write one half from the other. Masking is **not** the
 //! effect's concern: it is applied outside, by the shared in-place apply pass,
 //! which is what makes every effect maskable without declaring anything.
@@ -55,7 +55,7 @@ pub struct EffectCache {
 }
 
 impl EffectCache {
-    /// A cache holding no resources — what an effect with nothing to cache
+    /// A cache holding no resources: what an effect with nothing to cache
     /// returns from [`Effect::create_cache`], and the placeholder a consumer
     /// binds when an instance has not been realized yet.
     pub fn empty() -> Self {
@@ -139,7 +139,7 @@ pub fn create_blit_pipeline(
 }
 
 /// Build a render pipeline for the multi-tap soft downscale shader.
-/// Feeds a reduced-resolution effect a properly anti-aliased input —
+/// Feeds a reduced-resolution effect a properly anti-aliased input:
 /// single-tap bilinear (blit) aliases hard at any downscale ratio worse than
 /// ~0.7 because it's a fixed 2×2 box filter regardless of the ratio.
 pub fn create_downscale_pipeline(
@@ -157,7 +157,7 @@ pub fn create_downscale_pipeline(
     )
 }
 
-/// Build a render pipeline for the alpha-weighted magnification shader — the
+/// Build a render pipeline for the alpha-weighted magnification shader: the
 /// return leg of a reduced-resolution effect. A plain bilinear blit mixes the
 /// black held by transparent texels into everything it interpolates across an
 /// alpha edge, because accumulators carry straight alpha; this does the bilerp
@@ -276,7 +276,7 @@ pub fn create_blit_bind_group(
 /// A parameterized image transform, prepared against a ping-pong pair at a
 /// known resolution.
 ///
-/// One instance per place the effect is used — a layer in the tree, an entry in
+/// One instance per place the effect is used: a layer in the tree, an entry in
 /// the screen-space chain, a destructive apply, an open preview. The shared
 /// pipeline behind it is `Arc`'d by [`EffectRegistry`], so an instance is cheap:
 /// its own parameter values plus whatever GPU objects [`create_cache`] built for
@@ -299,12 +299,12 @@ pub trait Effect: std::fmt::Debug {
     ///
     /// `ping_pong_views` are the two halves the effect reads from and writes
     /// to; `render_width`/`render_height` are their dimensions. An effect never
-    /// learns why it was given that size — a reduced-resolution screen-space
+    /// learns why it was given that size: a reduced-resolution screen-space
     /// run, a canvas-sized accumulator and a region-sized destructive scratch
     /// all look the same from here.
     ///
     /// Takes `&mut self` so an effect whose uniform folds in something it is
-    /// only handed here — the render resolution, a decoded texture's aspect —
+    /// only handed here (the render resolution, a decoded texture's aspect)
     /// can keep it and rewrite that uniform later from state alone.
     fn create_cache(
         &mut self,
@@ -353,9 +353,9 @@ pub trait Effect: std::fmt::Debug {
     /// sequence be dropped and re-opened mid-run without replaying anything.
     ///
     /// Distinct from [`set_params`](Effect::set_params) because a clock is not
-    /// a parameter. It is not in the schema, it does not serialize, and — since
+    /// a parameter. It is not in the schema, it does not serialize, and (since
     /// the time an effect is showing cannot change what its cache *is*, only
-    /// what that cache holds — it never invalidates anything and so answers
+    /// what that cache holds) it never invalidates anything and so answers
     /// nothing. A parameter can do both, which is why the two are separate
     /// questions rather than one method that means whichever the caller
     /// intended.
@@ -364,7 +364,7 @@ pub trait Effect: std::fmt::Debug {
     /// Adopt a new parameter vector, answering whether `cache` still describes
     /// this instance.
     ///
-    /// The default answers `false` — rebuild — which is always correct and is
+    /// The default answers `false` (rebuild), which is always correct and is
     /// what the screen-space chain did for every slider drag before effects had
     /// this method. An effect whose cache *shape* is parameter-independent
     /// overrides it to rewrite its uniform in place and answer `true`, which is
@@ -386,7 +386,7 @@ pub struct EffectRegistration {
     pub display_name: &'static str,
     /// One-sentence summary shown as a picker tooltip and folded into the
     /// destructive-apply action's description, where the command palette's
-    /// substring search indexes it — include the terms users would search for.
+    /// substring search indexes it: include the terms users would search for.
     pub description: &'static str,
     /// Iconify name shown in the tree row and the menu action. Effects render
     /// live previews in the picker, so the icon is not what identifies them
@@ -405,7 +405,7 @@ pub struct EffectRegistration {
     pub params: &'static [ParamDef],
     /// How long this effect's preview runs, or `None` for one with nothing
     /// worth showing. Declaring an animation is what makes an effect
-    /// previewable — the two facts are one.
+    /// previewable: the two facts are one.
     pub preview: Option<PreviewAnim>,
     /// The parameter values this effect's preview shows at `t ∈ [0, 1]`, in
     /// `params` order. `None` is a still at the schema defaults, which is the
@@ -413,7 +413,7 @@ pub struct EffectRegistration {
     pub preview_at: Option<fn(f32) -> Vec<ParamValue>>,
     /// Target formats this effect's pipeline may be compiled against. A
     /// pipeline is compiled against exactly one format, so this is the list the
-    /// registry will build on demand — declaring `R8Unorm` is what lets an
+    /// registry will build on demand, declaring `R8Unorm` is what lets an
     /// effect run over a mask node.
     pub targets: &'static [wgpu::TextureFormat],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
@@ -424,7 +424,7 @@ pub struct EffectRegistration {
 /// declare [`MASK_TARGETS`] can run over an R8 mask node.
 pub const COLOR_TARGETS: &[wgpu::TextureFormat] = &[wgpu::TextureFormat::Rgba8Unorm];
 
-/// Color plus R8 — for an effect whose transform is meaningful on a
+/// Color plus R8: for an effect whose transform is meaningful on a
 /// single-channel mask.
 pub const MASK_TARGETS: &[wgpu::TextureFormat] = &[
     wgpu::TextureFormat::Rgba8Unorm,
@@ -447,7 +447,7 @@ impl EffectRegistration {
 }
 
 /// The effect catalog, sorted by `(category, display_name)` so a consumer can
-/// run-length group it into its category headings without bucketing — the same
+/// run-length group it into its category headings without bucketing: the same
 /// shape the blend-mode dropdown consumes.
 pub fn catalog() -> Catalog {
     let registry = EffectRegistry::new();
@@ -488,7 +488,7 @@ impl EffectRegistry {
     }
 
     /// Every registration, sorted by `type_id` for a deterministic order.
-    /// Callers read whatever fields they need off the registration — a new
+    /// Callers read whatever fields they need off the registration: a new
     /// field is free here.
     pub fn registrations(&self) -> Vec<&EffectRegistration> {
         let mut regs: Vec<&EffectRegistration> = self.entries.values().collect();
@@ -501,7 +501,7 @@ impl EffectRegistry {
     }
 
     /// True when this registry knows the given `type_id`. Used by the `.darkly`
-    /// load pre-check to refuse files naming effects the binary doesn't ship —
+    /// load pre-check to refuse files naming effects the binary doesn't ship:
     /// see [`crate::format::error::LoadError`].
     pub fn has(&self, type_id: &str) -> bool {
         self.entries.contains_key(type_id)
@@ -554,7 +554,7 @@ impl EffectRegistry {
         self.entries.get(type_id).map(|e| e.icon).unwrap_or("")
     }
 
-    /// Whether this effect declares `format` among its targets — the one
+    /// Whether this effect declares `format` among its targets: the one
     /// question a caller asks before offering it over a mask node.
     pub fn supports_target(&self, type_id: &str, format: wgpu::TextureFormat) -> bool {
         self.entries
@@ -564,7 +564,7 @@ impl EffectRegistry {
 
     /// Get or compile the shared pipeline for an effect type at one target
     /// format. `None` for an unknown type, or for a format the effect does not
-    /// declare — a caller handed an arbitrary string decides how to fail rather
+    /// declare: a caller handed an arbitrary string decides how to fail rather
     /// than tripping pipeline validation mid-frame.
     pub fn pipeline(
         &mut self,
@@ -642,7 +642,7 @@ impl PreviewMechanism for EffectMechanism {
 
 /// One open effect preview: the instance and the cache it was built against.
 ///
-/// Rebuilding is a normal outcome rather than a failure mode — [`Effect::set_params`]
+/// Rebuilding is a normal outcome rather than a failure mode: [`Effect::set_params`]
 /// answers `false` when the state it just entered no longer fits the cache, and
 /// a rebuilt instance at `t` is fully described by `t`.
 struct EffectSession<'a> {
@@ -653,8 +653,8 @@ struct EffectSession<'a> {
 
 impl<'a> EffectSession<'a> {
     /// The one place a preview's cache is built against its target, so the two
-    /// callers — the first build and a `set_params` that invalidated its cache
-    /// — cannot disagree about what it is built from.
+    /// callers (the first build and a `set_params` that invalidated its cache
+    ///) cannot disagree about what it is built from.
     fn build_cache(
         effect: &mut dyn Effect,
         device: &wgpu::Device,

@@ -5,7 +5,7 @@
 // downscale was: canvas accumulators hold *straight* (non-premultiplied) alpha,
 // since composite.wgsl divides its result by `out_a`. Fully transparent texels
 // therefore carry RGB 0, and hardware bilinear filtering mixes that black into
-// every colour it interpolates across an alpha edge — darkening a band one
+// every colour it interpolates across an alpha edge, darkening a band one
 // output texel wide around every silhouette in the document, which then ships
 // into the export.
 //

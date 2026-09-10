@@ -406,7 +406,7 @@ fn build_font_blobs(engine: &DarklyEngine) -> (Vec<ManifestFontRef>, Vec<SaveBlo
 }
 
 /// Walk the live document and collect every modular `type_id` in use.
-/// Registry-driven — no hand-maintained list to keep in sync when a new module
+/// Registry-driven: no hand-maintained list to keep in sync when a new module
 /// is added. The load path diffs this against the binary's registries before
 /// parsing the body.
 ///
@@ -521,7 +521,7 @@ mod tests {
 
     /// `requires_from_doc` walks the live document and collects every modular
     /// `type_id` actually in use. An effect layer must show up under
-    /// `requires.effect` by its *pipeline* id — its layer kind is `"filter"`,
+    /// `requires.effect` by its *pipeline* id: its layer kind is `"filter"`,
     /// which every effect layer shares and which says nothing about what the
     /// binary needs to be able to render. The existing raster + group layer
     /// kinds and `normal` blend mode must show up in their own buckets.

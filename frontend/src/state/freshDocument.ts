@@ -40,7 +40,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
         background: { r: 255, g: 255, b: 255, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackground({ id }),
         seedViewportEffects: async (instance, _w, _h) => {
-            // Four effect layers, added **hidden** — they are there to be
+            // Four effect layers, added **hidden**: they are there to be
             // discovered, not to redecorate the canvas before the user has
             // touched anything.
             //
@@ -65,7 +65,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                 const tree = await api.layerTree();
                 const divider = (tree.layers as any[]).find((r) => r.type === 'divider');
                 // The effects stacked up directly below the divider, bottom
-                // first — moving the divider below the bottom-most one puts
+                // first, moving the divider below the bottom-most one puts
                 // all of them in viewport space.
                 if (divider) {
                     await api.moveLayer({
@@ -85,13 +85,13 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                 if (groupId != null) api.setLayerName({ id: groupId, name: 'Veils' });
             }
             // The panel read the tree when it mounted, which is before any of
-            // this existed. Nothing else refreshes it — these layers are added
+            // this existed. Nothing else refreshes it: these layers are added
             // straight through the API rather than through an app-state method.
             await instance.refreshLayerTree();
             instance.requestFrame();
         },
     },
-    // App: a clean editor — an opaque black layer painted with a white ink pen,
+    // App: a clean editor, an opaque black layer painted with a white ink pen,
     // and no pre-seeded viewport effects. The feature still exists; it is
     // simply not pre-populated.
     app: {

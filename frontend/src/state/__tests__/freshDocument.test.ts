@@ -67,7 +67,7 @@ describe('freshDocument recipes', () => {
 
         // The four are one named group, so the starter document reads as a
         // single row. Grouped after the boundary moves, because the new group
-        // inherits the topmost source's side of the divider — group first and
+        // inherits the topmost source's side of the divider: group first and
         // the whole arrangement lands in canvas space.
         it('wraps the four effects in one named group, after the divider moves', async () => {
             const { engine, api } = fakeEngine();
@@ -106,7 +106,7 @@ describe('freshDocument recipes', () => {
         });
 
         // Regression: the panel read the tree when it mounted, which is before
-        // any of this exists, and nothing else refreshed it — so the seeded
+        // any of this exists, and nothing else refreshed it, so the seeded
         // effects were in the document but absent from the layer panel.
         it('refreshes the layer panel once the effects exist', async () => {
             const { engine } = fakeEngine();

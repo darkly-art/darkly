@@ -1,6 +1,6 @@
-# Viewport-space effect groups — render them, and refuse illegal placements loudly
+# Viewport-space effect groups: render them, and refuse illegal placements loudly
 
-## Revision (step 3) — **this section governs**
+## Revision (step 3): **this section governs**
 
 The independent review below returned `revise`. This section records the
 disposition of every finding and **replaces §4 (Stage A) wholesale**; §5 (Stage B)
@@ -11,7 +11,7 @@ Three review claims were independently re-verified before revising, because they
 are the ones that change the design:
 
 - A passthrough group's opacity and blend mode are already ignored in canvas
-  space — `compose_group_arm` inlines children and returns
+  space: `compose_group_arm` inlines children and returns
   (`gpu/compositor.rs:5534-5539`). So flattening a screen-space group loses
   nothing.
 - `CompoundAction::undo` iterates **in reverse** (`undo/compound.rs:25`), so the
@@ -22,7 +22,7 @@ are the ones that change the design:
   destructively via `set_screen_space_members` (`document/mod.rs:1091`). The move
   path's damage really is unrecoverable by undo.
 
-### R.1 Stage A is now **R4 — flatten the run**, not R1
+### R.1 Stage A is now **R4: flatten the run**, not R1
 
 The original Stage A routed the screen-space chain through `compose_children` by
 parking a screen accumulator in `Compositor::group_state` under a sentinel key.
@@ -45,12 +45,12 @@ The reasoning, in the order it matters:
    never sees the group. Darkly's run is already a flat sibling chain; R4 keeps
    it one.
 3. **R1's DRY argument does not survive contact.** `compose_children` exists to
-   handle isolation paths, masks, group accumulators, blend and scissor — every
+   handle isolation paths, masks, group accumulators, blend and scissor: every
    branch of which is inapplicable above the divider. Reusing it means reusing a
    walk none of whose decisions apply, and then papering over the isolation
    filter it drags along (the original §4.4 bullet). That is reuse of a shape,
    not of a rule.
-4. **It eliminates four risks and two defects outright** — the `set_canvas_rect`
+4. **It eliminates four risks and two defects outright**: the `set_canvas_rect`
    trap (§8.1.1), the borrow-splitting gamble (§8.1.2), the scratch pool (B6) and
    the blit bind-group re-owner (B7) all become moot, along with review finding
    D1's `AccumId` counter-proposal.
@@ -62,7 +62,7 @@ Stage A production cost drops from ~+252/−276 to roughly **+50/−15**.
 Add to `crates/darkly/src/document/mod.rs`, beside `screen_space_run`:
 
 ```rust
-/// The effect layers realized in screen space, bottom-to-top — the run,
+/// The effect layers realized in screen space, bottom-to-top: the run,
 /// flattened.
 ///
 /// A group above the divider is passthrough, unmasked, and holds only nodes
@@ -74,13 +74,13 @@ pub fn screen_space_effects(&self) -> Vec<LayerId>
 ```
 
 Depth-first over `screen_space_run()`, descending into groups, collecting nodes
-that are `Layer::Filter`. Structure only — **no visibility filtering here**; the
+that are `Layer::Filter`. Structure only: **no visibility filtering here**; the
 compositor keeps its existing `effective_visible` filter, which already handles
 an invisible ancestor group transitively.
 
 This is the whole of the document-side change. `screen_space_run()`,
 `renders_in_screen_space()`, `slot_of()` and `TreeSlot.screen_space` keep their
-current root-child meaning, untouched — which is what stops undo from trying to
+current root-child meaning, untouched, which is what stops undo from trying to
 restore a *nested* effect as a root-level run member.
 
 #### R.1.2 The two compositor call sites
@@ -95,15 +95,15 @@ restore a *nested* effect as a root-level run member.
   exactly the filters in screen space, membership is now exact, and the nested
   effect stops being mis-tagged `Canvas { parent: root }`.
 
-The original §4.2's `render_space` query is **dropped** — it existed to serve a
+The original §4.2's `render_space` query is **dropped**: it existed to serve a
 walk that no longer exists, and `screen_space_effects()` answers the same
 question in the only place that asks it.
 
 #### R.1.3 `group_layers` must preserve the run (C-finding, confirmed)
 
 `engine/layers.rs:694` hardcodes `screen_space: false` when reinserting the new
-group, so grouping run members — the obvious gesture for building a viewport
-effect group — silently drops the whole arrangement to canvas space. Set it from
+group, so grouping run members (the obvious gesture for building a viewport
+effect group) silently drops the whole arrangement to canvas space. Set it from
 whether the topmost source was a run member.
 
 **Ordering wrinkle, flagged for implementation:** `supports_screen_space` answers
@@ -125,7 +125,7 @@ Stage B's shape stands. Five deltas:
    undo passes through a state a refusing `link` would corrupt. The refusal still
    belongs at the engine handlers, on a different and honest justification:
    `Document::link` is infallible and sits beneath eight `add_*` entry points that
-   all return `LayerId` unconditionally, and — the substantive reason — refusal is
+   all return `LayerId` unconditionally, and (the substantive reason) refusal is
    about the *user's intent to move*, which only the handler knows. `link` sees
    insertions it must never reject, such as undo putting a node back.
 
@@ -137,7 +137,7 @@ Stage B's shape stands. Five deltas:
 
    The rule it enforces, stated once: **an insertion lands at the nearest
    position to the one requested that does not violate the screen-space rules.**
-   For a root-level insert that is already what the function does — an ineligible
+   For a root-level insert that is already what the function does, an ineligible
    node requested at an index inside the run is redirected to `Some(floor)`, the
    topmost canvas-space slot (`:1249-1253`). The extension is that a *parent*
    inside the screen-space subtree is redirected too: every position inside a run
@@ -152,7 +152,7 @@ Stage B's shape stands. Five deltas:
    failing a common action because of where the selection happened to be is
    hostile. One rule, two honest outcomes.
 
-   Nested inserts are, separately, recoverable — verified: an insert whose parent
+   Nested inserts are, separately, recoverable: verified: an insert whose parent
    is a run group early-returns at `:1231` today, never touches
    `screen_space_count`, and `unlink` decrements only for direct run members
    (`:1266-1270`). So this redirect prevents a transient collapse rather than
@@ -160,14 +160,14 @@ Stage B's shape stands. Five deltas:
 
 3. **The loud/silent line is refounded on recoverability (B3).** The original
    claim that "the stored count is left alone, so undoing the disqualifying
-   change restores the run" is false for the move path specifically — the one the
+   change restores the run" is false for the move path specifically: the one the
    user reported. The rule becomes:
 
    | Path | Behaviour | Why |
    |---|---|---|
    | `move_layer` / `move_layers` into viewport space, or into a viewport group | **Refuse, `Err(String)` → toast** | A move states placement intent. Also the only path that destroys `screen_space_count` beyond undo's reach |
    | add / paste / duplicate into a run group | Redirect to the nearest legal slot (R.2.2) | An add states no placement intent; failing it would be hostile. Stored intent untouched, and undo restores it either way (verified above) |
-   | `set_group_passthrough(false)`, `add_mask` on a run member | Silent clamp | Same — recoverable, and the clamp is scheduled for deletion by the divider-as-a-node redesign |
+   | `set_group_passthrough(false)`, `add_mask` on a run member | Silent clamp | Same: recoverable, and the clamp is scheduled for deletion by the divider-as-a-node redesign |
    | `set_screen_space_boundary` (divider drag) | Clamp, stays infallible | Dragging past the last eligible node means "as far as it goes", not an error |
    | undo / redo | Never refuses | Enforcement is in the engine handlers; `UndoAction`s call `Document` directly |
 
@@ -181,15 +181,15 @@ Stage B's shape stands. Five deltas:
    answer by recursion, not by the flag.
 
 5. **Record the two frontend notes (D4).** `SpaceDivider.svelte:36` has no error
-   surface at all — un-awaited, un-caught, `reportEngineError` → `console.error`
+   surface at all: un-awaited, un-caught, `reportEngineError` → `console.error`
    only. That is harmless *because* the boundary setter stays infallible, which
    makes item 3's divider row load-bearing; say so. And dropping a layer onto the
-   divider row is a silent no-op (`LayerPanel.svelte:22-24, :47`) — adjacent to
+   divider row is a silent no-op (`LayerPanel.svelte:22-24, :47`): adjacent to
    the complaint, out of scope here, fixed by the divider-as-a-node redesign.
    Record, do not act.
 
 Also: add the delete-last-effect-in-a-run-group path to §5.5 (C1), and fix the
-drifted citations — `any_animated_effect` is at `compositor.rs:3229`, Krita's
+drifted citations; `any_animated_effect` is at `compositor.rs:3229`, Krita's
 `correctNewNodeLocation` at `kis_mimedata.cpp:427-446` (B8). §8.2.4 is closed
 **no**: `docs/gpu-passes.md` is a generic WebGPU primer with no reference to the
 screen run (B9).
@@ -201,13 +201,13 @@ screen run (B9).
 | B1 undo justification false | Accepted, justification replaced (R.2.1) |
 | B2 `enforce_boundary_on_insert` signature | Accepted; the redirect it enables is how inserts avoid refusing (R.2.2) |
 | B3 move path destroys the count irreversibly | Accepted, loud/silent line refounded on it (R.2.3) |
-| B4 untested behaviour changes | Partly moot — the `is_in_isolation_path` change dies with R1. `group_layers` test added (R.4e) |
-| B5 walk-space resolved per call | Moot under R4 — there is no walk |
+| B4 untested behaviour changes | Partly moot: the `is_in_isolation_path` change dies with R1. `group_layers` test added (R.4e) |
+| B5 walk-space resolved per call | Moot under R4: there is no walk |
 | B6 scratch pool | Moot under R4 |
 | B7 blit bind-group re-owner | Moot under R4 |
 | B8 / B9 citation drift, `gpu-passes.md` | Accepted |
 | C1 delete-last-effect path | Accepted, added to §5.5 |
-| D1 `AccumId` enum | Moot under R4 — `group_state` is not touched |
+| D1 `AccumId` enum | Moot under R4: `group_state` is not touched |
 | D2 R4 omitted | **Accepted and adopted** (R.1) |
 | D3 registration flag naming | Accepted (R.2.4) |
 | D4 frontend gaps | Accepted as notes (R.2.5) |
@@ -220,7 +220,7 @@ readback only through the test-only helpers.
 
 - **(a) Regression, must fail first.** An effect inside a passthrough group above
   the divider changes the presented image. The reviewer transcribed and ran this
-  against the unfixed tree: centre pixel reads `[255,0,0,255]` (red — the effect
+  against the unfixed tree: centre pixel reads `[255,0,0,255]` (red, the effect
   never ran) instead of the expected inverted colour. This is the required
   failing-first test.
 - **(b)** Moving a group that recursively contains a raster into viewport space
@@ -229,14 +229,14 @@ readback only through the test-only helpers.
   document is unchanged.
 - **(d)** A legal arrangement survives undo/redo without refusal, and the run is
   the same list afterwards.
-- **(e)** `group_layers` over two run members leaves the new group in the run —
+- **(e)** `group_layers` over two run members leaves the new group in the run:
   pins R.1.3 including the empty-group ordering wrinkle.
 - **(f)** A nested effect is tagged `EffectSpace::Screen`, not
-  `Canvas { parent: root }` — pins R.1.2's second call site directly rather than
+  `Canvas { parent: root }`: pins R.1.2's second call site directly rather than
   only through pixels.
 - **(g)** Adding a raster while a nested effect is the active layer lands it at
   the topmost canvas-space slot, not inside the run group, and leaves the run
-  intact — pins the R.2.2 redirect. A companion case adds an *effect* with the
+  intact: pins the R.2.2 redirect. A companion case adds an *effect* with the
   same anchor and asserts it lands inside the group, unredirected, which is what
   stops the redirect from becoming "everything falls out of the group".
 
@@ -254,7 +254,7 @@ Added / removed, not touched.
 | **Combined** | **+230 / −55** | **+280 / −0** | **+40 / −10** |
 
 Stage B grew by ~+20/−5 production and +30 tests over the first revision when the
-insert redirect (R.2.2) replaced silent clamping — the
+insert redirect (R.2.2) replaced silent clamping: the
 `enforce_boundary_on_insert` signature change, the ancestor walk, and `link`
 threading both halves through.
 
@@ -279,44 +279,44 @@ remain out of scope and are neither absorbed nor invalidated.
 Step 2 of the planning workflow. Reviewed against the working tree at `06e808bb`
 plus uncommitted changes. Every file:line citation in the plan was opened and
 checked; the diagnosis was re-derived from the code and **empirically confirmed**
-by a throwaway integration test (written, run, deleted — no production code was
+by a throwaway integration test (written, run, deleted; no production code was
 modified).
 
 ### A. What was verified as correct
 
 Verified by reading the cited code, unless marked *(empirical)*.
 
-- **§2.1** — `LayerNode::supports_screen_space` (`crates/darkly/src/layer.rs:739-760`)
+- **§2.1**: `LayerNode::supports_screen_space` (`crates/darkly/src/layer.rs:739-760`)
   admits a passthrough group of effects exactly as quoted.
-- **§2.2** — `present_and_screen_run` (`gpu/compositor.rs:3733`), the
+- **§2.2**: `present_and_screen_run` (`gpu/compositor.rs:3733`), the
   `effective_visible` filter (`:3744-3749`), the `effect_instances` filter
   (`:3761-3764`), the plain-present branch (`:3766`), the flat effect loop
   (`:3809-3828`); `compose_children` (`:4348`), the hoisted `screen_run`
   (`:4360`), the run skip (`:4381-4383`). All exact.
-- **§2.3** — `sync_effect_instances` (`:4714`), the direct-membership tag
+- **§2.3**: `sync_effect_instances` (`:4714`), the direct-membership tag
   (`:4727-4738`), the space→views match (`:4836-4849`), `mark_effect_dirty`
   (`:3631-3637`), `effect_animates` (`:3220-3224`), `merge.rs:52` and
   `merge.rs:206`. `accumulator_host_of` (`document/mod.rs:659`) does stop at the
   root for a screen node, so the mis-binding is real.
-- **§2.4** — `screen_space_run` (`document/mod.rs:531`),
+- **§2.4**: `screen_space_run` (`document/mod.rs:531`),
   `qualifying_screen_space_suffix` (`:511`), `move_layer` (`:1067`),
   `set_screen_space_members` (`:1101`), `enforce_boundary_on_insert` (`:1224`)
   and its `parent != self.root` early return (`:1231`), `resolve_anchor_target`
   (`:1286`).
-- **§2.5** — `group_layers` hardcodes `screen_space: false` at
+- **§2.5**: `group_layers` hardcodes `screen_space: false` at
   `engine/layers.rs:694` **(confirmed empirically: grouping a single run member
   drops the run to `[]`)**. The duplicated `ScalingPipelines`
   (`compositor.rs:1309-1313` vs `gpu/screen_run.rs:129-134`, both built from the
   compositor's `accum_format` via `compositor.rs:1262`) and the duplicated
   scratch (`compositor.rs:4645` vs `screen_run.rs:183`) are as described.
-- **§4.3 R1 precedent** — the bake sentinel at `compositor.rs:3870-3881` driving
+- **§4.3 R1 precedent**: the bake sentinel at `compositor.rs:3870-3881` driving
   `compose_children` at `:3918` is real; `create_group_state` (`:888`) is
   size-generic and `make_accum_texture` (`:876`) is `Rgba8Unorm` with a strict
   superset of `ScreenRun`'s usages (`screen_run.rs:155-156`).
-- **§4.4** — the masked-passthrough branch (`compositor.rs:5525-5533`) is indeed
+- **§4.4**: the masked-passthrough branch (`compositor.rs:5525-5533`) is indeed
   structurally unreachable in screen space. `is_in_isolation_path` is at
-  `:2180` (plan says 2179 — immaterial).
-- **§5.1 prior art** — 22 of 23 Krita/GIMP citations verified verbatim, including
+  `:2180` (plan says 2179: immaterial).
+- **§5.1 prior art**: 22 of 23 Krita/GIMP citations verified verbatim, including
   the load-bearing ones: `kis_node_manager.cpp:529` really is
   `if (parent->allowAsChild(node)) {` with no `else`; `kis_mimedata.cpp:520-522`
   really returns `false` with no message anywhere in the file (only `i18n` hit in
@@ -327,28 +327,28 @@ Verified by reading the cited code, unless marked *(empirical)*.
   and `kis_assert.cpp:66-67` confirms it degrades to `qWarning`. An independent
   sweep of all 35 `allowAsChild` references confirms the plan's strongest claim:
   **that floating message is the only user-visible placement refusal in Krita.**
-- **§6.1 regression test — CONFIRMED TO FAIL TODAY (empirical).** Transcribed
+- **§6.1 regression test, CONFIRMED TO FAIL TODAY (empirical).** Transcribed
   verbatim and run: `SCREEN CENTER = [255, 0, 0, 255]`. Red, not cyan. The canvas
   readback is also `[255, 0, 0, 255]`. The effect renders in neither space,
   exactly as §2.2 predicts. This is a valid regression test.
-- **Existing test claims** — `a_group_is_eligible_exactly_when_its_contents_are`
+- **Existing test claims**: `a_group_is_eligible_exactly_when_its_contents_are`
   (`tests/effect_space.rs:307`) passes today, and its tail at `:328-335` does
   assert the silent-clamp behaviour. Full `effect_space` suite: 16/16 green.
-- **Frontend §5.6** — `LayerItem.svelte:375` + catch/toast at `:381-383`,
+- **Frontend §5.6**: `LayerItem.svelte:375` + catch/toast at `:381-383`,
   `LayerGroup.svelte:319` + catch/toast at `:325-327`, `LayerPanel.svelte:22`
   `preventDefault`-only, `spaceDivider.ts:44` `maxEligible`. All exact. Both
   import `toast` at `:7`; `toast.show('error', …)` is valid
   (`state/toast.svelte.ts:37`). `moveLayer` (singular) is **never called** from
-  hand-written frontend code — only generated surface at `protocol_gen.ts:1379`
-  and `:1566` — so its signature change is pure codegen churn.
-- **§3 handoff interaction** — §3.1 really is already fixed in the tree
+  hand-written frontend code (only generated surface at `protocol_gen.ts:1379`
+  and `:1566`) so its signature change is pure codegen churn.
+- **§3 handoff interaction**: §3.1 really is already fixed in the tree
   (`any_animated_effect` exists, `canvas_fires` consumes it at
   `compositor.rs:3416-3417`). §3.2 is genuinely untouched. The plan's claim that
   Stage A survives the divider-as-a-node redesign holds: every consumer it
   touches depends only on `screen_space_run()`'s contract, not its
   representation.
 
-### B. Findings — things the plan gets wrong
+### B. Findings: things the plan gets wrong
 
 **B1. The stated justification for not refusing in `Document::link` is false.**
 §5.3 asserts: *"a `CompoundAction` undo reassembles a tree one `reinsert_entity`
@@ -360,7 +360,7 @@ LayerMoveAction(child)…, LayerMoveAction(group reposition)]`
 (`engine/layers.rs:657-704`), so undo runs the group's reposition first, then
 pulls each child *out* of the still-present group, and detaches the group last.
 There is no moment where a child is reinserted into an absent group. And if there
-were, `reinsert_entity` already degrades safely — `document/mod.rs:1128-1131`
+were, `reinsert_entity` already degrades safely: `document/mod.rs:1128-1131`
 falls back to `self.root` when the recorded parent is not in the tree. I could
 not construct any compound undo that a refusing `link` would corrupt.
 
@@ -379,7 +379,7 @@ undo claim.
 plan's central Stage-B mechanism is: generalize it from "parent is the root" to
 "the resolved parent renders in screen space", after which an ineligible node
 targeted at a screen-space parent is *"redirected to the first canvas-space slot
-at the root"*. But the function returns `Option<usize>` — a **position only** —
+at the root"*. But the function returns `Option<usize>` (a **position only**)
 and `link` (`document/mod.rs:1198-1211`) has already captured `parent` before
 calling it:
 
@@ -398,7 +398,7 @@ and it is not in the plan or its LOC line (`document/mod.rs … 55 / 18`). Add i
 **B3. The move path's data loss is not recoverable by undo, and the plan says
 the opposite.** §5.3's table says of the read clamp: *"The stored count is left
 alone, so undoing the disqualifying change restores the run."* That is true for
-`add_mask` and `set_group_passthrough(false)` — and is pinned by
+`add_mask` and `set_group_passthrough(false)`, and is pinned by
 `masked_or_isolated_nodes_cannot_be_above_the_boundary`
 (`tests/effect_space.rs:294-302`). It is **false for the move path**, which is
 the path the user actually reported.
@@ -408,7 +408,7 @@ the path the user actually reported.
 (`:1101-1109`). `LayerMoveAction` (`undo/layer.rs:98-124`) records only two
 `TreeSlot`s and never captures `screen_space_count`; `move_layer_inner`
 (`engine/layers.rs:1273-1285`) constructs it from `slot_of` alone. **Empirically
-confirmed:** move a raster into a viewport group, then undo — the run stays `[]`.
+confirmed:** move a raster into a viewport group, then undo; the run stays `[]`.
 The user's viewport arrangement is gone permanently.
 
 Two consequences:
@@ -429,7 +429,7 @@ Two consequences:
 **B4. Two behaviour changes ship with no test.** CLAUDE.md: *"Every feature must
 have a test."*
 
-- §4.4's `group_layers` space preservation — the fix that makes the whole feature
+- §4.4's `group_layers` space preservation: the fix that makes the whole feature
   reachable by the obvious gesture (select veils → Group). Broken today
   (confirmed empirically). §6 lists no test for it. It needs one:
   *grouping run members leaves the new group in the run*.
@@ -444,12 +444,12 @@ own top-rated risk, and its failure mode is "mostly works".
 
 **B5. A per-frame cost regression in the hot compose walk.** §4.3 step 5 replaces
 `compose_children`'s run-membership skip with `doc.render_space(child)`
-*per child*. Today the run is resolved **once per group call** — `compositor.rs:4360`,
+*per child*. Today the run is resolved **once per group call**: `compositor.rs:4360`,
 with a comment saying exactly that. `render_space` as specified walks the parent
 chain and then consults `screen_space_run()`, which calls
 `qualifying_screen_space_suffix()` (`document/mod.rs:511`), which calls
-`supports_screen_space` — itself recursive over group subtrees and calling
-`has_mask` per node — over the whole trailing suffix. Per child, per group, per
+`supports_screen_space` (itself recursive over group subtrees and calling
+`has_mask` per node) over the whole trailing suffix. Per child, per group, per
 frame. Given `handoff-viewport-boundary.md` §3.2 already measures the compose
 walk as a live performance problem (+43.5 ms/frame for `painting`), the plan must
 state that the space is resolved once per `compose_children` call, not per child.
@@ -472,7 +472,7 @@ and the plan doesn't say who rebuilds them.** §4.3 step 7 says `ScreenRun` keep
 constructed from `v0`/`v1` inside `ensure_resources`
 (`gpu/screen_run.rs:166-186`) and dropped by `drop_textures` (`:189-194`). Once
 the views live in `group_state[SCREEN_ACCUM]`, something has to rebuild them
-every time that entry is recreated — which is at least `resize_screen_run`
+every time that entry is recreated, which is at least `resize_screen_run`
 (`compositor.rs:3622`, also driven by the test harness at `:4127`) and any
 `target_generation` bump. Name the owner and the trigger. Add it to the LOC line.
 
@@ -502,7 +502,7 @@ plan's §5.5 table is nearly complete. Verified: `clipboard.rs:508`,
 **C1. Deleting the last effect out of a viewport group.** Not in the table at
 all. `LayerNode::supports_screen_space` returns `false` for an empty group
 (`layer.rs:751-758`), so removing a run group's only child silently collapses the
-whole run above it via the read clamp. It is recoverable (the count survives —
+whole run above it via the read clamp. It is recoverable (the count survives:
 `unlink` only decrements for direct run members, `document/mod.rs:1268-1270`), so
 by B3's rule it belongs in the "clamp, recoverable" bucket. But it is a distinct
 door and the table should say so, because it is the one case where an operation
@@ -521,19 +521,19 @@ reproduces: `add_raster_layer(Some(effect_inside_run_group))` lands the raster
 `adding_a_raster_with_a_viewport_group_anchored_does_not_break_the_run` fails
 today, as claimed. Note it goes through `attach_at_target` directly
 (`document/mod.rs:905`, `:987`), not `Document::move_layer`, so unlike paste and
-duplicate it never touches `set_screen_space_members` — which is why the plan's
+duplicate it never touches `set_screen_space_members`, which is why the plan's
 "silent redirect is lossless here" reasoning is sound for `add_*`. State that;
 it is the reason the silent/loud line is defensible on this path.
 
 ### D. Design opinions (not defects)
 
-**D1. On `SCREEN_ACCUM` (self-flagged decision 1) — the reuse is fine, the
+**D1. On `SCREEN_ACCUM` (self-flagged decision 1): the reuse is fine, the
 sentinel is not.** Putting a screen accumulator in `Compositor::group_state` is
 *not* an ownership or Document-Authority violation: `group_state` is
 compositor-owned derived state, the document is never asked about it, and the
 bake sentinel already establishes the pattern. The problem is narrower and the
 plan half-sees it: a `HashMap<LayerId, GroupState>` that holds two non-document
-keys is lying about its key type, and the consequence is §8.1.1 — a hand-written
+keys is lying about its key type, and the consequence is §8.1.1, a hand-written
 `filter` in `set_canvas_rect` (`compositor.rs:2083-2088`) that a future edit can
 forget, guarding a failure mode that "mostly works".
 
@@ -545,7 +545,7 @@ enum AccumId { Group(LayerId), Bake, Screen }
 impl From<LayerId> for AccumId { … }
 ```
 
-`set_canvas_rect` then matches instead of filtering — `AccumId::Screen` is
+`set_canvas_rect` then matches instead of filtering: `AccumId::Screen` is
 excluded by the type, not by vigilance. `compose_children`'s walk-space query
 becomes `matches!(parent, AccumId::Screen)`, which is honest, instead of
 comparing against a magic id. The `From` impl keeps most of the ~25
@@ -554,15 +554,15 @@ wart" and §8.1 risk 1, both dissolved for maybe 25 lines. Recommended, not
 required. (Related: `create_group_state` writes
 `BlendUniforms { layer_offset: canvas_origin, layer_size: canvas_size }` at
 `compositor.rs:909-916`, which is meaningless for a screen accumulator. Harmless
-— `SCREEN_ACCUM` never blends into a parent — but note it.)
+(`SCREEN_ACCUM` never blends into a parent) but note it.)
 
 **D2. The R1/R2/R3 option set is incomplete, and the omitted option is the
 cheapest correct one.** R2 as written ("a purpose-built recursive screen walk")
 is a strawman: it is the worst of both, and the plan is right to reject it. But
 there is a third shape neither considered nor rejected:
 
-> **R4 — flatten the run.** Make the screen path consume a *flat list of effect
-> ids* derived from the document — `Document::screen_space_effects()`, a DFS of
+> **R4: flatten the run.** Make the screen path consume a *flat list of effect
+> ids* derived from the document: `Document::screen_space_effects()`, a DFS of
 > `screen_space_run()` collecting `Filter` ids and skipping invisible subtrees.
 > `present_and_screen_run`'s existing flat loop (`compositor.rs:3809-3828`) then
 > works unchanged; `sync_effect_instances` tags those ids `Screen` because they
@@ -574,12 +574,12 @@ semantics that flattening would lose. It must be passthrough
 (`layer.rs:751-752`), so it has no accumulator; it cannot carry a mask
 (`:740-742`); visibility is already handled transitively by `effective_visible`;
 and Darkly does **not** apply a passthrough group's opacity or blend mode today
-in canvas space either — `compose_group_arm`'s passthrough branch
+in canvas space either: `compose_group_arm`'s passthrough branch
 (`compositor.rs:5534-5538`) inlines children and ignores `group.blend` entirely.
 So the flattened run and the recursive walk produce the same pixels. (Krita
 reaches the same conclusion from the other direction: `KisProjectionLeaf`
 *splices* a pass-through group's children into the parent's sibling chain
-— `kis_projection_leaf.cpp:196-221` — precisely so the walker never sees the
+(`kis_projection_leaf.cpp:196-221`) precisely so the walker never sees the
 group. Darkly's run is a flat sibling chain already.)
 
 R4 also *avoids* the isolation regression R1 creates (§4.4's first bullet exists
@@ -589,7 +589,7 @@ bind-group re-owner (B7), the `set_canvas_rect` guard (§8.1.1), or the
 borrow-splitting gamble (§8.1.2). Rough size: **+35 / −10 production**, versus
 R1's +252 / −276.
 
-I am **not** saying R1 is wrong. R1's case is genuinely strong — it is net
+I am **not** saying R1 is wrong. R1's case is genuinely strong: it is net
 *negative* production LOC, it collapses `EffectSpace`, and it makes both spaces
 one mechanism, which is the DRY outcome CLAUDE.md wants. And R4 leaves §2.3's
 four mis-tagged consumers to be fixed separately by `render_space` (which the
@@ -604,15 +604,15 @@ scale.
 name it honestly.** §5.2 adds `renders_after_view_transform: bool` to
 `document/layer_kind.rs:54` and keeps the group recursion as a `match self` in
 `LayerNode`. That means `group.rs` sets the flag `false` while a group *can*
-render after the view transform — the flag silently means "…if this kind is a
+render after the view transform: the flag silently means "…if this kind is a
 leaf". A consumer reading `registration.renders_after_view_transform` on a group
 gets a wrong answer. The precedent the plan cites (`composites_in_place`,
 `layer.rs:713`) does not have this problem because it is not on the registry. Fix
 by naming (`leaf_renders_after_view_transform`, or document the caveat at the
-field) rather than by moving to a function pointer — the plan's instinct to avoid
+field) rather than by moving to a function pointer: the plan's instinct to avoid
 three identical bodies is right.
 
-**D4. The loud/silent line is defensible — see B3 — but the frontend has one
+**D4. The loud/silent line is defensible (see B3) but the frontend has one
 uncovered gap.** §5.6's "no new code is expected" is correct *for the paths the
 plan changes*: `LayerItem` and `LayerGroup` both funnel through `moveLayers` and
 both already toast, and `LayerPanel.svelte:22` issues no move. Independent sweep
@@ -625,7 +625,7 @@ frontend. Two things the plan should record:
   failure path is `reportEngineError` → `console.error` only
   (`engine/protocol.ts:16-19`, `:130-131`). `SpaceDivider.svelte` does not import
   `toast`. This is harmless *given the plan keeps `set_screen_space_boundary`
-  infallible* — which it does, correctly (§5.5's divider row). Worth one
+  infallible*, which it does, correctly (§5.5's divider row). Worth one
   sentence, because "the divider clamps" is now load-bearing for the frontend
   having no bug.
 - **Dropping a layer onto the divider row itself is a silent no-op.** The
@@ -644,8 +644,8 @@ unrelated arrangement was destroyed". B3 turns that from an assertion into a
 demonstrated fact (unrecoverable by undo). The plan also correctly took prior
 art's *other* two mechanisms (type-owned recursive predicate, drop-affordance
 suppression) rather than only the toast. On the closer analogue the review brief
-asked about: Krita has **no** placement rule specific to adjustment/filter layers
-— neither `KisLayer` nor `KisAdjustmentLayer` overrides `allowAsChild`, and
+asked about: Krita has **no** placement rule specific to adjustment/filter layers,
+neither `KisLayer` nor `KisAdjustmentLayer` overrides `allowAsChild`, and
 `KisAdjustmentLayer` inherits `KisSelectionBasedLayer`'s masks-only rule for its
 *children* only. Krita expresses adjustment-layer semantics through composition
 order, not placement constraints. So there is no missed analogue; §5.1's mapping
@@ -658,8 +658,8 @@ redesign: nothing in §4 or §5 touches `TreeSlot.screen_space`,
 `Manifest::screen_space_count`, `ScreenSpaceBoundaryAction`, or
 `SpaceDivider.svelte`'s drag. §3's claim that Stage A is representation-independent
 holds. Stage B's overlap with the pending redesign is real and the plan states it
-accurately; given B3, Stage B is not merely cosmetic — it is what stops
-unrecoverable state loss — so deferring it should be a deliberate choice, not the
+accurately; given B3, Stage B is not merely cosmetic (it is what stops
+unrecoverable state loss) so deferring it should be a deliberate choice, not the
 default.
 
 One scope observation: §4.2's `render_space` helper and the four consumer fixes
@@ -727,10 +727,10 @@ from that tree.
 
 | Term | What it is in the code |
 |---|---|
-| **veil / effect layer** | `Layer::Filter(FilterLayer)` — `crates/darkly/src/layer.rs:236`. Kind file: `crates/darkly/src/document/layer_kinds/filter.rs`. |
+| **veil / effect layer** | `Layer::Filter(FilterLayer)`: `crates/darkly/src/layer.rs:236`. Kind file: `crates/darkly/src/document/layer_kinds/filter.rs`. |
 | **viewport space** | "screen space" in the code: the run of the root group's trailing children realized *after* the view transform, on the presented image. |
-| **the divider / the boundary** | `Document::screen_space_count` — `crates/darkly/src/document/mod.rs:207`. A count of the root's trailing children. |
-| **the run** | `Document::screen_space_run()` — `crates/darkly/src/document/mod.rs:531`. The clamped slice of root children above the divider. |
+| **the divider / the boundary** | `Document::screen_space_count`: `crates/darkly/src/document/mod.rs:207`. A count of the root's trailing children. |
+| **the run** | `Document::screen_space_run()`: `crates/darkly/src/document/mod.rs:531`. The clamped slice of root children above the divider. |
 | **canvas space** | Everything below the divider. What export / flatten / merge see. |
 
 ---
@@ -748,7 +748,7 @@ Two separate defects are bundled here:
 1. **A rendering defect.** A passthrough group of effects placed above the
    divider is already legal in the document model, and renders nothing at all.
 2. **A silence defect.** Every way of making a viewport arrangement illegal
-   degrades silently — it un-makes the user's arrangement rather than refusing
+   degrades silently: it un-makes the user's arrangement rather than refusing
    the operation.
 
 ---
@@ -770,7 +770,7 @@ LayerNode::Group(g) => {
 }
 ```
 
-and an existing test pins it —
+and an existing test pins it:
 `a_group_is_eligible_exactly_when_its_contents_are`
 (`crates/darkly/tests/effect_space.rs:307`) asserts
 `run_ids(&engine) == vec![group]` after grouping an effect and setting the
@@ -780,7 +780,7 @@ anything**, which is precisely why the bug shipped.
 So the group *is* in the run. The failure is entirely downstream, in the
 compositor.
 
-### 2.2 The rendering defect — the group is dropped by both walks
+### 2.2 The rendering defect: the group is dropped by both walks
 
 **Screen walk.** `Compositor::present_and_screen_run`
 (`crates/darkly/src/gpu/compositor.rs:3733`) builds its member list as a **flat
@@ -804,9 +804,9 @@ let members: Vec<LayerId> = run
 ```
 
 A group id never has an entry in `effect_instances` (instances are minted only
-for `doc.all_filter_layers()` — `compositor.rs:4728`). So `members` is empty,
+for `doc.all_filter_layers()`: `compositor.rs:4728`). So `members` is empty,
 and `compositor.rs:3766` takes the "no effects" branch: a plain present straight
-to the surface. **There is no recursion here at all** — the screen path is a
+to the surface. **There is no recursion here at all**: the screen path is a
 flat `for id in members` loop over effect ids (`compositor.rs:3809-3828`).
 
 **Canvas walk.** `Compositor::compose_children`
@@ -860,15 +860,15 @@ each is a live bug for a nested node:
 
 | Site | Consequence for a node nested inside a screen-space group |
 |---|---|
-| `Compositor::mark_effect_dirty` — `compositor.rs:3631-3637` | A parameter edit marks the *canvas* dirty instead of requesting a re-present. |
-| `Compositor::effect_animates` — `compositor.rs:3220-3222` | The instance ticks on the canvas animation divisor rather than the screen one, and `needs_composite` is set every tick for something that is not in the composite. |
-| `DarklyEngine::merge_*` — `engine/merge.rs:52` and `engine/merge.rs:206` | A layer nested inside a viewport group is **not** refused by merge, though a direct run member is. |
+| `Compositor::mark_effect_dirty`: `compositor.rs:3631-3637` | A parameter edit marks the *canvas* dirty instead of requesting a re-present. |
+| `Compositor::effect_animates`: `compositor.rs:3220-3222` | The instance ticks on the canvas animation divisor rather than the screen one, and `needs_composite` is set every tick for something that is not in the composite. |
+| `DarklyEngine::merge_*`: `engine/merge.rs:52` and `engine/merge.rs:206` | A layer nested inside a viewport group is **not** refused by merge, though a direct run member is. |
 
-### 2.4 The silence defect — every illegal placement degrades quietly
+### 2.4 The silence defect: every illegal placement degrades quietly
 
 `Document::screen_space_run` (`document/mod.rs:531`) clamps on read against
 `qualifying_screen_space_suffix` (`document/mod.rs:511`). So the moment a run
-member stops qualifying, the run shrinks — silently, and often by more than one
+member stops qualifying, the run shrinks: silently, and often by more than one
 entry, because the suffix stops at the *first* disqualified child.
 
 Two concrete user-visible failures:
@@ -897,8 +897,8 @@ root.
 
 - **`group_layers` drops the group out of the run.** `engine/layers.rs:689-696`
   reinserts the freshly-created group with a hardcoded `screen_space: false`.
-  So the most natural way to *make* a viewport effect group — select your veils,
-  hit Group — takes them out of viewport space. Fixed in this plan (§4.4).
+  So the most natural way to *make* a viewport effect group (select your veils,
+  hit Group) takes them out of viewport space. Fixed in this plan (§4.4).
 - **The two spaces own duplicate GPU scaffolding.**
   `Compositor::canvas_scaling_pipelines` (`compositor.rs:1309-1313`) and
   `ScreenRun::scaling_pipelines` (`gpu/screen_run.rs:129-134`) are
@@ -928,7 +928,7 @@ side-inheritance.
 - **§4 (the rendering fix) is fully independent.** Every consumer it touches
   depends only on the contract "`Document::screen_space_run()` yields the root
   children realized after the view transform, bottom-to-top." That contract
-  survives §2 verbatim — under §2 the run is simply "children after the
+  survives §2 verbatim: under §2 the run is simply "children after the
   divider's index." The rendering fix should be done **before** §2, because it
   is the reported bug, it is cheap to verify, and it removes a whole class of
   space-tagging mistakes that §2 would otherwise inherit.
@@ -957,7 +957,7 @@ Other open items in that handoff, for the record:
 
 ---
 
-## 4. Stage A — the rendering fix
+## 4. Stage A: the rendering fix
 
 ### 4.1 The shape of the problem
 
@@ -982,12 +982,12 @@ one level below, inside `KisProjectionLeaf`: `firstChild()`/`lastChild()`
 (`krita/libs/image/kis_projection_leaf.cpp:122-139`) report *no children* for a
 pass-through group, and `nextSibling()`
 (`krita/libs/image/kis_projection_leaf.cpp:196-221`) descends into a
-pass-through sibling's first child instead — splicing the group's children into
+pass-through sibling's first child instead, splicing the group's children into
 the parent's sibling chain. `parent()`
 (`krita/libs/image/kis_projection_leaf.cpp:105-119`) climbs past pass-through
 ancestors, and `opacity()`
 (`krita/libs/image/kis_projection_leaf.cpp:300-311`) merges the pass-through
-parent's opacity into the child's — confirming children are composited as if
+parent's opacity into the child's, confirming children are composited as if
 flattened into the parent, never as a nested sub-composite.
 
 Darkly reaches the same end by inlining directly in `compose_group_arm`
@@ -1009,7 +1009,7 @@ Add to `Document`:
 /// screen-space walk that runs after the view transform.
 ///
 /// Derived by finding the node's root-level ancestor and asking whether it is
-/// in the run — a node inherits its space from whatever crossed the boundary,
+/// in the run: a node inherits its space from whatever crossed the boundary,
 /// which for a group is the whole subtree at once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RenderSpace { Canvas, Screen }
@@ -1052,11 +1052,11 @@ Steps:
    size in `ScreenRun::ensure_resources`' place, keyed into
    `Compositor::group_state`. `create_group_state` (`compositor.rs:888`) is
    already size-generic and its textures are `Rgba8Unorm`
-   (`make_accum_texture`, `compositor.rs:876`) — the same format `ScreenRun`
+   (`make_accum_texture`, `compositor.rs:876`): the same format `ScreenRun`
    uses (`compositor.rs:1262`), with a superset of usages.
 2. **`Compositor::set_canvas_rect` must skip the sentinel.** It currently
    recreates *every* `group_state` entry at canvas dimensions
-   (`compositor.rs:2083-2088`) — which would silently resize the screen
+   (`compositor.rs:2083-2088`), which would silently resize the screen
    accumulator to the canvas size on every canvas resize. One `filter` on that
    loop, with a comment. (The existing bake sentinel is canvas-sized, so it is
    unaffected either way.)
@@ -1073,7 +1073,7 @@ Steps:
    `structural_match` compare at `4780`) collapse to plain
    `group_state` lookups. `sync_effect_instances` computes the accumulator as
    "`SCREEN_ACCUM` when `doc.render_space(id) == Screen`, else
-   `doc.accumulator_host_of(id)`" — total, because an isolated group can never
+   `doc.accumulator_host_of(id)`": total, because an isolated group can never
    be in screen space, so `accumulator_host_of` for a screen node always returns
    the root.
 5. `compose_children`'s cross-space skip (`compositor.rs:4381-4383`) becomes a
@@ -1092,7 +1092,7 @@ Steps:
 `compose_children`'s visibility / passthrough / dispatch rules against
 `ScreenRun`'s pair. Cheaper to write, and it is exactly the duplication
 CLAUDE.md's stop-sign clause names. Recorded only as the fallback if R1's
-borrow-splitting in `compose_effect_arm` proves intractable — in which case the
+borrow-splitting in `compose_effect_arm` proves intractable: in which case the
 implementer should **stop and return to review**, not quietly ship R2.
 
 **Rejected (R3): adopt `KisProjectionLeaf` wholesale.** Darkly already gets
@@ -1104,7 +1104,7 @@ machinery without a second consumer.
 - **Isolation now reaches the screen walk.** `compose_children` filters on
   `is_in_isolation_path` (`compositor.rs:4373`, predicate at
   `compositor.rs:2179`). Under R1 a screen-space effect would be skipped
-  whenever the user isolates an unrelated canvas layer — a behaviour change, and
+  whenever the user isolates an unrelated canvas layer: a behaviour change, and
   a bad one: isolation is about document content. **Decision:**
   `is_in_isolation_path` returns `true` for any node whose
   `render_space` is `Screen`. Putting it there (rather than branching in the
@@ -1136,7 +1136,7 @@ is unaffected.
 
 ---
 
-## 5. Stage B — the refusal rule
+## 5. Stage B: the refusal rule
 
 ### 5.1 What prior art actually does (and where we diverge)
 
@@ -1149,28 +1149,28 @@ itself:
 
 | Class | File:line | Rule |
 |---|---|---|
-| `KisMask` | `krita/libs/image/kis_mask.cc:129-133` | unconditional `return false` — masks are leaves |
+| `KisMask` | `krita/libs/image/kis_mask.cc:129-133` | unconditional `return false`; masks are leaves |
 | `KisPaintLayer` | `krita/libs/image/kis_paint_layer.cc:128-131` | `node->inherits("KisMask")` only |
 | `KisSelectionBasedLayer` (adjustment/generator) | `krita/libs/image/kis_selection_based_layer.cpp:117-120` | masks only |
 | `KisShapeLayer` | `krita/libs/ui/flake/kis_shape_layer.cc:295-298` | masks only |
 | `KisCloneLayer` | `krita/libs/image/kis_clone_layer.cpp:109-112` | masks only |
 | `KisGroupLayer` | `krita/libs/image/kis_group_layer.cc:114-139` | recursive descendant check (`checkNodeRecursively`), plus root-layer special cases for selection masks (`:125-127`) and `allowMasksOnRootNode` (`:131-135`) |
 
-This is exactly Darkly's `supports_screen_space` shape — type-owned, recursive
-for containers — and it validates keeping the predicate on the node.
+This is exactly Darkly's `supports_screen_space` shape (type-owned, recursive
+for containers) and it validates keeping the predicate on the node.
 
 **But Krita reports the refusal to the user almost nowhere.** The enforcement
 points are:
 
-- `KisNode::add` — `krita/libs/image/kis_node.cpp:473`,
+- `KisNode::add`: `krita/libs/image/kis_node.cpp:473`,
   `KIS_SAFE_ASSERT_RECOVER_RETURN_VALUE(allowAsChild(newNode), false)`. The
   macro (`krita/libs/global/kis_assert.h:129`) is compiled to a log line only:
   `HIDE_SAFE_ASSERTS` is `ON` by default (`krita/CMakeLists.txt:307`).
-- `KisNodeManager::moveNodeAt` — `krita/libs/ui/kis_node_manager.cpp:529`:
+- `KisNodeManager::moveNodeAt`: `krita/libs/ui/kis_node_manager.cpp:529`:
   `if (parent->allowAsChild(node)) { ... }` with **no `else`**. Silent skip.
-- `KisNodeJugglerCompressed` — `krita/libs/ui/kis_node_juggler_compressed.cpp:446`:
+- `KisNodeJugglerCompressed`: `krita/libs/ui/kis_node_juggler_compressed.cpp:446`:
   `continue` on failure. Silent.
-- Drag and drop — `KisMimeData::correctNewNodeLocation`
+- Drag and drop: `KisMimeData::correctNewNodeLocation`
   (`krita/libs/ui/kis_mimedata.cpp:437-445`) **walks up the parent chain looking
   for a legal ancestor**, and `insertMimeLayers` returns `false`
   (`krita/libs/ui/kis_mimedata.cpp:520-522`) with no message anywhere in the
@@ -1191,7 +1191,7 @@ points are:
 (`gimp/app/core/gimpitemtree.c:513-566`) and `gimp_item_tree_reorder_item`
 (`gimp/app/core/gimpitemtree.c:648-...`) validate only through
 `g_return_if_fail` (e.g. the parent-must-be-a-group check at
-`gimp/app/core/gimpitemtree.c:533-534`, the cycle check at `:678-681`) — no
+`gimp/app/core/gimpitemtree.c:533-534`, the cycle check at `:678-681`): no
 `GError` parameter exists. The layer tree view calls `gimp_image_reorder_item`
 without checking the return value at all
 (`gimp/app/widgets/gimpitemtreeview.c:1642-1646`); the only user feedback is a
@@ -1211,7 +1211,7 @@ to the caller via `gimp_procedure_get_return_values`
 
 **Synthesis.** Prior art supports (a) a per-kind, container-recursive predicate,
 (b) suppressing the drop affordance, and (c) a human-readable reason at the API
-boundary. It does **not** support toasting on every refused interactive drop —
+boundary. It does **not** support toasting on every refused interactive drop:
 both editors deliberately stay quiet there. The user has asked for the loud
 version, and the reason it is right *here* and not there is stated in
 `handoff-viewport-boundary.md` §2: under this representation the failure mode of
@@ -1248,13 +1248,13 @@ pub enum ScreenSpaceRefusal {
 ```
 
 Group recursion returns the **descendant's** refusal unchanged, so the culprit
-is always named precisely and the enum stays flat and `Copy` — no `Box`, no
+is always named precisely and the enum stays flat and `Copy`: no `Box`, no
 `String`, nothing allocated on the hot path. `qualifying_screen_space_suffix`
 (`document/mod.rs:511`) runs per `compose_children` call per frame, so this
 matters.
 
-Message rendering lives in exactly one place —
-`ScreenSpaceRefusal::message(&self, doc) -> String` — and reads names out of the
+Message rendering lives in exactly one place
+(`ScreenSpaceRefusal::message(&self, doc) -> String`) and reads names out of the
 document, e.g.:
 
 > Group "Backdrop" contains "Layer 3", a Raster Layer, which cannot be shown in
@@ -1266,7 +1266,7 @@ LayerNode::Layer(_) => false` arms (`layer.rs:746-747`) become
 `LayerKindRegistration` (`document/layer_kind.rs:54`) alongside the capability
 flags it already carries (`can_have_mask`, `can_rename`, `has_thumbnail`).
 `filter.rs` sets `true`; `raster.rs` / `void.rs` / `vector.rs` / `group.rs` set
-`false`. A new leaf kind opts in from its own file with no edit here — the
+`false`. A new leaf kind opts in from its own file with no edit here: the
 `build.rs`-generated `registrations()` picks it up.
 
 The container arm (`LayerNode::Group`) stays as a `match self` inside
@@ -1305,7 +1305,7 @@ So the rule splits by *layer*:
 hole that lets a raster be added or pasted straight into a viewport group
 (§2.4). After the change, a node that cannot live in screen space and is
 targeted at a screen-space parent is redirected to the first canvas-space slot
-at the root — which is exactly what the function's own doc comment
+at the root, which is exactly what the function's own doc comment
 (`document/mod.rs:1221-1223`, "This is the only place the rule is written")
 already claims it does.
 
@@ -1317,7 +1317,7 @@ Add to `Document`:
 /// The space a node would render in if it landed at `target`.
 ///
 /// Every `MoveTarget` variant names a reference node, and a node landing
-/// beside a sibling — or inside a group — renders in that reference's space.
+/// beside a sibling (or inside a group) renders in that reference's space.
 /// So this is one lookup, not four.
 pub fn space_at(&self, target: MoveTarget) -> RenderSpace {
     self.render_space(target.reference())
@@ -1338,18 +1338,18 @@ the reference is the sibling. One expression covers all four.
 
 | Path | Entry point | Disposition |
 |---|---|---|
-| Single move | `DarklyEngine::move_layer` — `engine/layers.rs:1258` | **Refuse.** Signature becomes `Result<(), String>`. Regenerate `protocol_gen.ts`. |
-| Multi move / all panel drags | `DarklyEngine::move_layers` — `engine/layers.rs:1293` | **Refuse.** Already `Result<usize, String>`; pre-check every id against `target` before any mutation, so a refused batch is atomic. This is the path *both* `LayerItem.svelte:375` and `LayerGroup.svelte:319` use, which is what makes row-drops and group-drops one rule. |
-| Divider drag | `set_screen_space_boundary` — `engine/layers.rs:1732` | **Clamp** (unchanged). Dragging the divider past a raster is a gesture that overshoots, not an illegal placement; `spaceDivider.ts:44` (`maxEligible`) already stops the handle at the first ineligible row so the user sees the limit under the cursor. Prior art agrees: this is Krita's `updateDropEnabled` affordance. |
-| Group | `group_layers` — `engine/layers.rs:611` | **Structurally unable** to produce an illegal state after §4.4: the new group inherits the sources' space, and a group of effects is eligible by construction. If the selection is mixed, the sources' common space is Canvas. |
+| Single move | `DarklyEngine::move_layer`: `engine/layers.rs:1258` | **Refuse.** Signature becomes `Result<(), String>`. Regenerate `protocol_gen.ts`. |
+| Multi move / all panel drags | `DarklyEngine::move_layers`: `engine/layers.rs:1293` | **Refuse.** Already `Result<usize, String>`; pre-check every id against `target` before any mutation, so a refused batch is atomic. This is the path *both* `LayerItem.svelte:375` and `LayerGroup.svelte:319` use, which is what makes row-drops and group-drops one rule. |
+| Divider drag | `set_screen_space_boundary`: `engine/layers.rs:1732` | **Clamp** (unchanged). Dragging the divider past a raster is a gesture that overshoots, not an illegal placement; `spaceDivider.ts:44` (`maxEligible`) already stops the handle at the first ineligible row so the user sees the limit under the cursor. Prior art agrees: this is Krita's `updateDropEnabled` affordance. |
+| Group | `group_layers`: `engine/layers.rs:611` | **Structurally unable** to produce an illegal state after §4.4: the new group inherits the sources' space, and a group of effects is eligible by construction. If the selection is mixed, the sources' common space is Canvas. |
 | Ungroup | (no dedicated handler found; children move out via `move_layers`) | Covered by `move_layers`. |
 | Add layer | `add_raster` / `add_void` / `add_filter` / `add_group` / `add_text_layer` | **Redirect, silent.** Anchor is a convenience, not a stated intent. Covered by the generalized `enforce_boundary_on_insert` (§5.3). |
-| Paste | `clipboard.rs:508`, `floating.rs:275` — both `resolve_anchor_target` then `doc.move_layer` | **Redirect, silent.** Same reason. Covered by the same generalization. |
+| Paste | `clipboard.rs:508`, `floating.rs:275`: both `resolve_anchor_target` then `doc.move_layer` | **Redirect, silent.** Same reason. Covered by the same generalization. |
 | Duplicate | `duplicate.rs:84` (`After(source)`), `duplicate.rs:355/360` | **Structurally safe**: a duplicate of an eligible node is eligible; a duplicate of an ineligible node targets an ineligible sibling, so it lands in canvas space. |
-| Undo / redo reinsert | `reinsert_entity` — `document/mod.rs:1124` → `link` | **Never refuses.** It does not call `check_move`; it goes through the structural layer only. And by induction it never *needs* to: if every user-facing path refuses, every recorded slot was legal when recorded. `TreeSlot.screen_space` + `restore_to_screen_space` (`document/mod.rs:1150`) restore the recorded side, bounded by `qualifying_screen_space_suffix` so a restore can never drag an ineligible sibling into the run. |
-| Load | `engine/load.rs:372` — `doc.screen_space_count = doc.clamp_screen_space_count(manifest.screen_space_count)` | **Clamp, silent.** A hand-edited or foreign save is not a user gesture. |
+| Undo / redo reinsert | `reinsert_entity`: `document/mod.rs:1124` → `link` | **Never refuses.** It does not call `check_move`; it goes through the structural layer only. And by induction it never *needs* to: if every user-facing path refuses, every recorded slot was legal when recorded. `TreeSlot.screen_space` + `restore_to_screen_space` (`document/mod.rs:1150`) restore the recorded side, bounded by `qualifying_screen_space_suffix` so a restore can never drag an ineligible sibling into the run. |
+| Load | `engine/load.rs:372`: `doc.screen_space_count = doc.clamp_screen_space_count(manifest.screen_space_count)` | **Clamp, silent.** A hand-edited or foreign save is not a user gesture. |
 | Attach a mask to a run member | `add_mask` | **Read clamp** (unchanged; pinned by `masked_or_isolated_nodes_cannot_be_above_the_boundary`, `tests/effect_space.rs:277`). |
-| Isolate a run group | `set_group_passthrough(id, false)` — `engine/layers.rs:1669` | **Read clamp** (unchanged). See open question §8.2. |
+| Isolate a run group | `set_group_passthrough(id, false)`: `engine/layers.rs:1669` | **Read clamp** (unchanged). See open question §8.2. |
 | Merge / flatten | `engine/merge.rs:52,206`; `engine/flatten.rs:23` | Already refuse / exclude; both become nested-aware for free via §4.2. |
 
 ### 5.6 Frontend
@@ -1381,7 +1381,7 @@ fix; listed so the reviewer can decide whether to fold it in.
 
 All Rust tests go in `crates/darkly/tests/effect_space.rs`, following its
 existing helpers (`test_engine`, `fill_layer`, `settle`, `px`, `effect`,
-`run_ids`, `in_run`, `eligible` — `tests/effect_space.rs:18-129`).
+`run_ids`, `in_run`, `eligible`: `tests/effect_space.rs:18-129`).
 
 Run with:
 
@@ -1395,7 +1395,7 @@ mandatory (GPU integration tests share a process-wide wgpu device and SIGSEGV in
 parallel). Test-only readback helpers are permitted here and nowhere else; no
 production code in this plan touches `device.poll(Wait)`.
 
-### 6.1 The regression test — must fail before the fix
+### 6.1 The regression test: must fail before the fix
 
 ```
 effect_inside_a_screen_space_group_reaches_the_presented_image
@@ -1404,13 +1404,13 @@ effect_inside_a_screen_space_group_reaches_the_presented_image
 1. 16x16 engine; raster flood-filled solid red.
 2. `effect(&mut engine, "invert")`; `group_layers(vec![invert])`.
 3. `set_screen_space_boundary(1)`; assert `run_ids == vec![group]` (this part
-   passes today — it is the setup, not the assertion).
+   passes today: it is the setup, not the assertion).
 4. `settle`.
 5. **Assert `test_readback_screen_run(16, 16)` centre is cyan** (`r < 64`,
-   `g > 190`, `b > 190` — the same sRGB-tolerant form as
+   `g > 190`, `b > 190`: the same sRGB-tolerant form as
    `screen_space_effect_is_visible_only_after_the_present_pass`,
    `tests/effect_space.rs:206-211`).
-6. Assert `test_readback_canvas` centre is still `[255, 0, 0, 255]` — the
+6. Assert `test_readback_canvas` centre is still `[255, 0, 0, 255]`: the
    viewport effect is not in the image.
 
 **Expected failure today:** step 5 reads red, because `members` is empty
@@ -1426,9 +1426,9 @@ assertion. Demonstrate the failure before writing any fix.
 | `moving_a_raster_into_a_viewport_space_group_is_refused` | `move_layers(vec![raster], IntoGroupTop(run_group))` returns `Err`; `run_ids` still contains the group; the raster is still where it was. Fails today: returns `Ok` and the run empties. **Replaces** the current silent-clamp assertion at `tests/effect_space.rs:328-335`, which encodes the behaviour being fixed. |
 | `undo_redo_of_a_viewport_group_round_trips_without_refusal` | Build the legal arrangement, `remove_layers`, `undo`, `redo`, `undo`; `run_ids` and the rendered surface match at each equivalent point; no `Err` is produced. Guards §5.5's undo row. |
 | `adding_a_raster_with_a_viewport_group_anchored_does_not_break_the_run` | `add_raster_layer(Some(effect_inside_run_group))` lands the raster in canvas space and leaves `run_ids` intact. Fails today (§2.4's add-path hole). |
-| `a_nested_screen_effect_renders_at_viewport_resolution` | With a 16x16 canvas and a 64x64 viewport, an effect with a `perf_scale_factor` inside a run group reports a `test_effect_reduced_size` derived from **64x64**, not 16x16. This is the sharp assertion on the `EffectSpace`/`accumulator` tagging (§2.3) — the strongest single guard against a regression to per-id membership. |
+| `a_nested_screen_effect_renders_at_viewport_resolution` | With a 16x16 canvas and a 64x64 viewport, an effect with a `perf_scale_factor` inside a run group reports a `test_effect_reduced_size` derived from **64x64**, not 16x16. This is the sharp assertion on the `EffectSpace`/`accumulator` tagging (§2.3): the strongest single guard against a regression to per-id membership. |
 | `merge_refuses_a_layer_nested_in_a_viewport_group` | `merge_layers` on a node inside a run group returns the viewport-only refusal. Fails today (`engine/merge.rs:52` sees direct membership only). |
-| `slot_of_records_direct_run_membership` (unit, `document/mod.rs`) | `TreeSlot.screen_space` is `true` only for a root child in the run, `false` for a node nested inside a run group — pinning the §4.2 trap. |
+| `slot_of_records_direct_run_membership` (unit, `document/mod.rs`) | `TreeSlot.screen_space` is `true` only for a root child in the run, `false` for a node nested inside a run group, pinning the §4.2 trap. |
 
 Existing tests expected to need edits:
 `a_group_is_eligible_exactly_when_its_contents_are`
@@ -1457,13 +1457,13 @@ caller of the walk that already exists.
 - **Modularity / type-owned dispatch:** strengthened. Per-kind screen-space
   eligibility moves onto `LayerKindRegistration`, additive from a kind's own
   file. `compose_children` gains no new kind branch.
-- **DRY:** strengthened on three axes — one walk, one scaling-pipeline set, one
+- **DRY:** strengthened on three axes, one walk, one scaling-pipeline set, one
   apply-scratch pool.
 - **Ownership:** the one wart is `SCREEN_ACCUM` living in
   `Compositor::group_state`, a map documented as holding document groups
   (`compositor.rs:623-626`). Justified by the existing bake sentinel
-  (`compositor.rs:3870`) and by the alternative — threading an accessor through
-  ~25 split-borrow sites — being materially worse. Called out for review.
+  (`compositor.rs:3870`) and by the alternative (threading an accessor through
+  ~25 split-borrow sites) being materially worse. Called out for review.
 
 ---
 
@@ -1474,7 +1474,7 @@ caller of the walk that already exists.
 1. **`set_canvas_rect` resizing the screen accumulator.** `compositor.rs:2083-2088`
    recreates every `group_state` entry at canvas dimensions. Missing the skip
    would silently shrink the viewport accumulator to canvas size on every canvas
-   resize — and it would *mostly work*, which is the dangerous kind of bug. A
+   resize, and it would *mostly work*, which is the dangerous kind of bug. A
    test that resizes the canvas while a viewport group is active should be added
    if the reviewer agrees; `tests/canvas_resize.rs` already touches screen-space
    state.
@@ -1484,7 +1484,7 @@ caller of the walk that already exists.
    `compositor.rs:5442` exists specifically for that). Routing screen effects
    through `compose_effect_arm` (`compositor.rs:5259`) means going through
    `apply_in_place` (`compositor.rs:5403`) instead. That path already clones the
-   views it needs (`compositor.rs:5316-5325`), so it should hold — but this is
+   views it needs (`compositor.rs:5316-5325`), so it should hold, but this is
    the concrete place R1 could fail. If it does: **stop and return to review**,
    do not fall back to R2 silently.
 3. **The `renders_in_screen_space` semantic change.** Three call sites want the
@@ -1513,7 +1513,7 @@ caller of the walk that already exists.
    bool, to avoid three identical bodies.
 3. **Should the screen accumulator's `composite_cache` be allocated at all?**
    `GroupState` always allocates one (`compositor.rs:900-901`); the screen
-   accumulator never blends into a parent so it is dead weight — one
+   accumulator never blends into a parent so it is dead weight: one
    viewport-sized texture (~33 MB at 4K). Making it lazy touches
    `create_group_state` for every group. Proposed: allocate it, note the waste,
    revisit if VRAM shows up in profiling.
@@ -1531,15 +1531,15 @@ caller of the walk that already exists.
 Lines **added / removed**, not touched. Honest, and deliberately pessimistic on
 the compositor.
 
-### Stage A — rendering fix
+### Stage A, rendering fix
 
 | Area | Added | Removed |
 |---|---:|---:|
-| `document/mod.rs` — `RenderSpace`, `render_space`, `renders_in_screen_space`, `slot_of` comment | 40 | 8 |
-| `layer.rs` — no change in Stage A | 0 | 0 |
-| `gpu/compositor.rs` — `SCREEN_ACCUM` + lifecycle, `present_and_screen_run` rewrite, `EffectSpace` deletion, 4 collapsed matches, `compose_children` skip, scratch pool, unified scaling pipelines, `set_canvas_rect` skip, `is_in_isolation_path`, `effect_animates`, `mark_effect_dirty` | 170 | 175 |
-| `gpu/screen_run.rs` — shrink to blit + size + flag | 30 | 90 |
-| `engine/layers.rs` — `group_layers` space preservation | 12 | 3 |
+| `document/mod.rs` (`RenderSpace`, `render_space`, `renders_in_screen_space`, `slot_of` comment | 40 | 8 |
+| `layer.rs`) no change in Stage A | 0 | 0 |
+| `gpu/compositor.rs`, `SCREEN_ACCUM` + lifecycle, `present_and_screen_run` rewrite, `EffectSpace` deletion, 4 collapsed matches, `compose_children` skip, scratch pool, unified scaling pipelines, `set_canvas_rect` skip, `is_in_isolation_path`, `effect_animates`, `mark_effect_dirty` | 170 | 175 |
+| `gpu/screen_run.rs`, shrink to blit + size + flag | 30 | 90 |
+| `engine/layers.rs`, `group_layers` space preservation | 12 | 3 |
 | **Stage A production** | **~252** | **~276** |
 | Tests (`effect_space.rs`: regression + resolution + merge + slot unit; `canvas_resize.rs` case) | 190 | 10 |
 | **Stage A total** | **~442** | **~286** |
@@ -1547,14 +1547,14 @@ the compositor.
 Net Stage A: roughly **-25 lines of production code** for a bug fix. That is the
 signal that R1 is the right shape.
 
-### Stage B — refusal rule
+### Stage B: refusal rule
 
 | Area | Added | Removed |
 |---|---:|---:|
-| `layer.rs` — `ScreenSpaceRefusal`, `screen_space_refusal`, `message` | 85 | 25 |
-| `document/layer_kind.rs` + 5 kind files — one flag, five registrations | 22 | 0 |
-| `document/mod.rs` — `space_at`, `check_move`, generalized `enforce_boundary_on_insert` | 55 | 18 |
-| `engine/layers.rs` — pre-checks in `move_layer` / `move_layers` | 35 | 6 |
+| `layer.rs` (`ScreenSpaceRefusal`, `screen_space_refusal`, `message` | 85 | 25 |
+| `document/layer_kind.rs` + 5 kind files) one flag, five registrations | 22 | 0 |
+| `document/mod.rs` (`space_at`, `check_move`, generalized `enforce_boundary_on_insert` | 55 | 18 |
+| `engine/layers.rs`) pre-checks in `move_layer` / `move_layers` | 35 | 6 |
 | `frontend/src/engine/protocol_gen.ts` (generated) | 6 | 4 |
 | **Stage B production + generated** | **~203** | **~53** |
 | Tests (three refusal cases, undo round-trip, add-path; edits to two existing tests) | 150 | 25 |
@@ -1577,12 +1577,12 @@ removed**, of which production is **+400 to +520 added, −280 to −380 removed
 
 Stage A only, using **R2** (a bespoke recursive screen walk) instead of R1:
 approximately **+95 / −25** production, **+120 / −5** tests. It fixes the
-reported rendering bug and nothing else — the four mis-tagged consumers in §2.3
+reported rendering bug and nothing else: the four mis-tagged consumers in §2.3
 stay broken, the silent degradation stays, and the codebase gains a second walk
 that must be kept in step with `compose_children`. Recommended only if the user
 wants the visible symptom gone today and is willing to book the rest as debt.
 
-The middle option — **Stage A with R1, defer Stage B** — is the one worth
+The middle option (**Stage A with R1, defer Stage B**) is the one worth
 considering seriously: **+252 / −276** production, **+190 / −10** tests. It
 fixes the reported rendering bug, deletes more code than it adds, and leaves the
 refusal rule (which overlaps the pending divider-as-a-node redesign) for a

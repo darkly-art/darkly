@@ -5,8 +5,8 @@
  * The gesture belongs to the **gap** between two consecutive visible rows, not to
  * a row. Gap `g` sits below `rows[g - 1]` and above `rows[g]`; gap `0` is above
  * the first row and gap `rows.length` is below the last. A row's drag bands map
- * onto the gaps around it (see `bandToGap`), so every drop in the panel — row
- * edges, the viewport divider, the empty area below the list — resolves through
+ * onto the gaps around it (see `bandToGap`), so every drop in the panel (row
+ * edges, the viewport divider, the empty area below the list) resolves through
  * one function instead of each site inventing its own.
  *
  * Nothing here touches the DOM or the engine. That is deliberate and load-bearing:
@@ -44,8 +44,8 @@ export interface Band {
  *
  * The shallow end is fixed by the row *below* the gap: dropping above `rows[gap]`
  * cannot land deeper-out than that row's own level without reordering it too. The
- * deep end is fixed by the row *above*: a drop can land as a sibling of it, or —
- * when it is a group — one level further in, as its first child.
+ * deep end is fixed by the row *above*: a drop can land as a sibling of it, or
+ * (when it is a group) one level further in, as its first child.
  *
  * Off either end of the list the missing neighbour imposes no constraint, so the
  * range opens to the root.
@@ -66,10 +66,10 @@ export function gapDepthRange(rows: DropRow[], gap: number): { min: number; max:
  * it sits. The upper band addresses the gap above the row, the lower band the gap
  * below it; neither names a depth, because that is what cursor X is for.
  *
- * A group has a third band: 25%–75% means "drop inside me", the only way to
+ * A group has a third band: 25%-75% means "drop inside me", the only way to
  * reach a *collapsed* group's interior, since an expanded one is reachable
- * through the gap below its header. That band does name a depth — the deepest
- * the gap allows — because "inside me" is a statement about parentage, not a
+ * through the gap below its header. That band does name a depth (the deepest
+ * the gap allows) because "inside me" is a statement about parentage, not a
  * position the pointer is gesturing at.
  */
 export function bandToGap(rowIndex: number, isGroup: boolean, yRatio: number): Band {
@@ -89,7 +89,7 @@ export function bandToGap(rowIndex: number, isGroup: boolean, yRatio: number): B
  *
  * `xOffset` is the pointer's distance from the panel's left edge; it selects a
  * depth within the gap's legal range. `pin` overrides that reading for the
- * gestures that name a depth outright rather than gesturing at one — a group's
+ * gestures that name a depth outright rather than gesturing at one: a group's
  * `into` band pins deep, the empty area below the list pins shallow.
  */
 export function resolveGapDrop(

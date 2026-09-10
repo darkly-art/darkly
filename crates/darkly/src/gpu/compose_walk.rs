@@ -1,8 +1,8 @@
 //! The composite walk: the recursive traversal that blends the document's
-//! layer tree into group accumulators — group recursion, per-child dispatch,
+//! layer tree into group accumulators (group recursion, per-child dispatch,
 //! the blend/effect/group compose arms, the de-fused leaf-mask projection,
 //! and the in-place apply passes shared by effect layers and masked
-//! passthrough groups — plus the per-host [`ProjectionState`] lifecycle and
+//! passthrough groups) plus the per-host [`ProjectionState`] lifecycle and
 //! its pre-walk uniform sync. A sibling `impl Compositor` block over
 //! `pub(super)` fields, split from `gpu/compositor.rs` the same way Krita
 //! separates the merge walk (`kis_async_merger.cpp`) from the image.
@@ -24,7 +24,7 @@ type ChildIds = SmallVec<[LayerId; 8]>;
 /// Build a bind group for the blend pipelines' 4-entry group 0 layout:
 /// `[before/src texture, after/layer texture, sampler, blend uniforms]`.
 /// Specific to that layout (which is why it lives here beside the blend
-/// pipelines' owner, not in `gpu/mod.rs`) — every blend / in-place-apply
+/// pipelines' owner, not in `gpu/mod.rs`): every blend / in-place-apply
 /// draw builds its group 0 through this one function.
 pub(super) fn blend_bind_group(
     device: &wgpu::Device,
@@ -100,7 +100,7 @@ fn draw_blend_pass(
 
 /// True if the renderer should descend into / render `id` under the given
 /// isolation target. When no target is set, every id qualifies. Otherwise
-/// the path is `ancestors(target) ∪ {target} ∪ descendants(target)` —
+/// the path is `ancestors(target) ∪ {target} ∪ descendants(target)`:
 /// ancestors so the walk reaches the target, descendants so an isolated
 /// group renders its contents. Filters naturally fall in via their
 /// host (which is the filter's `parent_of`); they have no children, so
@@ -153,7 +153,7 @@ fn first_divergence(cached: &[ChildStamp], fresh: &[ChildStamp]) -> Option<usize
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct ChildStamp {
     id: LayerId,
-    /// Whether the walk actually drew this child — the skip chain plus the
+    /// Whether the walk actually drew this child: the skip chain plus the
     /// node's own [`LayerNode::compose_ready`]. A child that flips between
     /// drawing and not changes the group's output as surely as an edit does.
     included: bool,
@@ -166,13 +166,13 @@ pub(super) struct ChildStamp {
 /// One group's memory of its last walk: what its children were, and how far up
 /// the stack a reusable composite was captured.
 ///
-/// Compositor-owned derived state, rebuilt freely — losing it costs one full
+/// Compositor-owned derived state, rebuilt freely, losing it costs one full
 /// walk and nothing else.
 pub(super) struct WalkCache {
     /// Per-child stamps from the last walk, in document order.
     stamps: Vec<ChildStamp>,
     /// Registry ticks the stamps were taken under. Any drift and no reuse is
-    /// attempted at all — which is what makes every coarse `mark_dirty()` in
+    /// attempted at all, which is what makes every coarse `mark_dirty()` in
     /// the codebase safe without auditing it.
     built_document: crate::gpu::revisions::Tick,
     built_targets: crate::gpu::revisions::Tick,
@@ -194,13 +194,13 @@ pub(super) struct Prefix {
 /// Lean per-host projection for a leaf layer (raster / void) that carries a
 /// visible mask filter. The host's content composites into this isolated
 /// window-sized buffer; the mask modulates it (`apply_mask`); the finished
-/// projection blends down onto the parent — so the mask never samples the host
+/// projection blends down onto the parent, so the mask never samples the host
 /// layer's texture or geometry. This is the de-fused replacement for the fused
 /// mask that used to live inside the layer-blend pass.
 ///
 /// Leaner than a [`GroupState`]: just a ping-pong pair (content → masked) and
 /// the three uniform buffers the three passes need. No composite cache, no
-/// child caching — a leaf has exactly one piece of content.
+/// child caching: a leaf has exactly one piece of content.
 pub(super) struct ProjectionState {
     /// `[0]` receives the composited host content; `[1]` receives the
     /// mask-modulated result. (Two textures, not a true ping-pong loop.)
@@ -237,7 +237,7 @@ pub struct CompositionContext<'a> {
 impl<'a> CompositionContext<'a> {
     /// Blend-content hop: composite a layer that contributes its own texture
     /// through the standard blend path. Mirrors the
-    /// [`LayerKindGpu::realize_in`] split — the arm bodies live on
+    /// [`LayerKindGpu::realize_in`] split: the arm bodies live on
     /// [`Compositor`] (where they touch its private fields), and the
     /// dispatch is owned by the variant via [`Layer::compose_into`].
     pub(crate) fn compose_layer(&mut self, layer: &Layer) {
@@ -280,7 +280,7 @@ impl<'a> CompositionContext<'a> {
 
 impl Compositor {
     /// Effective mask bind group for a host raster/group during compositing
-    /// — substitutes the preview-mask bind group when one of the host's
+    ///: substitutes the preview-mask bind group when one of the host's
     /// filters is the floating target. Fall-through resolves the live
     /// mask through the existing `mask_bind_group` lookup.
     pub(crate) fn effective_mask_bind_group(
@@ -349,7 +349,7 @@ impl Compositor {
 
     /// Cached entry point for `create_blend_bind_group`. The key
     /// `(parent_group, child, halves)` uniquely identifies the bg+layer
-    /// view pair for a given composite — view handles and uniform buffers
+    /// view pair for a given composite: view handles and uniform buffers
     /// are stable across frames, so caching by key avoids the per-frame
     /// allocator round-trip. `halves` is bit 0 = the parent's source
     /// accumulator index, bit 1 = the child group's output half (always 0
@@ -473,8 +473,8 @@ impl Compositor {
             }
             None => {
                 // A full walk: reset the accumulator, and drop any prefix. A
-                // walk reached here either because a coarse source moved —
-                // which can change output below any stamp — or because the
+                // walk reached here either because a coarse source moved
+                // (which can change output below any stamp) or because the
                 // stamps themselves diverged low. Keeping the old capture
                 // across that would let a later resume restore pre-change
                 // pixels.
@@ -539,7 +539,7 @@ impl Compositor {
     /// The dispatch that satisfies it happens inside `compose_effect_arm`,
     /// mid-walk, against the effect's live input. Any skipped subtree between
     /// the root and that effect makes the dispatch unreachable and
-    /// `pump_node_histogram` waits forever — and the guard cannot be scoped to
+    /// `pump_node_histogram` waits forever, and the guard cannot be scoped to
     /// the host group, because an ancestor's own reuse is what skips it. A
     /// histogram is owed only while a filter's panel is focused and its result
     /// is one readback away, so refusing reuse outright for that window costs
@@ -577,8 +577,8 @@ impl Compositor {
     /// Latest content revision anywhere in a child's subtree.
     ///
     /// Folds the node's own pixel and animation ticks together with those of
-    /// its filters — a mask is not in `children_of`, so it has to be reached
-    /// explicitly — and recurses through descendants. A passthrough group's
+    /// its filters (a mask is not in `children_of`, so it has to be reached
+    /// explicitly) and recurses through descendants. A passthrough group's
     /// descendants are folded through the same inclusion predicate the walk
     /// applies to them, because they inline into *this* group's accumulator:
     /// an inner child that starts or stops drawing changes this group's output
@@ -657,7 +657,7 @@ impl Compositor {
         let Some(node) = doc.find_node(child_id) else {
             return false;
         };
-        // Isolation and visibility are orthogonal — the document's eye state
+        // Isolation and visibility are orthogonal: the document's eye state
         // is never inspected beyond `visible()`, and isolation never mutates
         // it.
         node.visible()
@@ -676,7 +676,7 @@ impl Compositor {
     /// Handles passthrough groups by recursing with the same parent group_id.
     ///
     /// Per-child dispatch goes through [`LayerNode::compose_into`] so each
-    /// node variant is responsible for its own compose behaviour — this
+    /// node variant is responsible for its own compose behaviour: this
     /// walk only owns the per-child filters that are orthogonal to node kind,
     /// through [`Self::child_included`].
     ///
@@ -857,7 +857,7 @@ impl Compositor {
     /// Pre-walk pass (has `queue`): ensure a projection state exists and its
     /// three uniform buffers are current for every leaf host that needs one,
     /// and drop states whose host no longer qualifies (mask hidden/removed).
-    /// The compose walk that follows only binds — it never allocates or writes.
+    /// The compose walk that follows only binds: it never allocates or writes.
     pub(super) fn sync_projection_states(
         &mut self,
         device: &wgpu::Device,
@@ -869,7 +869,7 @@ impl Compositor {
         let padded_h = self.canvas_height;
 
         // Drop projections whose host no longer needs one (mask hidden/removed
-        // or now transform-previewing) — the "released on mask remove/hide"
+        // or now transform-previewing): the "released on mask remove/hide"
         // requirement, plus the host-delete case (the layer_cache entry is
         // gone so it never re-qualifies below).
         let stale: Vec<LayerId> = self
@@ -957,7 +957,7 @@ impl Compositor {
 
         self.sync_effect_instances(device, queue, doc, isolated);
 
-        // Refresh every masked passthrough host's apply uniform — canvas + mask
+        // Refresh every masked passthrough host's apply uniform: canvas + mask
         // geometry. Effect layers' uniforms are written by
         // `sync_effect_instances` itself, beside the instances they belong to.
         let normal = crate::gpu::blend_mode::registry().default().gpu_value;
@@ -976,7 +976,7 @@ impl Compositor {
 
     /// De-fused leaf-mask compose: host content → projection, mask modulates
     /// the projection (`apply_mask`), projection blends down onto the parent.
-    /// The mask samples only `(projection, mask)` in its own space — never the
+    /// The mask samples only `(projection, mask)` in its own space: never the
     /// host layer texture or geometry. Uniforms are pre-written by
     /// [`Self::sync_projection_states`]; this only encodes the three passes.
     fn compose_layer_through_projection(
@@ -1034,7 +1034,7 @@ impl Compositor {
             live_mask_bg
         };
 
-        // Build the (non-hot) bind groups fresh — masked leaves are rare.
+        // Build the (non-hot) bind groups fresh: masked leaves are rare.
         // Pass 1 reads the cleared accum[1] as a transparent background.
         let content_bg = self.create_blend_bind_group(
             device,
@@ -1114,11 +1114,11 @@ impl Compositor {
 
     /// Composite a content layer (raster or void) into its parent group's
     /// ping-pong accumulators. One blend arm for both raster and procedural
-    /// content — the procedural texture lives in `node_textures` keyed by
+    /// content: the procedural texture lives in `node_textures` keyed by
     /// layer id (allocated by `ensure_void_layer` and refreshed by
     /// `encode_dirty_layer_content` before the tree walk), and the blend
     /// uniforms are the same `BlendUniforms` shape in the unified
-    /// `layer_cache` — so neither lookup branches on kind here.
+    /// `layer_cache`, so neither lookup branches on kind here.
     fn compose_layer_arm(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1132,7 +1132,7 @@ impl Compositor {
 
         // De-fused leaf mask: a host carrying a visible mask composites through
         // its own projection (content → apply_mask → blend down) so the mask
-        // never samples the host's texture or geometry — including while a
+        // never samples the host's texture or geometry, including while a
         // transform preview is active on the host or its mask, in which case
         // the projection swaps in the preview content/mask (see
         // `compose_layer_through_projection`). The fused path below runs only
@@ -1152,7 +1152,7 @@ impl Compositor {
         // Effective view + uniforms: when this layer is the floating
         // target, swap the live texture view for the (canvas-aligned)
         // preview view AND swap the live's layer-aligned blend uniforms
-        // for the preview's canvas-aligned ones — both halves must move
+        // for the preview's canvas-aligned ones; both halves must move
         // together or the shader maps fragments to the wrong region.
         // Voids never become floating targets today, so the detour
         // collapses to the live path for them; if voids ever do, the same
@@ -1251,7 +1251,7 @@ impl Compositor {
     /// place rather than blending a layer in.
     ///
     /// Because the child walk composites bottom-to-top, `gs.current_accum`
-    /// already holds the composite of everything below this effect — lower
+    /// already holds the composite of everything below this effect: lower
     /// siblings plus everything beneath the group, since a passthrough group
     /// inlines into its nearest isolated ancestor's accumulator. That image is
     /// both the effect's input and the "before" its result is applied over:
@@ -1263,7 +1263,7 @@ impl Compositor {
     ///
     /// The scratch is what gives the apply pass somewhere to write while still
     /// reading both images. It replaces the accumulator snapshot this path used
-    /// to take when masked — same texture count, one fewer full-canvas copy per
+    /// to take when masked: same texture count, one fewer full-canvas copy per
     /// effect per frame, and it does not depend on the layer being masked, so
     /// opacity and blend mode work whether or not a mask is present.
     fn compose_effect_arm(
@@ -1275,8 +1275,8 @@ impl Compositor {
         filter: &FilterLayer,
         scissor: (u32, u32, u32, u32),
     ) {
-        // An effect layer with no realized instance — an unknown pipeline id,
-        // or a parent whose accumulator did not exist at sync time — composes
+        // An effect layer with no realized instance (an unknown pipeline id,
+        // or a parent whose accumulator did not exist at sync time) composes
         // as a no-op rather than erroring mid-frame.
         if !self.effect_instances.contains_key(&filter.id) {
             return;
@@ -1354,7 +1354,7 @@ impl Compositor {
 
     /// Snapshot the current parent accumulator into the host's mask-snapshot
     /// texture (the "before" image of the lerp). Step 1 of every in-place
-    /// masked composite — shared by the masked passthrough group and the masked
+    /// masked composite: shared by the masked passthrough group and the masked
     /// filter layer. The snapshot state must already exist (ensure-driven per
     /// frame); the caller checks before invoking.
     fn snapshot_parent_accum(
@@ -1514,7 +1514,7 @@ impl Compositor {
                     isolated,
                 );
             } else {
-                // Pure passthrough — inline children into parent.
+                // Pure passthrough: inline children into parent.
                 let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
                 self.compose_children(
                     encoder,
@@ -1603,7 +1603,7 @@ impl Compositor {
     /// then runs the shared apply pass between the snapshot and the result.
     /// The one in-place host that still snapshots: its "after" is written by an
     /// arbitrary number of child passes straight into the accumulator, so
-    /// unlike an effect layer it cannot be redirected into a scratch — see
+    /// unlike an effect layer it cannot be redirected into a scratch; see
     /// [`LayerNode::needs_before_snapshot`](crate::layer::LayerNode::needs_before_snapshot).
     #[allow(clippy::too_many_arguments)]
     fn compose_passthrough_masked(

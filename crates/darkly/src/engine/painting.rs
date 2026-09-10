@@ -631,7 +631,7 @@ impl DarklyEngine {
         // the composite below an untouched stack is reusable, and only a
         // per-node mark says so. The write-site invariant on
         // `mark_node_pixels_dirty` ("if your signature carries a `LayerId`,
-        // you mark it") applies here — `gpu_stroke_to` has carried the id all
+        // you mark it") applies here: `gpu_stroke_to` has carried the id all
         // along. Thumbnail cadence is unaffected: the drain skips the layer
         // being stroked, so the panel still updates once at `end_stroke`
         // rather than per segment.

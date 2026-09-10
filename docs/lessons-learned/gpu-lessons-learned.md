@@ -94,6 +94,17 @@ The buffer size doesn't matter: color picker (1×1 pixel) and flood fill (full-c
 
 For flood fill: `gpu_flood_fill` starts the readback and stores a `PendingFloodFill`. On the next frame, `render()` polls for completion, then runs the CPU scanline fill + GPU stamp + undo commit. For color picker: `pick_color` returns the cached last-picked color immediately (one-frame latency, imperceptible for UI) and resolves on the next frame.
 
+**Textures the CPU needs but that change rarely** (the selection mask is the
+standing example) do not need a readback per query: maintain a CPU cache
+populated by the async readback and read from that.
+
+**The test-only escape hatch**: `test_utils::readback_texture()` and
+`blocking_read()` work on native (Vulkan/Metal), where `device.poll(Wait)` drives
+the completion queue synchronously. They are gated behind the `darkly/testing`
+feature and `#[cfg(test)]`, and must never be called from engine, compositor, or
+WASM bridge code. That gate is what makes the prohibition in `CONTRIBUTING.md` a
+compile error rather than a convention.
+
 **Takeaway**: You cannot synchronously wait for GPU results on WebGPU/WASM. It's not a wgpu limitation: the web platform fundamentally does not offer synchronous GPU readback. The browser event loop is the *only* mechanism for getting data back from the GPU, and any form of blocking (`recv()`, `thread::park()`, busy-wait) prevents the event loop from running. All GPU→CPU data transfers must be async: start the mapping, return control to JS, poll on the next frame. This applies to any future readback use case (save/export, histogram, clipboard copy, thumbnails). Native-only code paths (tests, headless rendering) can still use `blocking_read` safely.
 
 ## 6. NDC coordinate stretch from padded render targets

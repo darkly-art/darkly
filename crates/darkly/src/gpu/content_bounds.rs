@@ -158,7 +158,7 @@ impl ContentBoundsPass {
     }
 
     /// True if a bounds computation for the layer's current stamp is in
-    /// flight. A dispatch for a superseded stamp does not count — its result
+    /// flight. A dispatch for a superseded stamp does not count: its result
     /// will be discarded, so a fresh one is still warranted.
     pub fn is_pending(&self, revisions: &Revisions, layer_id: LayerId) -> bool {
         let stamp = Stamp::current(revisions, layer_id);
@@ -184,7 +184,7 @@ impl ContentBoundsPass {
     /// for RGBA targets, red for R8 targets. Driven by the texture's format,
     /// not by node kind.
     ///
-    /// Results arrive asynchronously — call [`poll`] each frame.
+    /// Results arrive asynchronously: call [`poll`] each frame.
     #[allow(clippy::too_many_arguments)]
     pub fn request(
         &mut self,
@@ -279,7 +279,7 @@ impl ContentBoundsPass {
                         completed.push(p.layer_id);
                     }
                     // Stale result (its inputs moved since dispatch) → drop it.
-                    // Don't increment i — swap_remove moved the last element here.
+                    // Don't increment i: swap_remove moved the last element here.
                 }
                 None => {
                     i += 1;

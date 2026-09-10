@@ -135,7 +135,7 @@ fn export_is_a_faithful_projection() {
     check(&json, "effects", {
         // The effect catalog is emitted in (category, display_name) order
         // so the frontend can run-length group it, which is not the
-        // registry's own type_id order — so the expectation is built from
+        // registry's own type_id order, so the expectation is built from
         // the same sort the catalog applies.
         let registry = darkly::gpu::effect::EffectRegistry::new();
         let mut regs = registry.registrations();

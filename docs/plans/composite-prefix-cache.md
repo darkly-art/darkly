@@ -1,4 +1,4 @@
-# Composite prefix cache — reusing the unchanged bottom of the layer stack
+# Composite prefix cache, reusing the unchanged bottom of the layer stack
 
 > **Needs rebasing before implementation.** `docs/plans/compositor-revision-registry.md`
 > has since been implemented. The `composite_epoch` and `node_revisions` map this
@@ -6,19 +6,19 @@
 > sources (`gpu/revisions.rs`), so PR A's groundwork is done: both fossils are
 > deleted, `mark_effect_dirty` is gone, and a per-composite counter
 > (`composite_runs`) exists for testability. What remains is the per-group
-> `Vec<ChildStamp>` — which becomes a fold of child-subtree ticks against the
+> `Vec<ChildStamp>`, which becomes a fold of child-subtree ticks against the
 > registry rather than new invalidation machinery. The review's argument that
 > PR B should be a **per-effect output cache** instead of a per-group prefix is
 > unaffected and still stands.
 
-## Provenance — this mechanism already existed and was dropped
+## Provenance: this mechanism already existed and was dropped
 
 Established from git history after the review, and it reframes the plan: this is
 not new machinery, it is a mechanism the compositor shipped with and lost.
 
 `git log -S cache_valid_through -- crates/darkly/src/gpu/compositor.rs` gives
 five commits. In the earliest three (`f05af709`, `57e1e0d2`, `9662cfff`) the
-field was fully wired — read at the top of the composite and assigned `Some`:
+field was fully wired: read at the top of the composite and assigned `Some`:
 
 ```rust
 let start_layer = match self.cache_valid_through {
@@ -38,8 +38,8 @@ The same function also scissored to a dirty rect computed from `doc.dirty`, so
 the original compositor had **both** halves of the optimization: resume-from-cache
 and dirty-rect compositing.
 
-`5badf609 "wip compositor refactor"` — the move from a flat layer list to the
-tree of per-group `GroupState`s — dropped both. From that commit on, the reads
+`5badf609 "wip compositor refactor"` (the move from a flat layer list to the
+tree of per-group `GroupState`s) dropped both. From that commit on, the reads
 and every `Some` assignment are gone and only the field, its `None`
 initializer and the `None` resets remain. `scissor` survived as the fossil of
 the dirty-rect half; `cache_valid_through` as the fossil of the resume half.
@@ -47,7 +47,7 @@ the dirty-rect half; `cache_valid_through` as the fossil of the resume half.
 Two honest qualifications, so this is not overclaimed:
 
 - The old resume was **coarser than what this plan proposes**. The only value
-  ever stored was `Some(num_layers - 1)` — "valid through the topmost layer" —
+  ever stored was `Some(num_layers - 1)` ("valid through the topmost layer")
   so in practice it functioned as "skip the composite when nothing is dirty"
   rather than a mid-stack split. The `start_layer` machinery could express a
   partial prefix; nothing ever produced one.
@@ -60,7 +60,7 @@ Bearing on the review's finding 3 ("PR B is over-built for the measured
 evidence"): the reviewer's cost objection was to *new* machinery in the crate's
 most intricate file. Restoring capability the compositor was designed around,
 and deleting two fossils left by the refactor that removed it, is a different
-trade — though it does not by itself answer whether the per-group prefix or a
+trade, though it does not by itself answer whether the per-group prefix or a
 per-effect output cache is the right shape for the tree.
 
 
@@ -81,7 +81,7 @@ the repo's own recorded direction points at.
 
 ### A. What I verified and accept
 
-- **`cache_valid_through` is dead — confirmed, both halves.** Declared at
+- **`cache_valid_through` is dead: confirmed, both halves.** Declared at
   `gpu/compositor.rs:290`, assigned `None` at `:928`, `:2205`, `:3845`, `:4235`,
   and nowhere else; `grep` over `crates/darkly/src` and `frontend/wasm/src`
   returns exactly those five hits, so it is never assigned `Some` and never read.
@@ -92,32 +92,32 @@ the repo's own recorded direction points at.
   sequence is not an index into `doc.children_of(group)`. `AccumPair` really is
   two ping-pong textures and `composite_cache` really holds only the final image.
   **Delete it. This part is unambiguously right.**
-- **74 `mark_dirty()` call sites** — confirmed exactly (`grep -rn "mark_dirty()"`
+- **74 `mark_dirty()` call sites**: confirmed exactly (`grep -rn "mark_dirty()"`
   over `crates/darkly/src` + `frontend/wasm/src`).
-- **Exactly three `needs_composite = true` sites outside `mark_dirty`** —
+- **Exactly three `needs_composite = true` sites outside `mark_dirty`**:
   confirmed: `:1289` (`new`), `:2112` (`set_canvas_rect`), `:3427`
   (`update_animations`); `:2202` is `mark_dirty` itself. `set_canvas_rect` does
   replace every `GroupState` wholesale at `:2078-2083`. Accepted.
-- **Six `target_generation += 1` sites** — confirmed at `:2019`, `:2080`,
+- **Six `target_generation += 1` sites**: confirmed at `:2019`, `:2080`,
   `:3575`, `:3823`, `:4609`, `:5609`.
-- **`compose_children` has no dirtiness filter** — confirmed
+- **`compose_children` has no dirtiness filter**: confirmed
   (`:4307-4339`): `find_node` miss, `node.visible()`, `is_in_isolation_path`,
   `screen_run.contains`, and nothing else.
-- **`scissor` is a threaded constant** — confirmed. Both call sites pass the full
+- **`scissor` is a threaded constant**: confirmed. Both call sites pass the full
   canvas (`:3835`, `:3920`). Minor: it is carried by **nine** functions plus
-  `CompositionContext:332`, not eight — `compose_group:4224`,
+  `CompositionContext:332`, not eight, `compose_group:4224`,
   `compose_children:4301`, `compose_layer_through_projection:4846`,
   `compose_layer_arm:5029`, `compose_effect_arm:5183`,
   `snapshot_parent_accum:5270`, `apply_in_place:5331`, `compose_group_arm:5428`,
   `compose_passthrough_masked:5541`. I agree with deleting it.
 - **Symptom B's measurements** are real and quoted correctly from
   `handoff-viewport-boundary.md:163-169`.
-- **`canvas_effect_scale: 1.0` vs `screen_effect_scale: 0.7071`** — confirmed at
+- **`canvas_effect_scale: 1.0` vs `screen_effect_scale: 0.7071`**: confirmed at
   `crates/darkly/presets/defaults.yaml:131-132`, and the "canvas output is
   document content" rationale is at `gpu/effect_scaling.rs:10-14`. §1.3's
   honesty about symptom A is correct and I endorse it.
 - **`poll_pending`'s global `mark_dirty` (§8) is genuinely not a per-frame
-  problem during a stroke** — `render` at `engine/rendering.rs:665-668` fires it
+  problem during a stroke**: `render` at `engine/rendering.rs:665-668` fires it
   only when `poll_pending` returns true, which needs `drain_readbacks` to land
   something; thumbnail readbacks are queued from `drain_dirty_pixels`
   (`engine/rendering.rs:651-656`), which `gpu_stroke_to` never populates because
@@ -129,7 +129,7 @@ the repo's own recorded direction points at.
 
 ### B. Blocking findings
 
-#### B1. `CompositeMode::Authoritative` does not make the file right — `render_offscreen` early-returns
+#### B1. `CompositeMode::Authoritative` does not make the file right: `render_offscreen` early-returns
 
 §3.5 rests its second line of defence on: "every path that writes pixels to disk
 or into the document forces a from-scratch composite." **It does not.** Every
@@ -160,14 +160,14 @@ paths that truly persist (export, save-to-file, flatten/merge, clone source),
 with recording/preview left `Interactive`.
 
 Until this is resolved, §3.5's "defence in depth with two independent layers" is
-**one** layer — the epoch. Which makes B2 more serious than it looks.
+**one** layer: the epoch. Which makes B2 more serious than it looks.
 
 #### B2. The plan narrows ~25 more call sites than it admits, and drops an invalidation while doing it
 
 §3.5 states: "Only two narrowed paths exist in v1 (paint dab, animation tick),
 each with a byte-equality test." §3.2's table and §5 step 2 contradict this. The
 table defines `mark_node_pixels_dirty` as "**the above** + `dirty_node_pixels`
-+ `histogram.invalidate_all()`", where "the above" is `mark_node_content_dirty` —
++ `histogram.invalidate_all()`", where "the above" is `mark_node_content_dirty`,
 and step 2 says "re-express `mark_node_pixels_dirty` on top of it". Today
 `mark_node_pixels_dirty` ends in `self.mark_dirty()` (`gpu/compositor.rs:2238`).
 Re-expressing it on `mark_node_content_dirty` therefore **narrows every
@@ -180,9 +180,9 @@ comments): `gpu/compositor.rs:1413, 1511, 1575, 1666, 1702, 1742, 1898, 2004,
 `engine/floating.rs:965, 1055`; `engine/painting.rs:164, 285, 1533, 1540, 1557,
 1566`. **That is 25, not the "16 today" the table claims.** Several of them
 (`:1511`, `:1575`, `:1666`, `:1702`, `:1742`, `:1898`, `:2004`) happen to be
-followed by an explicit `mark_dirty()` and would survive; the rest —
-`ensure_raster_layer:1413`, all three mask sites, both floating sites,
-`bake_common:114`, `clipboard:273`, `rendering:932`, four `painting.rs` sites —
+followed by an explicit `mark_dirty()` and would survive; the rest
+(`ensure_raster_layer:1413`, all three mask sites, both floating sites,
+`bake_common:114`, `clipboard:273`, `rendering:932`, four `painting.rs` sites)
 would not. Each of those becomes a fresh staleness surface with no test named for
 it.
 
@@ -195,7 +195,7 @@ or a floating commit. That cache is consumed by the transform/floating setup pat
 (`engine/rendering.rs:307, 318-324`), so the observable symptom is a transform
 gizmo sized to pre-paint bounds. The plan does not mention it.
 
-The fix is available and is already the audit's recommendation #3/#5 —
+The fix is available and is already the audit's recommendation #3/#5:
 `ContentBoundsPass::invalidate(layer_id)` exists at
 `gpu/content_bounds.rs:139-142` with **zero callers today**. `mark_node_content_dirty`
 should call it, and `HistogramPass` should get the same treatment rather than
@@ -208,7 +208,7 @@ becomes true, or (b) enumerate all 25 sites, route per-node `content_bounds` /
 `histogram` invalidation through the new mark, and extend §7.2 to cover the
 classes they represent. Do not ship it as an undisclosed refactor.
 
-#### B3. PR B is the wrong size for the evidence — the measured win is the effect *encode*, and a per-effect output cache reaches all of it
+#### B3. PR B is the wrong size for the evidence: the measured win is the effect *encode*, and a per-effect output cache reaches all of it
 
 §1.3 already concedes the prefix cache is not the bulk of symptom A. Work through
 what it buys on symptom A concretely: for `[r0, r1, r2, grain]` with `grain`
@@ -219,20 +219,20 @@ correctly refuses to claim the 10×.
 So the whole of PR B rests on symptom B. But look at what symptom B's numbers
 actually attribute the cost to (`handoff-viewport-boundary.md:167-169`): `invert`
 +1.1 ms, `grain` +3.7 ms, `painting` **+43.5 ms**. These scale with *shader
-cost*, not with stack depth — the handoff says so directly at `:172-175`
+cost*, not with stack depth: the handoff says so directly at `:172-175`
 ("`painting` is 169 taps per pixel and it executes every dirty frame"). The blend
-draws below the effect are a rounding error inside the 8.3–10.2 ms baseline. **The
+draws below the effect are a rounding error inside the 8.3-10.2 ms baseline. **The
 entire measured win is one `inst.scaled.encode(...)` call at
 `gpu/compositor.rs:5221-5231`.**
 
 A mechanism that reaches all of it, and nothing more, is: cache that effect's
-output and skip the encode when the effect's *input* is unchanged. Concretely —
+output and skip the encode when the effect's *input* is unchanged. Concretely:
 `compose_effect_arm` already computes `src` (the accumulator holding everything
 below, `:5196-5204`), already has an `apply_in_place` that reads `(before, after)`
 (`:5246-5257`), and already writes `after` into a scratch. Give each effect
 instance its own output texture instead of the shared `canvas_apply_scratch`, and
 skip lines `:5221-5231` when the running "nothing below me changed" bit is set.
-Everything below still re-blends — cheap — and the apply pass still runs, so
+Everything below still re-blends (cheap) and the apply pass still runs, so
 opacity/blend/mask behaviour is untouched.
 
 Compared to PR B this drops: the per-group prefix texture and its VRAM/eviction
@@ -241,8 +241,8 @@ bookkeeping, the `Vec<ChildStamp>` diff over every child of every group, the
 "convergence takes two composites" property (§9.3), the whole restructure of
 `compose_group`, and most of the pressure behind B1 (an effect that skips its
 encode when its input is byte-identical is far easier to argue correct than a
-resumed accumulator). It keeps everything PR A builds — the epoch, the revisions,
-`subtree_revision`, the narrowed marks — because it needs exactly the same "did
+resumed accumulator). It keeps everything PR A builds (the epoch, the revisions,
+`subtree_revision`, the narrowed marks) because it needs exactly the same "did
 anything below me change" signal.
 
 Three further reasons this shape deserves a real defence rather than §6's single
@@ -268,11 +268,11 @@ sentence:
    maintains a prefix accumulator. The plan reports this and then builds the
    prefix accumulator anyway. A per-effect output cache is much closer to Krita's
    `N_ABOVE_FILTHY` + `dependsOnLowerNodes()` reuse
-   (`kis_async_merger.cpp:226-234`, `kis_projection_leaf.cpp:276-279`) — reuse
+   (`kis_async_merger.cpp:226-234`, `kis_projection_leaf.cpp:276-279`): reuse
    attached to the expensive node, not to the group's running buffer.
 3. **The generality PR B buys is thin in practice.** §3.8's four cases reduce to:
    effect below the change (covered by the per-effect cache), effect above the
-   change (nothing helps — the effect must re-encode either way), unchanged
+   change (nothing helps; the effect must re-encode either way), unchanged
    nested group (which already has its own `composite_cache` at
    `gpu/compositor.rs:4266-4284`; skipping its walk is a separate and much
    smaller change to `compose_group_arm`), and param scrubbing (deferred to §8
@@ -280,7 +280,7 @@ sentence:
 
 **Required revision:** §6 must price the per-effect output cache against the
 group prefix cache in LOC and in expected milliseconds on the measured cases, and
-justify the delta — or adopt it. Right now the plan rejects the cheaper option
+justify the delta, or adopt it. Right now the plan rejects the cheaper option
 in one line and the more expensive option is ~210 added lines in the crate's most
 intricate file whose payoff §9.1 admits is unmeasured.
 
@@ -295,11 +295,11 @@ intricate file whose payoff §9.1 admits is unmeasured.
   instance appears on frame N+1 without any `mark_dirty` in between, the stale
   prefix is reused and the effect never appears. `ensure_group_state:2019` and
   `ensure_canvas_apply_scratch:4609` both bump `target_generation` (which PR A
-  routes into the epoch), which probably closes it — but "probably" is the wrong
+  routes into the epoch), which probably closes it, but "probably" is the wrong
   standard for a plan whose thesis is that staleness is impossible. State the
   argument, or fold instance-existence into the stamp.
 - **C2. §3.7's histogram guard names the wrong group.** "force a full walk for the
-  group containing `t`" — the group that owns the accumulator `t` composes into is
+  group containing `t`": the group that owns the accumulator `t` composes into is
   `doc.accumulator_host_of(t)` (`document/mod.rs:659-670`), not `parent_of(t)`,
   because a passthrough group inlines into its nearest non-passthrough ancestor.
   `compose_effect_arm` dispatches the histogram against
@@ -308,10 +308,10 @@ intricate file whose payoff §9.1 admits is unmeasured.
 - **C3. `test_readback_canvas_from_scratch` has an ordering hazard that can turn
   the §7.2 battery green while broken.** `test_readback_canvas`
   (`engine/mod.rs:1106-1119`) calls `render_offscreen`, which clears
-  `needs_composite` (`:3944`). If `from_scratch` forces a composite (it must —
+  `needs_composite` (`:3944`). If `from_scratch` forces a composite (it must:
   see B1) it also clears the flag. So in `assert_matches_from_scratch`, if the
-  *next* case's mutation fails to set `needs_composite` — which is precisely the
-  bug class being hunted — the incremental read no-ops and returns the previous
+  *next* case's mutation fails to set `needs_composite` (which is precisely the
+  bug class being hunted) the incremental read no-ops and returns the previous
   case's from-scratch bytes, and the assertion compares a texture with itself and
   passes. Guard it: assert inside the helper that the incremental readback
   actually recomposited (`composite_encodes` delta > 0, or `needs_composite` was
@@ -320,7 +320,7 @@ intricate file whose payoff §9.1 admits is unmeasured.
   in an exported file. Missing classes: transform preview start/update/commit
   (`effective_mask_bind_group_fields` consults `transform_session` and
   `transform_pass.paste` per draw, `:5128-5135`); floating-layer drag and commit
-  (`engine/floating.rs:965`, `:1055` — both `mark_node_pixels_dirty` sites that
+  (`engine/floating.rs:965`, `:1055`, both `mark_node_pixels_dirty` sites that
   B2 would narrow); selection change; a sample-merged clone stroke
   (`engine/painting.rs:985` reads the composite as paint source); paint into a
   layer *inside* a nested non-passthrough group below the split (exercises the
@@ -329,7 +329,7 @@ intricate file whose payoff §9.1 admits is unmeasured.
   (`encode_dirty_layer_content:3280` is one of the three revision-bump sites);
   a masked *passthrough* group straddling the split (`compose_passthrough_masked`
   is the one path that still snapshots the parent accumulator, `:5551`); and at
-  least one **negative** case — a mutation that must NOT invalidate (a rename, a
+  least one **negative** case, a mutation that must NOT invalidate (a rename, a
   screen-space effect param drag) asserted via a zero `composite_encodes` delta,
   since a plan whose safety comes from over-invalidating needs a test that the
   reuse exists at all.
@@ -341,7 +341,7 @@ intricate file whose payoff §9.1 admits is unmeasured.
   lines and it is the number the plan's justification rests on.
 - **C6. Threading `CompositeMode` on `CompositionContext` (`:332`) puts a caching
   policy flag into the modular dispatch carrier** that `LayerNode::compose_into`
-  (`layer.rs:699`) crosses — the seam whose whole point is that node kinds see
+  (`layer.rs:699`) crosses: the seam whose whole point is that node kinds see
   only what they need. It is unavoidable if `compose_group_arm` must recurse with
   the mode, and it is still better than a scoped field on `Compositor` (which
   `unified-effect-scale.md:108` rejects on save/restore grounds, correctly). Just
@@ -371,9 +371,9 @@ exact: `kis_merge_walker.cc:28-41` (`startTripImpl`), `kis_async_merger.cpp:172`
   `kis_async_merger_test.cpp`, `testRect4(580,381,40,40)` lies entirely inside
   `testRect3(500,0,140,441)`. The merges are at `:91-101` (cited `:87-100`) and
   the commented-out "old style merging … artifacts at x=100 and x=500" block is
-  at `:103-113` (cited `:104-114`). The *point* the plan draws from the test —
-  incremental compositing had this exact failure mode and the defence is
-  equality against a stored reference — stands.
+  at `:103-113` (cited `:104-114`). The *point* the plan draws from the test
+  (incremental compositing had this exact failure mode and the defence is
+  equality against a stored reference) stands.
 - **§2.1's "`setupProjection` cleared the parent projection first" is
   conditional.** `parentOriginal->clear(rect)` is at `kis_async_merger.cpp:289`
   exactly, but only in the non-temp-projection branch; with
@@ -382,7 +382,7 @@ exact: `kis_merge_walker.cc:28-41` (`startTripImpl`), `kis_async_merger.cpp:172`
 
 Line numbers for `visitHigherNode` (:86-99, cited :84-97) and `visitLowerNode`
 (:101-110, cited :99-108) and GIMP's chunk snapping (:640-643, cited :639-642)
-drift by 1-2. Immaterial. **Prior art is not a reason to reject this plan** — but
+drift by 1-2. Immaterial. **Prior art is not a reason to reject this plan**, but
 see B3: what the prior art actually *shows* is that neither editor built the
 mechanism this plan builds.
 
@@ -405,12 +405,12 @@ Read at `06e808bb`. The collision is smaller than feared but real:
 - **Textual conflict is certain in two functions.** That plan inserts
   `sync_effect_scale` at the top of `render_offscreen` *above* the
   `!needs_composite` gate (`compositor.rs:3916`) and replaces the
-  `sync_resolution_scale` block in `render` (`compositor.rs:5605-5610`) — the
+  `sync_resolution_scale` block in `render` (`compositor.rs:5605-5610`): the
   same `render` block whose `target_generation += 1` at `:5609` PR A step 4 routes
   through `bump_target_generation()`. Small, mechanical, but land them in a known
   order.
 - **Worth reading before writing `Authoritative`:** `unified-effect-scale.md:167`
-  records an undiagnosed bug — `bake_subtree_to_layer` composes into the sentinel
+  records an undiagnosed bug, `bake_subtree_to_layer` composes into the sentinel
   `GroupState` (`compositor.rs:3821-3833`, `:3869`) while effect instances are
   realized against `doc.accumulator_host_of(id)` (`:4681-4683`), i.e. the *root's*
   accumulator, so `compose_effect_arm` during flatten/merge encodes from the wrong
@@ -425,14 +425,14 @@ PR A (~175 added / ~95 removed as the plan splits it) is worth doing **on its ow
 merits and regardless of PR B**: it deletes two dead optimization scaffolds
 (`cache_valid_through`, `scissor`), fixes a real write-site-invariant violation at
 `engine/painting.rs:606`, adds the counter that makes any future caching work
-testable, and — with B2's fix — converts two `invalidate_all()` sweeps into the
+testable, and (with B2's fix) converts two `invalidate_all()` sweeps into the
 per-node invalidations the audit asked for at rec #5. Land it.
 
 PR B at ~210 added lines is not justified by what is currently measured. §9.1
 already gates it on a profiling measurement; I would go further and require the
 gate to compare *two* candidate mechanisms, not just to decide go/no-go on one.
 If the measurement confirms what `handoff-viewport-boundary.md:172-175` already
-says — that the cost is the effect encode, not the walk — then the per-effect
+says (that the cost is the effect encode, not the walk) then the per-effect
 output cache in B3 is the answer and PR B as written is over-built.
 
 Two smaller items the plan defers to §8 that are worth pulling forward, since
@@ -459,7 +459,7 @@ substantive but individually small.
 Two symptoms, one missing mechanism.
 
 **Symptom A (the reported one).** An animated canvas-space effect (`rainy_glass`,
-`grain`, `vhs` — the three that answer `needs_animation()`) costs roughly 10× the
+`grain`, `vhs`: the three that answer `needs_animation()`) costs roughly 10× the
 GPU of the same effect above the screen-space divider.
 
 **Symptom B (measured, `handoff-viewport-boundary.md` §3.2).** Painting on a
@@ -482,14 +482,14 @@ walks every child through `compose_children` (`:4256`, `:4294`), and copies the
 final accumulator into the group's `composite_cache` (`:4266-4284`).
 
 `compose_children` (`:4294`) filters children on `node.visible()` (`:4312`),
-`is_in_isolation_path` (`:4319`) and the screen-space run (`:4327`) — and on
+`is_in_isolation_path` (`:4319`) and the screen-space run (`:4327`), and on
 nothing else. There is no dirtiness filter anywhere in the walk. Every visible
 layer re-blends and every effect re-encodes on every dirty frame.
 
 The dirty signal itself is coarse. `mark_dirty()` (`:2201`) is global; 74 call
 sites in `crates/darkly/src/` reach it. The hot ones for symptom B are
 `gpu_stroke_to` (`engine/painting.rs:606`, one global `mark_dirty()` per dab,
-even though the function's own signature carries the painted `layer_id` —
+even though the function's own signature carries the painted `layer_id`:
 `engine/painting.rs:471`) and `poll_pending` → `mark_dirty()`
 (`engine/rendering.rs:665-668`, fired by *any* completed readback).
 
@@ -498,7 +498,7 @@ For symptom A, `update_animations` sets `needs_composite = true` directly
 uniform per animated instance. Everything below that effect in the stack is
 provably unchanged and is rebuilt anyway.
 
-### 1.2 `cache_valid_through` is dead — and the wrong shape
+### 1.2 `cache_valid_through` is dead, and the wrong shape
 
 `GroupState::cache_valid_through: Option<usize>` (`:290`) is documented as
 "Child index through which the cache is valid." Verified: it is assigned `None`
@@ -520,7 +520,7 @@ makes a nested group atomic with respect to splitting (§3.3).
 ### 1.3 Be honest about symptom A
 
 The prefix cache does **not** remove the effect's own pass when the *effect*
-is what changed — an animated effect must re-encode by definition. It removes
+is what changed: an animated effect must re-encode by definition. It removes
 the blend passes below it and the recomposite of unchanged sub-groups. For a
 three-layer document with the veil on top, that is two fullscreen blend draws.
 
@@ -530,8 +530,8 @@ The 10× in symptom A is dominated by two other terms, both verified:
   (`crates/darkly/presets/defaults.yaml:132`) versus
   `rendering.screen_effect_scale` `0.7071` (`:131`), and canvas resolution is
   the document (2048², 4096²) while the screen run is the viewport. That is a
-  ~4–8× texel-count difference before anything else. The 1.0 default is
-  deliberate — `gpu/effect_scaling.rs:10-14` states canvas output is document
+  ~4-8× texel-count difference before anything else. The 1.0 default is
+  deliberate: `gpu/effect_scaling.rs:10-14` states canvas output is document
   content and a reduced round-trip would bake loss into the export.
 - **The composite happens at all.** A screen-space animation tick sets only
   `needs_present`; a canvas-space tick sets `needs_composite`, which adds the
@@ -550,7 +550,7 @@ measured +43.5 ms, which the prefix cache reduces to zero.
 
 Read from the checkouts under the project root. No claim below is unsourced.
 
-### 2.1 Krita — recompute above the change, reuse below
+### 2.1 Krita: recompute above the change, reuse below
 
 Krita's incremental recomposite is a walker + merger pair. `KisMergeWalker`
 (`krita/libs/image/kis_merge_walker.cc`) builds a job stack from the changed
@@ -566,17 +566,17 @@ Krita's incremental recomposite is a walker + merger pair. `KisMergeWalker`
 `KisAsyncMerger::startMerge` (`krita/libs/image/kis_async_merger.cpp:172`) then
 pops the stack and, per position:
 
-- `N_FILTHY` (`:219-225`) — recalculate the node's own projection.
-- `N_ABOVE_FILTHY` (`:226-234`) — recalculate **only if**
+- `N_FILTHY` (`:219-225`): recalculate the node's own projection.
+- `N_ABOVE_FILTHY` (`:226-234`): recalculate **only if**
   `currentLeaf->dependsOnLowerNodes()`, which is true exactly for adjustment
   layers (`krita/libs/image/kis_projection_leaf.cpp:276-279`). Krita's
   adjustment layer is Darkly's effect layer.
-- `N_BELOW_FILTHY` (`:241-244`) — **"nothing to do"**. A node below the change
+- `N_BELOW_FILTHY` (`:241-244`), **"nothing to do"**. A node below the change
   never re-runs its filters.
 
 The crucial detail, and the reason Krita does *not* need a prefix accumulator:
-after the per-node decision, **every** leaf on the stack — including
-`N_BELOW_FILTHY` — is still `compositeWithProjection(currentLeaf, applyRect)`
+after the per-node decision, **every** leaf on the stack (including
+`N_BELOW_FILTHY`) is still `compositeWithProjection(currentLeaf, applyRect)`
 (`:246`), because `setupProjection` cleared the parent projection first
 (`:277-303`, `parentOriginal->clear(rect)` at `:289`). Krita re-blends the whole
 stack every time.
@@ -592,12 +592,12 @@ hundred texels.
 **Reading for Darkly:** Krita's answer to symptom B is dirty-rect compositing
 plus per-node projection reuse, not prefix reuse. Darkly has the scaffolding for
 the first (the `scissor` parameter, §3.6) and none of it wired. For symptom A
-the dirty rect is the whole canvas — a full-canvas animated veil dirties
-everything — so rect limiting buys nothing there, and prefix reuse is the only
+the dirty rect is the whole canvas (a full-canvas animated veil dirties
+everything) so rect limiting buys nothing there, and prefix reuse is the only
 lever on the walk. The two mechanisms are complementary, not alternatives; this
 plan builds prefix reuse and explicitly defers dirty rects (§8).
 
-### 2.2 Krita — how they keep it from going stale
+### 2.2 Krita: how they keep it from going stale
 
 `KisAsyncMergerTest::testMerger`
 (`krita/libs/image/tests/kis_async_merger_test.cpp:51-121`) builds a document
@@ -610,14 +610,14 @@ x=500". The test exists because incremental compositing had exactly this failure
 mode, and the defence is an equality assertion against a from-scratch reference.
 §7.2 copies that shape.
 
-### 2.3 GIMP — invalidation follows the dataflow, and regions are the unit
+### 2.3 GIMP: invalidation follows the dataflow, and regions are the unit
 
 GIMP builds the layer stack as a **linear GEGL chain**:
 `gimp_filter_stack_get_graph` (`gimp/app/core/gimpfilterstack.c:188-226`) starts
 from the input proxy and calls `gegl_node_link(previous, node)` per filter
 (`:217`); `gimp_filter_stack_add_node` (`:233-264`) splices a new node between
 its `node_below` and `node_above` (`:261-264`). "Everything below me" is
-literally the upstream of the chain, so invalidation propagates downstream only —
+literally the upstream of the chain, so invalidation propagates downstream only:
 the unchanged prefix is reused by construction, with no index to maintain.
 
 The projection is region-invalidated, never wholesale.
@@ -633,7 +633,7 @@ those tiles are re-rendered on the next read. Layer edits reach this through
 
 **Reading for Darkly:** GIMP's per-node result reuse costs nothing to maintain
 because it is a property of the graph topology, not of a remembered index. That
-is the standard this plan's invalidation model is held to in §3.2 — the
+is the standard this plan's invalidation model is held to in §3.2: the
 compositor must not carry a hand-updated "lowest dirty child".
 
 ## 3. Design
@@ -649,7 +649,7 @@ after clearing and composing `c_0 … c_k` under the current walk.
 > of `c_i` is unchanged, and the composite epoch and target generation are
 > unchanged.
 
-A child stamp is a plain-equality value (no hashing — see §3.4):
+A child stamp is a plain-equality value (no hashing: see §3.4):
 
 ```
 struct ChildStamp {
@@ -660,12 +660,12 @@ struct ChildStamp {
 ```
 
 `revision` is folded over the child's subtree: the node itself, its `filters()`
-list (masks — a mask is not in `children_of`, so it must be folded explicitly),
+list (masks; a mask is not in `children_of`, so it must be folded explicitly),
 and recursively every descendant's node and filters.
 
 The composite epoch is the piece that makes this safe by default. §3.2.
 
-### 3.2 Where invalidation lives — the ownership answer
+### 3.2 Where invalidation lives: the ownership answer
 
 The rejected shape is a per-group "lowest dirty child index" that every mutation
 must remember to update. The shape adopted here is a **three-level dirty
@@ -684,7 +684,7 @@ global `mark_dirty()` invalidates every prefix cache in the compositor, exactly
 as it invalidates everything today.** Opacity, blend mode, visibility, reorder,
 add/remove, mask add/remove/edit, effect params, isolation
 (`Compositor::set_isolated_node`, `:2155-2158`, calls `mark_dirty`), undo/redo
-(`engine/rendering.rs:973`), load, canvas transform — all unchanged and all safe
+(`engine/rendering.rs:973`), load, canvas transform: all unchanged and all safe
 without anyone auditing them.
 
 This is what makes correctness structural rather than remembered: **you cannot
@@ -694,10 +694,10 @@ existing one.** Narrowing is a reviewable, testable, per-site act.
 Exactly three places set `needs_composite` without `mark_dirty()`, and all three
 are accounted for:
 
-1. `Compositor::new` (`:1289`) — no cache exists yet.
-2. `set_canvas_rect` (`:2112`) — replaces every `GroupState` wholesale
+1. `Compositor::new` (`:1289`): no cache exists yet.
+2. `set_canvas_rect` (`:2112`): replaces every `GroupState` wholesale
    (`:2078-2083`), so prefix textures and stamps are destroyed with them.
-3. `update_animations` (`:3427`) — handled by the effect revision bump below.
+3. `update_animations` (`:3427`): handled by the effect revision bump below.
 
 The narrowings in scope (each one a line, each one covered by a §7.2 test):
 
@@ -706,12 +706,12 @@ The narrowings in scope (each one a line, each one covered by a §7.2 test):
   carries the id, and `mark_node_pixels_dirty`'s own write-site invariant
   ("if your signature carries a LayerId, you mark it", `:2215-2231`) says this
   site should have been narrow all along. The `active_stroke_layer` is the node
-  actually written — mask editing sets it to the mask id — so the id is exact.
+  actually written (mask editing sets it to the mask id) so the id is exact.
 - `tick_animated_effects` (`:3241-3246`): bump `node_revisions[id]` beside
   `update_time`. This is what makes symptom A's tick a *narrow* change instead
   of a global one.
 - `encode_dirty_layer_content` (`:3280`): a void that actually re-encoded bumps
-  its own revision. This incidentally fixes the cost the audit records at §4 —
+  its own revision. This incidentally fixes the cost the audit records at §4:
   an unfrozen camera void with no fresh upload currently recomposites the whole
   tree every canvas tick.
 - `realize_dirty_vector_layers` (`:3048`): same, for vector scenes.
@@ -721,12 +721,12 @@ The narrowings in scope (each one a line, each one covered by a §7.2 test):
   will be rebuilt against new views (`:4723-4728`); reuse must stop.
 
 **Ownership check.** The composite epoch and the per-node revision map are
-compositor state — derived, non-serializable, rebuildable. The prefix texture,
+compositor state: derived, non-serializable, rebuildable. The prefix texture,
 stamps and split index live in `GroupState`, which the compositor already owns
 and already destroys on canvas resize. Nothing flows upward: the document is
 never consulted for a dirty bit, only for structure and properties, and the
-compositor never writes to it. The one datum that is genuinely document-side —
-"has this layer's content changed?" — is answered by the same call sites that
+compositor never writes to it. The one datum that is genuinely document-side:
+"has this layer's content changed?": is answered by the same call sites that
 already answer "does the canvas need recompositing?", which is the existing
 contract, not a new one.
 
@@ -736,7 +736,7 @@ the document?** Considered and rejected in §6.
 ### 3.3 The algorithm
 
 Split points are child boundaries of the group that owns the accumulator. A
-nested group — passthrough or not — is **atomic** for splitting; its stamp folds
+nested group (passthrough or not) is **atomic** for splitting; its stamp folds
 its whole subtree. This is what sidesteps the passthrough-inlining problem in
 §1.2 without a flattened cursor, and it costs nothing: a group nested inside `G`
 gets its own prefix cache when `compose_group` recurses into it (`:5464`), so an
@@ -793,7 +793,7 @@ Notes on why this shape:
   `current_accum` a different number of times, and the plan must not have an
   opinion about how many.
 - **`current_accum` is restorable by construction.** The restore always lands in
-  slot 0 and sets `current_accum = 0` — the same state `compose_group` leaves
+  slot 0 and sets `current_accum = 0`: the same state `compose_group` leaves
   after its clear today (`:4234`). Nothing downstream can tell the difference.
 - **The restore is not an extra pass.** It replaces the full-canvas clear render
   pass (`:4236-4248`) with a full-canvas copy. Marginal cost over today is one
@@ -801,7 +801,7 @@ Notes on why this shape:
 - **Steady state costs one copy and zero snapshots.** With one thing changing
   repeatedly, `first_diff` is constant, so `split` is constant, so `split == p.through`
   and the snapshot branch does not re-fire. (An implementation detail: skip the
-  snapshot when `split == p.through` and we resumed — the prefix texture is
+  snapshot when `split == p.through` and we resumed; the prefix texture is
   already correct.)
 - **Convergence takes two composites.** The first composite after a change has
   no prior stamps to diff, so it snapshots nothing; the second knows `first_diff`
@@ -811,7 +811,7 @@ Notes on why this shape:
   premultiplication question, and it is the idiom already used for
   `composite_cache` (`:4266`) and `snapshot_parent_accum` (`:5289`).
 
-**VRAM.** One extra canvas-sized `Rgba8Unorm` per group that actually snapshots —
+**VRAM.** One extra canvas-sized `Rgba8Unorm` per group that actually snapshots:
 16 MB at 2048², 64 MB at 4096². Allocate **lazily**, only on the first snapshot,
 so a static document pays nothing. Eviction is an open question (§9).
 
@@ -835,7 +835,7 @@ per child; a 200-layer document stores under 5 KB and compares it with a slice
 the cache consistent across an interleaved authoritative pass rather than
 merely correct during it.
 
-Callers that must pass `Authoritative` — every path whose pixels are persisted
+Callers that must pass `Authoritative`: every path whose pixels are persisted
 or become document content:
 
 | path | site |
@@ -845,7 +845,7 @@ or become document content:
 | Process recording (embedded in the `.darkly` file) | `engine/process_recording.rs:275`, `:328` |
 | Sample-merged clone source (becomes painted pixels) | `engine/painting.rs:985`, `:1039-1040` |
 | Flatten / Merge Down | `bake_subtree_to_layer` `:3801`, whose `compose_children` at `:3869` recurses into nested groups' `compose_group` |
-| Test canvas readback | `engine/mod.rs:1108` — plus a separate `Interactive` accessor for the reuse tests (§7.1) |
+| Test canvas readback | `engine/mod.rs:1108`: plus a separate `Interactive` accessor for the reuse tests (§7.1) |
 
 `Interactive`: `Compositor::render` → `render_offscreen` (`:5618`), and picker
 previews (`engine/preview.rs:262`, transient display).
@@ -870,7 +870,7 @@ trailing `mark_dirty()` at `:3905` would also cover it; not relying on ordering.
 ### 3.6 Deleting `scissor` pays for the new parameter
 
 `scissor: (u32, u32, u32, u32)` is threaded through eight compose functions and
-stored on `CompositionContext` (`:332`). Both call sites pass the full canvas —
+stored on `CompositionContext` (`:332`). Both call sites pass the full canvas:
 `(0, 0, canvas_width, canvas_height)` at `:3835` (bake) and `:3920`
 (`render_offscreen`). It is derivable from `self` at every point of use. It was
 shaped for dirty-rect compositing, which this plan does not build (§8), and the
@@ -880,7 +880,7 @@ implement the region-level caching they were built for."
 Deleting `scissor` and adding `CompositeMode` is net-zero threading and a net
 line reduction, and it removes the second piece of dead optimization scaffolding
 alongside `cache_valid_through`. If a reviewer prefers to keep `scissor` against
-future dirty-rect work, the plan still stands — it just costs ~50 more lines.
+future dirty-rect work, the plan still stands: it just costs ~50 more lines.
 Recommend deleting: the parameter is a false promise today, and re-adding it
 with a real consumer is cheaper than maintaining an unused one.
 
@@ -893,7 +893,7 @@ effect is skipped inside a resumed prefix, `histogram.needs(id)` never clears an
 and `histogram.needs(t)`, force a full walk for the group containing `t`. One
 predicate, stated as a dependency rather than discovered as a hang.
 
-### 3.8 Generality — it comes free
+### 3.8 Generality: it comes free
 
 The mechanism keys on "the lowest child whose subtree changed", not on effects.
 Three cases fall out of one implementation:
@@ -912,18 +912,18 @@ Three cases fall out of one implementation:
 - **Unchanged sub-groups** get a fourth win for free: a non-passthrough group
   child whose subtree is unchanged and which sits *above* the split still gets
   blended from its `composite_cache`, but `compose_group` on it returns
-  immediately with `first_diff == None` and `start == len` — no children walked.
+  immediately with `first_diff == None` and `start == len`, no children walked.
   This is Krita's `N_BELOW_FILTHY` "nothing to do" (`kis_async_merger.cpp:241-244`)
   reached from the other direction.
 
 ## 4. Architectural impact
 
-- `crates/darkly/src/gpu/compositor.rs` — all structural change. `GroupState`
+- `crates/darkly/src/gpu/compositor.rs`: all structural change. `GroupState`
   loses `cache_valid_through` and gains a lazily-allocated `PrefixCache`;
   `Compositor` gains `composite_epoch`, `node_revisions`, and a
   `composite_encodes` telemetry counter; `compose_group` gains the resume/split
   logic; `mark_dirty` / `mark_node_pixels_dirty` gain a sibling.
-- `crates/darkly/src/engine/` — six call sites choose a `CompositeMode`, one
+- `crates/darkly/src/engine/`: six call sites choose a `CompositeMode`, one
   paint site narrows its mark, and two test accessors are added.
 - **No document change.** No new field survives save/load; the document is
   consulted, never written.
@@ -934,14 +934,14 @@ Three cases fall out of one implementation:
   would have widened `Effect::create_cache`'s `ping_pong_views: &[TextureView; 2]`
   (`gpu/effect.rs:293`) and `Reduced::downscale_bgs: [BindGroup; 2]`
   (`gpu/effect_scaling.rs:94`) to three, rippling through all seven effect
-  implementations. Rejected — see §6.
+  implementations. Rejected: see §6.
 - **No WASM or frontend change.**
 
 ## 5. Implementation steps
 
 Two PRs. PR A is behaviour-preserving groundwork and can land and bake alone.
 
-### PR A — dirty-marking hierarchy and walk plumbing (~120 net lines)
+### PR A, dirty-marking hierarchy and walk plumbing (~120 net lines)
 
 1. Add `composite_epoch: u64` and bump it in `mark_dirty()`.
 2. Add `node_revisions: HashMap<LayerId, u64>` and
@@ -963,14 +963,14 @@ Two PRs. PR A is behaviour-preserving groundwork and can land and bake alone.
     `compose_children` (`:4338`), with a `#[cfg(any(test, feature = "testing"))]`
     accessor modelled exactly on `effect_rebuilds` (`:3554-3559`) and
     `DarklyEngine::test_effect_rebuilds` (`engine/mod.rs:1167-1171`).
-11. Add `DarklyEngine::test_readback_canvas_from_scratch()` — drops all prefix
+11. Add `DarklyEngine::test_readback_canvas_from_scratch()`: drops all prefix
     caches, bumps the epoch, composites `Authoritative`, reads back.
 
 After PR A the counter reports "every child, every dirty frame" and the §7.2
 equality battery passes trivially. That is the baseline the §7.1 tests are
 written against.
 
-### PR B — the cache (~220 net lines)
+### PR B: the cache (~220 net lines)
 
 12. `ChildStamp` + `PrefixCache { texture, view, through, stamps, epoch, target_generation }`
     on `GroupState`, lazily allocated, sized from `padded_width/height`.
@@ -985,8 +985,8 @@ written against.
 animating.** This is the largest single lever on the reported 10× (§1.3) and it
 is ~5 lines. Rejected as the *answer*: it changes what the user sees, and
 `gpu/effect_scaling.rs:10-14` is explicit that canvas output is document content.
-A variant — run canvas effects reduced during interaction and full on
-`Authoritative` composites — is genuinely interesting and is recorded in §8 as a
+A variant (run canvas effects reduced during interaction and full on
+`Authoritative` composites) is genuinely interesting and is recorded in §8 as a
 separate plan, because it is a product decision about output quality, not a
 caching fix, and it does nothing for symptom B.
 
@@ -997,7 +997,7 @@ accumulator state for it to point at. The field is deleted.
 **A per-group "lowest dirty child index" updated by every mutation.** Rejected
 explicitly. It is the hand-maintained coupling CLAUDE.md refuses, and it inverts
 the failure mode: a forgotten call site produces silent wrong pixels. The epoch
-inverts it back — a forgotten call site produces a full recomposite.
+inverts it back: a forgotten call site produces a full recomposite.
 
 **A per-node content hash of the document (`Hash` derived on `Layer` /
 `BlendProps`, folded into the stamp).** Attractive because adding a document
@@ -1016,11 +1016,11 @@ disappear. Rejected because `Effect::create_cache` takes
 `ping_pong_views: &[wgpu::TextureView; 2]` (`gpu/effect.rs:293`) and
 `ScaledEffect`/`Reduced` are built on the same 2-array
 (`gpu/effect_scaling.rs:94, 112, 212`), so the change ripples through all seven
-files in `gpu/effects/` — a modular-boundary violation for a saving of roughly
+files in `gpu/effects/`: a modular-boundary violation for a saving of roughly
 one full-canvas copy per group per composite. Revisit if profiling shows the
 copy matters.
 
-**Dirty-rect compositing (Krita's actual answer, §2.1).** Not rejected —
+**Dirty-rect compositing (Krita's actual answer, §2.1).** Not rejected:
 deferred (§8). It is strictly better than prefix reuse for symptom B and does
 nothing for symptom A, and it is a larger change (every effect needs a
 `needRect` equivalent, per `kis_base_rects_walker.h:400-424`).
@@ -1035,30 +1035,30 @@ group below is unchanged". The group-level split subsumes it.
 `crates/darkly/tests/composite_prefix.rs`, run under
 `--features darkly/testing -- --test-threads=1`. Helpers (`test_engine`,
 `fill_layer`, `settle`, `px`, `effect`) follow `tests/effect_space.rs:18-60`.
-No blocking readback enters production code — `test_readback_canvas` and the new
+No blocking readback enters production code: `test_readback_canvas` and the new
 `test_readback_canvas_from_scratch` are both `#[cfg(any(test, feature = "testing"))]`,
 like every other `test_readback_*` on `DarklyEngine`.
 
 ### 7.1 The reuse actually happens
 
 Modelled on `effect_instances_are_not_rebuilt_every_frame`
-(`tests/effect_space.rs:509-550`) — settle, snapshot the counter, act, assert
+(`tests/effect_space.rs:509-550`): settle, snapshot the counter, act, assert
 the delta.
 
-- `animated_canvas_effect_skips_the_layers_below_it` — four rasters, `grain` at
+- `animated_canvas_effect_skips_the_layers_below_it`: four rasters, `grain` at
   speed 1.0 above them, all canvas-space. Settle; snapshot
   `test_composite_encodes()`; `test_tick_animations` across two
   `canvas_divisor` boundaries; force the composite. Assert the delta equals the
   count of children **at and above** the effect, not the full child count.
   Fails before PR B (delta = full count).
-- `painting_above_an_effect_does_not_re_encode_it` — raster, `invert`, raster on
+- `painting_above_an_effect_does_not_re_encode_it`: raster, `invert`, raster on
   top. Settle; snapshot; paint eight dabs on the top raster, compositing each
   frame. Assert the per-frame delta is 1 (the painted layer only). This is the
   +43.5 ms case. Fails before PR B.
-- `an_unchanged_group_is_not_walked` — a nested non-passthrough group with three
+- `an_unchanged_group_is_not_walked`: a nested non-passthrough group with three
   children below a painted top-level raster; assert the group's children
   contribute zero encodes.
-- `export_does_not_reuse_the_cache` — after a narrow paint mark, assert the
+- `export_does_not_reuse_the_cache`: after a narrow paint mark, assert the
   export path's encode delta equals the full child count, and that the exported
   bytes equal `test_readback_canvas_from_scratch()`.
 
@@ -1096,14 +1096,14 @@ assertion message.
 
 Cheap extra coverage, not a substitute: assert `composite_encodes` deltas for
 the mutation classes that *must* force a full walk (reorder, visibility,
-isolation) — a silent narrowing shows up as a too-small delta before it shows up
+isolation), a silent narrowing shows up as a too-small delta before it shows up
 as wrong pixels.
 
 ### 7.3 Regression framing
 
 This is a performance defect, not a bug fix, so §7.1 is the feature test. §7.2's
 `paint below the split` and `reorder across the split` cases are written first
-and will pass against PR A's from-scratch walk — they are the guard rails that
+and will pass against PR A's from-scratch walk: they are the guard rails that
 must not break, and they are the ones to run against every subsequent narrowing
 in §8.
 
@@ -1118,9 +1118,9 @@ in §8.
   offset this plan's VRAM cost exactly and remove a full-canvas copy per group
   per composite.
 - **Narrowing `poll_pending`'s global `mark_dirty`** (`engine/rendering.rs:667`,
-  audit §3.3). Not required — during a stroke, `drain_dirty_pixels` is empty
+  audit §3.3). Not required (during a stroke, `drain_dirty_pixels` is empty
   until `end_stroke`, so no thumbnail readback is in flight and `poll_pending`
-  returns false — but §7.1's counter test will expose it immediately if that
+  returns false) but §7.1's counter test will expose it immediately if that
   analysis is wrong on some path.
 - **Narrowing `update_filter_params`** to `mark_node_content_dirty`, and wiring
   the already-unwired `mark_effect_dirty` (`:3582`, zero callers today, audit
@@ -1136,11 +1136,11 @@ in §8.
    `render_offscreen` and `render` (`:3908`, `:5603`) can attribute the canvas
    tick between walk, effect encode, `composite_cache` copy, and present.
    If the walk is under ~15 % of the tick, PR B's justification rests entirely
-   on symptom B — which is a good justification, but the plan should say so out
+   on symptom B, which is a good justification, but the plan should say so out
    loud rather than claim a 10× fix.
 2. **Prefix VRAM.** +1 canvas-sized texture per snapshotting group. Lazy
    allocation covers static documents; a document with many groups all being
-   edited does not benefit. No eviction policy in v1 — **open question**: drop a
+   edited does not benefit. No eviction policy in v1: **open question**: drop a
    group's prefix after N composites without a hit, or cap total prefix bytes?
    Deferring this is only safe because the textures are freed with `GroupState`
    on canvas resize.
@@ -1152,7 +1152,7 @@ in §8.
    in the presence of an animated veil. Worth stating in the plan so it is not
    discovered as a "regression".
 5. **`subtree_revision` cost.** O(subtree) per child per composite, i.e. O(n) per
-   group and O(n·depth) overall — CPU only, on a codebase that already clones a
+   group and O(n·depth) overall: CPU only, on a codebase that already clones a
    `String` + `Vec<ParamValue>` per filter layer per frame (audit §6). Memoize
    per composite if a large document shows it; not expected.
 6. **Interaction with the divider-as-a-node redesign**
@@ -1161,7 +1161,7 @@ in §8.
    Independent.
 7. **`bake_subtree_to_layer`'s sentinel `GroupState`** (`LayerId::from_ffi(0)`,
    `:3821`) has a child list that is not `doc.children_of`. Under
-   `Authoritative` it never touches prefix state, so this is inert — but it is
+   `Authoritative` it never touches prefix state, so this is inert, but it is
    the kind of thing a later "let's allow reuse in bake too" change would break
    silently. Worth an assertion.
 8. **Test-file helper duplication.** `test_engine` / `fill_layer` / `settle` are
@@ -1176,8 +1176,8 @@ Lines added / removed, not touched.
 
 | area | added | removed |
 |---|---|---|
-| `gpu/compositor.rs` — PR A (epoch, revisions, marks, `CompositeMode`, `scissor` deletion, `cache_valid_through` deletion, counter) | ~130 | ~85 |
-| `gpu/compositor.rs` — PR B (`ChildStamp`, `PrefixCache`, `compose_group` restructure, `subtree_revision`, histogram guard) | ~210 | ~20 |
+| `gpu/compositor.rs`: PR A (epoch, revisions, marks, `CompositeMode`, `scissor` deletion, `cache_valid_through` deletion, counter) | ~130 | ~85 |
+| `gpu/compositor.rs`: PR B (`ChildStamp`, `PrefixCache`, `compose_group` restructure, `subtree_revision`, histogram guard) | ~210 | ~20 |
 | `engine/` (six `CompositeMode` sites, one narrowed paint mark, two test accessors) | ~45 | ~10 |
 | **production total** | **~385** | **~115** |
 | `tests/composite_prefix.rs` (new) | ~440 | 0 |
@@ -1190,7 +1190,7 @@ Lines added / removed, not touched.
 **This is a large change.** ~385 added / ~115 removed of production code in the
 single most intricate file in the crate, touching the compose walk, the dirty
 protocol, and six persistence call sites. The honest split is that PR A is
-~175/~95 and mostly deletion and renaming — low risk, independently valuable
+~175/~95 and mostly deletion and renaming (low risk, independently valuable
 (it removes both dead optimization scaffolds and fixes a write-site-invariant
-violation in the paint path) — and PR B is ~210/~20 of genuinely new machinery
+violation in the paint path)) and PR B is ~210/~20 of genuinely new machinery
 whose payoff should be measured before it is written (§9.1).

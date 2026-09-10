@@ -12,9 +12,9 @@ use std::collections::HashMap;
 /// Realization input for a vector-object layer: the `vello::Scene` the engine
 /// built from the document's objects, plus a "needs re-rasterize" flag. Held in
 /// a separate map (not `LayerContent`) because vector layers reuse the raster
-/// blend path verbatim — only their texture source differs. `dirty` flips when
+/// blend path verbatim: only their texture source differs. `dirty` flips when
 /// the engine pushes a new scene (object/style/transform change) and clears
-/// after [`Compositor::realize_dirty_vector_layers`] rasterizes it — never on
+/// after [`Compositor::realize_dirty_vector_layers`] rasterizes it: never on
 /// view zoom/pan (raster-first).
 pub(super) struct VectorContent {
     scene: vello::Scene,
@@ -41,7 +41,7 @@ impl Compositor {
     /// a canvas-sized `Rgba8Unorm` + `STORAGE_BINDING` texture (Vello renders
     /// into it as a storage image) and a `LayerCache` with blend uniforms.
     ///
-    /// Unlike a void, a vector layer carries no procedural sidecar — its
+    /// Unlike a void, a vector layer carries no procedural sidecar: its
     /// `LayerContent` is `Raster` so the void animation/dirty machinery skips
     /// it. The realization is driven separately: the engine builds a
     /// `vello::Scene` from the document objects and pushes it via
@@ -73,7 +73,7 @@ impl Compositor {
     /// Replace the realized `vello::Scene` for a vector layer and mark it dirty
     /// so the next composite re-rasterizes. The engine builds the scene from
     /// the document's authoritative objects (text shaped by parley, paths from
-    /// kurbo) — the compositor stays ignorant of fonts and geometry. No-op if
+    /// kurbo): the compositor stays ignorant of fonts and geometry. No-op if
     /// the layer wasn't ensured.
     pub fn set_vector_scene(&mut self, layer_id: LayerId, scene: vello::Scene) {
         if let Some(vc) = self.vector.scenes.get_mut(&layer_id) {
@@ -86,7 +86,7 @@ impl Compositor {
     /// Compile the vector renderer's pipelines now (if not already), so the first
     /// vector layer doesn't stall on the shader-compile cost. Building it compiles
     /// Vello's full compute-pipeline set (a >1s one-time cost). Called when the
-    /// text tool is selected — the compile then overlaps the gap before the user
+    /// text tool is selected: the compile then overlaps the gap before the user
     /// commits a text box, rather than blocking the frame that would show it.
     /// Idempotent: a no-op once the renderer exists.
     pub fn ensure_vector_renderer(&mut self, device: &wgpu::Device) {

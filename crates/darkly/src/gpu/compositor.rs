@@ -102,7 +102,7 @@ fn create_ortho_scratch(
 /// One node's entry in the per-node texture pool: its GPU texture plus, for
 /// R8 mask nodes, the "use my texture as a mask" bind group derived 1:1 from
 /// it. Bundling the bind group with the texture it samples makes "evict the
-/// texture but not its bind group" unrepresentable — one `remove`, one swap,
+/// texture but not its bind group" unrepresentable: one `remove`, one swap,
 /// one slot.
 pub(super) struct NodeSlot {
     pub(super) texture: LayerTexture,
@@ -254,7 +254,7 @@ pub(super) struct GroupState {
     pub(super) accum: AccumPair,
     /// Tracks which accumulator is the current "source" (last written).
     /// Between composites this names the half holding the group's finished
-    /// output — see [`GroupState::output_view`].
+    /// output: see [`GroupState::output_view`].
     pub(super) current_accum: usize,
     /// Uniform buffer holding opacity, blend_mode, isolated for blending
     /// this group's result into its parent.
@@ -271,7 +271,7 @@ impl GroupState {
     /// consumers select a resource by this index rather than reading one
     /// fixed view: the walk flips halves an unpredictable number of times,
     /// so "the output" is an index, not a texture. Valid from the end of the
-    /// group's `compose_group` until the next one — nothing outside
+    /// group's `compose_group` until the next one, nothing outside
     /// `compose_group` writes an accumulator.
     pub(super) fn output_index(&self) -> usize {
         self.current_accum
@@ -296,14 +296,14 @@ impl GroupState {
 pub(super) struct LayerCache {
     /// Uniform buffer holding opacity + blend_mode + isolated + geometry.
     pub(super) uniform_buf: wgpu::Buffer,
-    /// CPU shadow of `uniform_buf`'s last written contents — the GPU buffer
+    /// CPU shadow of `uniform_buf`'s last written contents: the GPU buffer
     /// is write-only, so readers (the floating-preview mirror, projection
     /// sync, the extent refresh on texture swap) consult this instead of
     /// reading the buffer back. Invariant: every `queue.write_buffer` to
     /// `uniform_buf` writes the same value here.
     ///
     /// The blend mode is stored as the registry-resolved gpu_value: the
-    /// compositor never branches on which mode it is — the shader does — so
+    /// compositor never branches on which mode it is (the shader does) so
     /// the raw shader integer is mirrored rather than a registration pointer.
     pub(super) last_uniforms: BlendUniforms,
     /// Where this layer's pixels come from. Raster pixels arrive via paint;
@@ -328,7 +328,7 @@ impl LayerKindGpu for Layer {
         match self {
             Layer::Raster(r) => r.realize_in(compositor, device, queue),
             Layer::Void(v) => v.realize_in(compositor, device, queue),
-            // Effect layers hold no per-instance GPU resource here — their
+            // Effect layers hold no per-instance GPU resource here: their
             // instances are realized by `sync_effect_instances`. They are
             // excluded from the content walk (`Layer::is_blend_content`), so
             // this is never reached, but the arm keeps the match total.
@@ -382,7 +382,7 @@ pub(super) struct BlendUniforms {
 
 impl BlendUniforms {
     /// Blend uniforms describing a texture that occupies `extent` in canvas
-    /// space — the one constructor behind every uniform-buffer write, so the
+    /// space: the one constructor behind every uniform-buffer write, so the
     /// offset/size packing lives in exactly one place.
     pub(super) fn for_extent(
         opacity: f32,
@@ -422,7 +422,7 @@ pub(super) struct CanvasUniform {
 /// Carries the canvas-window + mask geometry inline so the pass samples the
 /// host's mask in its own plane space (matching `apply_mask`) without the
 /// pipeline needing the shared canvas bind group, plus the modulation an effect
-/// layer contributes — its blend mode and opacity. A masked passthrough group
+/// layer contributes: its blend mode and opacity. A masked passthrough group
 /// leaves those at Normal and 1.0, which is exactly the lerp this pass used to
 /// be.
 #[repr(C)]
@@ -438,13 +438,13 @@ pub(super) struct ApplyUniforms {
     pub(super) _pad0: u32,
 }
 
-/// GPU state for a masked passthrough group — the one in-place host that still
+/// GPU state for a masked passthrough group: the one in-place host that still
 /// needs a snapshot. Its "after" is produced by an arbitrary number of child
 /// passes writing straight into the parent accumulator, so unlike an effect
 /// layer it cannot be redirected into a scratch and must be captured before the
 /// children run.
 pub(super) struct MaskSnapshotState {
-    /// Snapshot of the parent accumulator before the children are inlined —
+    /// Snapshot of the parent accumulator before the children are inlined:
     /// the "before" of the apply pass.
     pub(super) snapshot: wgpu::Texture,
     pub(super) snapshot_view: wgpu::TextureView,
@@ -477,7 +477,7 @@ impl StagedNodeTexture {
 /// # Per-node map lifecycle invariant
 ///
 /// Several fields are `HashMap<LayerId, _>` keyed by document node id. Each
-/// follows exactly one of three lifecycle disciplines — a new per-node map
+/// follows exactly one of three lifecycle disciplines: a new per-node map
 /// must pick one and say which:
 ///
 /// - **Disposed in [`Self::dispose_node_texture`]** when the node is
@@ -493,7 +493,7 @@ impl StagedNodeTexture {
 ///   `group_state` is recreated wholesale on canvas resize and the bake's
 ///   transient entry removes itself before returning.
 /// - **Evicted wherever the texture it references is replaced or
-///   destroyed**: `blend_bind_groups` — the swap/dispose retains and the
+///   destroyed**: `blend_bind_groups`, the swap/dispose retains and the
 ///   canvas-resize clear. A cached bind group must never outlive a view it
 ///   names.
 pub struct Compositor {
@@ -505,12 +505,12 @@ pub struct Compositor {
     /// Implicit root group id. Mirrored from the document at construction
     /// time so the compositor can address its own root's `GroupState` /
     /// composite cache without re-deriving it on every call. Stays valid for
-    /// the compositor's lifetime — root id is fixed once allocated.
+    /// the compositor's lifetime: root id is fixed once allocated.
     pub(super) root_id: LayerId,
 
     /// One pool of per-node GPU slots, keyed by node id. Holds raster
     /// layer textures (Rgba8Unorm), mask filter textures (R8Unorm), and
-    /// any future pixel-bearing filter kinds — `LayerTexture.format`
+    /// any future pixel-bearing filter kinds: `LayerTexture.format`
     /// distinguishes them. A mask node's slot also carries the bind group
     /// derived from its texture ([`NodeSlot::mask_bg`]). One lookup per
     /// access, no fan-out.
@@ -570,7 +570,7 @@ pub struct Compositor {
     /// Written only by [`Self::set_canvas_rect`].
     pub(super) canvas_uniform_buf: wgpu::Buffer,
     /// Bind group wrapping `canvas_uniform_buf` for the blend pipeline's group 2.
-    /// Stable across frames — only the buffer *contents* change on resize.
+    /// Stable across frames: only the buffer *contents* change on resize.
     pub(super) canvas_bind_group: wgpu::BindGroup,
 
     pub(super) sampler: wgpu::Sampler,
@@ -623,13 +623,13 @@ pub struct Compositor {
     /// like `void_registry`'s.
     pub(super) effect_registry: crate::gpu::effect::EffectRegistry,
 
-    /// Per-effect-layer realized state — the instance, its cache, and the facts
+    /// Per-effect-layer realized state: the instance, its cache, and the facts
     /// it was built against. Rebuilt by `sync_effect_instances` in the
     /// pre-compose phase whenever any of those facts drift; compose then merely
     /// encodes. Entries for removed effect layers are pruned there too.
     pub(super) effect_instances: HashMap<LayerId, EffectInstance>,
 
-    /// How many times an effect instance has been built from scratch —
+    /// How many times an effect instance has been built from scratch:
     /// pipeline lookup, `ScaledEffect::prepare`, fresh bind groups. Steady
     /// state is one per effect layer for the life of the document; anything
     /// that grows with the frame count means an instance is being rebuilt
@@ -774,7 +774,7 @@ impl Compositor {
         }
     }
 
-    /// Build the present bind groups that sample the root group's output —
+    /// Build the present bind groups that sample the root group's output:
     /// one per accumulator half, selected at draw time by the root's
     /// [`GroupState::output_index`].
     ///
@@ -1149,7 +1149,7 @@ impl Compositor {
             cached_view_transform: identity,
             viewport_bg: DEFAULT_WORKSPACE_BG,
             // Auto until the engine pushes the persisted preference via
-            // `set_pixel_filter` — config is session/host state the
+            // `set_pixel_filter`: config is session/host state the
             // compositor never reads itself.
             pixel_filter: 2.0,
             frame_count: 0,
@@ -1161,7 +1161,7 @@ impl Compositor {
             },
         };
         // Nothing has been composited yet, and the frame gate deliberately
-        // ignores the target bumps construction performs — without this the
+        // ignores the target bumps construction performs: without this the
         // first frame would compare clean and present a blank canvas.
         compositor.revisions.bump_document();
         compositor
@@ -1201,7 +1201,7 @@ impl Compositor {
 
         let layer_tex = LayerTexture::with_bounds(device, bounds);
         self.insert_content_layer(device, queue, layer_id, layer_tex, LayerContent::Raster);
-        // A freshly-allocated layer still needs a thumbnail slot — without
+        // A freshly-allocated layer still needs a thumbnail slot: without
         // this, an empty new layer renders as "no thumbnail" in the panel
         // until the artist paints. Part of the "any write/alloc to a node
         // texture marks it dirty" invariant; see `mark_node_pixels_dirty`.
@@ -1212,8 +1212,8 @@ impl Compositor {
     /// vector): build default blend uniforms for the texture's extent, create
     /// and write the uniform buffer, and insert the node-texture and
     /// layer-cache entries. Guards and dirty-marking stay with the per-kind
-    /// entry points — raster marks node pixels (thumbnail invariant),
-    /// void/vector mark the document — as do per-kind extras (procedural
+    /// entry points (raster marks node pixels (thumbnail invariant),
+    /// void/vector mark the document) as do per-kind extras (procedural
     /// sidecar, vector scene).
     pub(super) fn insert_content_layer(
         &mut self,
@@ -1392,7 +1392,7 @@ impl Compositor {
 
         // A content layer's blend uniform bakes in the texture's canvas extent
         // (`layer_offset` / `layer_size`). The extent may have just changed, so
-        // refresh it, keeping the shadowed blend props — otherwise the
+        // refresh it, keeping the shadowed blend props: otherwise the
         // composite samples the new texture through stale geometry (the
         // post-resize squash `BlendUniforms` is designed to make
         // unrepresentable). Masks have no layer_cache entry and are unaffected.
@@ -1546,14 +1546,14 @@ impl Compositor {
         }
     }
 
-    /// Run an effect over a node's `region` in place — the destructive
+    /// Run an effect over a node's `region` in place: the destructive
     /// counterpart of [`flip_node_region`](Self::flip_node_region), riding the
     /// same copy-out → pass → copy-back plumbing (`run_filter_region`).
     ///
     /// Where `mask_view` (a region-sized R8 selection crop) is selected the
     /// texel takes the transformed value, elsewhere the original passes
     /// through; `None` transforms the whole region. That confinement is the
-    /// shared in-place apply pass, exactly as on the layer path — which is why
+    /// shared in-place apply pass, exactly as on the layer path, which is why
     /// the effect itself never learns a mask exists, and why every effect is
     /// maskable without declaring anything.
     ///
@@ -1844,7 +1844,7 @@ impl Compositor {
         self.projection_states.clear();
         self.blend_bind_groups.clear();
 
-        // Present samples the root accumulators — rebind to the fresh views.
+        // Present samples the root accumulators: rebind to the fresh views.
         self.present_cache_bind_groups = Self::make_present_cache_bind_groups(
             device,
             &self._present_bind_group_layout,
@@ -1915,7 +1915,7 @@ impl Compositor {
         self.revisions.bump_document();
     }
 
-    /// Mark that a node's pixels changed — a bump of that node's own
+    /// Mark that a node's pixels changed: a bump of that node's own
     /// revision, which every consumer of its pixels (thumbnails, content
     /// bounds, histograms, the composite) compares against on read.
     ///
@@ -1947,7 +1947,7 @@ impl Compositor {
         &self.revisions
     }
 
-    /// Mark that something downstream of the composite changed — the view
+    /// Mark that something downstream of the composite changed: the view
     /// transform, the overlay, a screen-space effect's inputs. The composite
     /// itself stays valid, so only the present is owed.
     pub fn mark_needs_present(&mut self) {
@@ -1958,7 +1958,7 @@ impl Compositor {
     ///
     /// Nothing clears this: `finish_present` advances `presented` to the tick
     /// the frame was built from, and a dropped acquire (`Lost`/`Outdated`)
-    /// returns before that — so a frame that never reached the surface stays
+    /// returns before that, so a frame that never reached the surface stays
     /// owed without anyone having to remember to re-set a flag.
     pub fn needs_present(&self) -> bool {
         self.revisions.latest_visual() > self.presented
@@ -2463,7 +2463,7 @@ impl Compositor {
         &mut self.void_registry
     }
 
-    /// Read-only access to the effect registry — lets the engine answer
+    /// Read-only access to the effect registry: lets the engine answer
     /// `effect_types()` without exposing a mutable handle.
     pub fn effect_registry(&self) -> &crate::gpu::effect::EffectRegistry {
         &self.effect_registry
@@ -2492,7 +2492,7 @@ impl Compositor {
     }
 
     /// Number of `GroupState`s currently allocated (root plus every
-    /// non-passthrough group). Test-only — the bake-leak regression test
+    /// non-passthrough group). Test-only: the bake-leak regression test
     /// asserts merge/flatten leave no transient state behind.
     pub fn test_group_state_count(&self) -> usize {
         self.group_state.len()
@@ -2599,8 +2599,8 @@ impl Compositor {
     /// The composited output texture: the root group's output accumulator
     /// half. Used by the color picker for readback.
     ///
-    /// Stable between composites — accumulators are written only inside
-    /// `compose_group` — and every consumer copies out of it at request time
+    /// Stable between composites (accumulators are written only inside
+    /// `compose_group`) and every consumer copies out of it at request time
     /// into an immediately submitted encoder, so queue ordering serializes
     /// that copy against any later composite.
     pub fn composited_texture(&self) -> &wgpu::Texture {
@@ -2657,7 +2657,7 @@ impl Compositor {
 
     /// Resize the screen-space run's textures. Replacing them invalidates every
     /// bind group pointing at them, which the `targets` bump is what rebuilds
-    /// — the same source a canvas resize bumps, so neither space needs its own
+    ///: the same source a canvas resize bumps, so neither space needs its own
     /// enumeration of invalidation triggers. The run's output is downstream of
     /// the composite, so a resize owes a present but no recomposite.
     pub fn resize_screen_run(&mut self, width: u32, height: u32) {
@@ -2739,7 +2739,7 @@ impl Compositor {
         // spaces are woken by different dirty flags: a viewport resize replaces
         // the run's textures without touching the canvas, so `render_offscreen`
         // returns early and never reaches the sync. Gated on the run having
-        // members, so a document with no viewport effects — the common case —
+        // members, so a document with no viewport effects (the common case)
         // does not pay for a second walk of every effect layer per frame.
         if !run.is_empty() {
             self.sync_effect_instances(device, queue, doc, isolated);
@@ -2789,7 +2789,7 @@ impl Compositor {
         // Same two-step shape as the canvas arm: the effect writes into the
         // scratch, then the apply pass blends that back over the untouched
         // half carrying the layer's opacity and blend mode. No mask binding is
-        // needed — a masked node cannot be above the divider.
+        // needed: a masked node cannot be above the divider.
         let (vw, vh) = self.screen_run.viewport_size();
         let full = (0, 0, vw, vh);
         let mut src = 0usize;
@@ -2837,7 +2837,7 @@ impl Compositor {
         self.sync_effect_scale();
 
         // Captured before the walk and committed after it. Only `targets` may
-        // move in between — it is excluded from the gate precisely so a frame
+        // move in between: it is excluded from the gate precisely so a frame
         // creating its own group states cannot reschedule itself forever.
         let built_at = self.revisions.clock();
         let composite_input_at_capture = self.revisions.latest_composite_input();
@@ -2872,7 +2872,7 @@ impl Compositor {
         debug_assert_eq!(
             self.revisions.latest_composite_input(),
             composite_input_at_capture,
-            "a composite must not bump its own inputs — only `targets` may move during the walk"
+            "a composite must not bump its own inputs: only `targets` may move during the walk"
         );
         self.composite_built = built_at;
         #[cfg(any(test, feature = "testing"))]
@@ -2910,7 +2910,7 @@ impl Compositor {
     /// Used by the WASM frontend.
     ///
     /// `isolated` is the session isolation target (`engine.isolated_node`),
-    /// passed per frame — see [`Self::render_offscreen`].
+    /// passed per frame: see [`Self::render_offscreen`].
     pub fn render(
         &mut self,
         device: &wgpu::Device,

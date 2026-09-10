@@ -147,7 +147,7 @@ pub struct ManifestCanvas {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRequires {
     /// Effect `type_id`s named by any effect layer in the document, in either
-    /// space. Not the layer *kind* — every effect layer shares one of those.
+    /// space. Not the layer *kind*: every effect layer shares one of those.
     #[serde(default)]
     pub effect: Vec<String>,
     #[serde(default)]

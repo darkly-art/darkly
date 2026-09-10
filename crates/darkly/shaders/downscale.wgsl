@@ -6,9 +6,9 @@
 //
 // Each output pixel takes 4 bilinear taps positioned at the corners of
 // its footprint in the input texture. The footprint size is derived from
-// screen-space derivatives — `dpdx(uv)` is the change in input UV per
+// screen-space derivatives: `dpdx(uv)` is the change in input UV per
 // output pixel in X, i.e. exactly one output pixel's width in input-UV
-// space — so the shader self-adapts to any source/destination ratio
+// space, so the shader self-adapts to any source/destination ratio
 // without needing a uniform.
 
 struct VertexOutput {
@@ -28,7 +28,7 @@ struct VertexOutput {
 @group(0) @binding(1) var t_sampler: sampler;
 
 // Alpha-weighted mean of four texels. Canvas accumulators hold *straight*
-// (non-premultiplied) alpha — composite.wgsl divides its result by `out_a` —
+// (non-premultiplied) alpha (composite.wgsl divides its result by `out_a`)
 // so a fully transparent texel carries RGB 0 and an unweighted average across
 // an alpha edge drags colour toward black: opaque red averaged with empty
 // gives half-alpha *dark* red rather than half-alpha red. Weighting colour by
@@ -47,7 +47,7 @@ fn weighted_mean(s0: vec4f, s1: vec4f, s2: vec4f, s3: vec4f) -> vec4f {
     let footprint = vec2f(abs(dpdx(in.uv.x)), abs(dpdy(in.uv.y)));
 
     // 4 taps at the centers of the 4 quadrants of the output pixel's input
-    // footprint — i.e. ±¼ of the footprint from center along each axis. At
+    // footprint: i.e. ±¼ of the footprint from center along each axis. At
     // exactly 2× downscale that tiles the 2×2 input area; at lighter ratios
     // (1.41× at the default scale) the taps fall closer together and still
     // give a clean box.

@@ -6,7 +6,7 @@
 //! bottom of screen space (reference-side inheritance) or refused with
 //! "Cannot move a layer into itself" (the boundary gap resolving into the
 //! dragged subtree). With the divider as a node, the gesture's encoding is
-//! `Before(divider)` — a target that did not exist under the count design —
+//! `Before(divider)` (a target that did not exist under the count design)
 //! and the count-era encodings are asserted alongside as the failing baselines
 //! they were.
 //!
@@ -43,7 +43,7 @@ fn row_id(row: &serde_json::Value) -> LayerId {
     LayerId::from_ffi(row["id"].as_f64().expect("row carries an id") as u64)
 }
 
-/// Run members, bottom-to-top — the rows above the divider row, reversed.
+/// Run members, bottom-to-top: the rows above the divider row, reversed.
 fn run_ids(engine: &DarklyEngine) -> Vec<LayerId> {
     let tree = tree_json(engine);
     let mut ids: Vec<LayerId> = tree["layers"]
@@ -75,7 +75,7 @@ fn in_run(engine: &DarklyEngine, id: LayerId) -> bool {
 
 /// The user's report, step 2: a veil in a subgroup of a viewport group
 /// ("VHS in Viewport Effects → Group 2"). Dragging Group 2 to just below the
-/// viewport threshold must land it in canvas space — not at the bottom of
+/// viewport threshold must land it in canvas space, not at the bottom of
 /// screen space.
 ///
 /// The gesture's encoding is `Before(divider)`: the divider is a row, so the
@@ -111,7 +111,7 @@ fn dragging_a_nested_group_below_the_threshold_lands_in_canvas_space() {
 
     // The count-era baseline, still expressible: `Before(VE)` is now an
     // ordinary verbatim move that means "directly below VE", which is *above*
-    // the divider — a screen-space statement, honored as one.
+    // the divider, a screen-space statement, honored as one.
     engine
         .move_layers(vec![g2], MoveTarget::Before(ve))
         .expect("a screen-space drop next to VE is legal for an effect group");
@@ -122,7 +122,7 @@ fn dragging_a_nested_group_below_the_threshold_lands_in_canvas_space() {
 }
 
 /// The user's report, step 3: once the group sits at the bottom of screen
-/// space, dragging it below the threshold again must succeed — under the count
+/// space, dragging it below the threshold again must succeed, under the count
 /// design the gesture's only encoding resolved to the group's own descendant
 /// and refused with "Cannot move a layer into itself".
 #[test]
@@ -134,7 +134,7 @@ fn dragging_the_bottom_run_group_below_the_threshold_is_not_self_referential() {
     engine.test_set_screen_space_boundary(1);
     assert_eq!(run_ids(&engine), vec![g2], "the group alone is the run");
 
-    // The count-era encoding is still self-referential — that has not changed
+    // The count-era encoding is still self-referential, that has not changed
     // and never will (a node cannot be its own sibling anchor)…
     let err = engine
         .move_layers(vec![g2], MoveTarget::Before(vhs))

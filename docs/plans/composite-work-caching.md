@@ -5,7 +5,7 @@
 >
 > - **PR 1** as specified. One discovery: `ExternalImageSource` is
 >   uninhabited on native (`gpu/void.rs`), so the camera-upload narrowing
->   cannot be exercised by a native test — its contract is pinned by
+>   cannot be exercised by a native test; its contract is pinned by
 >   `gpu/revisions.rs` unit tests plus
 >   `a_histogram_survives_an_animating_veil` instead (§7.1).
 > - **PR 2** as specified. `GroupState` gained `output_index/​view/​texture`
@@ -15,7 +15,7 @@
 >   implemented as type-owned dispatch rather than a match in the walk:
 >   `LayerNode::compose_ready` / `Layer::compose_ready` (sibling of
 >   `compose_into`) ask each variant whether its arm has the resources to
->   draw, answering `true` whenever unsure — recording a drawing child as
+>   draw, answering `true` whenever unsure, recording a drawing child as
 >   absent would hide a later edit to it, while the reverse only costs a
 >   recomposite. The snapshot/restore live in `compose_group`;
 >   `compose_children` gained one `snapshot_after` parameter rather than a
@@ -233,7 +233,7 @@ analysis; no rethink is warranted.
 
 Every finding addressed in place; none rejected.
 
-- **R1**: adopted the total guard — while a histogram is owed, the composite
+- **R1**: adopted the total guard, while a histogram is owed, the composite
   refuses all reuse (§3.3 interlock); nested-host starvation test added
   (§7.3).
 - **R2**: all three no-op conditions folded into `included`, which now
@@ -254,9 +254,9 @@ Every finding addressed in place; none rejected.
   branch (§6, §7.3), consumer-audit facts recorded (§3.2).
 
 **Post-review reshape (user-directed).** After this review, the user judged
-PR 3's zero-copy parity resume benchmark-fitted — its coverage (topmost
+PR 3's zero-copy parity resume benchmark-fitted (its coverage (topmost
 advancing child only) encloses exactly the measured workloads and nothing
-else — and directed the general shape instead: a per-group prefix texture,
+else) and directed the general shape instead: a per-group prefix texture,
 §3.3 as it now stands. This moots R3's coverage caveat (coverage is now
 "below the first dirty child, anywhere") and R6 entirely (no advance
 counters exist), while R1's total histogram guard, R2/R7's shared inclusion
@@ -287,11 +287,11 @@ commit (`:2714-2718`, `:2749-2753`, including the `debug_assert` at
 `:2744-2748` that only `targets` moves mid-composite), accumulator usages
 (`make_accum_texture`, `gpu/compositor.rs:684-701`: Rgba8Unorm with
 `COPY_SRC | COPY_DST`, so both prefix copies are legal
-`copy_texture_to_texture` via `blit_region`, `gpu/mod.rs:57-67` — and the
+`copy_texture_to_texture` via `blit_region`, `gpu/mod.rs:57-67` (and the
 mask-snapshot precedent at `gpu/compositor.rs:2245` allocates through the
 same helper), the histogram stamp and `needs()`
-(`gpu/histogram.rs:49-51,165-167`), the bake ticks (`gpu/bake.rs:49,124,127`
-— and bake's `targets` bump at `:49` is also what makes nested groups
+(`gpu/histogram.rs:49-51,165-167`), the bake ticks (`gpu/bake.rs:49,124,127`)
+and bake's `targets` bump at `:49` is also what makes nested groups
 full-walk *inside* the bake's sentinel walk, so the bake can never consume a
 live-walk prefix), `ensure_group_state`'s creation bump
 (`gpu/compositor.rs:1717`), `sync_effect_scale`'s drift bump
@@ -300,9 +300,9 @@ live-walk prefix), `ensure_group_state`'s creation bump
 (`engine/rendering.rs:950,991`), and `set_isolated_node`'s `mark_dirty`
 (`engine/layers.rs:1584-1585`).
 
-The prefix mechanism was attacked arm by arm. The snapshot invariant — after
+The prefix mechanism was attacked arm by arm. The snapshot invariant (after
 any child's `compose_into` returns, `accum[current_accum]` holds the complete
-composite of `children[0..=that child]` — holds for every advancing arm: the
+composite of `children[0..=that child]`) holds for every advancing arm: the
 unmasked leaf blend (`gpu/compose_walk.rs:831-892`, full-coverage triangle
 into `dst`), the effect arm (`:934-997`, apply writes `dst`), the isolated
 child group (`:1185-1233`, blend into parent `dst`), the masked leaf
@@ -321,8 +321,8 @@ re-fires no copies) and the alternating-depth steady state (d flips between
 the two depths, `d == last_d` never holds, the prefix stays pinned below the
 lower depth). Index-vs-identity for `prefix.through` is doubly safe:
 structural mutations bump `document` (invalidating the cache), and the
-resume precondition — fresh stamps equal cached stamps through `d-1`,
-*including ids* — independently guarantees the prefix content corresponds to
+resume precondition (fresh stamps equal cached stamps through `d-1`,
+*including ids*) independently guarantees the prefix content corresponds to
 the same children in the same order. One finding survived the attack, and it
 is a real staleness hole:
 
@@ -330,23 +330,23 @@ is a real staleness hole:
 
 **S1 (must fix, PR 3 spec): a stale prefix survives an invalid full walk
 whose stamps did not move.** Any `document` or `targets` bump that moves no
-per-child stamp — layer opacity or blend mode, `update_filter_params`
+per-child stamp (layer opacity or blend mode, `update_filter_params`
 (`engine/layers.rs:895`), effect-scale drift
 (`gpu/effect_layers.rs:99-102`), selection edits, canvas-geometry-neutral
-property changes — makes `valid` false with `fresh == cache.stamps`, so
+property changes) makes `valid` false with `fresh == cache.stamps`, so
 `d == None`. The full-walk branch runs (correct frame), but the snapshot
 rule is defined only for `d ≥ 1`: it never fires, and nothing drops the
 prefix. The cache then records the *new* ticks over the *old* prefix
 texture. The next per-node-stamp-only change (a veil tick) finds
 `valid ∧ prefix.through < d` and restores pre-change pixels. Concrete repro:
-drag the bottom layer's opacity slider while a veil animates — every drag
+drag the bottom layer's opacity slider while a veil animates, every drag
 frame full-walks correctly, then the first post-release tick visibly reverts
 everything below the veil. Fix (three lines): the full-walk branch sets
 `prefix = None` before composing; the `d ≥ 1` snapshot then re-establishes
 it, and a property-only walk pays two extra composites of re-convergence,
 which is the correct price. §7.3 must gain the regression row: establish the
 prefix with two ticks, change a below-`through` child's opacity, tick again,
-`assert_matches_from_scratch` — no existing row produces this sequence (the
+`assert_matches_from_scratch`, no existing row produces this sequence (the
 chained row's *paint* below the veil moves `node_pixels`, lands `d ≤
 through`, and legitimately refreshes the prefix via the full-walk snapshot,
 so it cannot catch this).
@@ -355,7 +355,7 @@ so it cannot catch this).
 (§3.3) is false, and the plan's own test exercises the counterexample.**
 Painting a hidden layer bumps `node_pixels_any` (the gate opens,
 `gpu/compositor.rs:2714-2718`) while the root's stamps record the child as
-`included = false, rev = 0` — unchanged, `d == None`, root all-clean. A
+`included = false, rev = 0`, unchanged, `d == None`, root all-clean. A
 stroke on a screen-run member is the same shape. Both are *correct*
 (the canvas composite genuinely excludes them; `composite_built` still
 stamps, `composite_runs` still increments so the §7.3 hidden-subtree row's
@@ -370,14 +370,14 @@ inlines its children into *this* group's accumulator
 (`gpu/compose_walk.rs:1145-1174`), so a compositor-side no-op fact flipping
 on an *inner* child (effect instance realized late, projection state,
 `node_textures` entry) changes this group's output exactly as a direct
-child's flip would — but §3.3 specifies `included` per child of the group
+child's flip would, but §3.3 specifies `included` per child of the group
 and `rev` as a fold of `node_pixels`/`animation` only, which does not carry
 inner `included` flips. In practice every such flip appears bump-paired
 (instance create/retain follows the document, `gpu/effect_layers.rs:216-232`;
 deferred instance creation is gated on a `GroupState` whose creation bumps
 `targets`, `gpu/compositor.rs:1717`, `gpu/effect_layers.rs:242-247`;
 texture allocation is covered by the `mark_node_pixels_dirty` write-site
-invariant, `gpu/compositor.rs:1863-1879`) — but silently relying on pairing
+invariant, `gpu/compositor.rs:1863-1879`), but silently relying on pairing
 is the exact shape R2 was raised to eliminate. One sentence pins it: the
 shared inclusion predicate is applied recursively through passthrough
 children when building their stamp, mirroring the inlining.
@@ -398,24 +398,24 @@ flips it made). Drop it, or move it to §6/§10 as an explicit PR 2 cleanup.
 
 **S6 (minor, corrections and notes to record):**
 - The snapshot point must be a *loop position*, not a dispatch: when child
-  `d-1` is a not-included child, nothing "lands" — the copy fires after the
+  `d-1` is a not-included child, nothing "lands", the copy fires after the
   loop passes index `d-1`, dispatched or skipped (`accum[current]` is
   unchanged by a skip, so the content is still `children[0..=d-1]`).
 - Folding the masked-leaf no-op into the walk-level skip *fixes a latent
   bug*: today a missing projection state advances the parent ping-pong
   without writing (`gpu/compose_walk.rs:637-647`), leaving later children
   blending over a stale half; a walk-level skip removes the advance. A
-  behavior improvement, but an undisclosed one — state it, and it deserves
+  behavior improvement, but an undisclosed one: state it, and it deserves
   its own row if the state is reachable in the fixture.
-- Histogram guard, two notes. (a) If the target effect never dispatches —
-  no realized instance (`:926-928`), or a hidden/off-path host — `needs()`
+- Histogram guard, two notes. (a) If the target effect never dispatches:
+  no realized instance (`:926-928`), or a hidden/off-path host: `needs()`
   stays true and the total guard forces full walks for the modal's whole
   life: same visible behavior as today (the histogram never lands), just
   zero reuse; acceptable, worth a sentence. (b) `needs()` flips false
   *mid-walk* at dispatch (the pending push, `gpu/histogram.rs:200-206`), so
   groups entered after the host may re-enable reuse within the same guarded
-  composite. This is safe — bottom-to-top depth-first order means everything
-  feeding the effect's input composes before the dispatch — but the plan
+  composite. This is safe (bottom-to-top depth-first order means everything
+  feeding the effect's input composes before the dispatch) but the plan
   should either state that argument or sample the guard once per composite.
 - Under an invalid full walk, `last_d = d` records against stamps about to
   be replaced (possibly `None` despite a real change). With S1's prefix
@@ -709,11 +709,11 @@ pattern `blend_bind_groups` already uses for children
     inside `compose_group`, and command-queue ordering serializes the copy
     against any later composite. Two facts from the review's re-audit,
     recorded (review R8): `pick_color` (`engine/rendering.rs:178-213`,
-    `PickSource::Merged`) is the one consumer that never forces a composite —
+    `PickSource::Merged`) is the one consumer that never forces a composite;
     it reads between composites, safe here because the re-pointed accessor
     returns the current output half and the 1×1 readback copies immediately;
     and `engine/save.rs` keeps a handle clone of the root texture in
-    `SaveJob.pinned_textures` for the async job's life — content is already
+    `SaveJob.pinned_textures` for the async job's life; content is already
     copied out in the same submit, so the pinned handle simply becomes the
     root accumulator texture, still benign.
   - `gpu/bake.rs:33-125` composes through its own sentinel `GroupState` and
@@ -731,8 +731,8 @@ accumulators, which nothing but its own `compose_group` writes.
 This is the composite-prefix-cache plan rebased and reshaped per its review,
 plus one scope decision made at revision time with the user: an earlier draft
 resumed in the ping-pong accumulator itself (zero copies, no texture), but
-its coverage condition — the dirty child must be the *topmost advancing*
-child of its group — is a special case fitted to the benchmarks, not a
+its coverage condition (the dirty child must be the *topmost advancing*
+child of its group) is a special case fitted to the benchmarks, not a
 general mechanism. The adopted shape is the general one: **per-group child
 stamps plus a prefix texture holding the composite of everything below the
 first dirty child**, so the stack below the lowest change is reused no
@@ -770,17 +770,17 @@ strictly fewer copies.
 
 `ChildStamp.rev` is the memoized fold, over the child's subtree including its
 filter nodes (masks), of `max(node_pixels(n), animation(n))`. `included`
-captures every reason the walk skips *or no-ops* a child — both
+captures every reason the walk skips *or no-ops* a child: both
 `compose_children`'s skip chain (`find_node` miss (review C7), `visible()`,
 isolation path, screen-run membership) and every arm's own no-op conditions,
 which are compositor-side facts invisible to document revisions (reviews C1,
 R2): a filter child without a realized instance or apply scratch
 (`gpu/compose_walk.rs:926-931`), a leaf without a `node_textures` /
 `layer_cache` entry (`:816-829`), a masked leaf without a projection state
-(`:645-647` — an advance with no write, so folding it in also keeps the
+(`:645-647`; an advance with no write, so folding it in also keeps the
 advance counts honest), and a group child without a `GroupState`
-(`:1179-1181`). The inclusion predicate is **one shared function** — an
-iterator yielding each child with its verdict — consumed by the stamp fold,
+(`:1179-1181`). The inclusion predicate is **one shared function** (an
+iterator yielding each child with its verdict) consumed by the stamp fold,
 the recording loop, and `compose_children` itself, never a second copy of the
 skip chain (review R7). For a passthrough group child the predicate is
 applied **recursively** when building its stamp, mirroring the inlining: a
@@ -791,7 +791,7 @@ accompanies them (second review S3). Folding the masked-leaf no-op into the
 walk-level skip also fixes a latent defect: today that arm advances the
 parent ping-pong *without writing* (`:645-647`), handing every later child a
 stale half to blend over; under the shared predicate the child is excluded
-and never advances (second review S6 — disclosed as a behavior improvement).
+and never advances (second review S6, disclosed as a behavior improvement).
 `rev` is recorded as 0 when `included` is false, so mutating an invisible
 subtree never forces a recompose (the later visibility toggle is a
 `document` bump and invalidates everything anyway).
@@ -815,15 +815,15 @@ elif valid ∧ prefix exists ∧ prefix.through < d:
     compose children[prefix.through+1 ..]              (prefix resume)
 else:
     prefix = None       (S1: a coarse bump can change output below any
-                         stamp move — a prefix never survives a full walk;
+                         stamp move, a prefix never survives a full walk;
                          the snapshot below re-establishes it)
     clear accum[0]; current_accum = 0; compose all children   (full walk)
 
-snapshot rule — after the child loop passes position d-1 (d ≥ 1), whether
+snapshot rule (after the child loop passes position d-1 (d ≥ 1), whether
 that child dispatched or was skipped (a skip leaves accum[current]
-unchanged, so it still holds children[0..=d-1] — second review S6):
+unchanged, so it still holds children[0..=d-1]) second review S6):
 copy accum[current] → prefix, prefix.through = d-1.
-On the full-walk branch: only when the walk was `valid` — an invalid walk's
+On the full-walk branch: only when the walk was `valid`; an invalid walk's
 d was computed against untrustworthy stamps, so it drops the prefix above
 and takes no snapshot; the next, valid composite re-establishes it.
 On the resume branch: only when d == cache.last_d (the same depth was dirty
@@ -832,7 +832,7 @@ twice running).
 record fresh stamps + last_d = d + ticks
 ```
 
-Both copies are `copy_texture_to_texture` — exact, no sampler, no format or
+Both copies are `copy_texture_to_texture`: exact, no sampler, no format or
 premultiplication question, the idiom `snapshot_parent_accum` already uses
 (`gpu/compose_walk.rs:1005-1028`). The restore replaces the full-canvas clear
 pass, so a resumed composite costs one copy over the walk it skips. The
@@ -840,7 +840,7 @@ pass, so a resumed composite costs one copy over the walk it skips. The
 edit depth (an animating veil, a stroke on one layer) advances the prefix to
 just below it within two composites and then re-fires nothing, while
 alternating dirty depths (painting above an *animating* veil, where `d` flips
-between the veil and the paint layer every frame) never advance the prefix —
+between the veil and the paint layer every frame) never advance the prefix,
 the walk settles into resuming from below the lower depth every frame instead
 of oscillating between full walks and re-snapshots. Convergence is at most
 two composites for any newly stable depth; the fallback is always today's
@@ -849,16 +849,16 @@ full walk.
 Stamp recording lives in `compose_group`'s own child loop, driven by the
 shared inclusion predicate above; `compose_children` keeps serving the
 passthrough recursion and `bake_subtree_to_layer` untouched. There are no
-advance counters and no parity bookkeeping — the review's R6 finding is moot
+advance counters and no parity bookkeeping: the review's R6 finding is moot
 under this shape, and the snapshot point ("after child `d-1` lands") is
 well-defined regardless of how many ping-pong advances any child performs,
 because it reads `current_accum` after the child's `compose_into` returns.
 Bakes need no special handling: `bake_subtree_to_layer` bumps `targets`
 twice and `mark_dirty()` on exit (`gpu/bake.rs:49, 124, 127`), so every merge
-or flatten drops all walk caches and the next composite is a full walk —
+or flatten drops all walk caches and the next composite is a full walk,
 correct, self-healing, and expected rather than a cache bug (review R8).
 
-The root group is rarely all-clean but must support the branch — a bump on
+The root group is rarely all-clean but must support the branch: a bump on
 an excluded subtree (painting a hidden layer, a stroke on a screen-run
 member) opens the frame gate while every root stamp holds, and the resulting
 all-clean composite is correct, since the canvas composite genuinely excludes
@@ -907,27 +907,27 @@ that unreachable, not merely rare.
 
 `compose_effect_arm` dispatches the LUT histogram against the effect's live
 input mid-walk (`gpu/compose_walk.rs:949-959`); a skipped prefix would starve
-`pump_node_histogram` forever — and a per-host guard is not enough, because
+`pump_node_histogram` forever, and a per-host guard is not enough, because
 when the host group sits below an ancestor's first dirty child, the
 ancestor's resume or all-clean branch never enters the host's `compose_group`
 at all (review R1). Guard, the total form: while `histogram_target` is
 `Some(t)` and `histogram.needs(&revisions, t)`, the composite refuses **all**
-reuse — every group full-walks. A histogram is owed only while a LUT-style
+reuse, every group full-walks. A histogram is owed only while a LUT-style
 modal is focused and its result is one async readback away, so the state is
 rare and transient; computing the root-to-host path to guard more narrowly is
 not worth the code. One compounding consequence, from narrowing #3 (review
 R5): while such a modal is focused, a stroke's per-dab `node_pixels` bumps
 keep `needs()` true on every mid-stroke frame, so painting with a LUT modal
-open re-bins per frame and gets no walk reuse for the modal's duration —
+open re-bins per frame and gets no walk reuse for the modal's duration,
 accepted as transient modal behavior, stated so §4's pricing is read
 correctly. The finer below-the-target histogram stamp recorded in §9 removes
 both effects. Two boundary notes (second review S6): the guard samples
-`needs()` once at walk entry — the mid-walk flip to false at dispatch is
+`needs()` once at walk entry; the mid-walk flip to false at dispatch is
 safe by bottom-to-top walk order (everything feeding the effect's input
 composes before the dispatch), but sampling once keeps the composite's
 branches consistent regardless; and a target that can never dispatch (no
 realized instance, a hidden or off-path host) keeps `needs()` true and
-therefore forces full walks for the modal's whole life — the same visible
+therefore forces full walks for the modal's whole life, the same visible
 behavior as today (the histogram never lands), just with zero reuse, ended
 when the engine clears `histogram_target` on modal close.
 
@@ -935,7 +935,7 @@ when the engine clears `histogram_target` on modal close.
 
 Everything below the first dirty child is reused wherever that child sits:
 editing a middle layer, an animated veil in the middle of the stack, a
-filter-slider drag once its mark is narrowed (§8) — all resume, and the
+filter-slider drag once its mark is narrowed (§8), all resume, and the
 layers below never re-blend. What one prefix per group cannot do is serve
 two alternating dirty depths perfectly: painting above an *animating* veil
 flips `d` between the veil (canvas-tick frames) and the paint layer
@@ -944,7 +944,7 @@ the steady state is: every frame resumes from below the veil (base layers
 never re-blend), the veil re-encodes every frame (necessarily on tick
 frames, redundantly on paint-only frames), and the paint layer blends. With
 a *static* veil below, `d` is stable at the paint layer, the prefix advances
-above the veil, and every dab skips the veil encode — the measured +43.5 ms.
+above the veil, and every dab skips the veil encode: the measured +43.5 ms.
 No regression anywhere; the fallback is today's full walk. Closing the
 alternating case fully needs either a second prefix per group or the
 zero-copy parity elision from the earlier draft layered on top (resume the
@@ -985,8 +985,8 @@ exactly three, each disclosed, each with battery rows:
      mid-stroke, which the site's comment deliberately avoids
      (`engine/painting.rs:602-605`). Mitigation, engine-side session logic:
      the drain skips the engine's `active_stroke_layer` while a stroke is in
-     flight; the stroke-end marks (`engine/painting.rs:1570` — `end_stroke`,
-     `:1561` — flood-fill commit; `engine/rendering.rs:950` is the undo
+     flight; the stroke-end marks (`engine/painting.rs:1570` (`end_stroke`,
+     `:1561`) flood-fill commit; `engine/rendering.rs:950` is the undo
      pixel-restore mark, not a stroke-end site (review R8)) land the one
      panel update per stroke, preserving today's cadence exactly.
 
@@ -1010,8 +1010,8 @@ reduced, "V" = viewport-sized. Today's canvas tick: 5C + 2R + present (§1.1).
 
 B was this plan's first draft and is rejected as benchmark-fitted (a user
 call at revision time): its coverage condition happens to enclose exactly
-the two measured workloads and nothing else — any middle-layer edit
-full-walks — and its parity invariant proved brittle to reason about (the
+the two measured workloads and nothing else (any middle-layer edit
+full-walks) and its parity invariant proved brittle to reason about (the
 draft itself misstated the boundary; review R3). It survives in §9 as a
 possible copy-elision on top of A, saving A's one restore copy when the
 condition happens to hold. C is rejected: it does not touch this bug at all
@@ -1078,7 +1078,7 @@ difference plus the pre-walk sync churn (audit §6, separate work).
 
 8. The shared per-child inclusion predicate/iterator (extracted from
    `compose_children`'s skip chain plus the arm no-op conditions, consumed by
-   the walk and the stamp fold — review R7).
+   the walk and the stamp fold: review R7).
 9. `WalkCache` (stamps, `prefix`, `last_d`), the memoized stamp fold, the
    three-branch `compose_group` with the restore copy, the snapshot rule and
    its `last_d` hysteresis; histogram guard.
@@ -1114,13 +1114,13 @@ fixture, harness, and `stale_composite_battery!` macro.
   upload call. **Discovered during implementation:** `ExternalImageSource`
   has exactly one variant and it is `#[cfg(target_arch = "wasm32")]`
   (`gpu/void.rs:37-45`), so on native the enum is uninhabited and
-  `upload_void_external_image` is unreachable from any test — the
+  `upload_void_external_image` is unreachable from any test; the
   battery-shaped case this section originally specified cannot exist. What
   the narrowing actually asserts is covered instead by
   `an_animation_bump_leaves_the_pixel_consumers_alone` (`gpu/revisions.rs`
   unit tests): an animation bump moves neither `node_pixels(id)` nor
   `node_pixels_any`, which is precisely what keeps thumbnails, content
-  bounds and histograms quiet — including the disclosed consequence that the
+  bounds and histograms quiet, including the disclosed consequence that the
   void's own bounds stamp does not move (review R4). The composite-staleness
   half of the same path is covered end to end by the animated-void and
   animation-tick rows, which are natively reachable.
@@ -1180,11 +1180,11 @@ mutation plus `assert_matches_from_scratch`:
 - The resume boundary: a mutation at or below `prefix.through` must full-walk
   (bytes match, `walk_resumes` does *not* advance); one above it must resume;
   and alternating dirty depths across consecutive composites stay
-  byte-correct while the prefix holds still (pins the `last_d` hysteresis —
+  byte-correct while the prefix holds still (pins the `last_d` hysteresis,
   no snapshot advance on the resume branch unless the depth repeats).
 - The S1 regression (second review): establish the prefix with two veil
   ticks, change a below-`through` child's *opacity* (a `document` bump that
-  moves no per-child stamp), tick again, `assert_matches_from_scratch` —
+  moves no per-child stamp), tick again, `assert_matches_from_scratch`,
   fails without the full-walk branch dropping the prefix, because the
   post-change tick would restore pre-change pixels. No other row produces
   this sequence (paint below the veil moves a stamp and legitimately
@@ -1193,7 +1193,7 @@ mutation plus `assert_matches_from_scratch`:
   the veil animate, and assert the histogram result lands (would hang/starve
   without the guard) and the composite still matches from-scratch. A second
   case with the LUT filter inside the nested group and the mutation at root
-  level above its host (review R1's starvation shape — the case a per-host
+  level above its host (review R1's starvation shape: the case a per-host
   guard would pass on a flat fixture while starving here).
 - Hidden-subtree paint: paint a hidden layer, assert no stale composite and
   (via `composite_runs`) that making it visible again produces the correct

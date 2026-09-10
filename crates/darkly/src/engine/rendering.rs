@@ -643,7 +643,7 @@ impl DarklyEngine {
     /// this engine last queued one, at the default panel size.
     ///
     /// Run on every `render()` (production *and* headless tests) so the layer
-    /// panel sees fresh thumbnails after paint, fill, undo, paste — anything
+    /// panel sees fresh thumbnails after paint, fill, undo, paste, anything
     /// that bumps a node's pixel revision. Advancing the cursor at queue time
     /// (not when the readback lands) is what makes this queue-once per change,
     /// matching the drain it replaces.

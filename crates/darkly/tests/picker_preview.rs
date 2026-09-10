@@ -596,7 +596,7 @@ fn the_two_variants_are_separate_jobs() {
 
     // What a picker card costs on mount: one frame.
     engine.start_preview("effects", "frozen", PreviewVariant::Still);
-    // And what hovering it costs, requested while the still is still in flight —
+    // And what hovering it costs, requested while the still is still in flight:
     // the order a real card produces.
     engine.start_preview("effects", "frozen", PreviewVariant::Animated);
 

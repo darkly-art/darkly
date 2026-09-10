@@ -2,7 +2,7 @@
 
 Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Typescript, leveraging WebAssembly and WebGPU.
 
-This document exists to keep Darkly **minimal, elegant, and proper**. The best code is the code never written; nearly all the principles below are in support of this core principle. It is the whole contributor guide (architecture, principles, workflow, and the check suite), and it is addressed to humans and coding agents alike, because the standards are the same for both. `AGENTS.md` and `CLAUDE.md` are symlinks to this file.
+This document exists to keep Darkly **minimal, elegant, and proper**. The best code is the code never written; nearly all the principles below are in support of this core principle. It holds what applies to *every* contribution: the architecture, the principles, the workflow, the house rules and the check suite. Subsystem detail lives in [`docs/`](docs/) and is linked from where it matters. It is addressed to humans and coding agents alike, because the standards are the same for both. `AGENTS.md` and `CLAUDE.md` are symlinks to this file.
 
 Thanks for wanting to contribute.
 
@@ -55,12 +55,14 @@ crates/darkly/src/
   document/             Authoritative model (layer tree, canvas, ...)
     layer_kinds/  ★     group, raster, vector, void, filter
     filters/      ★     mask, selection
+  actions/        ★     every command the editor can run, as data
+                        (file, edit, layers, tools, view, …)
   engine/               DarklyEngine: session + per-domain dispatch
                           (painting, rendering, load/save, export,
                            floating, flatten, merge, undo_dispatch, …)
   gpu/                  Compositor, ping-pong blend, regions, readback
     blend_modes/  ★     normal, multiply, hue, color_burn, …
-    veils/        ★     post-process effects (rainy_glass, VHS, painting, …)
+    effects/      ★     image effects (rainy_glass, VHS, painting, …)
     voids/        ★     procedural fill sources (camera, noise, …)
   brush/                Stroke engine + node-graph brush engine, GPU
                         compute pipelines, WGSL compilation, brush
@@ -74,7 +76,8 @@ crates/darkly/src/
     import/             brush-bundle importers (krita)
   config/
     sections/     ★     schema sections (canvas, input, ui, …)
-    presets/      ★     bundled presets (gimp, krita, photoshop)
+  transform/            Affine math shared by tools and the compositor
+  text/                 Text layout and shaping
   tools/          ★     brush, fill, gradient, colorpicker,
                         select (rect/ellipse/lasso/polygon/magic_wand), transform
   undo/                 Per-domain undoable ops (layer, modifier, property,
@@ -84,31 +87,24 @@ crates/darkly/src/
   docs_md/              Generated regions in this repo's markdown
     fragments/    ★     what a region can be filled with (catalog_table,
                           catalog_graphic, …)
+crates/darkly/presets/  Bundled config overlays (gimp, krita, photoshop)
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
   graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
 ```
 
-### Coordinate Systems
+### Read Before You Touch
 
-**If you're touching anything with x/y coordinates, read
-[`docs/coordinate-systems.md`](docs/coordinate-systems.md) first.** Darkly moves
-a pixel through several frames (screen → plane → window-local → layer-local), and
-a value carried into the wrong frame is the single most recurring class of bug
-here, invisible until the canvas is cropped. The doc covers the frames, their
-authority, how to convert between them, and the pitfalls that have bitten us.
+Each of these is required reading *before* you change the area it covers, and safe to skip otherwise.
 
-### Brush Preview & Overlays
-
-**If you're touching the brush hover preview or on-canvas overlays, read
-[`docs/brush-preview-and-overlays.md`](docs/brush-preview-and-overlays.md)
-first.** Brushes compile to two shader variants (stroke + cursor-preview),
-`setOverlay` is single-slot, and preview swaps stroke-only bindings for
-fallbacks: the model that makes hover-feedback bugs hard to see otherwise.
-
-### Hotkey & Config Presets
-
-Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
+| If you are touching | Read first | Why |
+| --- | --- | --- |
+| Anything with x/y coordinates | [`docs/coordinate-systems.md`](docs/coordinate-systems.md) | A pixel moves through several frames (screen → plane → window-local → layer-local). A value carried into the wrong one is the single most recurring class of bug here, invisible until the canvas is cropped |
+| The brush hover preview or on-canvas overlays | [`docs/brush-preview-and-overlays.md`](docs/brush-preview-and-overlays.md) | Brushes compile to two shader variants, `setOverlay` is single-slot, and preview swaps stroke-only bindings for fallbacks: the model that makes hover-feedback bugs visible |
+| Hotkeys, the config schema, or editor presets | [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml) header | Settings resolve `user → overlay (krita/ps/gimp) → defaults`, and where a key belongs follows from that. Host-editor reference hotkeys are in [`docs/*-default-hotkeys.md`](docs/) |
+| A registration a README table or graphic names | [`docs/generated-markdown.md`](docs/generated-markdown.md) | Those spans are generated from the registries; see [Generated Markdown](#generated-markdown) |
+| The JS/Rust boundary or the async model | [`docs/architecture-history.md`](docs/architecture-history.md) | Most "obvious simplifications" there have already been tried and reverted |
+| The brush engine or its node graph | [`docs/brush/README.md`](docs/brush/README.md) | Stroke engine, node system, stabilization, and the imported brush formats |
 
 ## DRY Principle
 
@@ -133,7 +129,7 @@ When adding a new item to a modular system (filter, tool, brush, etc.):
 - **DO:** Create a single file in the appropriate directory that contains everything about that module: struct, implementation, registration function, constants, helpers.
 - **DO NOT:** Add match arms to a central dispatcher. Add entries to a handwritten list. Touch any file outside the module directory except the generated `mod.rs`.
 
-Mechanics: `build.rs` scans module directories and generates each `mod.rs` (never edit by hand) with a `registrations()` function. Each variant file exports `pub fn register() -> XRegistration`; the registry calls `registrations()` to populate itself. Generic infrastructure (`Trait`, `Registration`, `Registry`) is named after the kind, not after the first variant that happened to exist. See `gpu/veil.rs` + `gpu/veils/*.rs` for a worked example.
+Mechanics: `build.rs` scans module directories and generates each `mod.rs` (never edit by hand) with a `registrations()` function. Each variant file exports `pub fn register() -> XRegistration`; the registry calls `registrations()` to populate itself. Generic infrastructure (`Trait`, `Registration`, `Registry`) is named after the kind, not after the first variant that happened to exist. See `gpu/effect.rs` + `gpu/effects/*.rs` for a worked example.
 
 The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
 
@@ -147,7 +143,7 @@ State belongs to the thing it describes, not to a parent that manages it on its 
 
 The **document** is the authoritative model. The **compositor** is a derived realization. State falls into three categories:
 
-- **Document** (`crates/darkly/src/document.rs`, `src/layer.rs`): persistent, undoable, serializable. Tree structure, layer properties, mask presence, layer extents, selection regions, canvas size + `canvas_origin` (see [Coordinate Systems](#coordinate-systems): the canvas window is a plane rect anchored at `canvas_origin`). Must be possible to reason about without a GPU.
+- **Document** (`crates/darkly/src/document/`, `src/layer.rs`): persistent, undoable, serializable. Tree structure, layer properties, mask presence, layer extents, selection regions, canvas size + `canvas_origin` (see [`docs/coordinate-systems.md`](docs/coordinate-systems.md): the canvas window is a plane rect anchored at `canvas_origin`). Must be possible to reason about without a GPU.
 - **Session** (fields on `DarklyEngine` and tool/UI structs): transient editor state. Active tool, mask-editing target, viewport transform, in-flight stroke, undo stack. Does not survive reload.
 - **Compositor** (`src/gpu/compositor.rs` and friends): GPU textures, bind groups, pipelines, render caches. Always derivable from document + dirty regions; rebuildable on demand.
 
@@ -233,11 +229,9 @@ return to review, revision, and user approval.
 
 ## No Blocking GPU Readbacks
 
-**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU→CPU readback in production code.** These deadlock on WebGPU/WASM: the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking (`recv()`, spin-wait, `thread::park()`) prevents it from running. See `docs/lessons-learned/gpu-lessons-learned.md` §5 for the full stack trace of why.
+**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU to CPU readback in production code.** These deadlock on WebGPU/WASM: the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking prevents it from running. Readback is async: `request_readback()` → `readbacks.submit()` → poll on the next frame via `ReadbackScheduler`.
 
-The correct pattern is async readback: `request_readback()` → `readbacks.submit()` → poll on the next frame via `ReadbackScheduler`. If CPU data is needed from a GPU texture that changes infrequently (e.g., the selection mask), maintain a CPU cache populated by the async readback and read from that.
-
-`test_utils::readback_texture()` and `blocking_read()` are **test-only**: they work on native (Vulkan/Metal) where `device.poll(Wait)` drives the completion queue synchronously. They must be gated behind `#[cfg(test)]` and never called from engine, compositor, or WASM bridge code.
+The full stack trace of the deadlock, the CPU-cache variant for textures that change infrequently, and the test-only escape hatch are in [`docs/lessons-learned/gpu-lessons-learned.md`](docs/lessons-learned/gpu-lessons-learned.md) §5.
 
 ## Engineering Principle
 
@@ -252,6 +246,10 @@ If you're implementing one of the unchecked features in the README roadmap, or o
 ## No Migrations / No Backwards Compatibility (pre-release)
 
 Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine: do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing artist data can be invalidated.
+
+## No En or Em Dashes
+
+Darkly's prose uses plain hyphens. **No en dashes and no em dashes anywhere in a tracked file**: code, comments, docs, markdown, commit messages, PR bodies. Use a hyphen, comma, colon, or parentheses instead. `./scripts/check-dashes.sh` fails on either character and runs with the rest of the suite.
 
 ## PR Descriptions
 
@@ -271,92 +269,32 @@ The AI portion must cover the *entire* feature branch (everything since it diver
 
 ## Generated Markdown
 
-Parts of this repository's markdown are generated from the registries. A file
-opts a span of itself in by bracketing it with HTML comments, which render as
-nothing:
+Parts of this repository's markdown are generated from the registries: a span bracketed by `<!-- darkly:… -->` comments is filled from the `&'static str` on the registration that owns it. **Never edit inside a region**, the next sync overwrites it; fix the registration instead. `cargo sync-docs` refills every region, and `tests/docs_md.rs` fails on a stale one, so the ordinary test suite is the gate.
 
-```markdown
-<!-- darkly:catalog-table catalog=veils -->
-…generated…
-<!-- /darkly:catalog-table -->
-```
-
-**Never edit inside a region**: the next sync overwrites it. Every name and
-description in one is a `&'static str` on the registration that owns it, so a
-typo in the README's veil table is fixed in `crates/darkly/src/gpu/veils/`.
-
-```bash
-cargo sync-docs              # refill every region
-cargo sync-docs -- --check   # report drift, write nothing
-```
-
-`tests/docs_md.rs` fails if a committed region is stale, so the ordinary test
-suite is the gate: run `cargo sync-docs` when you have touched a registration
-and it will tell you what it rewrote. A new kind of region is a new file in
-[`crates/darkly/src/docs_md/fragments/`](crates/darkly/src/docs_md/fragments/)
-exporting `pub fn register()`: nothing else is touched.
-
-Preview stills are the one part that is **not** automatic: they need a GPU and
-land in the repository as binaries, so they are rendered deliberately when a
-catalog gains or loses an entry. `tests/docs_md.rs` fails on a region linking to
-an image that is not in the checkout, which is how you find out.
-
-```bash
-cargo run --release -p darkly --features testing --bin render_docs -- \
-  --stills --catalog veils
-```
-
-A `catalog-graphic` region embeds a rendered picture of a catalog instead of a
-table of it, as the README's veils section does. The picture is a Svelte
-component in [`frontend/src/graphics/`](frontend/src/graphics/), rasterized by
-resvg rather than a browser; what that costs a component is documented at the top
-of the runner. `npm test` re-renders each one and fails if the committed image is
-stale.
-
-```bash
-cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json
-node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json
-```
+Regions, preview stills, and catalog graphics (the parts that need a GPU or a browser-free rasterizer, and so are not automatic) are covered in [`docs/generated-markdown.md`](docs/generated-markdown.md).
 
 ## Lint / CI Checks
 
 Run at commit time only, not during iterative debugging. Use `cargo check` for mid-iteration build sanity. All must pass:
 
 ```bash
-# Prose punctuation: no en or em dashes anywhere in tracked files. Use a
-# plain hyphen, comma, colon, or parentheses instead.
-./scripts/check-dashes.sh
+./scripts/check-dashes.sh   # no en or em dashes in any tracked file
 cargo fmt --all -- --check
 RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm --features darkly/testing -- -D warnings
 RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
-# `--features darkly/testing` exposes `gpu::test_utils`, `blocking_read`, and
-# the engine's `test_readback_*` accessors that integration tests rely on
-# (compile-time gate enforcing CONTRIBUTING.md "No Blocking GPU Readbacks").
-# `--test-threads=1` is mandatory: GPU-touching integration tests (`engine.rs`, `blend_modes.rs`, etc.) share a process-wide wgpu device and SIGSEGV when run in parallel.
+# `--test-threads=1` is mandatory: GPU-touching integration tests share a
+# process-wide wgpu device and SIGSEGV when run in parallel.
 cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
-# `tsc --noEmit` is the TS gate for `.ts` files, but it CANNOT see inside
-# `.svelte` files (it doesn't parse the extension), and neither `vite build`
-# nor Vitest type-checks components. `svelte-check` is the only gate that
-# type-checks `.svelte` scripts + templates (via `svelte2tsx` + the TS API):
-# it catches nonexistent engine methods, wrong props, and null-safety in
-# components. Both are required: `tsc` alone gives false green on component bugs.
+# Both TS gates are required: `tsc` cannot see inside `.svelte` files, so it
+# gives a false green on component bugs that `svelte-check` catches.
 (cd frontend && npx tsc --noEmit)
 (cd frontend && npm run check)
 (cd frontend && npm run build)
-# Vitest runs in the node environment: there is no DOM, so globals like
-# `KeyboardEvent` / `PointerEvent` / `window` are undefined. Test against
-# plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code
-# that touches `window`, stub it with `vi.stubGlobal('window', …)` and a
-# fake node: see `src/lib/__tests__/dismiss.test.ts`.
-# Also the staleness gate for catalog graphics: it re-renders each one and
-# fails if the committed image no longer matches its component and stills.
 (cd frontend && npm test)
-# Reclaim stale build artifacts: Cargo orphans a ~300 MB static test binary on
-# every fingerprint change and never GCs it, so `target/` balloons over time.
-# `cargo install cargo-sweep` once, then periodically:
-cargo sweep --time 7
 ```
+
+Every flag above is load-bearing. What each one defends against, the shape Vitest tests have to take with no DOM, and the `cargo sweep` housekeeping that keeps `target/` from ballooning are in [`docs/checks.md`](docs/checks.md).
 
 Never run `git commit`: make the changes and leave staging and committing to the user.
 

@@ -634,7 +634,7 @@ fn effect_layer(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
 }
 
 /// Flatten Image leaves the run alone. Without the boundary-aware source list
-/// this fails by the effect **disappearing** — detached as a flatten source and
+/// this fails by the effect **disappearing**: detached as a flatten source and
 /// never baked, because the walk that would have baked it skips the run.
 #[test]
 fn flatten_image_leaves_the_screen_space_run_in_the_tree() {
@@ -690,7 +690,7 @@ fn merge_layers_refuses_a_screen_space_source() {
 }
 
 /// Regression: `bake_subtree_to_layer` must not leave its transient bake
-/// `GroupState` (three canvas-sized textures) allocated after the merge —
+/// `GroupState` (three canvas-sized textures) allocated after the merge,
 /// it once stashed one under the sentinel null id for the rest of the
 /// session, and each entry survived every subsequent merge.
 #[test]

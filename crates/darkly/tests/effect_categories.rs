@@ -7,7 +7,7 @@
 //!
 //! The second is the load-bearing one. A category that quietly gated
 //! capability would rebuild the two subsystems this work removed, one field at
-//! a time, and it would do so invisibly — which is the failure mode CLAUDE.md's
+//! a time, and it would do so invisibly, which is the failure mode CLAUDE.md's
 //! type-owned-dispatch rule names.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -89,7 +89,7 @@ fn the_categories_partition_the_catalog() {
 /// Category decides nothing about capability.
 ///
 /// Every effect is constructible, previewable and destructively applicable
-/// regardless of which tab it appears under — the property that makes the split
+/// regardless of which tab it appears under: the property that makes the split
 /// presentational. If a future change gates any of these on category, this
 /// fails before the two subsystems can grow back.
 #[test]
@@ -98,7 +98,7 @@ fn category_gates_no_capability() {
     for reg in registry.registrations() {
         assert!(
             !reg.hotkey_action.is_empty(),
-            "`{}` declares no action, so it cannot be applied destructively — \
+            "`{}` declares no action, so it cannot be applied destructively: \
              every effect can be, whatever its category",
             reg.type_id
         );
@@ -123,7 +123,7 @@ fn category_gates_no_capability() {
 }
 
 /// One catalog, sorted so a consumer can run-length group it into its category
-/// headings without bucketing — the same shape the blend-mode dropdown reads.
+/// headings without bucketing: the same shape the blend-mode dropdown reads.
 #[test]
 fn the_catalog_is_sorted_by_category_then_name() {
     let entries = catalog().entries;
@@ -154,8 +154,8 @@ fn the_catalog_is_sorted_by_category_then_name() {
 
 /// The duplicate entries the whole merge exists to remove are gone.
 ///
-/// `black_and_white` and `chromatic_aberration` were each registered twice —
-/// once as a veil, once as a filter — and appeared twice in the picker. One
+/// `black_and_white` and `chromatic_aberration` were each registered twice
+/// (once as a veil, once as a filter) and appeared twice in the picker. One
 /// catalog now holds one of each. This is the reported bug, asserted where a
 /// user would see it.
 #[test]

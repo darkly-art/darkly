@@ -1,7 +1,7 @@
-// Black and White effect — the textureLoad wrapper around the shared
+// Black and White effect: the textureLoad wrapper around the shared
 // `bw_transform` core (`shaders/lib/black_and_white.wgsl`, prepended at load
 // time by `gpu/effects/black_and_white.rs`). Alpha passes through; no output
-// clamp — the unorm render target clamps on store.
+// clamp: the unorm render target clamps on store.
 
 @group(0) @binding(0) var t_src: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: BwParams;

@@ -30,12 +30,12 @@ struct Uniforms {
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
-// Mask texture in a separate bind group — avoids rebuilding group 0 on mask change.
+// Mask texture in a separate bind group: avoids rebuilding group 0 on mask change.
 // When no mask is present, a 1x1 white fallback texture is bound (mask_alpha=1.0).
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 // Shared canvas-window geometry (group 2): canvas dimensions + the plane-space
-// offset of the canvas window. Document-owned and single-sourced — one buffer
+// offset of the canvas window. Document-owned and single-sourced: one buffer
 // updated whenever the canvas is resized/cropped, bound to every composite draw.
 // Lives outside the per-layer `Uniforms` so it can never go stale per layer
 // (the bug that produced the post-resize anisotropic squash).

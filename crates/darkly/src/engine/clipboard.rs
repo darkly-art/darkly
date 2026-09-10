@@ -503,7 +503,7 @@ impl DarklyEngine {
         // Position relative to the active node. `resolve_anchor_target` maps a
         // filter anchor (the active id while editing a mask) to its host, so
         // the pasted layer lands as the host's sibling rather than nested under
-        // it — the same anchor resolution the document's `add_*` helpers use.
+        // it: the same anchor resolution the document's `add_*` helpers use.
         // A paste is an add, not a move: `place_layer` takes the boundary
         // policy, so an anchor above the viewport divider cannot pull a raster
         // into the run.

@@ -113,7 +113,7 @@ fn layer_tree_query_round_trips_with_the_boundary() {
     assert_eq!(
         rows.first().map(|r| r["type"].clone()),
         Some(json!("divider")),
-        "a fresh document's topmost row is the viewport divider — nothing is viewport-only"
+        "a fresh document's topmost row is the viewport divider, nothing is viewport-only"
     );
 }
 

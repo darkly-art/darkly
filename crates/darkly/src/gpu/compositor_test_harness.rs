@@ -92,7 +92,7 @@ impl Compositor {
 
     /// Run the present pass through the **production** cached `view_uniform_buf`
     /// (the matrix `rebuild_view_transform` last uploaded) into a
-    /// `viewport_w × viewport_h` target — i.e. exactly what the surface would
+    /// `viewport_w × viewport_h` target: i.e. exactly what the surface would
     /// show, minus the surface. Unlike [`Self::test_present_to_canvas`] this
     /// does NOT force identity, so it exercises the real screen↔canvas mapping
     /// where view-transform / resize bugs (anisotropic squash, offset) live.
@@ -110,7 +110,7 @@ impl Compositor {
     }
 
     /// Present **through the screen-space run** into a `target_w × target_h`
-    /// offscreen texture and return its bytes — what the surface would show,
+    /// offscreen texture and return its bytes: what the surface would show,
     /// minus the surface.
     ///
     /// [`Self::test_present_to_viewport`] deliberately stops at the present

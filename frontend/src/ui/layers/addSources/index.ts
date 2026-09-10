@@ -6,7 +6,7 @@ export type { AddSource } from './types';
  * Every add source, discovered from this directory.
  *
  * A glob rather than a hand-written list so a new way of adding something is a
- * new file and nothing else — the frontend's equivalent of `build.rs` scanning
+ * new file and nothing else: the frontend's equivalent of `build.rs` scanning
  * a module directory. Rail order comes from each source's action, not from the
  * order they land in here.
  */

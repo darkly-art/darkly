@@ -1,7 +1,7 @@
 //! Running an effect at less than its target's resolution.
 //!
 //! Spatial effects cost per output texel, and several of them cost enough that
-//! full resolution is not worth the difference — so an effect can be rendered
+//! full resolution is not worth the difference, so an effect can be rendered
 //! into a smaller pair and the result scaled back up. That wrapping is the same
 //! wherever the effect runs, which is why it lives here rather than inside any
 //! one caller: downscale the source, run the effect at the reduced size,
@@ -11,14 +11,14 @@
 //! wherever it sits, and the resolution it runs at is a global quality/speed
 //! preference rather than a property of the side of the divider it happens to be
 //! on. Canvas-space output is document content, so the trade ships into the
-//! export — that is the deliberate consequence of having one knob, and the way
+//! export, that is the deliberate consequence of having one knob, and the way
 //! out is to raise the knob or apply the effect destructively, which never comes
 //! through here.
 //!
 //! Effects are resolution-agnostic and never learn any of this: an effect sees
 //! the pair it was handed and its size, and nothing about why. An effect's own
 //! [`Effect::perf_scale_factor`] composes with the global scale as a declaration
-//! of relative cost — it is not a veto, and no effect opts out.
+//! of relative cost: it is not a veto, and no effect opts out.
 //!
 //! [`Effect::perf_scale_factor`]: crate::gpu::effect::Effect::perf_scale_factor
 
@@ -32,7 +32,7 @@ const FULL_SCALE_EPSILON: f32 = 1.0e-3;
 /// produce anything recognizable, and a zero would be a zero-sized texture.
 const MIN_SCALE: f32 = 0.05;
 
-/// Below this, two scales are the same scale — the threshold for deciding that
+/// Below this, two scales are the same scale: the threshold for deciding that
 /// a realized instance still matches the configuration.
 pub const SCALE_EPSILON: f32 = 1.0e-3;
 
@@ -107,7 +107,7 @@ pub struct Reduced {
     views: [wgpu::TextureView; 2],
     /// `[i]` reads native `ping_pong[i]` and draws into `views[0]`.
     downscale_bgs: [wgpu::BindGroup; 2],
-    /// Reads `views[1]` — the effect's output — and draws into the destination.
+    /// Reads `views[1]` (the effect's output) and draws into the destination.
     upscale_bg: wgpu::BindGroup,
 }
 

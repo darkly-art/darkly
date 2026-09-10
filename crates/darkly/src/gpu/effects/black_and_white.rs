@@ -1,4 +1,4 @@
-//! Black and White — the registration over the shared black-and-white core
+//! Black and White: the registration over the shared black-and-white core
 //! ([`crate::gpu::black_and_white`]), which owns the identity, param schema,
 //! uniform packing and WGSL transform. This file wires those into one
 //! [`ParamEffect`](crate::gpu::param_effect::ParamEffect) and declares how the

@@ -1,9 +1,9 @@
-//! The compositor's revision registry — one clock, five sources, every
+//! The compositor's revision registry: one clock, five sources, every
 //! derived artifact validated where it is read.
 //!
 //! Two things are under test. **Correctness**: after any mutation, the
 //! incrementally-maintained composite must be byte-identical to one built from
-//! scratch — a source a mutation forgot to bump shows up here as a stale
+//! scratch, a source a mutation forgot to bump shows up here as a stale
 //! composite and nowhere else. **Scheduling**: the gates that used to be
 //! boolean flags are now tick comparisons, so what recomposites and what only
 //! re-presents is pinned as a truth table.
@@ -14,7 +14,7 @@
 //! observable. That is what the `composite_runs` counter measures, and it is
 //! why the counter carries more weight here than the pixels do. When
 //! per-effect or per-group caching lands, the same comparisons start catching
-//! partially-stale results too — which is the point of writing them now.
+//! partially-stale results too, which is the point of writing them now.
 //!
 //! Run with: `cargo test -p darkly --test compositor_revisions --features testing -- --test-threads=1`
 
@@ -91,7 +91,7 @@ fn effect(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
 /// The heart of the battery: the incremental composite must equal one built
 /// with every revision bumped.
 ///
-/// Ordering matters — the incremental read happens first, because the
+/// Ordering matters: the incremental read happens first, because the
 /// from-scratch read invalidates everything and would mask a stale result if
 /// it ran first. The `composite_runs` delta guards the other direction: a
 /// mutation that recomposites nothing and a mutation that recomposites
@@ -111,7 +111,7 @@ fn assert_matches_from_scratch(engine: &mut DarklyEngine, what: &str) {
     );
     assert_eq!(
         ran, 1,
-        "{what} must leave the composite stale — it produced matching bytes \
+        "{what} must leave the composite stale: it produced matching bytes \
          without recompositing, which means the assertion above proved nothing"
     );
 }
@@ -169,7 +169,7 @@ fn fixture() -> Fixture {
 // ---------------------------------------------------------------------------
 
 /// A fresh compositor has composited nothing, and the frame gate deliberately
-/// ignores `targets` — the only source construction bumps on its own. Without
+/// ignores `targets`: the only source construction bumps on its own. Without
 /// an explicit document bump at construction the first frame compares clean
 /// and the canvas stays blank.
 ///
@@ -184,7 +184,7 @@ fn a_fresh_engine_composites_its_first_frame() {
         "construction must not composite"
     );
 
-    // Nothing has mutated the document — this is purely the first frame. An
+    // Nothing has mutated the document: this is purely the first frame. An
     // empty document composites to transparent either way, so the pixels
     // cannot distinguish "composited nothing" from "never composited"; the
     // counter is the only thing that can.
@@ -294,7 +294,7 @@ stale_composite_battery! {
 
     changing_filter_params, "filter param change", |f| {
         // `brightness_contrast` rather than the fixture's `invert`, which
-        // declares no parameters — there would be nothing to change.
+        // declares no parameters: there would be nothing to change.
         let fx = effect(&mut f.engine, "brightness_contrast");
         settle(&mut f.engine);
         f.engine.update_filter_params(
@@ -319,7 +319,7 @@ stale_composite_battery! {
 
     moving_the_screen_boundary, "screen-boundary move", |f| {
         // Raise the effect to the top so it is eligible for the run, then lift
-        // the divider over it — it leaves the canvas composite entirely.
+        // the divider over it: it leaves the canvas composite entirely.
         f.engine.move_layer(f.fx, MoveTarget::After(f.top)).expect("move succeeds");
         settle(&mut f.engine);
         f.engine.test_set_screen_space_boundary(1);
@@ -355,7 +355,7 @@ stale_composite_battery! {
 }
 
 /// The animation source, isolated. Not a battery row: the harness `settle`s
-/// first, and a frame that lands async work marks the document dirty — which
+/// first, and a frame that lands async work marks the document dirty, which
 /// would recomposite for a reason other than the animation tick and hide a
 /// missing `animation` bump entirely.
 #[test]
@@ -363,7 +363,7 @@ fn an_animation_tick_leaves_no_stale_composite() {
     let mut engine = test_engine(W, H);
     let base = engine.add_raster_layer(None);
     fill_layer(&mut engine, base, 60, 60, 60);
-    // Non-zero speed — a grain at the default speed does not animate, and the
+    // Non-zero speed: a grain at the default speed does not animate, and the
     // canvas animation gate would never fire.
     engine
         .add_filter_layer(
@@ -419,7 +419,7 @@ fn composites_for_one_render(engine: &mut DarklyEngine) -> u64 {
 ///
 /// `owes_frame` is what the frame loop reports afterwards; `composites` is how
 /// many recomposites the next frame encodes. Together they separate the two
-/// gates — a present-only change owes a frame but composites zero times, which
+/// gates: a present-only change owes a frame but composites zero times, which
 /// no single assertion can express.
 fn assert_schedules(
     label: &str,
@@ -546,7 +546,7 @@ use darkly::gpu::revisions::Revisions;
 /// Everything the content-bounds tests share: a device, a texture with known
 /// coverage, the pass, and the revisions its cache is validated against.
 ///
-/// Bundled rather than threaded through free functions — the pass takes eight
+/// Bundled rather than threaded through free functions: the pass takes eight
 /// arguments, which is more plumbing than these tests have logic.
 struct BoundsHarness {
     device: wgpu::Device,
@@ -602,7 +602,7 @@ impl BoundsHarness {
     }
 
     /// Poll once, reporting whether this layer's result landed. Blocks the
-    /// device when it has not — native-only, and this is test code.
+    /// device when it has not: native-only, and this is test code.
     fn poll(&mut self) -> bool {
         let layer = self.layer();
         if self
@@ -638,7 +638,7 @@ impl BoundsHarness {
 }
 
 /// Content bounds carry the `(document, node_pixels)` stamp they were computed
-/// under, so a cached answer stops being current the moment either moves — no
+/// under, so a cached answer stops being current the moment either moves: no
 /// invalidation is pushed, and a consumer cannot read a stale result by
 /// forgetting to check one.
 #[test]
@@ -671,7 +671,7 @@ fn content_bounds_go_stale_when_their_inputs_move() {
     }
 }
 
-/// A result that lands after its inputs moved is dropped rather than cached —
+/// A result that lands after its inputs moved is dropped rather than cached:
 /// the async readback equivalent of reading a stale value.
 #[test]
 fn a_bounds_result_landing_after_its_inputs_moved_is_discarded() {
@@ -697,7 +697,7 @@ fn a_bounds_result_landing_after_its_inputs_moved_is_discarded() {
 }
 
 /// An empty texture resolves to *no bounds* as a terminal answer, not a
-/// permanent miss — otherwise a caller requeues the same computation forever.
+/// permanent miss: otherwise a caller requeues the same computation forever.
 #[test]
 fn empty_content_bounds_resolve_rather_than_requeue() {
     let mut h = BoundsHarness::new(None);
@@ -716,7 +716,7 @@ fn empty_content_bounds_resolve_rather_than_requeue() {
 
 /// A histogram bins a filter's *input pixels*. A parameter drag changes the
 /// document but no pixels, so the cached histogram the Levels editor is being
-/// read against must survive it — the reason `document` is not one of the
+/// read against must survive it: the reason `document` is not one of the
 /// histogram's dependencies.
 #[test]
 fn a_histogram_survives_a_param_drag() {
@@ -766,7 +766,7 @@ fn a_histogram_survives_a_param_drag() {
 
 /// A raster under an animating veil, the shape this whole mechanism exists
 /// for. Each tick advances only the veil's own revision, so everything below
-/// it is provably unchanged and must be reused — and the result must still be
+/// it is provably unchanged and must be reused, and the result must still be
 /// byte-identical to a full walk.
 ///
 /// The `walk_resumes` assertion is what stops this from proving nothing: a
@@ -776,7 +776,7 @@ fn animating_veil_fixture() -> (DarklyEngine, LayerId) {
     let mut engine = test_engine(W, H);
     let base = engine.add_raster_layer(None);
     fill_layer(&mut engine, base, 60, 90, 120);
-    // Non-zero speed — a grain at the default speed never animates, so the
+    // Non-zero speed: a grain at the default speed never animates, so the
     // canvas animation gate would not fire at all.
     engine
         .add_filter_layer(
@@ -814,7 +814,7 @@ fn an_animating_veil_reuses_the_stack_below_it() {
     assert!(
         engine.test_walk_resumes() > 0,
         "an animating veil above an untouched stack must reuse the composite \
-         below it — without this the veil's tick re-blends every layer"
+         below it: without this the veil's tick re-blends every layer"
     );
 
     let incremental = engine.test_readback_canvas();
@@ -827,7 +827,7 @@ fn an_animating_veil_reuses_the_stack_below_it() {
 
 /// The staleness hole a prefix invites: a change that moves no per-child stamp
 /// at all. Opacity travels as a coarse `document` bump, so the walk correctly
-/// full-walks the frame it happens on — but if that walk kept the old capture,
+/// full-walks the frame it happens on, but if that walk kept the old capture,
 /// the next animation tick would resume from pixels taken before the change.
 #[test]
 fn a_property_change_below_the_prefix_is_not_restored_over() {
@@ -857,13 +857,13 @@ fn a_property_change_below_the_prefix_is_not_restored_over() {
     assert_eq!(
         incremental, scratch,
         "a prefix captured before a property change must not be restored \
-         after it — the tick following the change would show pre-change pixels"
+         after it: the tick following the change would show pre-change pixels"
     );
 }
 
 /// A focused filter's histogram is binned from inside the walk, against its
 /// live input accumulator. Any reuse that skips the subtree carrying it makes
-/// that dispatch unreachable and the result never lands — so while a histogram
+/// that dispatch unreachable and the result never lands, so while a histogram
 /// is owed, no group may reuse anything.
 ///
 /// The filter sits inside a nested group while the activity is at root level
@@ -894,7 +894,7 @@ fn a_histogram_inside_a_group_still_lands_while_work_happens_above_it() {
 
     engine.set_histogram_target(Some(fx));
 
-    // Work above the group on every frame — exactly what would let an
+    // Work above the group on every frame: exactly what would let an
     // ancestor's reuse skip the group holding the filter.
     let mut binned = Vec::new();
     for i in 0..64 {
@@ -910,7 +910,7 @@ fn a_histogram_inside_a_group_still_lands_while_work_happens_above_it() {
     assert!(
         !binned.is_empty(),
         "a histogram owed for a filter inside a group must still land while \
-         the user works above that group — reuse that skips the group makes \
+         the user works above that group: reuse that skips the group makes \
          the mid-walk dispatch unreachable and it never resolves"
     );
 }
@@ -954,7 +954,7 @@ fn an_untouched_nested_group_is_not_rewalked() {
 /// A group's output is whichever ping-pong half its walk ended on, so every
 /// consumer selects a resource by that index. If the present pass bound one
 /// fixed half instead, a stack whose walk ends on the other half would present
-/// stale or empty pixels — so this composites onto *both* halves and checks
+/// stale or empty pixels, so this composites onto *both* halves and checks
 /// each, asserting the halves really differed rather than trusting the parity.
 #[test]
 fn the_present_follows_the_composite_to_either_accumulator_half() {
@@ -1013,7 +1013,7 @@ fn a_present_only_frame_still_finds_the_last_composite() {
     assert_eq!(
         engine.test_composite_runs(),
         runs_before,
-        "moving the view must not recomposite — otherwise this proves nothing \
+        "moving the view must not recomposite: otherwise this proves nothing \
          about the accumulator surviving between composites"
     );
     assert_eq!(
@@ -1157,7 +1157,7 @@ fn thumbnails_queue_once_per_pixel_change() {
     );
 }
 
-/// Disposing a node prunes its revision, and with it the cursor entry — so a
+/// Disposing a node prunes its revision, and with it the cursor entry, so a
 /// deleted layer stops being scanned and a reused id starts clean.
 #[test]
 fn deleting_a_layer_prunes_its_thumbnail_cursor() {

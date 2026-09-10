@@ -16,10 +16,10 @@ use std::collections::HashSet;
 ///
 /// Every field below the cache is a fingerprint. `sync_effect_instances`
 /// compares them against the document and the compositor's current textures,
-/// and rebuilds on any drift — which is what makes the compose walk a pure
+/// and rebuilds on any drift, which is what makes the compose walk a pure
 /// encode with nothing to check.
 /// The pair an effect instance was prepared against. An effect layer is the
-/// same object in both spaces — one shader, one param schema — but the textures
+/// same object in both spaces (one shader, one param schema) but the textures
 /// it binds, the resolution it runs at and the dirty flag it drives all follow
 /// from which side of the divider it sits on.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,8 +47,8 @@ pub(super) struct EffectInstance {
     /// means the textures behind them may have been freed.
     built_targets: Tick,
     /// The effective scale this instance's scaffolding was built for. The
-    /// instance is the only record of the scale in force — nothing caches a
-    /// second copy — so a configuration change is detected by comparing against
+    /// instance is the only record of the scale in force (nothing caches a
+    /// second copy) so a configuration change is detected by comparing against
     /// this rather than by watching the config from somewhere else.
     applied_scale: f32,
     /// This layer's uniform for the shared in-place apply pass. Per instance
@@ -72,8 +72,8 @@ impl Compositor {
     /// `sync_effect_instances` does the rebuilding once a frame is running.
     ///
     /// Only instances that sync can actually reach are consulted. One whose
-    /// space currently has no resources — a zero-sized viewport drops the screen
-    /// run's textures while its entries survive — would never be rebuilt, and
+    /// space currently has no resources (a zero-sized viewport drops the screen
+    /// run's textures while its entries survive) would never be rebuilt, and
     /// counting it as drifted would mark the compositor dirty on every frame
     /// forever. Skipping it is what makes this terminate.
     ///
@@ -140,7 +140,7 @@ impl Compositor {
     /// mask's own plane rect, and the modulation the host contributes.
     ///
     /// The mask geometry is what lets a mask that grew independently of the
-    /// canvas window sample in its own space — the same `sample_mask_window`
+    /// canvas window sample in its own space: the same `sample_mask_window`
     /// path the leaf projection takes. A mask being transform-previewed is
     /// canvas-aligned; otherwise it samples in its live extent. A host with no
     /// visible mask gets the canvas rect, against which the shader's fallback
@@ -185,14 +185,14 @@ impl Compositor {
     /// Bring every effect layer's realized instance up to date with the
     /// document, then discard the ones whose layers are gone.
     ///
-    /// The one place with both a `device` and a `queue` on the effect path —
+    /// The one place with both a `device` and a `queue` on the effect path:
     /// the compose walk that follows only *encodes*, so everything an encode
     /// could need must already exist when this returns. That is why an instance
     /// records what it was built against: this compares those facts and
     /// rebuilds on any drift, rather than the walk re-deriving them per frame.
     ///
     /// Rebuilding is the expensive branch and it is avoided wherever an effect
-    /// can adopt the change in place — `Effect::set_params` answering `true`
+    /// can adopt the change in place: `Effect::set_params` answering `true`
     /// means a slider drag costs one buffer write. Everything else (a different
     /// effect type, a different parent, a resized accumulator, a freed texture)
     /// genuinely needs new bind groups.
@@ -207,8 +207,8 @@ impl Compositor {
         self.screen_run.ensure_resources(device);
 
         // One pass over the document's effect layers, each tagged with the
-        // space its position puts it in. Everything downstream — the pair it
-        // binds, the scale it runs at, the dirty flag it drives — follows from
+        // space its position puts it in. Everything downstream (the pair it
+        // binds, the scale it runs at, the dirty flag it drives) follows from
         // this tag, so there is no second list to keep in step.
         // Flattened, so an effect nested in a run group is tagged by the space
         // it actually renders in rather than by whether it is a root child.
@@ -235,7 +235,7 @@ impl Compositor {
 
         for (id, space, pipeline_id, params) in live {
             // The native size the instance renders against. The scale it runs
-            // under is global — one knob for both spaces — so only the pair's
+            // under is global (one knob for both spaces) so only the pair's
             // dimensions differ here.
             let size = match space {
                 EffectSpace::Canvas { parent } => {
@@ -286,14 +286,14 @@ impl Compositor {
                     inst.params = params;
                     continue;
                 }
-                // The effect cannot adopt these in place — fall through and
+                // The effect cannot adopt these in place: fall through and
                 // rebuild it against the same views.
             }
 
             self.effect_rebuilds += 1;
             // An instance of the same effect type is cloned rather than rebuilt
             // from the registry, so a rebuild triggered by resources moving
-            // under it — a resize, a scale change — keeps whatever the effect
+            // under it (a resize, a scale change) keeps whatever the effect
             // was carrying. Animation clocks live on the effect itself, so
             // going back to the registry would silently rewind every animated
             // veil to zero.

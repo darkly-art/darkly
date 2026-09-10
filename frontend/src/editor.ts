@@ -184,10 +184,10 @@ export async function createInstance(
 
 /** Populate a freshly-booted instance with the deploy-flavor's default
  *  starter content (the demo build's hidden viewport effects, or nothing for
- *  the app build) — see {@link freshDocument}. Caller decides when to invoke
+ *  the app build): see {@link freshDocument}. Caller decides when to invoke
  *  (skipped for tabs that load existing documents). Living as a free
  *  function (not a `DarklyInstance` method) keeps "what's in a fresh tab"
- *  at the application layer — the engine itself stays opinion-free. */
+ *  at the application layer: the engine itself stays opinion-free. */
 export function seedFreshDocument(
     instance: DarklyInstance,
     docW: number,

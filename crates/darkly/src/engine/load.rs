@@ -14,7 +14,7 @@
 //!    `requires` block → [`LoadError::CorruptManifest`].
 //! 3. **Container version**: newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
-//! 4. **`requires` inventory** — diffed against the four registries
+//! 4. **`requires` inventory**: diffed against the four registries
 //!    (effects, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
@@ -25,7 +25,7 @@
 //!
 //! Only after every check passes does [`install_staging`] swap the
 //! document, replace the compositor, and upload pixels.
-//! That phase has no fallible operations — by construction the install
+//! That phase has no fallible operations: by construction the install
 //! either completes or panics (a logic bug to fix at the source).
 //!
 //! The staging-doc construction is registry-driven: each entity's
@@ -370,7 +370,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
 
     // The one place the divider invariant is established by hand. Load builds
     // the tree from the manifest and derives the parent map directly, so
-    // `link` — where every other path holds the invariant — is never called.
+    // `link` (where every other path holds the invariant) is never called.
     normalize_divider(&mut doc, fresh_divider)?;
 
     Ok((doc, id_map))
@@ -420,7 +420,7 @@ fn normalize_divider(doc: &mut Document, fresh_divider: LayerId) -> Result<(), L
     // Degrade on load, refuse on move: relink the divider above the longest
     // qualifying suffix if the file put something ineligible above it, so a
     // hand-edited file cannot ask for a raster to be rendered after the view
-    // transform — and still opens.
+    // transform, and still opens.
     let div = doc.divider_id();
     let run_blocked = doc.screen_space_run().iter().any(|&c| {
         doc.find_node(c)
@@ -516,7 +516,7 @@ fn install_staging(
     // The screen-space run sizes to the surface in production (via
     // `resize()`); on a freshly-loaded compositor it's still 0×0, so its
     // instances would have no pair to bind. Seed to canvas dimensions so the
-    // first frame after a load always sees a sized viewport — the next real
+    // first frame after a load always sees a sized viewport: the next real
     // resize cascades to the right surface size automatically.
     engine
         .compositor
@@ -718,7 +718,7 @@ fn register_embedded_fonts(
     }
 }
 
-/// Allocate the selection-filter GPU state — mirrors the engine
+/// Allocate the selection-filter GPU state: mirrors the engine
 /// constructor's eager allocation.
 fn ensure_selection_state(engine: &mut DarklyEngine) {
     let id = engine.doc.ensure_selection_filter();
@@ -766,7 +766,7 @@ mod tests {
         // shape that mirrors what a real save would produce, then assert
         // the staging doc's structure.
         // Manifest ids are `LayerId::to_ffi` outputs (generation in the high
-        // bits) — a bare small integer is not a valid wire id and would only
+        // bits): a bare small integer is not a valid wire id and would only
         // resolve by slot-index coincidence.
         let ffi = |idx: u64| (1u64 << 32) | idx;
         let root_id: u64 = ffi(1);

@@ -1,4 +1,4 @@
-//! Invert colors — `1 - rgb`, alpha preserved.
+//! Invert colors: `1 - rgb`, alpha preserved.
 //!
 //! A thin registration over shared infrastructure: the `invert_color` atom
 //! (`shaders/lib/color.wgsl`) supplies the math and
@@ -20,7 +20,7 @@ use crate::gpu::preview::PreviewAnim;
 const BINDINGS: &[Binding] = &[Binding::Texture];
 
 /// Prepend the shared color atom to the invert shader so `fs_invert` can call
-/// `invert_color` — the same `include_str!` concatenation `voids/noise.rs` uses
+/// `invert_color`: the same `include_str!` concatenation `voids/noise.rs` uses
 /// for `lib/fbm.wgsl`.
 fn shader_source() -> String {
     let color = include_str!("../../../shaders/lib/color.wgsl");

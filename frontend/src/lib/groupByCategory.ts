@@ -2,7 +2,7 @@
  * Grouping and search over lists of categorized things.
  *
  * The brush picker, the brush-builder node menus and the add-layer modal all
- * present the same shape — a flat list carrying an optional category, grouped
+ * present the same shape: a flat list carrying an optional category, grouped
  * into sections with a fallback bucket, narrowed by a typed query. This module
  * is that shape, so the arithmetic lives in one place and stays testable
  * without mounting a component.
@@ -43,7 +43,7 @@ export function groupByCategory<T>(
 }
 
 /**
- * Whitespace-tokenized substring match — `"soft round"` matches "Soft Round"
+ * Whitespace-tokenized substring match: `"soft round"` matches "Soft Round"
  * but `"soft xxx"` does not. Every token must appear somewhere in the haystack,
  * so tokens can match across different facets of the same item.
  *

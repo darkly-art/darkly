@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 /**
  * `getDisplayMedia` needs transient user activation, which an `addVoid`
  * round-trip would expire. The void spawn therefore acquires the MediaStream
- * before it awaits anything else — an ordering constraint that is invisible in
+ * before it awaits anything else: an ordering constraint that is invisible in
  * the source, so it is pinned here.
  */
 
@@ -88,7 +88,7 @@ describe('the void add source', () => {
         expect(calls).toEqual(['addVoid']);
     });
 
-    // An image void has no empty state to add — it needs a file first — so it
+    // An image void has no empty state to add (it needs a file first) so it
     // goes to the placement action rather than becoming a blank layer.
     it('hands an image-sourced void to the placement action', async () => {
         await source.spawn!(entry({ type: 'image', source: { kind: 'image' } }));

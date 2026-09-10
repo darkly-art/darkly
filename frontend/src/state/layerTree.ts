@@ -64,7 +64,7 @@ export interface LayerTreeIndex {
     collapsed: Set<number>;
     slots: Map<number, Slot>;
     /**
-     * The rows the panel actually draws, in panel order — `visibleOrder` minus
+     * The rows the panel actually draws, in panel order: `visibleOrder` minus
      * modifiers, carrying the depth each row is indented to. What the drop-target
      * model resolves a pointer against.
      */
@@ -91,8 +91,8 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
         for (const n of nodes) {
             if (n?.id === undefined) continue;
             const id: number = n.id;
-            // The viewport divider is a drop row — the gaps above and below it
-            // are the two sides of the boundary — but never a selectable node:
+            // The viewport divider is a drop row (the gaps above and below it
+            // are the two sides of the boundary) but never a selectable node:
             // it stays out of `ids`/`order`, so selection, reselection after a
             // delete, and keyboard navigation can't land on it.
             if (n.type === 'divider') {

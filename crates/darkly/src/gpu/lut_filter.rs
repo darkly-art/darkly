@@ -5,11 +5,11 @@
 //!
 //!   RGB (composite), Red, Green, Blue, Alpha, Hue, Saturation, Lightness
 //!
-//! — into one 256×2 RGBA8 LUT read by [`shaders/effects/curves.wgsl`], then runs
+//!: into one 256×2 RGBA8 LUT read by [`shaders/effects/curves.wgsl`], then runs
 //! that one fragment shader. Only the *evaluator* differs: Curves reads a
 //! natural-cubic spline, Levels a black/gamma/white/output transfer. Everything
-//! shared lives here — the LUT layout, the composite-over-channel fold, the
-//! HSV/Lab stage gate flags, and the pipeline — so each filter is a thin "give
+//! shared lives here (the LUT layout, the composite-over-channel fold, the
+//! HSV/Lab stage gate flags, and the pipeline) so each filter is a thin "give
 //! me eight per-channel evaluators" provider.
 
 use std::sync::Arc;

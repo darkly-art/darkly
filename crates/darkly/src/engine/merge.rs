@@ -16,7 +16,7 @@ use crate::undo::BakeSourceSlot;
 /// Refusal shared by both merge paths. Phrased in the divider's vocabulary
 /// ("viewport only") rather than the compositor's, so it reads as the same
 /// concept the layer panel labels.
-const VIEWPORT_ONLY_REFUSAL: &str = "Viewport-only effects can't be merged — they aren't part of the image. Drag it below the viewport line first.";
+const VIEWPORT_ONLY_REFUSAL: &str = "Viewport-only effects can't be merged: they aren't part of the image. Drag it below the viewport line first.";
 
 #[handlers]
 impl DarklyEngine {

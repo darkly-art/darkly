@@ -1020,7 +1020,7 @@ fn dropped_present_keeps_requesting_frames() {
 
 // ---------------------------------------------------------------------------
 // Effect-instance invalidation. An instance's bind groups point at the pair it
-// was prepared against — a group accumulator in canvas space, the run's
+// was prepared against: a group accumulator in canvas space, the run's
 // ping-pong in screen space. Both are replaced under it: the canvas rect
 // recreates every accumulator, and a viewport resize recreates the run's
 // textures, which `set_canvas_rect` never touches. A missed invalidation leaves
@@ -1087,7 +1087,7 @@ fn effect_layer_survives_canvas_resize() {
 }
 
 /// Moving an effect across the divider re-prepares it against the other
-/// space's pair — the second invalidation trigger, and the one no canvas-rect
+/// space's pair: the second invalidation trigger, and the one no canvas-rect
 /// change can stand in for.
 #[test]
 fn effect_layer_survives_crossing_the_divider() {

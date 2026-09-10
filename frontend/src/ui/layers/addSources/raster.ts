@@ -1,7 +1,7 @@
 import type { AddSource } from './types';
 
 /**
- * A plain raster layer — the `raster` layer kind, whose `display_name` is
+ * A plain raster layer: the `raster` layer kind, whose `display_name` is
  * "Raster Layer". The tab says "Normal", which is what the add-layer UI has
  * always called it.
  *

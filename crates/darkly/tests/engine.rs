@@ -2812,7 +2812,7 @@ fn passthrough_sub_canvas_group_mask_samples_own_space() {
     engine.render(0.0);
 
     engine.add_mask(group_id).expect("add mask");
-    // A black brush dab on the mask at plane (40, 40) — a localized hidden spot.
+    // A black brush dab on the mask at plane (40, 40): a localized hidden spot.
     paint_mask_dab(&mut engine, group_id, 40.0, 40.0, 0.0);
     engine.test_flush_readbacks();
 
@@ -3854,7 +3854,7 @@ fn paste_while_editing_mask_places_layer_at_top_level() {
     );
 }
 
-/// The document model must expose the selection as a typed [`Filter`] —
+/// The document model must expose the selection as a typed [`Filter`],
 /// not as a parallel bespoke slot beside the filter list. `Document.selection`
 /// is a Filter with `kind = Selection(...)`, addressable through the same
 /// `Filter::pixels()` interface as a mask.

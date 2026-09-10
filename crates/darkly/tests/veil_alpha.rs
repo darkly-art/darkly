@@ -6,7 +6,7 @@
 //! anything it touched would be forced opaque, destroying transparency beneath
 //! it and filling unpainted areas with colour.
 //!
-//! The contract pinned here is that alpha is **coverage** — averaged linearly
+//! The contract pinned here is that alpha is **coverage**: averaged linearly
 //! over whatever footprint the veil reads. Feeding a uniform half-transparent
 //! source therefore has to come back half-transparent, because the linear mean
 //! of a constant is that constant. A veil that hard-codes its alpha returns 255
@@ -23,7 +23,7 @@ const W: u32 = 64;
 const H: u32 = 64;
 const SRC_ALPHA: u8 = 128;
 
-/// A uniform RGBA source: mid-grey at half coverage. Uniform on purpose — a
+/// A uniform RGBA source: mid-grey at half coverage. Uniform on purpose: a
 /// spatial veil's footprint then cannot reach a differently-covered texel, so
 /// any deviation in the result is the veil's own doing rather than its blur
 /// kernel averaging in a neighbour.
@@ -125,7 +125,7 @@ fn veils_carry_source_alpha() {
         assert!(
             delta <= 2,
             "veil `{type_id}` returned alpha {got}, expected ~{SRC_ALPHA} \
-             (delta {delta}) — it is not carrying the source's coverage",
+             (delta {delta}): it is not carrying the source's coverage",
         );
     }
 }
@@ -140,7 +140,7 @@ fn veils_leave_empty_canvas_empty() {
         assert_eq!(
             alpha, 0,
             "veil `{type_id}` returned alpha {alpha} over fully transparent \
-             input — it would opaque-ify empty canvas",
+             input: it would opaque-ify empty canvas",
         );
     }
 }

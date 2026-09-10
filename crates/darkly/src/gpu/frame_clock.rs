@@ -16,7 +16,7 @@ impl Compositor {
     /// Master rAF tick counter. Advances exactly once per `update_animations`
     /// call (i.e. once per `engine.render`), starting at 0. This is the same
     /// counter every divisor-throttled subsystem inside the compositor checks
-    /// (`screen_divisor`, `overlay_divisor`, `canvas_divisor` — see
+    /// (`screen_divisor`, `overlay_divisor`, `canvas_divisor`: see
     /// [`Self::update_animations`]), so any JS-side throttle that uses
     /// `frame_count % divisor == 0` automatically aligns with all of them.
     /// Exposed so the WASM bridge can hand it to the frontend (e.g. the
@@ -31,13 +31,13 @@ impl Compositor {
     /// - Viewport-only effects: every `screen_divisor`-th frame (default 2 =
     ///   50% = 30fps at 60hz)
     /// - Overlay: every `overlay_divisor`-th frame (default 4 = 25% = 15fps at 60hz)
-    /// - Document content — void layers and canvas-space effect layers: every
+    /// - Document content, void layers and canvas-space effect layers: every
     ///   `canvas_divisor`-th frame
     ///
-    /// Integer divisors guarantee alignment — a divisor-4 tick always coincides
+    /// Integer divisors guarantee alignment: a divisor-4 tick always coincides
     /// with a divisor-2 tick, so systems never force extra frame renders.
     ///
-    /// `doc` is borrowed to consult layer visibility — animation work for an
+    /// `doc` is borrowed to consult layer visibility: animation work for an
     /// effectively-hidden layer (self or any ancestor hidden) is skipped at
     /// exactly the point the compositor's tree walk would drop the layer's
     /// composited output.
@@ -108,7 +108,7 @@ impl Compositor {
 
     /// Returns true if any animations need continuous frames (effect layers on
     /// either side of the divider, the overlay, or any effectively-visible
-    /// animated layer). `doc` is consulted for per-layer visibility — same
+    /// animated layer). `doc` is consulted for per-layer visibility: same
     /// contract as [`Self::update_animations`].
     pub fn needs_animation(&self, doc: &Document) -> bool {
         self.tool_overlay.needs_animation()
@@ -120,7 +120,7 @@ impl Compositor {
     /// True when any allocated layer with procedural content reports
     /// `needs_animation()` AND is effectively visible in `doc`. Folded into
     /// the compositor's overall `needs_animation()` so the rAF loop keeps
-    /// ticking while animated voids exist — but a hidden layer's animation
+    /// ticking while animated voids exist, but a hidden layer's animation
     /// contribution is dropped at the same point the compositor's tree walk
     /// would drop the layer's output (see `compose_children`'s
     /// `node.visible()` skip).
@@ -141,7 +141,7 @@ impl Compositor {
     }
 
     /// Whether any effect layer on one side of the divider wants continuous
-    /// frames. The instance is the authority — `needs_animation()` is an answer
+    /// frames. The instance is the authority: `needs_animation()` is an answer
     /// about current parameter values, which only the realized effect holds.
     fn any_animated_effect(&self, doc: &Document, screen: bool) -> bool {
         self.effect_instances
@@ -175,7 +175,7 @@ impl Compositor {
     /// content by `dt`, returning the ids that advanced. Called by
     /// `update_animations` at the cadence set by `animation.canvas_divisor`.
     /// Visibility is queried the same way the main composite walk queries
-    /// it — no precomputed "hidden" set; the doc is the authoritative tree.
+    /// it: no precomputed "hidden" set; the doc is the authoritative tree.
     fn tick_animated_layers(
         &mut self,
         queue: &wgpu::Queue,

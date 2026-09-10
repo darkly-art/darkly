@@ -32,7 +32,7 @@ function deps(over: Partial<TabDeps> = {}): TabDeps {
         { action: 'newGroup', catalog: '', title: 'Normal' },
     ];
     const catalogs: Record<string, Catalog> = {
-        // One catalog, two categories — the shape the merged registry emits.
+        // One catalog, two categories: the shape the merged registry emits.
         effects: catalog('effects', 'Effects', [
             entry('invert', { category: 'Filters' }),
             entry('curves', { category: 'Filters' }),
@@ -104,7 +104,7 @@ describe('buildTabs', () => {
 
     it('splits one source into two tabs when its entries declare two categories', () => {
         // The shape the rail takes once the veil and filter registries merge
-        // into one `effects` catalog — no change to this function.
+        // into one `effects` catalog: no change to this function.
         const merged = catalog('effects', 'Effects', [
             entry('invert', { category: 'Filters' }),
             entry('grain', { category: 'Veils' }),
@@ -124,7 +124,7 @@ describe('buildTabs', () => {
 
     it('offers each effect once, under the source that names its category', () => {
         // `black_and_white` and `chromatic_aberration` used to be registered
-        // twice — once as a veil, once as a filter — and appeared twice. One
+        // twice (once as a veil, once as a filter) and appeared twice. One
         // catalog now holds one of each, and the two sources split it by
         // category rather than by which registry it came from.
         const effects = catalog('effects', 'Effects', [
@@ -149,7 +149,7 @@ describe('buildTabs', () => {
         expect(all.filter(t => t === 'chromatic_aberration')).toHaveLength(1);
 
         // ...and each lands under the source that offers it, which is what makes
-        // its spawn path correct — a filter layer for one, a veil for the other.
+        // its spawn path correct: a filter layer for one, a veil for the other.
         const bw = tabs.find(t => t.cards.some(c => c.entry.type === 'black_and_white'))!;
         expect(bw.title).toBe('Filters');
         expect(bw.cards.find(c => c.entry.type === 'black_and_white')!.source.action).toBe(

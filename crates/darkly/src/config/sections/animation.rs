@@ -23,8 +23,8 @@ const PREFS: &[Pref] = &[
         key: "animation.canvas_divisor",
         display_name: "Canvas animation divisor",
         description: Some(
-            "How often animated document content — void layers and effect layers below the \
-             viewport line — re-renders, as a fraction of the master frame rate. Both share \
+            "How often animated document content: void layers and effect layers below the \
+             viewport line: re-renders, as a fraction of the master frame rate. Both share \
              one clock so their ticks line up.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },

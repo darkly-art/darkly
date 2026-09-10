@@ -54,8 +54,8 @@
         addLayerModal.hide();
         if (!app.engine) return;
         // The picker adds layers by type, so the panel's view has to be re-read
-        // once it closes. Mounted at the app root — reachable from the palette
-        // and menu bar, not just the layer panel — so the refresh is ours to do
+        // once it closes. Mounted at the app root (reachable from the palette
+        // and menu bar, not just the layer panel) so the refresh is ours to do
         // rather than the panel's.
         app.refreshLayerTree();
         app.requestFrame();
@@ -279,7 +279,7 @@
         top: 0;
         padding: 10px 0 8px;
         z-index: 1;
-        /* The list scrolls under this, so it has to be opaque — and it has to
+        /* The list scrolls under this, so it has to be opaque, and it has to
            be the dialog's own surface (`dialog.modal` in Modal.svelte), not the
            app background the floating menus sit on. */
         background: var(--bg-active);

@@ -16,7 +16,7 @@
 // Deliberately *not* Porter-Duff source-over. Source-over of a transform's
 // result over its own input inflates alpha wherever the input is partially
 // transparent (`a + a(1-a) != a`), which is why Krita's adjustment layers
-// default to COMPOSITE_COPY (`KoCompositeOpCopy2.h` — a replace, then a lerp on
+// default to COMPOSITE_COPY (`KoCompositeOpCopy2.h`: a replace, then a lerp on
 // the mask and opacity) and GIMP's to GIMP_LAYER_MODE_REPLACE
 // (`gimpoperationreplace.c`). Replace-then-lerp is the adjustment-layer
 // semantic, and this is that arithmetic.
@@ -63,7 +63,7 @@ struct ApplyUniforms {
 }
 @group(0) @binding(3) var<uniform> uniforms: ApplyUniforms;
 
-// Mask texture — same bind group layout as composite.wgsl group 1.
+// Mask texture: same bind group layout as composite.wgsl group 1.
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {

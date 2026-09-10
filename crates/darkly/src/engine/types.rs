@@ -215,21 +215,21 @@ pub enum LayerInfo {
         modifiers: Vec<ModifierInfo>,
         children: Vec<LayerInfo>,
     },
-    /// The viewport divider — the screen-space boundary's row. Carries only
+    /// The viewport divider: the screen-space boundary's row. Carries only
     /// identity: it has no user-editable properties, and the panel renders it
     /// from its own template rather than the generic layer row.
     #[serde(rename_all = "camelCase")]
     Divider { id: f64 },
 }
 
-/// The root's children, top-first — panel order. The viewport divider is one
+/// The root's children, top-first: panel order. The viewport divider is one
 /// of the rows ([`LayerInfo::Divider`]), so the boundary needs no side
 /// channel: everything above the divider row renders in screen space.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct LayerTree {
-    /// Root children, top-first — panel order.
+    /// Root children, top-first: panel order.
     pub layers: Vec<LayerInfo>,
 }
 
@@ -253,7 +253,7 @@ pub struct ModifierInfo {
     pub editable: bool,
 }
 
-/// Range and default rendered for reading — each number converted into its
+/// Range and default rendered for reading: each number converted into its
 /// display unit and suffixed. Carried alongside the raw numbers so a consumer
 /// that only wants to *show* the schema needs no unit table of its own.
 #[derive(serde::Serialize)]

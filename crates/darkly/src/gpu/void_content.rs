@@ -12,7 +12,7 @@ use crate::layer::LayerId;
 
 /// How a layer's pixels reach `node_textures[id]`.
 ///
-/// - `Raster`: pixels arrive via paint / paste / fill — `node_textures[id]`
+/// - `Raster`: pixels arrive via paint / paste / fill; `node_textures[id]`
 ///   is authoritative and the compositor doesn't regenerate it.
 /// - `Procedural`: pixels are GPU-regenerable. The compositor calls
 ///   [`Void::encode`] before the next composite when the void's own dirty
@@ -23,7 +23,7 @@ pub(super) enum LayerContent {
 }
 
 /// Per-instance procedural-content state. The "needs re-encode" flag lives
-/// on the [`Void`] itself ([`Void::take_dirty`]) — the compositor neither
+/// on the [`Void`] itself ([`Void::take_dirty`]): the compositor neither
 /// stores nor reconciles it.
 pub(super) struct ProceduralContent {
     /// The procedural-content trait object. Owned here (one per layer)
@@ -37,7 +37,7 @@ pub(super) struct ProceduralContent {
 /// Field-explicit projection of a cache entry's procedural sidecar. A free
 /// function over the enum (not a method on `Compositor`) so call sites that
 /// hold a disjoint borrow of another compositor field can still route through
-/// the one `LayerContent` match — every pattern-match on the enum lives here
+/// the one `LayerContent` match: every pattern-match on the enum lives here
 /// and in [`procedural_of_mut`]; the accessors and iterators below all share
 /// them.
 fn procedural_of(content: &LayerContent) -> Option<&ProceduralContent> {
@@ -77,7 +77,7 @@ impl Compositor {
     /// compositor's blend pipeline can sample it without any kind-specific
     /// branch) and a `LayerCache` holding the blend uniforms plus a
     /// [`LayerContent::Procedural`] sidecar with the trait object and its
-    /// `EffectCache`. Idempotent — calling twice for the same id is a no-op.
+    /// `EffectCache`. Idempotent, calling twice for the same id is a no-op.
     ///
     /// The caller constructs `void` via the engine's void registry. The
     /// compositor takes the trait object as-is and stops bookkeeping the
@@ -135,7 +135,7 @@ impl Compositor {
     }
 
     /// Iterate every realized procedural layer as `(id, sidecar)`. The
-    /// whole-pool counterpart of [`Self::procedural_content`] — animation
+    /// whole-pool counterpart of [`Self::procedural_content`]: animation
     /// ticks and canvas resync walk the pool through this, so no consumer
     /// pattern-matches [`LayerContent`] itself.
     pub(super) fn procedural_entries(&self) -> impl Iterator<Item = (LayerId, &ProceduralContent)> {
@@ -163,7 +163,7 @@ impl Compositor {
     }
 
     /// Install a void layer's source image. Wraps
-    /// [`crate::gpu::void::Void::set_source_pixels`] — the void reallocates its
+    /// [`crate::gpu::void::Void::set_source_pixels`]: the void reallocates its
     /// source texture at `(width, height)`, rebuilds its bind group, and writes
     /// the bytes. Two callers: document load restoring a saved frame, and
     /// placement installing a user-supplied image. `bytes` are premultiplied
@@ -313,9 +313,9 @@ impl Compositor {
     /// Update a void's procedural inputs in place. The void mutates its
     /// own fields and rewrites the uniform buffer; the existing
     /// `EffectCache` (including any aux textures the void was using to
-    /// hold stateful pixel data — e.g. the camera void's last received
+    /// hold stateful pixel data: e.g. the camera void's last received
     /// frame) is preserved untouched. The blend uniforms (opacity / mode
-    /// / isolated) are also untouched — only the procedural side changes.
+    /// / isolated) are also untouched: only the procedural side changes.
     pub fn update_void_layer_params(
         &mut self,
         queue: &wgpu::Queue,
@@ -364,7 +364,7 @@ impl Compositor {
         let canvas = self.canvas_rect();
 
         // A void's output texture is canvas-sized by definition, and
-        // `ensure_void_layer` allocates it once — so a resize has to
+        // `ensure_void_layer` allocates it once, so a resize has to
         // reallocate it here or the void keeps drawing into the old window's
         // footprint. Collected first: the loop below writes `node_textures`
         // while `layer_cache` is borrowed.
@@ -378,7 +378,7 @@ impl Compositor {
             {
                 // `swap_node_texture` also refreshes the blend uniform's
                 // `layer_offset` / `layer_size` and drops the bind groups that
-                // named the old view — without that the composite samples the
+                // named the old view: without that the composite samples the
                 // new texture through the old extent and clips the void to the
                 // previous window.
                 let tex = LayerTexture::with_bounds(device, canvas);
@@ -425,7 +425,7 @@ impl Compositor {
     /// Re-render every dirty procedural layer's texture. Runs at the top of
     /// the compositor's encode pass so the subsequent blend in
     /// `compose_children` samples up-to-date pixels. Raster layers are
-    /// inherently "never dirty" — their pixels arrived through paint and
+    /// inherently "never dirty": their pixels arrived through paint and
     /// `node_textures[id]` is authoritative.
     ///
     /// The dirty bit is the void's own, returned through
@@ -458,7 +458,7 @@ impl Compositor {
             // Field-explicit `procedural_of_mut` instead of
             // `procedural_content_mut(&mut self, ..)` so the borrow checker
             // sees that `node_textures` and `layer_cache` are disjoint
-            // fields — without that, dst_view and the procedural sidecar
+            // fields: without that, dst_view and the procedural sidecar
             // can't both be live at once.
             let Some(proc) = self
                 .layer_cache
@@ -469,7 +469,7 @@ impl Compositor {
             };
             proc.void.encode(encoder, &proc.cache, dst_view);
         }
-        // Leave the field empty at exit — capacity is retained but no
+        // Leave the field empty at exit: capacity is retained but no
         // potentially-stale LayerIds live past dispose.
         self.dirty_procedural_scratch.clear();
     }

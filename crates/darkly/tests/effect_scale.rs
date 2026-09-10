@@ -1,4 +1,4 @@
-//! The effect resolution scale — one global knob, both sides of the divider.
+//! The effect resolution scale: one global knob, both sides of the divider.
 //!
 //! An effect can render below native resolution and be scaled back up, trading
 //! sharpness for fill rate. This file is about that trade: that the scale is
@@ -62,7 +62,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
     engine.render(0.0);
 }
 
-/// A single opaque dab, leaving the rest of the layer transparent — the alpha
+/// A single opaque dab, leaving the rest of the layer transparent: the alpha
 /// edge the resampling assertions need.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
     engine.begin_stroke(layer_id).unwrap();
@@ -111,7 +111,7 @@ fn realized_canvas_effect(engine: &mut DarklyEngine, pipeline: &str) -> LayerId 
 // The scale applies in both spaces
 // ---------------------------------------------------------------------------
 
-/// The knob reaches canvas space at all — the half of the divider that used to
+/// The knob reaches canvas space at all: the half of the divider that used to
 /// hardcode full resolution.
 #[test]
 fn canvas_space_effect_renders_at_the_configured_scale() {
@@ -170,7 +170,7 @@ fn a_scale_of_one_skips_the_reduced_path() {
     );
 }
 
-/// The global scale and an effect's own declared cost multiply — neither
+/// The global scale and an effect's own declared cost multiply: neither
 /// overrides the other. `painting` declares 0.7, so at 0.5 it lands on 0.35.
 #[test]
 fn per_effect_factor_composes_with_the_configured_scale() {
@@ -213,7 +213,7 @@ fn a_reduced_canvas_effect_actually_resamples_the_composite() {
 }
 
 /// Accumulators hold straight alpha, so an unweighted resample drags colour
-/// toward the black that transparent texels carry — a dark rim around every
+/// toward the black that transparent texels carry: a dark rim around every
 /// silhouette, baked into the export. Colour must be weighted by coverage in
 /// both directions of the round trip.
 #[test]
@@ -252,7 +252,7 @@ fn a_reduced_canvas_effect_does_not_darken_transparent_edges() {
 
 /// Regression: the realized scale was never part of an instance's fingerprint.
 /// `structural_match` compares `pipeline_id`, `space`, `render_size` and the
-/// `targets` revision — and for a canvas instance `render_size` is the parent
+/// `targets` revision, and for a canvas instance `render_size` is the parent
 /// accumulator, which a scale change does not move. So a composite could run
 /// after the change and still reuse the instance built at the old scale.
 #[test]
@@ -269,7 +269,7 @@ fn changing_the_scale_rebuilds_a_canvas_instance() {
     set_scale(0.5);
 
     // Dirty the composite the ordinary way, so the frame genuinely reaches
-    // `sync_effect_instances` — this test is about the fingerprint, not about
+    // `sync_effect_instances`: this test is about the fingerprint, not about
     // whether anything woke the pipeline up.
     let base = engine.add_raster_layer(None);
     fill_layer(&mut engine, base, 10, 20, 30);
@@ -295,7 +295,7 @@ fn a_scale_change_alone_wakes_the_canvas() {
 
     set_scale(0.5);
 
-    // No mutation whatsoever — the config change is the only event.
+    // No mutation whatsoever: the config change is the only event.
     let _ = engine.test_readback_canvas();
 
     assert_eq!(
@@ -306,7 +306,7 @@ fn a_scale_change_alone_wakes_the_canvas() {
 }
 
 /// The scale poll now runs on every frame, ahead of the dirty gate. It must
-/// report drift only when there is drift — otherwise it marks the compositor
+/// report drift only when there is drift: otherwise it marks the compositor
 /// dirty forever and the frame loop never idles.
 #[test]
 fn a_steady_frame_does_not_rebuild_or_redirty() {

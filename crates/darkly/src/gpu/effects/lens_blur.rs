@@ -117,7 +117,7 @@ impl Effect for LensBlur {
     }
 
     /// The uniform holds the render resolution alongside the parameters, and
-    /// that half is untouched here — which is why the cache stays valid and
+    /// that half is untouched here, which is why the cache stays valid and
     /// this answers `true`.
     fn set_params(
         &mut self,

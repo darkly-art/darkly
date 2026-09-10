@@ -4,7 +4,7 @@ import type { CaptureKind } from '../../../lib/frameSource';
 import type { AddSource } from './types';
 
 /**
- * A void — a layer filled from a procedural or live source.
+ * A void: a layer filled from a procedural or live source.
  *
  * Spawning lives here rather than in the modal because of the acquisition
  * ordering below: no shared spawn path could hold it, since it constrains what
@@ -15,8 +15,8 @@ export const source: AddSource = {
     catalog: 'voids',
     async spawn(entry) {
         if (!app.engine) return;
-        // An image-sourced void has no empty state to add — it needs the user to
-        // choose a file first — so hand it straight to the placement action
+        // An image-sourced void has no empty state to add (it needs the user to
+        // choose a file first) so hand it straight to the placement action
         // rather than creating a blank layer here. Keyed on the void's declared
         // source, so a future ingress is additive at this match.
         if (entry.source?.kind === 'image') {
@@ -29,8 +29,8 @@ export const source: AddSource = {
         // which would expire if we acquired only after awaiting add_void. If
         // the user cancels / denies, we still create the layer and record the
         // error so the properties panel can offer Resume. A `stream` void
-        // (Blender) needs no gesture or permission — it connects over localhost
-        // HTTP after the layer exists — so skip acquisition entirely.
+        // (Blender) needs no gesture or permission (it connects over localhost
+        // HTTP after the layer exists) so skip acquisition entirely.
         const captureKind: CaptureKind | undefined =
             entry.source?.kind === 'capture' ? entry.source.capture : undefined;
         let stream: MediaStream | undefined;
@@ -55,7 +55,7 @@ export const source: AddSource = {
         if (id != null) {
             app.selectLayer(id);
             // Adding a stream-backed void via the picker is an explicit user
-            // gesture — opt the new layer into this session's allow-list and
+            // gesture: opt the new layer into this session's allow-list and
             // hand it the pre-acquired stream (or the acquire error). Reopening
             // a saved doc does NOT add to this set, which is why loaded
             // stream voids hold their saved frame until the user clicks Resume.
@@ -64,7 +64,7 @@ export const source: AddSource = {
                 await app.startStreamSource(id, captureKind, stream, acquireError);
             }
         } else if (stream) {
-            // Layer creation failed but we acquired a stream — release it so the
+            // Layer creation failed but we acquired a stream: release it so the
             // OS capture indicator doesn't linger.
             stream.getTracks().forEach((t) => t.stop());
         }

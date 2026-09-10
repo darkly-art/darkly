@@ -2,8 +2,8 @@
 //! parameter-derived [`EffectCache`].
 //!
 //! Most effects are the same object: hold a parameter vector, realize it into
-//! GPU resources — a packed uniform, sometimes a baked texture (Curves and
-//! Levels bake a 256×2 LUT) — then run one fragment pass reading `[src, …]` and
+//! GPU resources (a packed uniform, sometimes a baked texture (Curves and
+//! Levels bake a 256×2 LUT)) then run one fragment pass reading `[src, …]` and
 //! writing the destination. This is that object, so those effects are a
 //! `register()` function and a description of their resources rather than a
 //! hand-written [`Effect`] impl.
@@ -28,13 +28,13 @@ use crate::gpu::params::{ParamDef, ParamValue};
 pub type PackUniform = fn(&[ParamValue]) -> Vec<u8>;
 
 /// Allocates an effect's parameter-derived GPU resources into a fresh cache.
-/// Runs once per instance, at cache creation — never on a parameter change.
+/// Runs once per instance, at cache creation: never on a parameter change.
 pub type AllocResources = fn(&wgpu::Device, &mut EffectCache);
 
 /// Writes current parameter values into resources [`AllocResources`] already
 /// allocated. Runs at cache creation and again on every parameter change, so it
 /// takes no device and allocates nothing. Boxed rather than a bare `fn` so a
-/// shared substrate can close over the per-effect half of the work — which is
+/// shared substrate can close over the per-effect half of the work, which is
 /// how Curves and Levels share one writer over two bakers.
 pub type WriteResources = Box<dyn Fn(&wgpu::Queue, &[ParamValue], &EffectCache) + Send + Sync>;
 
@@ -46,7 +46,7 @@ pub type WriteResources = Box<dyn Fn(&wgpu::Queue, &[ParamValue], &EffectCache) 
 /// bind group. That is what lets [`Effect::set_params`] always answer `true`
 /// here, so dragging a slider does not rebuild the instance.
 pub enum Resources {
-    /// Nothing to realize — the bind group is `[src]` alone.
+    /// Nothing to realize: the bind group is `[src]` alone.
     None,
     /// One uniform buffer, sized by what `pack` produces and rewritten from it
     /// on every parameter change.
@@ -145,7 +145,7 @@ impl ParamEffect {
         }
     }
 
-    /// Build the two bind groups — one per ping-pong direction — over the
+    /// Build the two bind groups (one per ping-pong direction) over the
     /// resources `cache` holds. The one place the binding order is spelled out,
     /// so the cache and the shader cannot disagree.
     fn bind_groups(

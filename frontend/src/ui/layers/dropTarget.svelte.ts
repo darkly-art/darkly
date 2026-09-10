@@ -1,5 +1,5 @@
 /**
- * `use:layerDropTarget` — one shared Svelte action owning the HTML5 drag-and-drop
+ * `use:layerDropTarget`: one shared Svelte action owning the HTML5 drag-and-drop
  * lifecycle for every droppable thing in the layer panel: layer rows, group
  * headers, the viewport divider, and the empty area below the list.
  *
@@ -12,7 +12,7 @@
  * The affordance is written straight onto the node rather than round-tripped
  * through component state, so a site opts in with `use:` alone and needs no
  * `$state` of its own. The classes it toggles are styled in `dropIndicator.css`,
- * which is global on purpose — a component-scoped rule for a class that only
+ * which is global on purpose: a component-scoped rule for a class that only
  * appears via `classList` is pruned as unmatchable.
  */
 

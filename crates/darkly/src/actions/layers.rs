@@ -4,7 +4,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "addLayer",
         display_name: "Add Layer…",
-        description: "Open the add-layer picker — normal, filter, veil, void or group.",
+        description: "Open the add-layer picker: normal, filter, veil, void or group.",
         icon: "fa6-solid:plus",
     },
     ActionDef {
@@ -22,7 +22,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "newVeil",
         display_name: "New Veil",
-        description: "Add an effect layer from the Veils set — the distorting and animated ones (rainy glass, VHS, grain, …).",
+        description: "Add an effect layer from the Veils set: the distorting and animated ones (rainy glass, VHS, grain, …).",
         icon: "material-symbols:curtains-rounded",
     },
     ActionDef {

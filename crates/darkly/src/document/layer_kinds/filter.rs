@@ -30,7 +30,7 @@ struct FilterBody {
     opacity: f32,
     blend_mode: String,
     /// Stable `type_id` from [`crate::gpu::effect::EffectRegistry`],
-    /// e.g. `"invert"`. Anchors the param vector — a load that doesn't
+    /// e.g. `"invert"`. Anchors the param vector: a load that doesn't
     /// recognize this id is rejected by the engine as `CorruptManifest`.
     pipeline: String,
     /// Parameter values in the order the filter pipeline's schema declares

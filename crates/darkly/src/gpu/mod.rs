@@ -66,7 +66,7 @@ pub fn blit_region(
     blit_region_mip(encoder, src, src_origin, dst, dst_origin, width, height, 0);
 }
 
-/// [`blit_region`] at a specific mip level (same level on both sides) — for
+/// [`blit_region`] at a specific mip level (same level on both sides): for
 /// callers that copy whole mip chains level by level.
 #[allow(clippy::too_many_arguments)]
 pub fn blit_region_mip(

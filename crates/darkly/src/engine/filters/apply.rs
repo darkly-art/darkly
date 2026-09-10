@@ -1,4 +1,4 @@
-//! Destructive effects — apply a registered effect to a node's
+//! Destructive effects: apply a registered effect to a node's
 //! pixels in place, respecting an active selection.
 //!
 //! Mirrors [`layer_flip`](super::super::layer_flip)'s structure: the region machinery

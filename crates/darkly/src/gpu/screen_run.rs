@@ -2,7 +2,7 @@
 //! divider, realized on the presented image at viewport resolution, after the
 //! view transform.
 //!
-//! This owns only *resources* — the ping-pong pair the run reads and writes, a
+//! This owns only *resources*: the ping-pong pair the run reads and writes, a
 //! scratch target for the in-place apply pass, the scaling pipelines and the
 //! final blit. Membership, order and visibility come from the document
 //! ([`Document::screen_space_run`]), and the effect instances themselves live in
@@ -63,7 +63,7 @@ impl ScreenRun {
         self.accum_format
     }
 
-    /// The format the final blit writes — the surface's. A test sink standing
+    /// The format the final blit writes: the surface's. A test sink standing
     /// in for the surface has to match it or the pipeline is incompatible with
     /// the pass.
     pub fn surface_format(&self) -> wgpu::TextureFormat {
@@ -80,7 +80,7 @@ impl ScreenRun {
     }
 
     /// Where an effect writes its output before the apply pass blends it back
-    /// into the pair — the screen-space counterpart of the canvas apply scratch.
+    /// into the pair: the screen-space counterpart of the canvas apply scratch.
     pub fn scratch_view(&self) -> Option<&wgpu::TextureView> {
         self.scratch.as_ref().map(|(_, v)| v)
     }
@@ -92,7 +92,7 @@ impl ScreenRun {
     // --- Resources ---
 
     /// Update viewport dimensions. Returns whether the textures were replaced,
-    /// which invalidates every bind group pointing at them — the caller bumps
+    /// which invalidates every bind group pointing at them: the caller bumps
     /// the revisions that fact implies.
     pub fn resize(&mut self, width: u32, height: u32) -> bool {
         if self.viewport_width == width && self.viewport_height == height {

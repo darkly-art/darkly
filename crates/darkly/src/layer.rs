@@ -483,13 +483,13 @@ impl VectorLayer {
     }
 }
 
-/// The viewport divider — the screen-space boundary as a node among the root's
+/// The viewport divider: the screen-space boundary as a node among the root's
 /// children. Canvas space is everything below it, screen space everything
 /// above. It has no content of its own and never composites; its entire
 /// document meaning is its index in the root's children list.
 ///
 /// `blend` and `filters` exist only to keep [`Layer`]'s uniform accessors
-/// total — nothing ever reads them (the compositor skips the divider, and
+/// total, nothing ever reads them (the compositor skips the divider, and
 /// `can_have_mask` is false).
 pub struct DividerLayer {
     pub id: LayerId,
@@ -707,14 +707,14 @@ impl LayerNode {
         }
     }
 
-    /// Whether this node is the screen-space boundary — the divider among the
+    /// Whether this node is the screen-space boundary: the divider among the
     /// root's children. Read off the kind registration, so no consumer ever
     /// compares `type_id`.
     pub fn is_screen_space_boundary(&self) -> bool {
         self.kind().screen_space_boundary
     }
 
-    /// Convenience for the wire format / save file — just the stable `type_id`
+    /// Convenience for the wire format / save file: just the stable `type_id`
     /// string from `kind()`.
     pub fn type_id(&self) -> &'static str {
         self.kind().type_id
@@ -739,7 +739,7 @@ impl LayerNode {
     /// Sibling of [`Self::compose_into`], and dispatched the same way: every
     /// arm that can silently return without drawing answers for itself, so the
     /// walk never enumerates which kinds can no-op. The walk's cache consults
-    /// this so a child that contributes nothing is recorded as such — a child
+    /// this so a child that contributes nothing is recorded as such: a child
     /// whose resources appear or vanish changes the group's output exactly as
     /// a pixel edit would.
     ///
@@ -770,13 +770,13 @@ impl LayerNode {
         }
     }
 
-    /// Whether this node may sit above the screen-space boundary — whether it
+    /// Whether this node may sit above the screen-space boundary: whether it
     /// can be realized after the view transform, on the presented image, rather
     /// than inside the canvas-space tree walk.
     ///
     /// A structural question only: visibility is never consulted, because
     /// toggling an eye must not change what a document exports. A node carrying
-    /// a mask answers `false` whatever its kind — mask textures are canvas-space
+    /// a mask answers `false` whatever its kind: mask textures are canvas-space
     /// R8 at the full canvas rect and are sampled in plane coordinates, so
     /// applying one to a view-transformed image mixes coordinate frames. Mask
     /// *presence* is what disqualifies, not mask visibility, for the same reason
@@ -792,9 +792,9 @@ impl LayerNode {
         self.screen_space_blocker(doc).is_none()
     }
 
-    /// What stops `self` from sitting above the boundary — the offending node
+    /// What stops `self` from sitting above the boundary (the offending node
     /// (`self`, or the first descendant of it that cannot be there) paired with
-    /// why — or `None` if nothing does.
+    /// why) or `None` if nothing does.
     /// [`Self::supports_screen_space`] is this, asked as a yes/no.
     ///
     /// One rule with two callers: the boundary machinery wants the bool, and a
@@ -825,7 +825,7 @@ impl LayerNode {
             }
             // A group is eligible exactly when everything it holds is. Above
             // the divider the run is consumed flattened, so a group composites
-            // nothing of its own there — its passthrough flag, opacity and
+            // nothing of its own there: its passthrough flag, opacity and
             // blend mode are read only in canvas space, and cross the divider
             // untouched so they re-apply when the group moves back down.
             LayerNode::Group(g) => g
@@ -840,7 +840,7 @@ impl LayerNode {
     /// A passthrough group's "after" is written by an arbitrary number of child
     /// passes straight into the parent accumulator, so the only way to keep its
     /// "before" is to copy the accumulator first. An effect layer instead
-    /// writes into a scratch target, so both images exist without a copy — one
+    /// writes into a scratch target, so both images exist without a copy: one
     /// full-canvas `copy_texture_to_texture` per effect per frame that the
     /// snapshot path would have cost.
     ///
@@ -908,8 +908,8 @@ impl Layer {
     }
 
     /// Composite this layer into its parent group's accumulators. The
-    /// variant dispatch is owned by `Layer` — sibling of
-    /// [`LayerNode::compose_into`], one level down — so the compositor never
+    /// variant dispatch is owned by `Layer` (sibling of
+    /// [`LayerNode::compose_into`], one level down) so the compositor never
     /// asks which kind it received; each arm delegates back through `ctx`
     /// into a compositor-private method that owns the GPU work. A new
     /// in-place layer kind slots in here, editing this file only.
@@ -924,7 +924,7 @@ impl Layer {
         }
     }
 
-    /// Whether this layer's compose arm has what it needs to draw — sibling of
+    /// Whether this layer's compose arm has what it needs to draw, sibling of
     /// [`Self::compose_into`], one level down from
     /// [`LayerNode::compose_ready`].
     pub fn compose_ready(&self, compositor: &crate::gpu::compositor::Compositor) -> bool {

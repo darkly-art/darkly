@@ -3,14 +3,14 @@
 //!
 //! A preview is a short sequence of thumbnail frames of one entry, shown in the
 //! editor's pickers and written to disk as documentation. An entry declares
-//! *that* it has one — a [`PreviewAnim`] on its registration — and *how it
+//! *that* it has one (a [`PreviewAnim`] on its registration) and *how it
 //! moves* as code: a `fn(f32) -> Vec<ParamValue>` on the registration for what
 //! its parameters do over the sweep, and [`Effect::seek`](super::effect::Effect::seek)
 //! / `Void::preview_at` for entries whose motion is a clock rather than a
 //! parameter.
 //!
 //! **The convention every sweep follows**: take `t`, set fields, sync the GPU
-//! resources those fields feed — in that order, once. Repetition across bodies
+//! resources those fields feed, in that order, once. Repetition across bodies
 //! is extracted into plain helpers here ([`swing`], [`swing_signed`]) that a
 //! body calls and stays in control of.
 //!
@@ -822,7 +822,7 @@ impl<'a> PreviewSequence<'a> {
 
 /// Make a one-way sequence hand back to its own first frame.
 ///
-/// Three effects — grain, rainy glass, VHS — declare [`PreviewAnim::ONE_WAY`]:
+/// Three effects (grain, rainy glass, VHS) declare [`PreviewAnim::ONE_WAY`]:
 /// their motion is a clock integrated forward, so the last frame does not lead
 /// back to the first, and the bodies that wrote them are right not to fake that
 /// by making the effect itself periodic. But **both** consumers play a sequence

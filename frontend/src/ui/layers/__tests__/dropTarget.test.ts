@@ -47,7 +47,7 @@ describe('gapDepthRange', () => {
 
     it('offers one level deeper below a group header', () => {
         // Gap between g1 and l2: the row below pins the floor at its own depth,
-        // and g1 being a group would allow depth 1 — the same number.
+        // and g1 being a group would allow depth 1, the same number.
         expect(gapDepthRange(singleGroup, 1)).toEqual({ min: 1, max: 1 });
     });
 
@@ -186,7 +186,7 @@ describe('the reported gesture', () => {
 
     it('the below band of an expanded group header lands inside the group', () => {
         // Dropping on the lower edge of an expanded header once issued
-        // `before group` — the slot below the entire block, which reads as
+        // `before group`: the slot below the entire block, which reads as
         // "the bottom of the group". The gap below the header is pinned to the
         // group's interior by the child row beneath it, whatever X says.
         const band = bandToGap(0, true, 0.9);
@@ -210,7 +210,7 @@ describe('the reported gesture', () => {
 
 /**
  * Regression for the cross-divider drag bugs (`docs/plans/divider-as-a-node.md`).
- * The divider is a row, so the gap above it and the gap below it are distinct —
+ * The divider is a row, so the gap above it and the gap below it are distinct:
  * the user's reported panel: a veil in Viewport Effects → Group 2, then the
  * divider, then a canvas raster.
  *
@@ -236,7 +236,7 @@ describe('dragging across the divider row', () => {
     it('never resolves the below-divider gap into the dragged subtree', () => {
         // The reported gesture: dragging g2 (with its veil inside) to just
         // below the viewport threshold. Under the count model this gap did not
-        // exist — the resolution walked into g2's ancestor or descendants and
+        // exist: the resolution walked into g2's ancestor or descendants and
         // the move was self-referential or side-inherited.
         const drop = resolveGapDrop(panel, belowDivider, xFor(0))!;
         expect([2, 3]).not.toContain(drop.target.target_id);

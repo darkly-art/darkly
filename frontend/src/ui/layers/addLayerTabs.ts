@@ -3,7 +3,7 @@ import { parseMenuSegment, type Action } from '../../actions/registry';
 import { groupByCategory, matchesQuery } from '../../lib/groupByCategory';
 import type { AddSource } from './addSources';
 
-/** One card in a tab — a catalog entry plus the source that spawns it. */
+/** One card in a tab: a catalog entry plus the source that spawns it. */
 export interface AddCard {
     entry: CatalogEntry;
     source: AddSource;
@@ -63,13 +63,13 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
  *
  * Sources order by their action's menu position, so the rail and the Layer menu
  * cannot drift. A source contributes one tab per distinct `category` its
- * entries declare, or a single tab when none does — which is what makes Filters
+ * entries declare, or a single tab when none does, which is what makes Filters
  * and Veils two tabs over one merged catalog, with no change here.
  */
 export function buildTabs(deps: TabDeps): AddTab[] {
     const ordered = [...deps.sources].sort((a, b) => railOrder(a, deps) - railOrder(b, deps));
-    // Keyed by title so two sources naming the same tab land in one group —
-    // which is how "New Group" sits beside "New Layer" under Normal — and so a
+    // Keyed by title so two sources naming the same tab land in one group
+    // (which is how "New Group" sits beside "New Layer" under Normal) and so a
     // category interleaved across a catalog collects rather than repeating.
     const byTitle = new Map<string, AddCard[]>();
 

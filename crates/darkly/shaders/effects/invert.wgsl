@@ -1,11 +1,11 @@
 // Invert-colors adjustment: `1 - rgb`, alpha preserved.
 //
 // The `invert_color` atom is supplied by `shaders/lib/color.wgsl`, which the
-// Rust side (`gpu/effects/invert.rs`) `include_str!`-prepends — so this
+// Rust side (`gpu/effects/invert.rs`) `include_str!`-prepends, so this
 // file owns only the per-pixel plumbing, never the color math. Exact per-texel
 // `textureLoad` (no sampler), so the result is bit-exact up to the inversion.
 //
-// One entry point serves RGBA8 layers and R8 masks alike — the pipeline target
+// One entry point serves RGBA8 layers and R8 masks alike: the pipeline target
 // format is the only difference (an R8 target stores `1 - r`). Where the
 // inversion lands is not this shader's concern: a mask or a selection confines
 // it from outside, in the shared in-place apply pass.

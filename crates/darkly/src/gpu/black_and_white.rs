@@ -1,4 +1,4 @@
-//! Black and White — the shared core behind the `black_and_white` effect
+//! Black and White: the shared core behind the `black_and_white` effect
 //! (`gpu/effects/black_and_white.rs`). One identity, one param schema, one
 //! uniform layout, one WGSL transform
 //! ([`black_and_white.wgsl`](../../shaders/lib/black_and_white.wgsl)); the
@@ -94,7 +94,7 @@ pub fn preview_params(t: f32) -> Vec<ParamValue> {
 /// prepended to each surface's wrapper shader at pipeline build time.
 pub const SHADER_LIB: &str = include_str!("../../shaders/lib/black_and_white.wgsl");
 
-/// Positional float lookup with schema-default fallback — params arrive
+/// Positional float lookup with schema-default fallback: params arrive
 /// positionally, like every pack in `gpu/effects/`.
 fn float_param(params: &[ParamValue], idx: usize) -> f32 {
     if let Some(ParamValue::Float(v)) = params.get(idx) {
@@ -108,7 +108,7 @@ fn float_param(params: &[ParamValue], idx: usize) -> f32 {
 
 /// Pack the shared schema into the shader's 32-byte `BwParams` uniform:
 /// `[mode: u32, red_w, green_w, blue_w, tint_r, tint_g, tint_b,
-/// tint_strength]` — floats stored as bit patterns beside the u32 (the same
+/// tint_strength]`, floats stored as bit patterns beside the u32 (the same
 /// packing `gpu/effects/hsv.rs` uses). Missing or mistyped entries fall back
 /// to the schema defaults.
 ///

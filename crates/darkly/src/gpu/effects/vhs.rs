@@ -33,7 +33,7 @@ pub fn register() -> EffectRegistration {
         category: "Veils",
         icon: "fa6-solid:tv",
         hotkey_action: "effectVhs",
-        description: "Analog VHS tape artifacts — scanlines, noise, and color bleed.",
+        description: "Analog VHS tape artifacts: scanlines, noise, and color bleed.",
         params: PARAMS,
         preview: Some(PreviewAnim::ONE_WAY),
         preview_at: None,
@@ -141,7 +141,7 @@ impl Effect for Vhs {
     }
 
     /// Two seconds of the veil's own tape clock. The artefacts this veil is
-    /// made of are temporal — the wobble, the switching noise, the AC beat — so
+    /// made of are temporal (the wobble, the switching noise, the AC beat) so
     /// its preview runs time rather than any parameter. The clock runs forward
     /// and does not return to where it started, so the sequence does not loop;
     /// making it do so would mean a periodic time basis in the shader, which is
@@ -163,7 +163,7 @@ impl Effect for Vhs {
     }
 
     /// The preview is a span of the effect's own clock, so positioning it is
-    /// setting the time directly — scaled by `speed`, so a slower instance
+    /// setting the time directly: scaled by `speed`, so a slower instance
     /// covers less of its motion over the same preview.
     fn seek(&mut self, queue: &wgpu::Queue, cache: &EffectCache, t: f32) {
         self.time = PREVIEW_SECONDS * t * self.speed;

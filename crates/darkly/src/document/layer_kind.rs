@@ -67,7 +67,7 @@ pub struct LayerKindRegistration {
     /// May a *leaf* of this kind be realized after the view transform, on the
     /// presented image, rather than inside the canvas-space tree walk? A kind
     /// qualifies when its output is a function of the image it is handed, so it
-    /// does not care which space that image is in — true for effects, false for
+    /// does not care which space that image is in: true for effects, false for
     /// anything that owns canvas-space pixels or geometry.
     ///
     /// Leaf-only, hence the name: groups are not leaves and answer by recursing
@@ -83,14 +83,14 @@ pub struct LayerKindRegistration {
 
     /// May instances of this kind be removed from the document? Consulted by
     /// the remove ops and by merge (which consumes its sources). `false` for
-    /// structural singletons the document cannot lose — the viewport divider.
+    /// structural singletons the document cannot lose: the viewport divider.
     pub can_delete: bool,
 
     /// May instances of this kind be duplicated? `false` for kinds whose
     /// instance is a structural singleton.
     pub can_duplicate: bool,
 
-    /// Is this kind's single instance the screen-space boundary — the node
+    /// Is this kind's single instance the screen-space boundary: the node
     /// among the root's children that splits canvas space (below it) from
     /// screen space (above it)? Implies root-only placement, `can_delete:
     /// false`, and `can_duplicate: false`. Consult through

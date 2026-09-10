@@ -10,7 +10,7 @@ import { flushSync, mount, unmount } from 'svelte';
 const spawned: string[] = [];
 
 const catalogs: Record<string, any> = {
-    // One catalog holding both categories — the shape the merged registry
+    // One catalog holding both categories: the shape the merged registry
     // emits, sorted by (category, displayName) as it is on the wire.
     effects: {
         id: 'effects',
@@ -128,7 +128,7 @@ function tabTitles(): string[] {
     return Array.from(target.querySelectorAll('.tab')).map(t => t.textContent!.trim());
 }
 
-/** Every card in the modal, in list order — the groups all render at once. */
+/** Every card in the modal, in list order: the groups all render at once. */
 function cardNames(): string[] {
     return Array.from(target.querySelectorAll('.card-name')).map(c => c.textContent!.trim());
 }
