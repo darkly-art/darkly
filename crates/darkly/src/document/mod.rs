@@ -31,6 +31,18 @@ pub enum SelectionMode {
     Intersect,
 }
 
+/// Where an entity sat in the tree: its container and its index within it.
+/// The viewport divider is a node among the root's children, so an index says
+/// everything, including which side of the boundary the slot is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TreeSlot {
+    /// Container the entity was linked under. `None` means the root group.
+    pub parent: Option<LayerId>,
+    /// Index within the container's `children` (tree node) or `filters`
+    /// (modifier) list.
+    pub position: usize,
+}
+
 /// Where a move/group operation drops its payload, relative to an anchor node.
 ///
 /// Wire-native: an adjacently-tagged enum deserializes straight from the
@@ -48,6 +60,18 @@ pub enum MoveTarget {
     IntoGroupTop(LayerId),
     #[serde(rename = "into_bottom")]
     IntoGroupBottom(LayerId),
+}
+
+impl MoveTarget {
+    /// The node this target is stated relative to. Every variant names one.
+    pub fn reference(&self) -> LayerId {
+        match *self {
+            MoveTarget::Before(id)
+            | MoveTarget::After(id)
+            | MoveTarget::IntoGroupTop(id)
+            | MoveTarget::IntoGroupBottom(id) => id,
+        }
+    }
 }
 
 /// One slot in [`Document::entities`]. Tree nodes (layers + groups) and
@@ -89,11 +113,11 @@ impl Entity {
 }
 
 pub struct Document {
-    /// User-visible document name. Sourced by the tab strip, used as the
+    /// Artist-visible document name. Sourced by the tab strip, used as the
     /// default filename in the Save As picker, and serialized at the top
     /// of `manifest.json`. Defaults to `"Untitled"` for fresh documents.
     ///
-    /// Single source of truth — there is no JS-side parallel name map
+    /// Single source of truth: there is no JS-side parallel name map
     /// (the engine's `document_name()` query backs the tab title).
     pub name: String,
     pub width: u32,
@@ -101,7 +125,7 @@ pub struct Document {
 
     /// Offset of the **canvas window** within the fixed canvas/plane space.
     ///
-    /// There is one coordinate frame — canvas/plane space — in which layer
+    /// There is one coordinate frame (canvas/plane space) in which layer
     /// extents, undo rects, and selection regions all live (and may be
     /// negative, e.g. paste). The canvas *window* is the visible/exported
     /// rectangle `(canvas_origin, width, height)` within that plane.
@@ -111,11 +135,11 @@ pub struct Document {
     pub canvas_origin: CanvasPoint,
 
     /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
-    /// chokepoint — any new undoable mutation flips it true. Cleared
+    /// chokepoint: any new undoable mutation flips it true. Cleared
     /// only by a successful save (`poll_save_result`) or a load
     /// (`open_document` installs a fresh staging doc with `dirty = false`).
     /// Not undoable on purpose: an undo back to the original state
-    /// shouldn't pretend the work was never done. Not serialized — the
+    /// shouldn't pretend the work was never done. Not serialized: the
     /// flag describes editor session state, not file content.
     pub dirty: bool,
 
@@ -124,7 +148,7 @@ pub struct Document {
     /// undo/redo application (which deliberately leave `dirty` alone).
     /// Observers that need "did the document change since I last looked?"
     /// (e.g. the process recorder) sample and compare it. Not serialized,
-    /// not undoable — it describes session history, not file content.
+    /// not undoable: it describes session history, not file content.
     ///
     /// [`UndoStack::push`]: crate::undo::UndoStack::push
     pub revision: u64,
@@ -138,14 +162,14 @@ pub struct Document {
     /// - For a tree node: its tree parent (a group). Root has no entry.
     /// - For a filter: its host node. Selection has no entry.
     ///
-    /// Entities present in `entities` but absent from `parent` are *orphans* —
+    /// Entities present in `entities` but absent from `parent` are *orphans*:
     /// either the root itself, the selection filter, or a subtree that has
     /// been detached for undo and is waiting to be reattached.
     pub parent: SecondaryMap<LayerId, LayerId>,
 
     /// The implicit root group's id. Allocated in [`Document::new`]; replaces
     /// the old well-known `ROOT_ID = 0` constant. The root group itself is
-    /// never exposed to the UI — only its children are.
+    /// never exposed to the UI; only its children are.
     pub root: LayerId,
 
     /// Global selection filter id, if allocated. The filter itself lives
@@ -162,7 +186,7 @@ pub struct Document {
     /// after heavy churn.
     ///
     /// One uniform mechanism across every kind that lays down a layer or
-    /// filter — raster, group, mask, void (per void-type), and any future
+    /// filter: raster, group, mask, void (per void-type), and any future
     /// kind. The base label is the caller's responsibility: hardcoded for
     /// fixed kinds (`"Layer"`, `"Group"`, `"Mask"`), registry-resolved for
     /// dynamic ones (the void's display name, e.g. `"Noise"`).
@@ -178,7 +202,7 @@ impl Document {
         let root = entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Group(LayerGroup::new(key, "Root".to_string())))
         });
-        Document {
+        let mut doc = Document {
             name: "Untitled".to_string(),
             width,
             height,
@@ -190,7 +214,15 @@ impl Document {
             root,
             selection: None,
             name_counters: HashMap::new(),
-        }
+        };
+        // The viewport divider is born with the document: the root always
+        // holds exactly one, and a fresh document's divider sits at the top,
+        // nothing is viewport-only until the user drags it down.
+        let divider = doc.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Divider(DividerLayer::new(key))))
+        });
+        doc.link(divider, root, None);
+        doc
     }
 
     /// Produce the next default display name for a given base label,
@@ -219,7 +251,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Lookup — every method is O(1) (tree walks happen only in the
+    // Lookup: every method is O(1) (tree walks happen only in the
     // explicitly-named whole-tree queries: `flat_layers`, `all_*`,
     // `node_count`).
     // ---------------------------------------------------------------
@@ -240,7 +272,7 @@ impl Document {
         self.entities.get_mut(id).and_then(Entity::as_modifier_mut)
     }
 
-    /// Canvas-space pixel bounds of any pixel-bearing node — a raster layer or
+    /// Canvas-space pixel bounds of any pixel-bearing node: a raster layer or
     /// a mask/selection filter. `None` for nodes that have no pixels (groups,
     /// void layers) or unknown ids. Lets callers treat "things with pixels"
     /// uniformly without branching on layer vs filter or on layer kind.
@@ -297,11 +329,11 @@ impl Document {
         matches!(self.entities.get(id), Some(Entity::Filter(_)))
     }
 
-    /// True when `id` may be mutated by the user.
+    /// True when `id` may be mutated by the artist.
     ///
     /// `false` when the node itself or any ancestor (host for a filter;
     /// parent group for a layer/group, walked to the root) carries
-    /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable` — locks
+    /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable`; locks
     /// cascade down the tree so locking a group also protects its contents.
     ///
     /// Unknown ids return `true`; the caller's existing "node not found"
@@ -324,7 +356,7 @@ impl Document {
         }
     }
 
-    /// Pixel-buffer accessor that works for any pixel-bearing entity — raster
+    /// Pixel-buffer accessor that works for any pixel-bearing entity: raster
     /// layers and pixel-storing filters (today: masks, selection). Returns
     /// `None` for groups, pure-effect filters, or unknown ids.
     pub fn pixel_buffer(&self, id: LayerId) -> Option<&PixelBuffer> {
@@ -365,7 +397,7 @@ impl Document {
     /// circuits invisible subtrees ([`crate::gpu::compositor::Compositor`]
     /// line ~2665), so this is the corresponding read-side helper for
     /// callers (engine, frontend) that need the same answer without walking
-    /// the tree themselves — e.g. deciding whether to keep a camera void's
+    /// the tree themselves, e.g. deciding whether to keep a camera void's
     /// MediaStream uploading frames when a parent group hid it.
     pub fn effective_visible(&self, id: LayerId) -> bool {
         let mut current = id;
@@ -399,7 +431,7 @@ impl Document {
     }
 
     /// First mask filter on a host, if any. Replaces the old
-    /// `host.filters().mask()` pattern — that helper used to live on
+    /// `host.filters().mask()` pattern; that helper used to live on
     /// `ModifierList`, but with id-references it needs the document to
     /// resolve.
     pub fn mask_filter_id(&self, host_id: LayerId) -> Option<LayerId> {
@@ -413,6 +445,16 @@ impl Document {
 
     pub fn mask_filter(&self, host_id: LayerId) -> Option<&Filter> {
         self.find_filter(self.mask_filter_id(host_id)?)
+    }
+
+    /// The host's mask filter id when that mask is *visible*: the one
+    /// derivation every masked compose / uniform / snapshot path keys off.
+    /// `None` for a missing mask and a hidden one alike, so consumers never
+    /// re-check visibility themselves.
+    pub fn visible_mask_of(&self, host: LayerId) -> Option<LayerId> {
+        self.mask_filter(host)
+            .filter(|m| m.common.visible)
+            .map(|m| m.id)
     }
 
     pub fn has_mask(&self, host_id: LayerId) -> bool {
@@ -436,7 +478,192 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Whole-tree queries — these enumerate the world by definition,
+    // The screen-space boundary. The divider is a node among the root's
+    // children; its index *is* the boundary. Screen space is everything
+    // above it, canvas space everything below.
+    // ---------------------------------------------------------------
+
+    /// Index of the divider among the root's children, or `None` when the
+    /// tree does not hold one: a state that exists only inside load staging,
+    /// before normalization re-establishes the invariant. Every public
+    /// boundary query degrades to "nothing is viewport-only" in that window.
+    fn divider_position(&self) -> Option<usize> {
+        self.children_of(self.root).iter().position(|&c| {
+            self.find_node(c)
+                .is_some_and(|n| n.is_screen_space_boundary())
+        })
+    }
+
+    /// The divider's id. The root always holds exactly one: established by
+    /// [`Document::new`], defended by the kind's capability flags and the move
+    /// validation, normalized on load.
+    pub fn divider_id(&self) -> LayerId {
+        let i = self
+            .divider_position()
+            .expect("document invariant: the root always holds the divider");
+        self.children_of(self.root)[i]
+    }
+
+    /// The root children realized in screen space, bottom-to-top, everything
+    /// above the divider.
+    pub fn screen_space_run(&self) -> &[LayerId] {
+        let children = self.children_of(self.root);
+        match self.divider_position() {
+            Some(i) => &children[i + 1..],
+            None => &children[children.len()..],
+        }
+    }
+
+    /// The effect layers realized in screen space, bottom-to-top: the run,
+    /// flattened.
+    ///
+    /// A group above the divider is treated as passthrough whatever its stored
+    /// flag says: it is unmasked and holds only nodes that themselves qualify
+    /// ([`LayerNode::supports_screen_space`]), so it contributes no compositing
+    /// of its own (no accumulator, no mask to project through) and its
+    /// passthrough flag, opacity and blend mode are read only in canvas space.
+    /// The flag itself is left untouched so it re-applies isolation the moment
+    /// the group moves back below the divider. Its effects are therefore
+    /// siblings of the run's leaves as far as the present chain is concerned,
+    /// and that chain consumes this list rather than the run's root-level
+    /// members.
+    ///
+    /// Structure only: visibility is not consulted here. An invisible ancestor
+    /// group is handled by the caller's `effective_visible` filter, which walks
+    /// the same parent chain.
+    ///
+    /// [`LayerNode::supports_screen_space`]: crate::layer::LayerNode::supports_screen_space
+    pub fn screen_space_effects(&self) -> Vec<LayerId> {
+        let mut out = Vec::new();
+        for &id in self.screen_space_run() {
+            self.collect_screen_space_effects(id, &mut out);
+        }
+        out
+    }
+
+    fn collect_screen_space_effects(&self, id: LayerId, out: &mut Vec<LayerId>) {
+        match self.find_node(id) {
+            Some(LayerNode::Layer(Layer::Filter(_))) => out.push(id),
+            Some(LayerNode::Group(g)) => {
+                for &child in &g.children {
+                    self.collect_screen_space_effects(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The root children composited in canvas space, bottom-to-top: the
+    /// document's content, and the complement of [`Self::screen_space_run`].
+    /// What export, flatten and merge operate on. The divider itself is in
+    /// neither list.
+    pub fn canvas_space_children(&self) -> &[LayerId] {
+        let children = self.children_of(self.root);
+        match self.divider_position() {
+            Some(i) => &children[..i],
+            None => children,
+        }
+    }
+
+    /// Is this node currently realized in screen space? Root-level membership
+    /// only: the run is a slice of the root's children, and undo restores a
+    /// node's side of the divider through this same notion.
+    pub fn renders_in_screen_space(&self, id: LayerId) -> bool {
+        self.screen_space_run().contains(&id)
+    }
+
+    /// Is `id` anywhere inside the screen-space region: a run member itself,
+    /// or held by one? The question [`Self::renders_in_screen_space`] cannot
+    /// answer, and the one that matters for "may this land here".
+    pub fn in_screen_space_region(&self, id: LayerId) -> bool {
+        let run = self.screen_space_run();
+        std::iter::successors(Some(id), |&n| self.parent_of(n)).any(|n| run.contains(&n))
+    }
+
+    /// Would `target` land a node in the screen-space region? Resolved against
+    /// the current tree, with the prospective mover still in place: the mover
+    /// is never the divider or the reference, so unlinking it cannot change
+    /// which side of the divider the slot is on.
+    fn target_in_screen_space(&self, target: MoveTarget) -> bool {
+        let (parent, position) = self.resolve_target_slot(target);
+        if parent != self.root {
+            return self.in_screen_space_region(parent);
+        }
+        let Some(div) = self.divider_position() else {
+            return false;
+        };
+        let children = self.children_of(self.root);
+        let at = position.map_or(children.len(), |p| p.min(children.len()));
+        // Inserting *at* the divider's index pushes the divider up and lands
+        // below it; only a strictly higher index is above the boundary.
+        at > div
+    }
+
+    /// The node that would stop `id` from being moved to `target` (`id`
+    /// itself, or a descendant of it) paired with why, or `None` if the move
+    /// is legal.
+    ///
+    /// Two rules, both answered here so [`Self::move_layer`]'s debug assert
+    /// covers every illegal shape:
+    /// - an ordinary node moving into the screen-space region must
+    ///   [`LayerNode::supports_screen_space`];
+    /// - the divider itself may only move among the root's children, and only
+    ///   to an index that leaves nothing above it that cannot render there.
+    pub fn screen_space_move_blocker(
+        &self,
+        id: LayerId,
+        target: MoveTarget,
+    ) -> Option<(LayerId, &'static str)> {
+        let node = self.find_node(id)?;
+        if node.is_screen_space_boundary() {
+            return self.divider_move_blocker(target);
+        }
+        if !self.target_in_screen_space(target) {
+            return None;
+        }
+        node.screen_space_blocker(self)
+    }
+
+    /// What stops the divider itself from moving to `target`, if anything.
+    /// The prospective run (every other root child that would end up above
+    /// the divider) must consist of nodes that can render in screen space.
+    fn divider_move_blocker(&self, target: MoveTarget) -> Option<(LayerId, &'static str)> {
+        let (parent, _) = self.resolve_target_slot(target);
+        if parent != self.root {
+            return Some((self.divider_id(), "can only live among the root's children"));
+        }
+        let div = self.divider_id();
+        let others: Vec<LayerId> = self
+            .children_of(self.root)
+            .iter()
+            .copied()
+            .filter(|&c| c != div)
+            .collect();
+        // Where the divider lands in the list without it: `Before` takes the
+        // reference's slot (the reference ends up above), `After` the next.
+        let landing = match target {
+            MoveTarget::Before(r) => others.iter().position(|&c| c == r),
+            MoveTarget::After(r) => others.iter().position(|&c| c == r).map(|i| i + 1),
+            MoveTarget::IntoGroupTop(_) => Some(others.len()),
+            MoveTarget::IntoGroupBottom(_) => Some(0),
+        };
+        let landing = landing?;
+        others[landing..]
+            .iter()
+            .find_map(|&c| self.find_node(c)?.screen_space_blocker(self))
+    }
+
+    /// Where `id` sits in the tree, for undo to restore verbatim.
+    pub fn slot_of(&self, id: LayerId) -> Option<TreeSlot> {
+        let position = self.position_in_parent(id)?;
+        Some(TreeSlot {
+            parent: self.parent_of(id),
+            position,
+        })
+    }
+
+    // ---------------------------------------------------------------
+    // Whole-tree queries: these enumerate the world by definition,
     // so they're O(N). They walk from `root` and so naturally exclude
     // any orphans parked in the slotmap awaiting undo reattach.
     // ---------------------------------------------------------------
@@ -453,12 +680,15 @@ impl Document {
         };
         for &child_id in &g.children {
             match self.find_node(child_id) {
+                // The divider composites nothing; a "flat layers" view has no
+                // row for it.
+                Some(node) if node.is_screen_space_boundary() => {}
                 Some(LayerNode::Layer(l)) => out.push(l),
                 Some(LayerNode::Group(child)) if !child.common.visible => {}
                 Some(LayerNode::Group(_)) => {
                     // Passthrough groups: children composited directly into
-                    // parent. Normal groups: TODO — needs isolated compositing
-                    // buffer. For now, flatten children in both modes.
+                    // parent. Normal groups need an isolated compositing
+                    // buffer (TODO). For now, flatten children in both modes.
                     self.flatten_into(child_id, out);
                 }
                 None => {}
@@ -467,7 +697,7 @@ impl Document {
     }
 
     /// All raster layers in the tree, regardless of visibility. Used for GPU
-    /// sync — we keep GPU textures in sync even for hidden layers.
+    /// sync: we keep GPU textures in sync even for hidden layers.
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
         self.collect_raster_layers(self.root, &mut out);
@@ -490,7 +720,7 @@ impl Document {
     /// Every content layer (raster + void) in the tree, regardless of
     /// visibility. Both kinds share the standard blend pipeline and live
     /// in the unified compositor `layer_cache`, so the GPU sync path only
-    /// needs to know "this is a layer the compositor manages" — kind
+    /// needs to know "this is a layer the compositor manages"; kind
     /// dispatch happens once, inside the compositor's `ensure_layer`.
     pub fn all_content_layers(&self) -> Vec<&Layer> {
         let mut out = Vec::new();
@@ -505,11 +735,35 @@ impl Document {
         for &child_id in &g.children {
             match self.find_node(child_id) {
                 // Filter layers transform the group accumulator rather than
-                // contributing a texture — they are realized by the
+                // contributing a texture; they are realized by the
                 // compositor's filter arm, not the standard blend walk.
                 Some(LayerNode::Layer(l)) if l.is_blend_content() => out.push(l),
                 Some(LayerNode::Group(_)) => self.collect_content_layers(child_id, out),
                 _ => {}
+            }
+        }
+    }
+
+    /// The nearest ancestor of `id` whose children composite into their own
+    /// accumulator: where `id`'s contribution actually lands.
+    ///
+    /// A passthrough group has no accumulator of its own: its children inline
+    /// into whatever accumulator it inlines into, which is what makes an effect
+    /// inside one transform its grandparent's content rather than just its
+    /// siblings'. So the walk skips passthrough groups and stops at the first
+    /// isolated one, or at the root, which always owns one.
+    ///
+    /// Structural and GPU-free, which is why it lives here rather than being
+    /// re-derived from whatever the compose walk happens to be carrying.
+    pub fn accumulator_host_of(&self, id: LayerId) -> Option<LayerId> {
+        let mut cursor = self.parent_of(id)?;
+        loop {
+            if cursor == self.root {
+                return Some(self.root);
+            }
+            match self.find_node(cursor) {
+                Some(LayerNode::Group(g)) if !g.passthrough => return Some(cursor),
+                _ => cursor = self.parent_of(cursor)?,
             }
         }
     }
@@ -532,12 +786,12 @@ impl Document {
         }
     }
 
-    /// Host ids of every node that composites in place (a passthrough group or
-    /// a filter layer) *and* carries a visible mask — the set the compositor
-    /// must keep a snapshot+lerp buffer for. Kind-agnostic: it asks each node
-    /// [`LayerNode::composites_in_place`] rather than enumerating which kinds
+    /// Host ids of every node whose in-place result must be captured before it
+    /// runs *and* which carries a visible mask: the set the compositor must
+    /// keep a snapshot buffer for. Kind-agnostic: it asks each node
+    /// [`LayerNode::needs_before_snapshot`] rather than enumerating which kinds
     /// qualify, so a new in-place kind is picked up with no edit here.
-    pub fn masked_in_place_hosts(&self) -> Vec<LayerId> {
+    pub fn snapshot_in_place_hosts(&self) -> Vec<LayerId> {
         let mut out = Vec::new();
         self.collect_masked_in_place(self.root, &mut out);
         out
@@ -551,12 +805,7 @@ impl Document {
             let Some(node) = self.find_node(child_id) else {
                 continue;
             };
-            if node.composites_in_place()
-                && self
-                    .mask_filter(child_id)
-                    .map(|m| m.common.visible)
-                    .unwrap_or(false)
-            {
+            if node.needs_before_snapshot() && self.visible_mask_of(child_id).is_some() {
                 out.push(child_id);
             }
             if matches!(node, LayerNode::Group(_)) {
@@ -600,15 +849,20 @@ impl Document {
         }
     }
 
-    /// Count of all tree nodes (layers + groups, excluding the root and
-    /// filters). Walks the tree; intended for tests and rare diagnostics.
+    /// Count of the user's tree nodes (layers + groups, excluding the root,
+    /// filters, and structural singletons the user cannot delete: the
+    /// divider). Backs the "cannot delete the last layer" floor, so it counts
+    /// exactly the nodes deletion could take.
     pub fn node_count(&self) -> usize {
         fn walk(doc: &Document, group_id: LayerId, counter: &mut usize) {
             let Some(LayerNode::Group(g)) = doc.find_node(group_id) else {
                 return;
             };
             for &child_id in &g.children {
-                *counter += 1;
+                match doc.find_node(child_id) {
+                    Some(n) if n.kind().can_delete => *counter += 1,
+                    _ => continue,
+                }
                 if matches!(doc.find_node(child_id), Some(LayerNode::Group(_))) {
                     walk(doc, child_id, counter);
                 }
@@ -630,7 +884,7 @@ impl Document {
     /// mixes layers and groups, including cross-parent selections.
     ///
     /// Iteration is bottom-of-stack first within each parent's
-    /// `children` Vec — so for a panel that displays "top of stack first,"
+    /// `children` Vec, so for a panel that displays "top of stack first,"
     /// the last entry in this Vec for a given selection is the
     /// **panel-topmost** member. `merge_layers` uses this to locate the
     /// topmost selected layer across arbitrary parents.
@@ -653,7 +907,7 @@ impl Document {
     }
 
     // ---------------------------------------------------------------
-    // Mutation — every entry point that adds, removes, or reparents an
+    // Mutation: every entry point that adds, removes, or reparents an
     // entity goes through here so the slotmap, the parent map, and the
     // children/filter Vecs stay consistent.
     // ---------------------------------------------------------------
@@ -673,7 +927,7 @@ impl Document {
         id
     }
 
-    /// Add a new vector-object layer. Carries no pixel buffer — the compositor
+    /// Add a new vector-object layer. Carries no pixel buffer: the compositor
     /// realizes a texture from its `objects` (text/paths) on the next frame and
     /// re-realizes only when the objects/style/transform change. Starts empty;
     /// the engine seeds the first object (e.g. a text block) atomically.
@@ -687,13 +941,13 @@ impl Document {
         id
     }
 
-    /// Add a new void (procedural) layer. Carries no pixel buffer — the
+    /// Add a new void (procedural) layer. Carries no pixel buffer: the
     /// compositor regenerates content each frame from `void_type` + `params`.
     /// Caller is responsible for ensuring `void_type` is a registered void
     /// kind and `params` matches its schema; the engine wrapper does that.
     ///
     /// `display_label` is the registry's `display_name` for the void type
-    /// (e.g. `"Noise"`) — used as the default layer name so the panel shows
+    /// (e.g. `"Noise"`), used as the default layer name so the panel shows
     /// `"Noise 1"`, `"Noise 2"`, … rather than a generic `"Void N"`. The
     /// label is the doc's only knowledge of the registry; the registry
     /// itself lives on the compositor (GPU-coupled) so it can't be
@@ -722,15 +976,15 @@ impl Document {
         id
     }
 
-    /// Add a new filter layer — a non-destructive procedural transform that
+    /// Add a new filter layer: a non-destructive procedural transform that
     /// filters the composite of everything below it. Carries no pixel buffer;
     /// the compositor runs the shared filter pipeline named by `pipeline` over
     /// the running group accumulator each frame.
     ///
     /// `display_label` is the registry's display name for the filter type
-    /// (e.g. `"Invert Colors"`) — used as the default layer name. The caller
+    /// (e.g. `"Invert Colors"`), used as the default layer name. The caller
     /// (engine wrapper) is responsible for validating `pipeline` against the
-    /// [`FilterPipelineRegistry`](crate::gpu::filter::FilterPipelineRegistry);
+    /// [`FilterPipelineRegistry`](crate::gpu::effect::EffectRegistry);
     /// that registry is GPU-coupled and lives on the compositor, so it can't be
     /// dereferenced here.
     pub fn add_filter_layer(
@@ -752,7 +1006,7 @@ impl Document {
     }
 
     /// Iterate every void layer in the tree, regardless of visibility. Used
-    /// for GPU sync — same shape as [`Self::all_raster_layers`].
+    /// for GPU sync: same shape as [`Self::all_raster_layers`].
     pub fn all_void_layers(&self) -> Vec<&VoidLayer> {
         let mut out = Vec::new();
         self.collect_void_layers(self.root, &mut out);
@@ -773,7 +1027,7 @@ impl Document {
     }
 
     /// Iterate every vector layer in the tree, regardless of visibility. Used
-    /// for GPU sync — same shape as [`Self::all_void_layers`].
+    /// for GPU sync: same shape as [`Self::all_void_layers`].
     pub fn all_vector_layers(&self) -> Vec<&VectorLayer> {
         let mut out = Vec::new();
         self.collect_vector_layers(self.root, &mut out);
@@ -837,7 +1091,7 @@ impl Document {
     /// owns and grows its bounds independently (see [`Self::host_default_bounds`]).
     /// Returns `None` if the host id is unknown.
     ///
-    /// Note: only one mask per host is enforced at the UI layer, not here —
+    /// Note: only one mask per host is enforced at the UI layer, not here;
     /// the model supports N. Callers that want the singleton invariant should
     /// check [`Document::has_mask`] before adding.
     pub fn add_mask_filter(&mut self, host_id: LayerId) -> Option<LayerId> {
@@ -866,7 +1120,7 @@ impl Document {
     }
 
     /// Allocate the global selection filter if not already present, sized
-    /// to the canvas. Idempotent — returns the filter id either way.
+    /// to the canvas. Idempotent: returns the filter id either way.
     pub fn ensure_selection_filter(&mut self) -> LayerId {
         if let Some(id) = self.selection {
             return id;
@@ -889,7 +1143,7 @@ impl Document {
         }
         self.selection = Some(id);
         // Per the plan, the selection lives "at the document root rather than
-        // on a host's `filters` list" — so no entry in `parent`.
+        // on a host's `filters` list", so no entry in `parent`.
         id
     }
 
@@ -899,85 +1153,112 @@ impl Document {
     }
 
     /// True when the selection filter is allocated AND its `common.visible`
-    /// flag is set — equivalent to today's `gpu_selection.active`.
+    /// flag is set, equivalent to today's `gpu_selection.active`.
     pub fn selection_active(&self) -> bool {
         self.selection
             .and_then(|id| self.find_filter(id))
             .is_some_and(|m| m.common.visible)
     }
 
-    /// Move a node to a new position in the tree.
+    /// Move a tree node to a new position. Filters have no position in the
+    /// tree (they hang off a host), so a filter id is refused rather than
+    /// smuggled into some group's children.
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        if self.unlink_node(layer_id).is_none() {
+        if self.is_filter(layer_id) {
+            return;
+        }
+        // A move is a statement about position, applied verbatim. The engine
+        // refuses illegal ones before they get here
+        // (`check_screen_space_move`); this assert catches a caller that
+        // skipped it. The divider is a node in the children list, so the slot
+        // alone says which side of the boundary the mover lands on.
+        debug_assert!(
+            self.screen_space_move_blocker(layer_id, target).is_none(),
+            "illegal screen-space move reached Document::move_layer"
+        );
+        if self.unlink(layer_id).is_none() {
+            return;
+        }
+        let (parent, position) = self.resolve_target_slot(target);
+        self.link(layer_id, parent, position);
+    }
+
+    /// Place an entity that carries no placement statement of its own (a
+    /// paste landing relative to an anchor) at `target`, through the same
+    /// boundary policy as any add: the nearest legal slot, never a failure.
+    /// The move twin is [`Self::move_layer`], which applies a user-stated
+    /// position verbatim.
+    pub fn place_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        if self.is_filter(layer_id) {
+            return;
+        }
+        if self.unlink(layer_id).is_none() {
             return;
         }
         self.attach_at_target(layer_id, target);
     }
 
-    /// Detach a node from the tree for undo purposes, leaving it parked in
-    /// `entities` so its id stays stable across undo/redo. Returns the id on
-    /// success. Reattach with [`Document::reinsert_node`]; if the undo entry
-    /// is later discarded, call [`Document::remove_node`] to actually free it.
-    pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
-        self.unlink_node(id)
+    /// Detach `id` and re-link it at `slot`, through the placement policy:
+    /// for callers that *derive* a position (grouping, rearranges) rather than
+    /// restore a recorded one. The undo twin is [`Self::reinsert_entity`],
+    /// which attaches verbatim because it restores a previously-legal state.
+    pub fn place_at_slot(&mut self, id: LayerId, slot: TreeSlot) {
+        if self.unlink(id).is_none() {
+            return;
+        }
+        let parent = match slot.parent {
+            Some(p) if self.find_node(p).is_some() => p,
+            _ => self.root,
+        };
+        self.link_placed(id, parent, Some(slot.position));
     }
 
-    /// Reinsert a previously detached node at a specific position.
-    pub fn reinsert_node(&mut self, id: LayerId, parent: Option<LayerId>, position: usize) {
+    /// Detach an entity (tree node or filter) from its parent, leaving it
+    /// parked in `entities` so its id stays stable across undo/redo. Returns
+    /// the id on success. Reattach with [`Document::reinsert_entity`]; if the
+    /// undo entry is later discarded, call [`Document::remove_entity`] to
+    /// actually free it.
+    pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
+        self.unlink(id)
+    }
+
+    /// Reattach a previously detached entity under `parent` at `position`.
+    /// `parent` of `None` means the root. The entity's kind decides which of
+    /// the parent's lists it lands in, so a filter always returns to a
+    /// `filters` list and a node to a `children` list.
+    pub fn reinsert_entity(&mut self, id: LayerId, slot: TreeSlot) {
         if !self.entities.contains_key(id) {
             return;
         }
-        let parent_id = self.resolve_parent_group(parent);
-        self.link_child(id, parent_id, Some(position));
+        let parent_id = match slot.parent {
+            Some(p) if self.find_node(p).is_some() => p,
+            _ => self.root,
+        };
+        // Verbatim position restore. The divider is a node in the same list,
+        // so the index alone says which side of the boundary this is.
+        self.link(id, parent_id, Some(slot.position));
     }
 
-    /// Detach a filter from its host for undo purposes. The filter stays
-    /// in `entities`, so reattach via [`Document::reinsert_filter`] preserves
-    /// the id.
-    pub fn detach_filter_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
-        self.unlink_filter(id)
-    }
-
-    /// Reattach a previously detached filter to a host. Append-only — the
-    /// model doesn't expose a position parameter today because masks use
-    /// "first mask" lookup rather than positional access.
-    pub fn reinsert_filter(&mut self, filter_id: LayerId, host_id: LayerId) {
-        if !self.is_filter(filter_id) {
-            return;
-        }
-        if let Some(host) = self.find_node_mut(host_id) {
-            host.modifiers_mut().push(filter_id);
-            self.parent.insert(filter_id, host_id);
-        }
-    }
-
-    /// Remove a node (layer or group) and everything beneath it (descendant
-    /// nodes, all filters on every node in the subtree) from `entities`.
-    /// Permanent — call [`Document::detach_for_undo`] instead if the caller
-    /// wants id-stable detach for undo.
-    pub fn remove_node(&mut self, id: LayerId) {
+    /// Permanently remove an entity (tree node or filter) from `entities`,
+    /// along with everything beneath it (descendant nodes, and all filters on
+    /// every node in the subtree). Call [`Document::detach_for_undo`] instead
+    /// when the caller wants an id-stable detach for undo.
+    pub fn remove_entity(&mut self, id: LayerId) {
         if id == self.root {
             return;
         }
-        // Unlink first so the parent's children Vec is consistent if anyone
-        // observes mid-purge.
-        self.unlink_node(id);
-        self.purge_subtree(id);
-    }
-
-    /// Permanently remove a filter from `entities` (and its host's filter
-    /// list, if still attached).
-    pub fn remove_filter(&mut self, id: LayerId) {
-        self.unlink_filter(id);
+        // Unlink first so the parent's list is consistent if anyone observes
+        // mid-purge.
+        self.unlink(id);
         // Selection sentinel: if this was the selection, clear the field too.
         if self.selection == Some(id) {
             self.selection = None;
         }
-        self.entities.remove(id);
+        self.purge_subtree(id);
     }
 
     // ---------------------------------------------------------------
-    // Internal helpers — every mutation path funnels through these so
+    // Internal helpers: every mutation path funnels through these so
     // the slotmap / parent map / children Vec stay in sync.
     // ---------------------------------------------------------------
 
@@ -990,106 +1271,182 @@ impl Document {
         }
     }
 
-    /// Insert `child` into `group`'s children Vec at `position` (or at the end
-    /// if `None`), and update the parent map. Caller guarantees `child` is in
-    /// `entities` and `group` is a group.
-    fn link_child(&mut self, child: LayerId, group: LayerId, position: Option<usize>) {
-        let Some(LayerNode::Group(g)) = self.find_node_mut(group) else {
+    /// Link `child` under `parent`, into the list its kind belongs in: a
+    /// filter joins `parent`'s modifiers, a tree node joins its children, at
+    /// `position` (clamped) or at the end. No-op when `parent` can't hold the
+    /// child, so a leaf layer never acquires tree children.
+    ///
+    /// Verbatim: the slot is attached exactly as given. A caller with no
+    /// placement statement of its own (an add, a paste) goes through
+    /// [`Self::link_placed`] instead, which applies the boundary policy first.
+    fn link(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
+        let slot = if self.is_filter(child) {
+            ChildSlot::Filter
+        } else {
+            ChildSlot::Child
+        };
+        let Some(node) = self.find_node_mut(parent) else {
             return;
         };
-        let pos = position
-            .map(|p| p.min(g.children.len()))
-            .unwrap_or(g.children.len());
-        g.children.insert(pos, child);
-        self.parent.insert(child, group);
+        if node.attach_child(child, slot, position) {
+            self.parent.insert(child, parent);
+        }
     }
 
-    /// Unlink a node from its parent's children Vec and from the parent map.
-    /// Returns the node's id if it was linked, `None` if it was the root or
-    /// already orphaned.
-    fn unlink_node(&mut self, id: LayerId) -> Option<LayerId> {
+    /// [`Self::link`], preceded by the screen-space placement policy: the
+    /// child lands at the nearest slot to the requested one that keeps the
+    /// boundary invariant, nothing above the divider that cannot render
+    /// there.
+    ///
+    /// This is why an add or a paste never fails. Landing a new layer is not a
+    /// statement about placement, so a child that does not qualify for a
+    /// screen-space slot is redirected to the topmost canvas-space slot
+    /// (directly below the divider), which is the closest position it is
+    /// allowed to occupy. A *move* is such a statement, and the engine refuses
+    /// those outright rather than quietly putting the node somewhere else.
+    ///
+    /// The redirect crosses parents because it has to: every position inside a
+    /// run group is above the divider, so for a disqualified child there is no
+    /// legal slot anywhere in that subtree and the nearest one is out at the
+    /// root, below the divider.
+    fn link_placed(&mut self, child: LayerId, parent: LayerId, position: Option<usize>) {
+        let slot = if self.is_filter(child) {
+            ChildSlot::Filter
+        } else {
+            ChildSlot::Child
+        };
+        let (parent, position) = self.redirect_ineligible_insert(child, parent, slot, position);
+        self.link(child, parent, position);
+    }
+
+    /// The placement policy behind [`Self::link_placed`]: the requested slot,
+    /// or (for a child that cannot render in screen space asked to land there
+    ///) the topmost canvas-space slot, directly below the divider.
+    fn redirect_ineligible_insert(
+        &self,
+        child: LayerId,
+        parent: LayerId,
+        slot: ChildSlot,
+        position: Option<usize>,
+    ) -> (LayerId, Option<usize>) {
+        // A filter hangs off its host and has no position relative to the
+        // divider, so the boundary has nothing to say about it.
+        if slot != ChildSlot::Child {
+            return (parent, position);
+        }
+        if self
+            .find_node(child)
+            .is_some_and(|node| node.supports_screen_space(self))
+        {
+            return (parent, position);
+        }
+        let Some(div) = self.divider_position() else {
+            return (parent, position);
+        };
+        if parent != self.root {
+            if self.in_screen_space_region(parent) {
+                return (self.root, Some(div));
+            }
+            return (parent, position);
+        }
+        let n = self.children_of(self.root).len();
+        let at = position.map_or(n, |p| p.min(n));
+        if at > div {
+            return (parent, Some(div));
+        }
+        (parent, position)
+    }
+
+    /// Unlink an entity from its parent, whichever of the parent's two lists
+    /// held it, and drop the parent-map entry. Returns the id if it was
+    /// linked, `None` if it was the root or already orphaned.
+    ///
+    /// Kind-agnostic on purpose: the parent knows which list a child is in, so
+    /// no caller has to, and a filter can't be half-detached by being unlinked
+    /// through the wrong path.
+    fn unlink(&mut self, id: LayerId) -> Option<LayerId> {
         if id == self.root {
             return None;
         }
         let parent_id = self.parent.remove(id)?;
-        if let Some(LayerNode::Group(g)) = self.find_node_mut(parent_id) {
-            g.children.retain(|c| *c != id);
-        }
-        Some(id)
-    }
-
-    /// Unlink a filter from its host's filters Vec and from the parent
-    /// map. Returns the filter's id if it was linked.
-    fn unlink_filter(&mut self, id: LayerId) -> Option<LayerId> {
-        let host_id = self.parent.remove(id)?;
-        if let Some(host) = self.find_node_mut(host_id) {
-            host.modifiers_mut().retain(|m| *m != id);
+        if let Some(parent) = self.find_node_mut(parent_id) {
+            parent.detach_child(id);
         }
         Some(id)
     }
 
     /// Resolve a UI "anchor" (typically the currently selected node in the
     /// layers panel) into a [`MoveTarget`] that places a newly-created node
-    /// where the user expects.
+    /// where the artist expects.
     ///
-    /// - `None` / unknown / stale id → top of root.
+    /// - `None` / unknown / stale id → top of canvas space.
     /// - Filter id → recurse against the filter's host.
     /// - Group id → top of that group's children.
     /// - Layer id → sibling immediately above the anchor.
     pub fn resolve_anchor_target(&self, anchor: Option<LayerId>) -> MoveTarget {
+        // One shared fallback for every case with no usable anchor: the top of
+        // canvas space, directly below the divider. "Top of root" would mean
+        // the top of *screen* space, which no anchorless add is asking for.
+        let fallback = || MoveTarget::Before(self.divider_id());
         let Some(id) = anchor else {
-            return MoveTarget::IntoGroupTop(self.root);
+            return fallback();
         };
         if self.is_filter(id) {
             return match self.parent.get(id).copied() {
                 Some(host) => self.resolve_anchor_target(Some(host)),
-                None => MoveTarget::IntoGroupTop(self.root),
+                None => fallback(),
             };
         }
         match self.find_node(id) {
+            // An add anchored on the divider itself is not asking for screen
+            // space; it gets the same top-of-canvas default.
+            Some(n) if n.is_screen_space_boundary() => fallback(),
             Some(LayerNode::Group(_)) => MoveTarget::IntoGroupTop(id),
             Some(LayerNode::Layer(_)) => MoveTarget::After(id),
-            None => MoveTarget::IntoGroupTop(self.root),
+            None => fallback(),
         }
     }
 
-    /// Apply a [`MoveTarget`] to a node already unlinked from the tree.
-    fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
+    /// Where a [`MoveTarget`] points right now: the parent to attach under
+    /// and the position within it, `None` meaning "at the end". Resolved
+    /// against the current tree, so a mover must unlink first.
+    fn resolve_target_slot(&self, target: MoveTarget) -> (LayerId, Option<usize>) {
         match target {
-            MoveTarget::Before(ref_id) => {
-                if let Some(parent_id) = self.parent_of(ref_id) {
+            MoveTarget::Before(ref_id) => match self.parent_of(ref_id) {
+                Some(parent_id) => {
                     let pos = self
                         .children_of(parent_id)
                         .iter()
                         .position(|c| *c == ref_id)
                         .unwrap_or(0);
-                    self.link_child(node, parent_id, Some(pos));
-                } else {
-                    self.link_child(node, self.root, None);
+                    (parent_id, Some(pos))
                 }
-            }
-            MoveTarget::After(ref_id) => {
-                if let Some(parent_id) = self.parent_of(ref_id) {
+                None => (self.root, None),
+            },
+            MoveTarget::After(ref_id) => match self.parent_of(ref_id) {
+                Some(parent_id) => {
                     let pos = self
                         .children_of(parent_id)
                         .iter()
                         .position(|c| *c == ref_id)
-                        .map(|p| p + 1)
-                        .unwrap_or_else(|| self.children_of(parent_id).len());
-                    self.link_child(node, parent_id, Some(pos));
-                } else {
-                    self.link_child(node, self.root, None);
+                        .map(|p| p + 1);
+                    (parent_id, pos)
                 }
-            }
-            MoveTarget::IntoGroupTop(group_id) => {
-                let group = self.resolve_parent_group(Some(group_id));
-                self.link_child(node, group, None);
-            }
+                None => (self.root, None),
+            },
+            MoveTarget::IntoGroupTop(group_id) => (self.resolve_parent_group(Some(group_id)), None),
             MoveTarget::IntoGroupBottom(group_id) => {
-                let group = self.resolve_parent_group(Some(group_id));
-                self.link_child(node, group, Some(0));
+                (self.resolve_parent_group(Some(group_id)), Some(0))
             }
         }
+    }
+
+    /// Apply a [`MoveTarget`] to a node already unlinked from the tree, through
+    /// the placement policy: the add/paste path, for callers with no placement
+    /// statement of their own.
+    fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
+        let (parent, position) = self.resolve_target_slot(target);
+        self.link_placed(node, parent, position);
     }
 
     /// Recursively remove a subtree (the node, its descendants, and every
@@ -1130,7 +1487,7 @@ impl Document {
     /// Creation-default bounds for a fresh mask on `host_id`: the full canvas,
     /// for every host kind. A mask owns its bounds independently of its host
     /// (it grows itself via `grow_filter`); the host's extent is only a
-    /// historical seed, not a runtime dependency — mirroring Krita's
+    /// historical seed, not a runtime dependency, mirroring Krita's
     /// parent-extent *fallback* (a default bbox, not a coupling). The
     /// mask-apply pass samples the mask in its own space, so the default size
     /// is just "cover the visible canvas".
@@ -1193,7 +1550,7 @@ mod tests {
     fn mask_on_filter_layer_resolves_without_colliding_with_the_effect() {
         // A mask added to a filter layer must land in the filter's polymorphic
         // `filters` list, resolve via `mask_filter`, and leave the procedural
-        // effect (`pipeline`/`params`) untouched — the no-collision property
+        // effect (`pipeline`/`params`) untouched: the no-collision property
         // that makes filter layers carry masks like any other host. Pins it so
         // a future change to the `filters` Vec can't silently break it.
         let mut doc = Document::new(64, 64);
@@ -1213,7 +1570,7 @@ mod tests {
             node.filters().contains(&mask_id),
             "mask id must be in the filter layer's filters list",
         );
-        // The procedural effect is untouched — `compose_filter_arm` builds it
+        // The procedural effect is untouched; `compose_filter_arm` builds it
         // from `pipeline`/`params`, never from `filters`.
         match node {
             LayerNode::Layer(Layer::Filter(f)) => {
@@ -1231,9 +1588,9 @@ mod tests {
             "filter layer composites in place"
         );
         assert_eq!(
-            doc.masked_in_place_hosts(),
-            vec![filter],
-            "the masked filter layer is collected as an in-place masked host",
+            doc.snapshot_in_place_hosts(),
+            Vec::<LayerId>::new(),
+            "an effect layer redirects into a scratch, so it needs no snapshot",
         );
     }
 
@@ -1289,7 +1646,7 @@ mod tests {
         let g1 = doc.add_group(None);
         let _l1 = doc.add_raster_layer(Some(g1));
 
-        doc.remove_node(g1);
+        doc.remove_entity(g1);
         assert!(doc.flat_layers().is_empty());
     }
 
@@ -1327,7 +1684,7 @@ mod tests {
         let l = doc.add_raster_layer(None);
         let mod_id = doc.add_mask_filter(l).unwrap();
 
-        doc.remove_filter(mod_id);
+        doc.remove_entity(mod_id);
         assert!(doc.filters_of(l).is_empty());
         assert!(!doc.is_filter(mod_id));
         // Truly purged from entities (not just unlinked).
@@ -1367,12 +1724,12 @@ mod tests {
 
     #[test]
     fn stale_id_returns_none() {
-        // After purging a layer, looking it up by its old id MUST return None
-        // — slotmap's generational keys make this safe even after another
-        // layer is allocated into the same slot.
+        // After purging a layer, looking it up by its old id MUST return
+        // None; slotmap's generational keys make this safe even after
+        // another layer is allocated into the same slot.
         let mut doc = Document::new(256, 256);
         let stale = doc.add_raster_layer(None);
-        doc.remove_node(stale);
+        doc.remove_entity(stale);
         // Allocate something else; the slot may be recycled with a bumped
         // generation. The stale key must still not resolve.
         let _other = doc.add_raster_layer(None);
@@ -1405,8 +1762,7 @@ mod tests {
         let l = doc.add_raster_layer(None);
         let m = doc.add_mask_filter(l).unwrap();
 
-        let parent = doc.parent_of(l);
-        let pos = doc.position_in_parent(l).unwrap();
+        let slot = doc.slot_of(l).unwrap();
 
         let detached = doc.detach_for_undo(l).unwrap();
         assert_eq!(detached, l);
@@ -1419,15 +1775,15 @@ mod tests {
         // Not in the tree.
         assert!(doc.flat_layers().is_empty());
 
-        doc.reinsert_node(l, parent, pos);
-        assert_eq!(doc.parent_of(l), parent.or(Some(doc.root)));
+        doc.reinsert_entity(l, slot);
+        assert_eq!(doc.parent_of(l), slot.parent.or(Some(doc.root)));
         assert_eq!(doc.flat_layers().len(), 1);
         assert_eq!(doc.mask_filter_id(l), Some(m));
     }
 
     #[test]
     fn purge_subtree_frees_descendants() {
-        // remove_node must actually purge from `entities` — not just unlink.
+        // remove_node must actually purge from `entities`, not just unlink.
         let mut doc = Document::new(256, 256);
         let g = doc.add_group(None);
         let l = doc.add_raster_layer(Some(g));
@@ -1437,7 +1793,7 @@ mod tests {
         doc.move_layer(inner_g, MoveTarget::IntoGroupTop(g));
         let inner_l = doc.add_raster_layer(Some(inner_g));
 
-        doc.remove_node(g);
+        doc.remove_entity(g);
         for id in [g, l, m, inner_g, inner_l] {
             assert!(
                 doc.entities.get(id).is_none(),
@@ -1458,7 +1814,7 @@ mod tests {
         let _l1 = doc.add_raster_layer(None);
         let _l2 = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(None);
-        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+        assert_eq!(doc.canvas_space_children().last().copied(), Some(new_id));
     }
 
     #[test]
@@ -1468,7 +1824,7 @@ mod tests {
         let l2 = doc.add_raster_layer(None);
         let l3 = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(Some(l1));
-        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2, l3]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_id, l2, l3]);
     }
 
     #[test]
@@ -1500,17 +1856,17 @@ mod tests {
         let mask = doc.add_mask_filter(l1).unwrap();
         let new_id = doc.add_raster_layer(Some(mask));
         // Filter resolves to its host layer → After(host) in root.
-        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_id, l2]);
     }
 
     #[test]
     fn add_raster_layer_with_stale_anchor_falls_back_to_root_top() {
         let mut doc = Document::new(256, 256);
         let stale = doc.add_raster_layer(None);
-        doc.remove_node(stale);
+        doc.remove_entity(stale);
         let _other = doc.add_raster_layer(None);
         let new_id = doc.add_raster_layer(Some(stale));
-        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+        assert_eq!(doc.canvas_space_children().last().copied(), Some(new_id));
     }
 
     #[test]
@@ -1519,7 +1875,7 @@ mod tests {
         let l1 = doc.add_raster_layer(None);
         let l2 = doc.add_raster_layer(None);
         let new_g = doc.add_group(Some(l1));
-        assert_eq!(doc.children_of(doc.root), &[l1, new_g, l2]);
+        assert_eq!(doc.canvas_space_children(), &[l1, new_g, l2]);
     }
 
     #[test]
@@ -1530,5 +1886,106 @@ mod tests {
         let new_g = doc.add_group(Some(outer));
         assert_eq!(doc.parent_of(new_g), Some(outer));
         assert_eq!(doc.children_of(outer), &[inner_l, new_g]);
+    }
+
+    /// A filter belongs to its host's `filters` list and to no `children`
+    /// list, whichever detach/attach pair moved it. The two lists used to be
+    /// reachable from the wrong primitive, so a mask could be detached as a
+    /// node (leaving it in `filters`) or reattached as one (landing it in
+    /// `root.children`).
+    #[test]
+    fn detaching_a_filter_by_the_node_path_still_unlinks_it_from_its_host() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+
+        doc.detach_for_undo(mask);
+
+        assert!(
+            !doc.filters_of(host).contains(&mask),
+            "mask must leave its host's filter list, got {:?}",
+            doc.filters_of(host)
+        );
+        assert_eq!(doc.parent_of(mask), None);
+    }
+
+    #[test]
+    fn reinserting_a_filter_puts_it_back_on_its_host_not_in_root_children() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+        let slot = doc.slot_of(mask).expect("filter slot");
+
+        doc.detach_for_undo(mask);
+        doc.reinsert_entity(mask, slot);
+
+        assert_eq!(doc.filters_of(host), &[mask]);
+        assert_eq!(doc.parent_of(mask), Some(host));
+        assert!(
+            !doc.children_of(doc.root).contains(&mask),
+            "a filter must never appear in a children list, got {:?}",
+            doc.children_of(doc.root)
+        );
+    }
+
+    /// Restoring a filter puts it back at its original index rather than
+    /// appending, so undoing the removal of one of several modifiers doesn't
+    /// silently reorder the stack.
+    #[test]
+    fn reinserting_a_filter_restores_its_original_index() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let first = doc.add_mask_filter(host).expect("first filter");
+        let second = doc.add_mask_filter(host).expect("second filter");
+        assert_eq!(doc.filters_of(host), &[first, second]);
+
+        let slot = doc.slot_of(first).expect("filter slot");
+        doc.detach_for_undo(first);
+        doc.reinsert_entity(first, slot);
+
+        assert_eq!(doc.filters_of(host), &[first, second]);
+    }
+
+    /// Moving a filter id through the node-move path must not smuggle it into
+    /// a `children` list; a mask has no position in the tree.
+    #[test]
+    fn move_layer_refuses_to_relocate_a_filter() {
+        let mut doc = Document::new(256, 256);
+        let host = doc.add_raster_layer(None);
+        let other = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+
+        doc.move_layer(mask, MoveTarget::Before(other));
+
+        assert_eq!(
+            doc.filters_of(host),
+            &[mask],
+            "mask must stay on its host after an attempted node move"
+        );
+        assert_eq!(doc.parent_of(mask), Some(host));
+        assert!(!doc.children_of(doc.root).contains(&mask));
+    }
+
+    /// `remove_entity` frees descendants as well as the entity itself, for both
+    /// kinds: the node path used to purge the subtree while the filter path
+    /// only dropped the entity.
+    #[test]
+    fn remove_entity_purges_a_subtree_and_a_filter_alike() {
+        let mut doc = Document::new(256, 256);
+        let group = doc.add_group(None);
+        let child = doc.add_raster_layer(Some(group));
+        let child_mask = doc.add_mask_filter(child).expect("mask");
+
+        doc.remove_entity(group);
+        assert!(doc.find_node(group).is_none());
+        assert!(doc.find_node(child).is_none());
+        assert!(doc.find_filter(child_mask).is_none());
+
+        let host = doc.add_raster_layer(None);
+        let mask = doc.add_mask_filter(host).expect("mask");
+        doc.remove_entity(mask);
+        assert!(doc.find_filter(mask).is_none());
+        assert!(doc.filters_of(host).is_empty());
+        assert!(doc.find_node(host).is_some());
     }
 }

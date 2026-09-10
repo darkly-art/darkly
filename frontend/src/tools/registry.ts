@@ -6,11 +6,11 @@ import { screenToCanvas } from '../canvas/coordinates';
 /**
  * A tool's behaviour hooks, bound to one {@link DarklyInstance}. Constructed per
  * instance by a {@link ToolDescriptor}'s `create`, so each editor tab owns its
- * own tool objects and their state. Hooks take no context parameter — a tool
+ * own tool objects and their state. Hooks take no context parameter: a tool
  * reads its own instance (the base class {@link ToolBase} exposes `engine` /
  * `canvasEl` / `screenToCanvas`). Capture semantics are preserved by the tool
  * session: a hook parked on an await issued through the (now dead) session
- * rejects on resume, so the await — not a context object — is the cancellation
+ * rejects on resume, so the await (not a context object) is the cancellation
  * point. See `tool_session.ts`.
  */
 export interface Tool {
@@ -21,7 +21,7 @@ export interface Tool {
      *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
      *  use this to prevent chord interception while their UI is active.
      *
-     *  Also useful for preempting a modifier-held chord — return `true` when
+     *  Also useful for preempting a modifier-held chord: return `true` when
      *  the relevant modifier is held to stop a global modifier+drag binding
      *  (e.g. `ctrl+drag` → sample color) from intercepting. `claimsPointer`
      *  runs before `dispatchDrag` in `CanvasView.onPointerDown`. */
@@ -35,16 +35,16 @@ export interface Tool {
     /** Re-establish hover-time visual feedback (e.g. the brush's dab
      *  preview) at the given canvas position, without requiring a live
      *  PointerEvent. Called by systems that briefly steal the pointer
-     *  pipeline and need to hand it back — e.g. the modifier-held color
+     *  pipeline and need to hand it back (e.g. the modifier-held color
      *  picker releasing, where the next genuine pointermove may be far
-     *  off and the user expects the preview to be there immediately. */
+     *  off and the artist expects the preview to be there immediately). */
     restoreHover?(canvasX: number, canvasY: number): void;
 
     /** Inverse of {@link restoreHover}: tear down hover-time visual feedback
      *  and invalidate any in-flight async hover push, so a pending overlay
      *  update can't land after the caller has taken over the pointer
      *  pipeline (e.g. a modifier-held cursor engaging). Tools without such
-     *  feedback opt out by not implementing it — the caller falls back to a
+     *  feedback opt out by not implementing it; the caller falls back to a
      *  generic overlay clear. */
     suspendHover?(): void;
 
@@ -65,16 +65,21 @@ export interface Tool {
 /**
  * Static, instance-independent metadata for a tool, plus the factory that
  * builds a per-instance {@link Tool}. This is what the registry holds and what
- * the toolbar / options UI iterates — none of it depends on a live document, so
+ * the toolbar / options UI iterates: none of it depends on a live document, so
  * a descriptor is a process-global singleton. Behaviour and per-canvas state
  * live on the {@link Tool} that `create` returns.
  */
 export interface ToolDescriptor {
     readonly id: string;
-    /** Iconify icon name (e.g. 'fa6-solid:paintbrush', 'local:gradient').
-     *  Rendered via the shared `<Icon>` component. May be a getter (the brush's
-     *  icon tracks the global erase-mode flag). */
-    readonly icon?: string;
+    /** Session-dependent override of the tool's registry icon.
+     *
+     *  The tool's own glyph lives on its Rust `ToolRegistration` and reaches
+     *  the UI through the `tools` catalog. This field exists only for a glyph
+     *  that depends on live session state, which a static registration cannot
+     *  express: the brush swaps to the eraser icon while erase mode is on.
+     *  Resolve through `app.toolGlyph(id)` rather than reading it directly:
+     *  that is where override-beats-registry is decided. */
+    readonly icon?: string | (() => string);
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
     readonly group: string;
 
@@ -83,16 +88,12 @@ export interface ToolDescriptor {
      *  metadata (icon, default sub-tool, order) lives in {@link ToolCluster}. */
     readonly cluster?: string;
 
-    /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
-     *  Used by hotkey registration to wire up tool switching automatically. */
-    readonly hotkeyAction: string;
-
     /** Optional Svelte component rendered inside the always-visible bottom
      *  options strip. Owns the per-tool widgets (sliders, toggles, pickers).
      *  When absent, the strip shows a generic placeholder. */
     readonly optionsComponent?: Component;
 
-    /** Optional Svelte component rendered ABOVE the options strip — for
+    /** Optional Svelte component rendered ABOVE the options strip: for
      *  tools that need a collapsible secondary panel (e.g. the brush
      *  builder). The component owns its own visibility logic and may
      *  render nothing when collapsed. */
@@ -106,15 +107,15 @@ export interface ToolDescriptor {
  * Base class for per-instance tools. Holds the owning {@link DarklyInstance} and
  * exposes the three things tool code needs from it, all null-safe:
  *
- * - `engine` — the instance's live {@link SessionEngine} (`inst.session`), the
+ * - `engine` - the instance's live {@link SessionEngine} (`inst.session`), the
  *   *only* engine handle tool code should reach through, so a request that
  *   resolves after the session dies rejects with `ToolSessionCancelled`.
- * - `canvasEl` — the instance's canvas element.
- * - `screenToCanvas` — screen → plane conversion against that canvas.
+ * - `canvasEl` - the instance's canvas element.
+ * - `screenToCanvas` - screen → plane conversion against that canvas.
  *
  * A tool reads its own instance; it never reaches for the global `app`.
  *
- * Not declared `implements Tool` — {@link Tool}'s members are all optional (a
+ * Not declared `implements Tool`: {@link Tool}'s members are all optional (a
  * "weak type"), and a base with none of them would trip TS's weak-type check.
  * Concrete subclasses supply the hooks and are structurally {@link Tool}s; each
  * descriptor's `create` returns them typed as such.
@@ -170,7 +171,7 @@ export const toolRegistry = new ToolRegistry();
 /**
  * A cluster bundles multiple tools behind a single flyout button in the
  * toolbar (e.g. selection tools, fill tools). The cluster button always
- * mirrors *some* member tool's icon — never owns one of its own. Specifically:
+ * mirrors *some* member tool's icon: never owns one of its own. Specifically:
  * the currently-active member when one is active in this cluster, otherwise
  * the default member. The cluster is a routing concept, not a visual identity.
  */

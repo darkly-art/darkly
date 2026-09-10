@@ -3,8 +3,8 @@
 //! A compute shader visits every texel, tests a caller-defined predicate, and
 //! folds the coordinates of any matching texel into a 16-byte atomic min/max
 //! buffer. After dispatch the buffer holds `[min_x, min_y, max_x, max_y]`; if
-//! `min_x > max_x` no texel matched. The result is read back asynchronously —
-//! no full-texture readback required.
+//! `min_x > max_x` no texel matched. The result is read back asynchronously,
+//! avoiding a full-texture readback.
 //!
 //! This module owns the machinery that every bbox caller shares: the atomic
 //! storage buffer + its `BOUNDS_INIT` seed, the staging buffer, the
@@ -23,7 +23,7 @@ const BOUNDS_INIT: [u32; 4] = [u32::MAX, u32::MAX, 0, 0];
 /// Size of the atomic bounds / staging buffers: 4 × u32.
 const BOUNDS_BYTES: u64 = 16;
 
-/// The shared bbox-reduction machinery. Stateless — it only bundles the
+/// The shared bbox-reduction machinery. Stateless: it only bundles the
 /// [`dispatch`](Self::dispatch) constructor for an in-flight [`PendingBbox`].
 pub struct BboxReduction;
 
@@ -96,14 +96,14 @@ pub struct PendingBbox {
 impl PendingBbox {
     /// Poll for the reduced bbox.
     ///
-    /// - `None` — still pending; call again next frame.
-    /// - `Some(None)` — no texel matched the predicate (empty result).
-    /// - `Some(Some([x, y, w, h]))` — the tight bounding box, converted from
+    /// - `None` - still pending; call again next frame.
+    /// - `Some(None)` - no texel matched the predicate (empty result).
+    /// - `Some(Some([x, y, w, h]))` - the tight bounding box, converted from
     ///   the shader's inclusive `[min, max]` to origin + size (`w = max - min
     ///   + 1`). Coordinates are texel-local; callers translate as needed.
     ///
     /// Begins the async mapping on the first call, then nudges native backends
-    /// with a non-blocking `device.poll(Poll)` — never a blocking wait, so this
+    /// with a non-blocking `device.poll(Poll)`, never a blocking wait, so this
     /// is safe on WebGPU/WASM.
     pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<[u32; 4]>> {
         if self.rx.is_none() {

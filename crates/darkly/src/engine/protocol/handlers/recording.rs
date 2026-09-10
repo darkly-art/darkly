@@ -1,4 +1,4 @@
-//! Process recording (timelapse) — capture parameters + frame draining.
+//! Process recording (timelapse): capture parameters + frame draining.
 //!
 //! The engine only captures frames; encoding and persistence are
 //! frontend-owned. `poll_recording_frame` mirrors `poll_export_result`:
@@ -9,10 +9,10 @@ use serde_json::json;
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 
-/// `{ enabled, minIntervalSecs, width, height, baseWidth, baseHeight }` —
+/// `{ enabled, minIntervalSecs, width, height, baseWidth, baseHeight }`:
 /// frontend-negotiated capture parameters. `width`/`height` are the encoder
 /// frame dimensions (even-aligned); `baseWidth`/`baseHeight` are the canvas
-/// dimensions the negotiation was based on — capture holds while the live
+/// dimensions the negotiation was based on; capture holds while the live
 /// canvas aspect ratio differs from theirs.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -43,7 +43,7 @@ pub fn registrations() -> Vec<RequestRegistration> {
         .post()
         .req::<SetRecordingParamsReq>(),
         // Force a one-off capture on the next frame, independent of the
-        // document revision — how live-void milestones (first streamed frame,
+        // document revision: how live-void milestones (first streamed frame,
         // feed disconnect) and the final state on recording stop reach the
         // recorder, since they change GPU pixels without touching the document.
         RequestRegistration::new("request_recording_capture", |engine, _payload, _b| {

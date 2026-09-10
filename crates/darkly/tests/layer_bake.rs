@@ -17,7 +17,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// Paint a solid coloured stamp at canvas centre. Used to give layers
 /// distinguishable pixel content before merge/flatten.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -40,14 +40,14 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
-/// Paint a black dab onto a host's mask filter — R8 value drops toward 0
+/// Paint a black dab onto a host's mask filter: R8 value drops toward 0
 /// where the brush lands, leaving the rest of the mask at its prior value
 /// (255 for a freshly-added, all-reveal mask).
 fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
     let mask_id = engine
         .host_mask_id(host_id)
         .expect("paint_mask_dot requires the host to have a mask filter");
-    engine.begin_stroke(mask_id);
+    engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -74,6 +74,7 @@ fn group_at_root(engine: &DarklyEngine, group_id: LayerId) -> bool {
     let target = group_id.to_ffi() as f64;
     engine
         .layer_tree()
+        .layers
         .iter()
         .any(|info| matches!(info, LayerInfo::Group { id, .. } if *id == target))
 }
@@ -185,7 +186,7 @@ fn merge_down_undo_restores_both_sources() {
     assert!(engine.has_layer(upper), "upper restored");
     assert!(!engine.has_layer(result), "result detached on undo");
 
-    // Source pixels must be intact — tombstoning kept textures alive.
+    // Source pixels must be intact: tombstoning kept textures alive.
     let lower_px = engine.test_readback_layer(lower);
     assert!(
         alpha_at(&lower_px, w, 32, 48) > 0,
@@ -254,8 +255,8 @@ fn flatten_undo_restores_original_tree() {
 //
 // Protects the "every write-site marks its node thumbnail-dirty" invariant
 // (see `Compositor::mark_node_pixels_dirty` docs). Without that, a fresh
-// duplicate appears in the panel as a thumbnail-less row until the user
-// makes their first edit — the original bug this refactor was written to
+// duplicate appears in the panel as a thumbnail-less row until the artist
+// makes their first edit: the original bug this refactor was written to
 // kill, recurring "the fourth or fifth time" in the codebase's history.
 
 #[test]
@@ -302,7 +303,7 @@ fn flatten_node_on_layer_with_mask_applies_it() {
     let mut engine = test_engine(64, 64);
     let layer = engine.add_raster_layer(None);
     paint_dot(&mut engine, layer, 32.0, 32.0, [1.0, 0.0, 0.0]);
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     assert!(engine.flatten_node(layer).is_ok());
     assert!(
         engine.host_mask_id(layer).is_none(),
@@ -340,7 +341,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     //     └─ child_b (green dot at 48,32)
     //
     // Flattening the group must consume every child and every mask. Undo
-    // must put all of it back — tree shape, both masks, and every pixel
+    // must put all of it back: tree shape, both masks, and every pixel
     // byte-for-byte.
     let (w, h) = (64u32, 64u32);
     let mut engine = test_engine(w, h);
@@ -348,13 +349,13 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let group = engine.add_group(None);
     let child_a = engine.add_raster_layer(Some(group));
     paint_dot(&mut engine, child_a, 16.0, 32.0, [1.0, 0.0, 0.0]);
-    engine.add_mask(child_a);
+    engine.add_mask(child_a).expect("add mask");
     paint_mask_dot(&mut engine, child_a, 16.0, 16.0);
 
     let child_b = engine.add_raster_layer(Some(group));
     paint_dot(&mut engine, child_b, 48.0, 32.0, [0.0, 1.0, 0.0]);
 
-    engine.add_mask(group);
+    engine.add_mask(group).expect("add mask");
     paint_mask_dot(&mut engine, group, 8.0, 8.0);
 
     // Snapshot every pixel buffer we expect to survive the round-trip.
@@ -367,7 +368,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let result = engine.flatten_node(group).expect("group flatten succeeded");
     assert!(engine.has_layer(result), "result raster attached");
     assert!(!group_at_root(&engine, group), "group consumed by flatten");
-    // Result composite must reflect both children — proof the bake actually
+    // Result composite must reflect both children, proof the bake actually
     // walked the subtree, rather than emitting an empty placeholder.
     let result_pixels = engine.test_readback_layer(result);
     assert!(
@@ -421,12 +422,17 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
 }
 
 // ============================================================================
-// merge_layers — multi-source bake, same-parent and cross-parent
+// merge_layers: multi-source bake, same-parent and cross-parent
 // ============================================================================
 
 /// Merging a same-parent selection lands the result at the panel-topmost
-/// selected sibling's slot and inherits that sibling's name / blend /
-/// opacity / visibility.
+/// selected sibling's slot and inherits that sibling's name / blend mode /
+/// visibility.
+///
+/// Opacity is the exception, and the assertion below is deliberate: the
+/// topmost's opacity is baked into the result's pixels, so the result carries
+/// 100 % and composites to the same image. See
+/// `merge_layers_does_not_double_the_topmosts_opacity`.
 #[test]
 fn merge_layers_same_parent_inherits_topmost_props() {
     use darkly::engine::types::LayerInfo;
@@ -441,6 +447,12 @@ fn merge_layers_same_parent_inherits_topmost_props() {
     paint_dot(&mut engine, lower, 8.0, 8.0, [1.0, 0.0, 0.0]);
     paint_dot(&mut engine, upper, 16.0, 16.0, [0.0, 1.0, 0.0]);
 
+    // What the user sees before the merge. Merging is a restructuring, not an
+    // edit, so this must survive it unchanged: the assertion that actually
+    // catches a doubled opacity, whatever the tree ends up looking like.
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
     let result = engine.merge_layers(vec![lower, upper]).expect("merge ok");
 
     // Source layers should be detached from the tree.
@@ -448,9 +460,10 @@ fn merge_layers_same_parent_inherits_topmost_props() {
     assert!(!engine.has_layer(upper));
     assert!(engine.has_layer(result));
 
-    // Result inherits the topmost's name + opacity.
+    // Result inherits the topmost's name; its opacity is in the pixels.
     let info = engine
         .layer_tree()
+        .layers
         .into_iter()
         .find(|n| match n {
             LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
@@ -462,7 +475,18 @@ fn merge_layers_same_parent_inherits_topmost_props() {
         _ => panic!(),
     };
     assert_eq!(name, "topmost");
-    assert!((opacity - 0.5).abs() < 1e-3, "opacity inherited: {opacity}");
+    assert!(
+        (opacity - 1.0).abs() < 1e-3,
+        "the topmost's opacity is baked into the pixels, so the result must \
+         carry 100% or it would be applied twice: {opacity}",
+    );
+
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "merging must not change the composite",
+    );
 }
 
 /// A cross-parent selection (one layer at root, one inside a group)
@@ -477,7 +501,9 @@ fn merge_layers_cross_parent_lands_at_topmost() {
     // Build [keep, in_group_via_group, group(inner), root_top].
     let group = engine.add_group(None);
     let inner = engine.add_raster_layer(None);
-    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(inner, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
     let root_top = engine.add_raster_layer(None);
     engine.set_layer_name(root_top, "expected-topmost");
 
@@ -497,6 +523,7 @@ fn merge_layers_cross_parent_lands_at_topmost() {
     // matches an id in the selection).
     let info = engine
         .layer_tree()
+        .layers
         .into_iter()
         .find(|n| match n {
             LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
@@ -519,7 +546,9 @@ fn merge_layers_undo_restores_all_sources() {
     let _keep = engine.add_raster_layer(None);
     let group = engine.add_group(None);
     let inner = engine.add_raster_layer(None);
-    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    engine
+        .move_layer(inner, MoveTarget::IntoGroupTop(group))
+        .expect("move succeeds");
     let root_top = engine.add_raster_layer(None);
 
     paint_dot(&mut engine, inner, 8.0, 8.0, [1.0, 0.0, 0.0]);
@@ -553,8 +582,8 @@ fn merge_layers_undo_restores_all_sources() {
     );
 }
 
-/// `merge_layers` aborts if any source is locked — a partial bake
-/// would destroy the user's data.
+/// `merge_layers` aborts if any source is locked, since a partial bake
+/// would destroy the artist's data.
 #[test]
 fn merge_layers_rejects_locked() {
     let mut engine = test_engine(32, 32);
@@ -581,4 +610,162 @@ fn merge_layers_needs_two_sources() {
 
     let r2 = engine.merge_layers(vec![l1, l1]);
     assert!(r2.is_err(), "duplicate-id merge must error (dedupes to 1)");
+}
+
+// ---------------------------------------------------------------------------
+// The viewport divider. Flatten and merge both consume the nodes they operate
+// on, so a run member reaching either one would be destroyed without ever
+// having been part of the image it is supposedly being baked into. They handle
+// that differently on purpose: Flatten Image legitimately means "flatten the
+// document content", while "merge these two things" with one of them absent is
+// not a meaningful outcome.
+// ---------------------------------------------------------------------------
+
+/// Add an effect layer at the top of the stack.
+fn effect_layer(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
+    let defaults: Vec<_> = engine
+        .filter_param_defs(pipeline)
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect();
+    engine
+        .add_filter_layer(pipeline, defaults, None)
+        .expect("effect layer is addable")
+}
+
+/// Flatten Image leaves the run alone. Without the boundary-aware source list
+/// this fails by the effect **disappearing**: detached as a flatten source and
+/// never baked, because the walk that would have baked it skips the run.
+#[test]
+fn flatten_image_leaves_the_screen_space_run_in_the_tree() {
+    let mut engine = test_engine(64, 64);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 32.0, [1.0, 0.0, 0.0]);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, upper, 40.0, 32.0, [0.0, 0.0, 1.0]);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.test_set_screen_space_boundary(1);
+
+    let result = engine.flatten_image().expect("flatten succeeds");
+
+    assert!(
+        engine.has_layer(viewport_effect),
+        "a viewport-only effect is not document content and must survive Flatten"
+    );
+    assert!(engine.has_layer(result), "the baked result exists");
+    assert!(
+        !engine.has_layer(lower),
+        "canvas-space sources are consumed"
+    );
+    assert!(!engine.has_layer(upper));
+}
+
+/// Merge Down refuses rather than silently eating the effect.
+#[test]
+fn merge_down_refuses_a_screen_space_source() {
+    let mut engine = test_engine(64, 64);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 32.0, [1.0, 0.0, 0.0]);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.test_set_screen_space_boundary(1);
+
+    let result = engine.merge_down(viewport_effect);
+    assert!(result.is_err(), "a viewport-only source must refuse");
+    assert!(engine.has_layer(viewport_effect), "and must survive");
+    assert!(engine.has_layer(lower));
+}
+
+/// …and so does `merge_layers`, for the same reason.
+#[test]
+fn merge_layers_refuses_a_screen_space_source() {
+    let mut engine = test_engine(64, 64);
+    let keep = engine.add_raster_layer(None);
+    let viewport_effect = effect_layer(&mut engine, "invert");
+    engine.test_set_screen_space_boundary(1);
+
+    let result = engine.merge_layers(vec![keep, viewport_effect]);
+    assert!(result.is_err(), "a viewport-only source must refuse");
+    assert!(engine.has_layer(viewport_effect));
+    assert!(engine.has_layer(keep));
+}
+
+/// Regression: `bake_subtree_to_layer` must not leave its transient bake
+/// `GroupState` (three canvas-sized textures) allocated after the merge,
+/// it once stashed one under the sentinel null id for the rest of the
+/// session, and each entry survived every subsequent merge.
+#[test]
+fn merge_down_leaks_no_group_state() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let lower = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 32.0, 64.0, [1.0, 0.0, 0.0]);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, upper, 96.0, 64.0, [0.0, 0.0, 1.0]);
+
+    let before = engine.test_group_state_count();
+    engine.merge_down(upper).expect("merge_down should succeed");
+    assert_eq!(
+        engine.test_group_state_count(),
+        before,
+        "merge must not leave the transient bake GroupState allocated"
+    );
+
+    // Repeat with fresh layers: the count must stay flat across merges.
+    let a = engine.add_raster_layer(None);
+    paint_dot(&mut engine, a, 64.0, 32.0, [0.0, 1.0, 0.0]);
+    let b = engine.add_raster_layer(None);
+    paint_dot(&mut engine, b, 64.0, 96.0, [1.0, 1.0, 0.0]);
+    engine
+        .merge_down(b)
+        .expect("second merge_down should succeed");
+    assert_eq!(
+        engine.test_group_state_count(),
+        before,
+        "repeated merges must not accumulate group state"
+    );
+}
+
+/// Regression: a bake result must land in canvas space, whatever index the
+/// sources it replaces used to occupy.
+///
+/// The result's slot is derived from the topmost source, and it is read off the
+/// tree *before* the sources detach. Restoring that index verbatim afterwards
+/// walks the result up past everything the detach shifted down, and with a
+/// divider among the root's children that is enough to strand a raster above
+/// it, where nothing composites it into the canvas. Merging is a
+/// restructuring, so the pixels have to survive it.
+#[test]
+fn merge_result_lands_below_the_divider() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let lower = engine.add_raster_layer(None);
+    let upper = engine.add_raster_layer(None);
+    paint_dot(&mut engine, lower, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, upper, 16.0, 16.0, [0.0, 1.0, 0.0]);
+    engine.render(0.0);
+    let before = engine.test_readback_canvas();
+
+    let result = engine.merge_layers(vec![lower, upper]).expect("merge ok");
+
+    // `layers` is top-first, so everything before the divider row is the
+    // viewport treatment and everything after it is the document's content.
+    let rows = engine.layer_tree().layers;
+    let divider = rows
+        .iter()
+        .position(|n| matches!(n, LayerInfo::Divider { .. }))
+        .expect("the root always holds the divider");
+    let landed = rows
+        .iter()
+        .position(|n| matches!(n, LayerInfo::Raster { id, .. } if *id == result.to_ffi() as f64))
+        .expect("result in tree");
+    assert!(
+        landed > divider,
+        "the baked raster belongs to the document, not the viewport treatment"
+    );
+    engine.render(0.0);
+    assert_eq!(
+        engine.test_readback_canvas(),
+        before,
+        "a result stranded above the divider composites into nothing"
+    );
 }

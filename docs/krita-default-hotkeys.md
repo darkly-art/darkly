@@ -1,4 +1,4 @@
-# Krita — Default Keyboard Shortcuts & Canvas Inputs
+# Krita: Default Keyboard Shortcuts & Canvas Inputs
 
 > Reference for **Krita default** keybindings as shipped in the source tree.
 > Generated from:
@@ -7,15 +7,15 @@
 > - `krita/krita/data/input/kritadefault.profile` (canvas pointer/key chords for paint, pan, zoom, rotate, color-pick)
 > - `krita/libs/ui/input/kis_*_action.{h,cpp}` (canvas input action mode tables)
 >
-> Krita ships alternate profiles too — *Photoshop Compatible*, *Clip Studio Paint Compatible*,
-> *Paint Tool SAI Compatible*, *Tablet Pro* — selectable under **Settings → Configure Krita →
+> Krita ships alternate profiles too (*Photoshop Compatible*, *Clip Studio Paint Compatible*,
+> *Paint Tool SAI Compatible*, *Tablet Pro*), selectable under **Settings → Configure Krita →
 > Canvas Input Settings**. This document covers only the default profile.
 
 Shortcut sources you can rebind in Krita:
 
-- **Keyboard shortcuts** — `Settings → Configure Krita → Keyboard Shortcuts`.
+- **Keyboard shortcuts**: `Settings → Configure Krita → Keyboard Shortcuts`.
   Map menu items, tool activators, layer ops, blending modes, scripts to single keys / chords.
-- **Canvas Input** — `Settings → Configure Krita → Canvas Input Settings`.
+- **Canvas Input**: `Settings → Configure Krita → Canvas Input Settings`.
   Map pointer + key chords (mouse-drag with modifiers, wheel, gestures) to the canvas action modes
   (pan, zoom, rotate, pick color, alt-invoke, change brush size, etc.).
 
@@ -38,11 +38,11 @@ Shortcut sources you can rebind in Krita:
 - [General](#krita--general)
 - [Animation](#krita--animation)
 - [Color selectors (Wide-Gamut, MyPaint, etc.)](#krita--color-selectors)
-- [Tools — generic switchers](#tools--tool-shortcuts)
-- [Tool — Interaction (vector)](#tools--interaction-tool)
-- [Tool — Path](#tools--path-tool)
-- [Tool — SVG Text](#svg-tools--svg-text-tool)
-- [Scripts — Ten Brushes, Ten Scripts, Mutator](#scripts)
+- [Tools: generic switchers](#tools--tool-shortcuts)
+- [Tool: Interaction (vector)](#tools--interaction-tool)
+- [Tool: Path](#tools--path-tool)
+- [Tool: SVG Text](#svg-tools--svg-text-tool)
+- [Scripts: Ten Brushes, Ten Scripts, Mutator](#scripts)
 - [S-Pen Actions](#krita--s-pen-actions)
 - [Recorder](#recorder--recorder)
 
@@ -149,13 +149,13 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 | Toggle canvas-only mode | `Four-finger tap` |
 
 > **Read this table as held-modifiers.** `Shift + Left mouse drag` means: hold Shift, drag with
-> the left button — release Shift and the canvas returns to normal tool invocation. Touch
+> the left button; release Shift and the canvas returns to normal tool invocation. Touch
 > gestures (tap / drag / hold) require a touch screen; trackpad pan requires a multi-touch trackpad.
 
 ---
 
 
-## Menu — File
+## Menu: File
 
 **9 default shortcuts** (21 actions total)
 
@@ -191,7 +191,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — Edit
+## Menu: Edit
 
 **13 default shortcuts** (22 actions total)
 
@@ -228,7 +228,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — View
+## Menu: View
 
 **16 default shortcuts** (46 actions total)
 
@@ -289,7 +289,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — Image
+## Menu: Image
 
 **2 default shortcuts** (19 actions total)
 
@@ -323,7 +323,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — Select
+## Menu: Select
 
 **5 default shortcuts** (19 actions total)
 
@@ -357,7 +357,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — Filter
+## Menu: Filter
 
 **1 default shortcut** (13 actions total)
 
@@ -385,7 +385,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Menu — Settings / Window / Help
+## Menu: Settings / Window / Help
 
 **1 default shortcut** (34 actions total)
 
@@ -434,7 +434,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Layers
+## Krita: Layers
 
 **18 default shortcuts** (97 actions total)
 
@@ -546,7 +546,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Painting
+## Krita: Painting
 
 **16 default shortcuts** (63 actions total)
 
@@ -624,7 +624,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Blending Modes
+## Krita: Blending Modes
 
 **28 default shortcuts** (28 actions total)
 
@@ -660,7 +660,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 | `Alt+Shift+Z` | Select Pin Light Blending Mode | `Select Pin Light Blending Mode` |
 
 
-## Krita — Filters (direct hotkeys)
+## Krita: Filters (direct hotkeys)
 
 **6 default shortcuts** (54 actions total)
 
@@ -729,7 +729,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — General
+## Krita: General
 
 **11 default shortcuts** (31 actions total)
 
@@ -775,7 +775,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Animation
+## Krita: Animation
 
 <details><summary>52 unbound actions in this group (default has no shortcut)</summary>
 
@@ -837,7 +837,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Color Selectors
+## Krita: Color Selectors
 
 **1 default shortcut** (10 actions total)
 
@@ -862,7 +862,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — S-Pen Actions
+## Krita: S-Pen Actions
 
 **8 default shortcuts** (9 actions total)
 
@@ -886,7 +886,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Krita — Settings
+## Krita: Settings
 
 <details><summary>1 unbound actions in this group (default has no shortcut)</summary>
 
@@ -897,7 +897,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Tools — Tool Shortcuts (tool switchers)
+## Tools: Tool Shortcuts (tool switchers)
 
 **12 default shortcuts** (46 actions total)
 
@@ -958,7 +958,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Tools — Interaction Tool (default vector tool)
+## Tools: Interaction Tool (default vector tool)
 
 **4 default shortcuts** (42 actions total)
 
@@ -1015,7 +1015,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Tools — Path Tool
+## Tools: Path Tool
 
 **16 default shortcuts** (24 actions total)
 
@@ -1054,7 +1054,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## SVG Tools — SVG Text Tool
+## SVG Tools: SVG Text Tool
 
 **13 default shortcuts** (28 actions total)
 
@@ -1136,7 +1136,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 </details>
 
 
-## Recorder — Recorder
+## Recorder: Recorder
 
 <details><summary>2 unbound actions in this group (default has no shortcut)</summary>
 
@@ -1154,7 +1154,7 @@ Multiple bindings per mode are common (mouse + touch + keyboard each may map the
 
 - **685 total actions** exposed by Krita (menu items, tool activators, layer ops, scripts, etc.)
 - **201 have a default keyboard shortcut**; the remaining **484** are reachable only via menus, toolbars, or by being assigned a shortcut in `Settings → Configure Krita → Keyboard Shortcuts`.
-- Canvas input bindings (modifier + pointer / wheel / gesture) live in `kritadefault.profile` — counted separately.
+- Canvas input bindings (modifier + pointer / wheel / gesture) live in `kritadefault.profile`, counted separately.
 
 ## Source files
 

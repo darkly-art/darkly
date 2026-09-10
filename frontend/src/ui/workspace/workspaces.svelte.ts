@@ -1,19 +1,19 @@
 /**
  * Reactive multi-window docking store.
  *
- * Holds an array of workspace *windows* — the main page plus any popped-out OS
- * windows — each carrying its own split tree. A popped-out panel is not a
+ * Holds an array of workspace *windows* (the main page plus any popped-out OS
+ * windows), each carrying its own split tree. A popped-out panel is not a
  * "detached" flag; it is simply a group living in a different workspace's tree,
  * so cross-window drag is the same tree op as within-window drag, just against
  * two trees. This module owns:
  *   - the tree mutations (thin wrappers over pure `tree.ts` ops),
  *   - the cross-window tab-drag coordinator (capture-free, so events can cross
- *     window boundaries — see `dragGesture.ts`),
+ *     window boundaries; see `dragGesture.ts`),
  *   - pop-out / close-window lifecycle (Document Picture-in-Picture, else
  *     `window.open`), and
  *   - persistence of every workspace tree to localStorage.
  *
- * Layout is frontend UI state (Document Authority Principle) — no Rust/WASM.
+ * Layout is frontend UI state (Document Authority Principle): no Rust/WASM.
  */
 
 import { mount, unmount } from 'svelte';
@@ -35,6 +35,8 @@ import {
     foldPanelsIntoMain,
     loadOrDefault,
     resolveSplitByPath,
+    firstDockableGroupId,
+    groupHolding,
 } from './tree';
 import { resolvePanel } from './panelTypes';
 import { detectDockingEdge, edgeToSplit, tabInsertionIndex } from './dropZones';
@@ -76,7 +78,7 @@ export function popOutSupported(): boolean {
 
 // ---------------------------------------------------------------------------
 // DOM hit-testing (per-window). Free function: the reporting window passes its
-// own `document`, so the returned `workspaceId` is *its* id — cross-window
+// own `document`, so the returned `workspaceId` is *its* id: cross-window
 // falls out for free.
 // ---------------------------------------------------------------------------
 
@@ -102,7 +104,7 @@ export function hitTest(doc: Document, x: number, y: number): HitTarget {
         const groupId = Number(body.dataset.groupId);
         const r = body.getBoundingClientRect();
         const edge = detectDockingEdge(x, y, { left: r.left, top: r.top, width: r.width, height: r.height });
-        // An anchor group (the canvas) can't be tabbed into — its center is not
+        // An anchor group (the canvas) can't be tabbed into: its center is not
         // a valid drop; only the surrounding edges dock panels around it.
         if (body.hasAttribute('data-anchor') && edge === 'center') return { kind: 'none' };
         return { kind: 'body', workspaceId, groupId, edge };
@@ -113,7 +115,7 @@ export function hitTest(doc: Document, x: number, y: number): HitTarget {
 
 // ---------------------------------------------------------------------------
 
-class WorkspaceStore {
+export class WorkspaceStore {
     workspaces = $state<WorkspaceWindow[]>([]);
     /** Shared across all windows so group ids never collide. */
     nextGroupId = 1;
@@ -123,7 +125,7 @@ class WorkspaceStore {
     drag = $state<{ state: DragState; reportingWorkspaceId: number } | null>(null);
 
     /** OS windows + mounted component handles, keyed by workspace id. Not
-     *  reactive — Window/component handles aren't serializable state. */
+     *  reactive: Window/component handles aren't serializable state. */
     #windows = new Map<number, Window>();
     #mounted = new Map<number, ReturnType<typeof mount>>();
     #themeObserver: MutationObserver | null = null;
@@ -155,7 +157,7 @@ class WorkspaceStore {
     }
 
     /** Set the sizes of two adjacent children of the split at `path` (a gutter
-     *  drag). Mutates the store-owned reactive tree in place — no clone/prune,
+     *  drag). Mutates the store-owned reactive tree in place: no clone/prune,
      *  since only two sibling sizes change (structure is untouched, and their
      *  sum is preserved by the caller). Routing through the store keeps the tree
      *  owned here rather than mutated through a component's `node` prop. */
@@ -176,6 +178,47 @@ class WorkspaceStore {
                 if (idx !== -1) group.state.activeTabIndex = idx;
             }
         });
+    }
+
+    // ---- panel visibility --------------------------------------------------
+
+    /** The workspace whose tree holds `tab`, if any window shows it. */
+    #workspaceHolding(tab: PanelType): WorkspaceWindow | undefined {
+        return this.workspaces.find((w) => groupHolding(w.layout.root, tab) !== null);
+    }
+
+    isPanelOpen(tab: PanelType): boolean {
+        return this.#workspaceHolding(tab) !== undefined;
+    }
+
+    /** Show `tab`: raise it where it already lives, else dock it into the main
+     *  window's first dockable group. */
+    openPanel(tab: PanelType) {
+        const holder = this.#workspaceHolding(tab);
+        if (holder) {
+            const group = groupHolding(holder.layout.root, tab)!;
+            this.setActiveTab(holder.id, group.id, tab);
+            return;
+        }
+        this.#mutate(MAIN_ID, (root) => {
+            const target = firstDockableGroupId(root);
+            if (target !== null) insertTab(root, target, tab);
+        });
+    }
+
+    /** Hide `tab` wherever it lives. Refused for a panel that declares itself
+     *  non-closable. */
+    closePanel(tab: PanelType) {
+        if (!resolvePanel(tab).closable) return;
+        const holder = this.#workspaceHolding(tab);
+        if (!holder) return;
+        const group = groupHolding(holder.layout.root, tab)!;
+        this.#mutate(holder.id, (root) => removeTab(root, group.id, tab));
+    }
+
+    togglePanel(tab: PanelType) {
+        if (this.isPanelOpen(tab)) this.closePanel(tab);
+        else this.openPanel(tab);
     }
 
     // ---- drag coordinator --------------------------------------------------
@@ -256,7 +299,7 @@ class WorkspaceStore {
 
     /** Remove `tab` from the source group, then apply `insert` to the target
      *  root. Same-workspace collapses to one mutation (so removal and insertion
-     *  share one prune — critical when dropping a group's only tab onto its own
+     *  share one prune, critical when dropping a group's only tab onto its own
      *  body edge); cross-workspace mutates both trees. */
     #applyCrossTree(
         sourceWorkspaceId: number,
@@ -265,7 +308,7 @@ class WorkspaceStore {
         targetWorkspaceId: number,
         insert: (targetRoot: Subdivision) => void,
     ) {
-        // A non-poppable panel (the canvas) can't leave its window — its WebGPU
+        // A non-poppable panel (the canvas) can't leave its window; its WebGPU
         // surface can't migrate documents. Drop is a no-op; the panel stays put.
         if (sourceWorkspaceId !== targetWorkspaceId && !resolvePanel(tab).poppable) return;
 
@@ -296,7 +339,7 @@ class WorkspaceStore {
             win = null;
         }
         if (!win) {
-            // Opening failed — fold the panel back so it isn't lost.
+            // Opening failed; fold the panel back so it isn't lost.
             this.#mutate(MAIN_ID, (root) => foldPanelsIntoMain(root, [tab]));
             return;
         }
@@ -313,7 +356,7 @@ class WorkspaceStore {
         const handle = mount(Workspace, { target: win.document.body, props: { workspaceId: newId } });
         this.#mounted.set(newId, handle);
 
-        // The user closing the OS window (or the browser folding PiP back) must
+        // The artist closing the OS window (or the browser folding PiP back) must
         // return its panels to the main tree.
         win.addEventListener('pagehide', () => this.closeWindow(newId), { once: true });
 
@@ -341,7 +384,9 @@ class WorkspaceStore {
         this.#windows.delete(workspaceId);
         this.workspaces = this.workspaces.filter((w) => w.id !== workspaceId);
 
-        if (orphans.length > 0) this.#mutate(MAIN_ID, (root) => foldPanelsIntoMain(root, orphans));
+        if (orphans.length > 0) {
+            this.#mutate(MAIN_ID, (root) => foldPanelsIntoMain(root, orphans));
+        }
         try {
             win?.close();
         } catch {

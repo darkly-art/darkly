@@ -31,6 +31,20 @@ struct CheckpointSlot {
     /// Dimensions of the allocated texture (may be larger than bbox).
     tex_w: u32,
     tex_h: u32,
+    /// Format the slot was allocated in. The ring snapshots the stroke
+    /// scratch, whose format is the terminal's business (color for most
+    /// brushes, a float displacement field for warp terminals), and
+    /// `copy_texture_to_texture` requires the two to match.
+    tex_format: wgpu::TextureFormat,
+    /// Snapshots of the stroke's channels, parallel to
+    /// `Scratch::channel_textures`. Empty for terminals that declare none.
+    ///
+    /// Captured and restored with the stroke buffer because a channel is
+    /// what dabs *read* to decide what to deposit. Rewinding the pixels
+    /// but not the channel would leave it holding contributions from
+    /// discarded dabs, and the dabs replayed over those pixels would read
+    /// values describing a stroke that no longer exists.
+    extra: Vec<wgpu::Texture>,
     /// The bbox region this checkpoint covers, in canvas pixel coords.
     /// Stable across mid-stroke layer growth.
     canvas_bbox: CanvasRect,
@@ -50,6 +64,7 @@ impl CheckpointSlot {
             texture: None,
             tex_w: 0,
             tex_h: 0,
+            tex_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
             canvas_bbox: CanvasRect::from_xywh(0, 0, 0, 0),
             save_point_index: 0,
             vector_index: 0,
@@ -60,41 +75,76 @@ impl CheckpointSlot {
                 last_dab_size: [0.0, 0.0],
                 last_dab_pos: None,
                 dab_count: 0,
+                stamp_angle: None,
             },
             valid: false,
+            extra: Vec::new(),
         }
     }
 
-    /// Ensure the texture is at least `w × h`. Reallocate if needed.
-    fn ensure_texture(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if self.tex_w >= w && self.tex_h >= h && self.texture.is_some() {
+    /// Ensure the stroke-buffer snapshot is at least `w × h` and in
+    /// `format`, plus one channel snapshot per entry in `extra_formats`.
+    /// Reallocate if needed, including on a format change, since a slot
+    /// cached from a color stroke cannot receive a warp field. The whole
+    /// set is reallocated together so a slot's snapshots always share
+    /// dimensions.
+    fn ensure_texture(
+        &mut self,
+        device: &wgpu::Device,
+        w: u32,
+        h: u32,
+        format: wgpu::TextureFormat,
+        extra_formats: &[wgpu::TextureFormat],
+    ) {
+        // Slots outlive strokes (`clear()` only flips `valid`), so a slot
+        // allocated for one terminal is reused by the next. Comparing the
+        // formats, not just the count, is what stops a `paint` stroke's
+        // empty slot (or a differently-typed channel set) being reused as
+        // though it held this terminal's snapshots.
+        let formats_match = self.extra.len() == extra_formats.len()
+            && self
+                .extra
+                .iter()
+                .zip(extra_formats)
+                .all(|(t, f)| t.format() == *f);
+        if self.tex_w >= w
+            && self.tex_h >= h
+            && self.tex_format == format
+            && self.texture.is_some()
+            && formats_match
+        {
             return;
         }
         // Allocate with some headroom to reduce reallocation frequency.
         let alloc_w = w.next_power_of_two().max(64);
         let alloc_h = h.next_power_of_two().max(64);
-        self.texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("checkpoint-slot"),
-            size: wgpu::Extent3d {
-                width: alloc_w,
-                height: alloc_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        }));
+        let make = |format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("checkpoint-slot"),
+                size: wgpu::Extent3d {
+                    width: alloc_w,
+                    height: alloc_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        self.texture = Some(make(format));
+        self.extra = extra_formats.iter().copied().map(make).collect();
         self.tex_w = alloc_w;
         self.tex_h = alloc_h;
+        self.tex_format = format;
     }
 }
 
 /// Ring buffer of checkpoint textures for O(divergence_window / N) re-render.
 ///
-/// Two invariants — one for correctness, one for performance — together
+/// Two invariants (one for correctness, one for performance) together
 /// make full-stroke re-render fallback impossible by construction whenever
 /// the stabilizer's `max_divergence_window` bound holds.
 ///
@@ -154,7 +204,7 @@ impl CheckpointRing {
     ///    values. For each existing slot, compute the resulting max
     ///    consecutive gap if it were evicted; pick the slot that minimizes
     ///    that max gap. The slot with the lowest `vi` is *protected* while
-    ///    it is the sole anchor — i.e., while no other slot satisfies
+    ///    it is the sole anchor, i.e., while no other slot satisfies
     ///    `vi ≤ tip_vi − max_div_window`.
     ///
     /// Naively evicting the lowest `vi` slot (the prior policy) destroys
@@ -164,7 +214,7 @@ impl CheckpointRing {
     /// cluster keeps both invariants satisfiable for as long as the
     /// spacing and ring capacity admit.
     ///
-    /// Cost is O(n²) on the ring size — n is 8 — which is negligible
+    /// Cost is O(n²) on the ring size (n is 8), which is negligible
     /// compared with the GPU work each save triggers.
     fn pick_slot(&self, tip_vi: usize, max_div_window: usize, new_vi: usize) -> usize {
         // 1) any invalid slot wins immediately.
@@ -181,7 +231,7 @@ impl CheckpointRing {
         // `restore_before(div_idx)` returns the slot with the largest
         // `vi < div_idx`. The worst-case reachable `div_idx` is
         // `anchor_boundary`, so coverage requires `vi < anchor_boundary`.
-        // The anchor is "redundant" — and the lowest slot may be evicted —
+        // The anchor is "redundant" (and the lowest slot may be evicted)
         // only when the second-lowest slot already satisfies that strict
         // inequality. While `by_vi[1].vi >= anchor_boundary`, the anchor is
         // the sole carrier of coverage and must be protected.
@@ -222,7 +272,7 @@ impl CheckpointRing {
 
         // If anchor protection rejected every candidate (n=1 only), or some
         // future state we haven't anticipated, fall back to evicting the
-        // anchor — the post-save assertion will surface any real coverage
+        // anchor; the post-save assertion will surface any real coverage
         // loss in debug builds.
         best.map(|(i, _)| i).unwrap_or(anchor_slot)
     }
@@ -232,14 +282,15 @@ impl CheckpointRing {
     /// paired with the active layer's canvas extent (the stroke buffer is
     /// texture-aligned to the layer texture). `canvas_bbox` is the
     /// canvas-space rect to snapshot. `tip_vi` and `max_div_window` are the
-    /// stabilizer's current tip index and bound — used by the eviction
-    /// policy and the post-save coverage assertion.
+    /// stabilizer's current tip index and bound (used by the eviction
+    /// policy and the post-save coverage assertion).
     #[allow(clippy::too_many_arguments)]
     pub fn save(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         stroke: &CanvasFrame<'_>,
+        extra: &[&wgpu::Texture],
         save_point_index: usize,
         vector_index: usize,
         canvas_bbox: CanvasRect,
@@ -247,50 +298,96 @@ impl CheckpointRing {
         tip_vi: usize,
         max_div_window: usize,
     ) {
-        let layer_rect = match stroke.canvas_to_layer_rect(canvas_bbox) {
-            Some(r) if !r.is_empty() => r,
-            _ => return,
-        };
-        // Use the clipped canvas rect (post-intersection) so the stored
-        // bbox matches the texels actually copied.
-        let clipped_canvas = match stroke.canvas_extent.intersect(canvas_bbox) {
-            Some(r) => r,
-            None => return,
-        };
+        // The region to snapshot, as a texture-local rect paired with the
+        // clipped canvas rect (so the stored bbox matches the texels
+        // actually copied). `None` when the checkpoint covers no texels.
+        //
+        // An empty region is a *valid* checkpoint: it records "nothing had
+        // been painted at this index", and restoring it is fully served by
+        // the caller's reset to the terminal's baseline. Claiming the slot
+        // anyway is what keeps the `vi = 0` anchor present when a stroke's
+        // first dab is an identity write (a stationary smudge, say);
+        // without it every early divergence falls back to a full re-render.
+        let region = stroke
+            .canvas_to_layer_rect(canvas_bbox)
+            .filter(|r| !r.is_empty())
+            .zip(stroke.canvas_extent.intersect(canvas_bbox));
 
+        let extra_formats: Vec<wgpu::TextureFormat> = extra.iter().map(|t| t.format()).collect();
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
-        slot.ensure_texture(device, layer_rect.width, layer_rect.height);
-        slot.canvas_bbox = clipped_canvas;
+        slot.canvas_bbox =
+            region.map_or_else(|| CanvasRect::from_xywh(0, 0, 0, 0), |(_, clipped)| clipped);
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;
         slot.render_state = render_state;
         slot.valid = true;
 
         // Copy bbox region from stroke texture to slot texture.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: stroke.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: layer_rect.x0(),
-                    y: layer_rect.y0(),
-                    z: 0,
+        if let Some((layer_rect, _)) = region {
+            slot.ensure_texture(
+                device,
+                layer_rect.width,
+                layer_rect.height,
+                stroke.texture.format(),
+                &extra_formats,
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: stroke.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: layer_rect.x0(),
+                        y: layer_rect.y0(),
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: slot.texture.as_ref().unwrap(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: layer_rect.width,
-                height: layer_rect.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyTextureInfo {
+                    texture: slot
+                        .texture
+                        .as_ref()
+                        .expect("ensure_texture just allocated the slot"),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: layer_rect.width,
+                    height: layer_rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // Same region, same coordinates: the accumulators are layer-sized
+            // and grown in lockstep with the stroke buffer, so one rect
+            // addresses all of them.
+            for (src, dst) in extra.iter().zip(slot.extra.iter()) {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: src,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: layer_rect.x0(),
+                            y: layer_rect.y0(),
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: dst,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: layer_rect.width,
+                        height: layer_rect.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
 
         // Coverage invariant: after every save, at least one valid slot
         // must sit at or below the divergence boundary. If this fires, the
@@ -323,7 +420,7 @@ impl CheckpointRing {
     /// with the largest `vi < div_idx`, and the worst-case `div_idx` is
     /// `tip_vi − max_div`. At stroke start (when `tip_vi ≤ max_div`), the
     /// reachable divergence window includes `vi = 0` and no anchor below it
-    /// can exist — full re-render from `vi = 0` is bounded and intended.
+    /// can exist; full re-render from `vi = 0` is bounded and intended.
     pub fn has_anchor(&self, tip_vi: usize, max_div_window: usize) -> bool {
         if tip_vi <= max_div_window {
             return true;
@@ -356,18 +453,18 @@ impl CheckpointRing {
     /// Find and restore the best checkpoint before `div_vector_index`.
     ///
     /// Copies the checkpoint's bbox region back onto the stroke buffer.
-    /// **Does not clear outside the bbox** — the caller must establish the
+    /// **Does not clear outside the bbox**: the caller must establish the
     /// outside-bbox initial state before calling this (e.g. via
     /// `StrokeEngine::begin_stroke`, which delegates to the active
     /// terminal's lifecycle hook). For paint, that's a transparent clear;
     /// for a warp/smudge terminal, it's a copy of the pre-stroke layer; the
-    /// ring doesn't care which — it only restores the mutated region.
+    /// ring doesn't care which; it only restores the mutated region.
     ///
     /// Returns the checkpoint metadata for the caller to restore engine
     /// state.
     ///
     /// `stroke` pairs the stroke buffer with the active layer's *current*
-    /// canvas extent — used to translate the slot's canvas-coord bbox to
+    /// canvas extent, used to translate the slot's canvas-coord bbox to
     /// texture-local coords (which may differ from save time if the layer
     /// has grown in the meantime; the stroke buffer's contents are rebased
     /// by `StrokeBuffer::grow_preserving` to track the new frame, so this
@@ -376,41 +473,75 @@ impl CheckpointRing {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         stroke: &CanvasFrame<'_>,
+        extra: &[&wgpu::Texture],
         div_vector_index: usize,
     ) -> Option<CheckpointRestore> {
         let slot_idx = self.best_slot_before(div_vector_index)?;
         let slot = &self.slots[slot_idx];
-        let layer_rect = stroke.canvas_to_layer_rect(slot.canvas_bbox)?;
-        if layer_rect.is_empty() {
-            return None;
-        }
 
         // Copy checkpoint bbox region back to stroke buffer. The caller has
         // already reset outside-bbox pixels to the terminal's starting
-        // state, so only the mutated region needs restoring here.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: slot.texture.as_ref().unwrap(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: stroke.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: layer_rect.x0(),
-                    y: layer_rect.y0(),
-                    z: 0,
+        // state, so only the mutated region needs restoring here, and a
+        // checkpoint that snapshotted no texels (nothing had been painted
+        // yet) is fully restored by that reset alone.
+        if let Some((layer_rect, texture)) = stroke
+            .canvas_to_layer_rect(slot.canvas_bbox)
+            .filter(|r| !r.is_empty())
+            .zip(slot.texture.as_ref())
+        {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: layer_rect.width,
-                height: layer_rect.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyTextureInfo {
+                    texture: stroke.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: layer_rect.x0(),
+                        y: layer_rect.y0(),
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: layer_rect.width,
+                    height: layer_rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // Restore the accumulators the stroke buffer's pixels were
+            // derived from, or the next resolve recomputes this region from
+            // state describing dabs that were just discarded.
+            for (dst, src) in extra.iter().zip(slot.extra.iter()) {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: src,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: dst,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: layer_rect.x0(),
+                            y: layer_rect.y0(),
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: layer_rect.width,
+                        height: layer_rect.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
 
         Some(CheckpointRestore {
             save_point_index: slot.save_point_index,
@@ -450,7 +581,7 @@ impl CheckpointRing {
     /// `tip_vi`.
     ///
     /// **Coverage invariant.** The ring must hold at least one checkpoint
-    /// with `vi < div_idx` for every reachable divergence index — that's
+    /// with `vi < div_idx` for every reachable divergence index; that's
     /// what makes partial restore possible. The stabilizer's
     /// `max_divergence_window()` bounds how far back divergence can reach
     /// from the tip, so spacing-distance checkpoints near the tip cover

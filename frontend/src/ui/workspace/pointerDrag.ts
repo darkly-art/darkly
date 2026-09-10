@@ -1,5 +1,5 @@
 /**
- * `use:pointerDrag` — one shared Svelte action for **same-window** capture-mode
+ * `use:pointerDrag`: one shared Svelte action for **same-window** capture-mode
  * drags: gutter resize and the region-width handle. It owns `setPointerCapture`,
  * the start-coordinate bookkeeping, and Escape-to-abort so no resize site
  * re-implements the pattern (DRY).

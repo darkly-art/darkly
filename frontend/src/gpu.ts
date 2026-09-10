@@ -44,7 +44,7 @@ function readAdapterInfo(adapter: GPUAdapter): AdapterInfo {
  * `adapter.info.isFallbackAdapter === true` (the W3C-spec signal that the
  * browser itself fell back to software).
  *
- * Real-GPU users must never see a failure here.
+ * Real-GPU artists must never see a failure here.
  */
 export async function checkGpu(): Promise<GpuCheckResult> {
     if (!navigator.gpu) {

@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Regression tests for the clone set-source cursor's engagement machinery.
-// The crosshair is a *transient* sample-mode indicator — engaged only while
+// The crosshair is a *transient* sample-mode indicator, engaged only while
 // the set-source chord is actually held, exactly like the color picker's
 // dropper. Source presence is irrelevant to arming.
 //
 // Bug 1 ("no dab preview until a source is set"): a clone brush with no
-// source used to engage as a persistent prompt — holding the cursor slot and
+// source used to engage as a persistent prompt, holding the cursor slot and
 // suppressing the brush hover indefinitely, so the neutral-grey dab preview
 // never rendered on a fresh load. No chord held must mean no engagement.
 //
 // Bug 2 ("crosshair fails to disappear on ctrl release"): disarming nulled
-// `app.toolCursor`, and the canvas fell back to nav's idle cursor — which is
-// also 'crosshair' — until the next pointermove. Disarming must restore the
+// `app.toolCursor`, and the canvas fell back to nav's idle cursor (which is
+// also 'crosshair') until the next pointermove. Disarming must restore the
 // tool hover immediately (which re-asserts the brush's own cursor).
 //
 // Binding seed mirrors `colorpicker_cursor.test.ts`: `setCloneSource` on
@@ -139,7 +139,7 @@ describe('chord engagement (sample-mode indicator)', () => {
         expect(fakeApp.toolCursor).toBe('crosshair');
     });
 
-    it('engages with no source set too — source presence is irrelevant to arming', async () => {
+    it('engages with no source set too: source presence is irrelevant to arming', async () => {
         await primeNeedsSource();
         setHeld('ctrl');
         expect(mc.isToolHoverSuppressed()).toBe(true);

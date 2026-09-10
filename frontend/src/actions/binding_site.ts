@@ -1,11 +1,11 @@
 /**
- * `use:bindingSite={{ name, ctx, mouse? }}` — declares a DOM element as a
+ * `use:bindingSite={{ name, ctx, mouse? }}`: declares a DOM element as a
  * binding site for both keyboard scope and mouse-click dispatch.
  *
  * What it does:
  *
  *   1. **Keyboard scope.** Sets `tabindex="-1"` so the element can hold focus
- *      programmatically (not via Tab — see `suppressButtonKeyboardFocus.ts`).
+ *      programmatically (not via Tab; see `suppressButtonKeyboardFocus.ts`).
  *      Listens for `mousedown` in the bubble phase and calls `.focus()`,
  *      since the capture-phase button-focus suppression would otherwise
  *      block click-to-focus on inner buttons.
@@ -55,7 +55,7 @@ export function bindingSite(node: HTMLElement, params: BindingSiteParams) {
         //
         // stopPropagation: when binding sites are nested (e.g. a `layerEye`
         // button inside a `layerPanel` panel), the innermost site should
-        // own focus — otherwise the outer site's mousedown would re-focus
+        // own focus; otherwise the outer site's mousedown would re-focus
         // its own root on bubble. The outer site still appears in the
         // activeSiteChain via DOM ancestry, so its hotkeys still fire.
         node.focus();

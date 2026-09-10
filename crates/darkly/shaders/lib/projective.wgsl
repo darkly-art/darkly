@@ -2,8 +2,8 @@
 // window-local fragment back through an inverse 3×3 homography, with the
 // per-pixel perspective divide". Concatenated ahead of every consumer shader
 // at pipeline-build time (`include_str!` / `concat!`), the same mechanism
-// `lib/fbm.wgsl` and `lib/color.wgsl` use — so the floating commit path
-// (`transform_commit.wgsl`) and the voids (`voids/video_stream.wgsl`,
+// `lib/fbm.wgsl` and `lib/color.wgsl` use, so the floating commit path
+// (`transform_commit.wgsl`) and the voids (`voids/textured.wgsl`,
 // `voids/noise.wgsl`) share one implementation instead of three affine copies.
 //
 // The three rows are an inverse matrix packed `[m00,m01,m02,_], [m10,m11,m12,_],
@@ -11,7 +11,7 @@
 // case `inv2 == [0,0,1,_]`, where `h.z ≡ 1` and the divide is a no-op.
 //
 // Returns `vec3f(pre.xy, ok)`: `pre` is the pre-transform position (still in the
-// caller's pixel frame — each consumer owns its own normalization to a source
+// caller's pixel frame; each consumer owns its own normalization to a source
 // UV), and `ok` is 1.0 when the sample is valid or 0.0 when the homogeneous w
 // collapsed (a corner folded behind the camera) so the caller can early-out
 // transparent / clamp.

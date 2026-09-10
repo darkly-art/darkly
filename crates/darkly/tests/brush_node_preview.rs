@@ -3,13 +3,13 @@
 //! Before the WGSL node-system overhaul, the brush builder previewed *any*
 //! node with a renderable output via a GPU subgraph render. The overhaul left
 //! a stub that special-cased `noise` with a CPU renderer and returned an empty
-//! `Vec` for every other node — so `circle`, `image`, and the rest lost their
+//! `Vec` for every other node, so `circle`, `image`, and the rest lost their
 //! preview.
 //!
 //! This drives the engine handler exactly as the frontend does: add a node,
 //! call `brush_node_preview`, pump the async readback loop to completion, and
 //! assert the cache filled with real PNG bytes. Against the stubbed handler
-//! this fails — a non-`noise` node returns empty regardless of pumping.
+//! this fails: a non-`noise` node returns empty regardless of pumping.
 
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
@@ -40,11 +40,11 @@ fn shape_node_produces_non_empty_preview() {
         .expect("circle node added to active graph");
 
     // First call kicks off the async GPU render + readback; it returns empty
-    // while the render is pending (by design — no blocking readback).
+    // while the render is pending (by design: no blocking readback).
     let pending = engine.brush_node_preview(&node_id);
     assert!(
         pending.is_empty(),
-        "first call is async — no cached bytes yet"
+        "first call is async: no cached bytes yet"
     );
 
     // Pump the readback loop to completion, filling the per-node cache.
@@ -54,8 +54,8 @@ fn shape_node_produces_non_empty_preview() {
     let bytes = engine.brush_node_preview(&node_id);
     assert!(
         !bytes.is_empty(),
-        "after pumping the readback, a renderable node must return preview bytes \
-         — empty means the handler still special-cases noise and drops shape",
+        "after pumping the readback, a renderable node must return preview bytes; \
+         empty means the handler still special-cases noise and drops shape",
     );
     assert_eq!(&bytes[..8], &PNG_SIGNATURE, "preview must be a valid PNG",);
 }

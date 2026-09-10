@@ -9,7 +9,7 @@ import {
 
 /**
  * Mirror of Rust `transform::tests::affine_contract`. Both sides transform the
- * SAME matrix + point and MUST agree — this pins the row-major `[a,b,tx,c,d,ty]`
+ * SAME matrix + point and MUST agree; this pins the row-major `[a,b,tx,c,d,ty]`
  * convention so the JS gizmo and the Rust record can't silently diverge across
  * the WASM boundary. If you change one, the other must change identically.
  */

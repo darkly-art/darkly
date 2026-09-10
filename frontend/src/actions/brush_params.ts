@@ -10,7 +10,7 @@ import { runHook } from '../tools/tool_session';
  * brush parameter keyboard-and-drag adjustable.
  *
  * - `kind: 'mult'` applies a multiplicative step (`v * step^dir`). Use for
- *   parameters that feel logarithmic to users (size).
+ *   parameters that feel logarithmic to artists (size).
  * - `kind: 'add'` applies an additive step (`v + step*dir`). Use for
  *   parameters that feel linear (opacity, hardness).
  */
@@ -47,8 +47,8 @@ function commit(nodeId: string, portName: string, value: number) {
 
 /** Discrete step in the given direction (used by `[` / `]` hotkeys).
  *  After committing, refresh the on-canvas hover overlay so the brush
- *  cursor preview reflects the new value immediately — without this
- *  the circle stays at the old size until the user moves the pointer. */
+ *  cursor preview reflects the new value immediately; without this
+ *  the circle stays at the old size until the artist moves the pointer. */
 function adjustBrushParam(role: Role, dir: 1 | -1): void {
     const found = findScalarPort(role);
     if (!found) return;
@@ -83,25 +83,16 @@ let sizeDrag: SizeDragState | null = null;
 export function registerBrushParamActions() {
     actions.register({
         id: 'brushSizeUp',
-        displayName: 'Increase Brush Size',
-        category: 'brush',
-        icon: 'fa6-solid:plus',
         handler: () => adjustBrushParam('size', +1),
     });
 
     actions.register({
         id: 'brushSizeDown',
-        displayName: 'Decrease Brush Size',
-        category: 'brush',
-        icon: 'fa6-solid:minus',
         handler: () => adjustBrushParam('size', -1),
     });
 
     actions.register({
         id: 'brushSizeAdjust',
-        displayName: 'Adjust Brush Size (drag)',
-        category: 'brush',
-        icon: 'fa6-solid:up-right-and-down-left-from-center',
         type: 'hold',
         handler: (ctx) => {
             const found = findScalarPort('size');

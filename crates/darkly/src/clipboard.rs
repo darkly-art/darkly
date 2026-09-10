@@ -1,40 +1,40 @@
-//! Clipboard system — typed internal clipboard with extensible content types.
+//! Clipboard system: typed internal clipboard with extensible content types.
 //!
 //! Two flavours of clipboard payload:
-//! - [`ImageClip`] — flat RGBA pixel buffer. The cross-application interop
+//! - [`ImageClip`]: flat RGBA pixel buffer. The cross-application interop
 //!   path: a copied layer round-trips through a PNG on the system clipboard.
-//! - [`LayerClipboard`] — full layer with blend mode, opacity, name, and
+//! - [`LayerClipboard`]: full layer with blend mode, opacity, name, and
 //!   pixel data. The cross-tab interop path: the multi-tab editor writes
 //!   this alongside the PNG via a `web application/x-darkly-layer` custom
 //!   MIME type so paste into another Darkly tab restores blend mode +
 //!   opacity that PNG can't carry.
 //!
 //! Both go through the same async GPU readback pipeline. Mask pixel data
-//! (R8) is not yet captured in `LayerClipboard` v1 — it requires a second
+//! (R8) is not yet captured in `LayerClipboard` v1; it requires a second
 //! readback in parallel and lands in v2. The schema-version field exists
 //! so the deserializer can warn loudly when it sees a future version.
 
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Clipboard enum — extensible content container
+// Clipboard enum: extensible content container
 // ---------------------------------------------------------------------------
 
 /// Typed clipboard content. New variants can be added for future content types
 /// (e.g. layer groups) without refactoring the clipboard system.
 pub enum Clipboard {
-    /// Flattened RGBA pixel region — used for canvas copy/paste and external interop.
+    /// Flattened RGBA pixel region, used for canvas copy/paste and external interop.
     ImageData(ImageClip),
-    /// Layer-with-metadata — used for cross-tab paste in the multi-tab
+    /// Layer-with-metadata, used for cross-tab paste in the multi-tab
     /// editor. Carries blend mode + opacity + name + pixels so the
     /// receiving tab can recreate the source layer faithfully.
     Layer(LayerClipboard),
     // Future variants (not implemented):
-    // LayerGroup(GroupClip),   — group with children
+    // LayerGroup(GroupClip): group with children
 }
 
 impl Clipboard {
-    /// Extract an `ImageClip` reference. Returns `None` for richer variants —
+    /// Extract an `ImageClip` reference. Returns `None` for richer variants;
     /// callers that want pixels-only fall back to the system PNG path.
     pub fn as_image(&self) -> Option<&ImageClip> {
         match self {
@@ -49,10 +49,92 @@ impl Clipboard {
             _ => None,
         }
     }
+
+    /// The clip's pixels as `(rgba, width, height, offset_x, offset_y)`,
+    /// regardless of variant. A flat `ImageData` clip returns its buffer
+    /// directly; a rich `Layer` clip decodes its base64 pixels. Used by the
+    /// paste-in-place floating path so it works for the `Layer` clip a normal
+    /// copy produces, not just flat image clips.
+    ///
+    /// Trimmed to the pasted object (see [`trim_to_content`]). What was copied
+    /// is the region the artist swept, but what is *pasted* is the thing inside
+    /// it, and the floating session draws its bounding box from these
+    /// dimensions: untrimmed, a select-all copy hands the transform gizmo a
+    /// canvas-sized box around a small stroke.
+    ///
+    /// Returns `None` if a rich clip's pixels are malformed, or if the clip is
+    /// entirely transparent and so has nothing to paste.
+    pub fn paste_pixels(&self) -> Option<(Vec<u8>, u32, u32, i32, i32)> {
+        let (rgba, width, height, x, y) = match self {
+            Clipboard::ImageData(c) => (c.data.clone(), c.width, c.height, c.offset_x, c.offset_y),
+            Clipboard::Layer(l) => {
+                let pixels = l.decode_pixels().ok()?;
+                if pixels.len() != (l.bounds.width * l.bounds.height * 4) as usize {
+                    return None;
+                }
+                (
+                    pixels,
+                    l.bounds.width,
+                    l.bounds.height,
+                    l.bounds.x,
+                    l.bounds.y,
+                )
+            }
+        };
+        trim_to_content(&rgba, width, height, x, y)
+    }
+}
+
+/// Shrink a straight-alpha RGBA region to the bounding box of its
+/// non-transparent pixels, moving the origin so the content keeps its position.
+/// `None` when every pixel is transparent.
+pub fn trim_to_content(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    offset_x: i32,
+    offset_y: i32,
+) -> Option<(Vec<u8>, u32, u32, i32, i32)> {
+    let (w, h) = (width as usize, height as usize);
+    if rgba.len() < w * h * 4 {
+        return None;
+    }
+    let (mut min_x, mut min_y) = (w, h);
+    let (mut max_x, mut max_y) = (0usize, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            if rgba[(y * w + x) * 4 + 3] != 0 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+    if (min_x, min_y, max_x, max_y) == (0, 0, w - 1, h - 1) {
+        return Some((rgba.to_vec(), width, height, offset_x, offset_y));
+    }
+
+    let (tw, th) = (max_x - min_x + 1, max_y - min_y + 1);
+    let mut out = Vec::with_capacity(tw * th * 4);
+    for y in min_y..=max_y {
+        let row = (y * w + min_x) * 4;
+        out.extend_from_slice(&rgba[row..row + tw * 4]);
+    }
+    Some((
+        out,
+        tw as u32,
+        th as u32,
+        offset_x + min_x as i32,
+        offset_y + min_y as i32,
+    ))
 }
 
 // ---------------------------------------------------------------------------
-// ImageClip — flattened RGBA pixel region
+// ImageClip: flattened RGBA pixel region
 // ---------------------------------------------------------------------------
 
 /// A rectangular region of RGBA pixels stored as a flat buffer.
@@ -99,11 +181,11 @@ impl ImageClip {
 }
 
 // ---------------------------------------------------------------------------
-// LayerClipboard — layer with blend mode, opacity, name, and pixels
+// LayerClipboard: layer with blend mode, opacity, name, and pixels
 // ---------------------------------------------------------------------------
 
 /// Bumped on any breaking change to the on-the-wire representation. Cross-tab
-/// paste between mismatched Darkly versions is best-effort — pre-release we
+/// paste between mismatched Darkly versions is best-effort: pre-release we
 /// just accept that and refuse anything we don't understand.
 pub const LAYER_CLIPBOARD_SCHEMA_VERSION: u32 = 1;
 
@@ -115,7 +197,7 @@ pub const LAYER_CLIPBOARD_SCHEMA_VERSION: u32 = 1;
 /// Pixel data is base64-encoded inline. That inflates payload size by ~33%
 /// vs. raw bytes, but keeps the JSON envelope self-contained and trivially
 /// pumpable through `navigator.clipboard.write`/`read`. A 1024×1024 RGBA
-/// layer is ~5.5 MiB after base64 — acceptable for clipboards.
+/// layer is ~5.5 MiB after base64, acceptable for clipboards.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LayerClipboard {
     pub schema_version: u32,
@@ -127,11 +209,11 @@ pub struct LayerClipboard {
     pub blend_mode: String,
     pub bounds: ClipboardRect,
     /// Base64-encoded raw RGBA8 pixels, row-major, `width * height * 4`
-    /// bytes after decode. Straight alpha (Darkly never premultiplies — see
+    /// bytes after decode. Straight alpha (Darkly never premultiplies; see
     /// `docs/lessons-learned/compositing-lessons-learned.md §1`).
     pub pixels_b64: String,
     /// Mask metadata if the source had one. Pixel data is **not** captured
-    /// in v1 — restoring rebuilds an empty (fully opaque) mask with the
+    /// in v1: restoring rebuilds an empty (fully opaque) mask with the
     /// recorded bounds. v2 will add R8 pixels via a parallel readback.
     pub mask: Option<MaskClipboard>,
 }
@@ -167,7 +249,7 @@ impl LayerClipboard {
     }
 
     /// Parse a JSON envelope produced by [`Self::to_json`]. Rejects payloads
-    /// from a future schema version — pre-release we don't carry forward
+    /// from a future schema version: pre-release we don't carry forward
     /// shims for formats we haven't shipped yet.
     pub fn from_json(s: &str) -> Result<Self, String> {
         let parsed: LayerClipboard = serde_json::from_str(s).map_err(|e| e.to_string())?;
@@ -188,6 +270,40 @@ impl LayerClipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a paste puts down is the object, not the region the artist swept to
+    /// copy it: a select-all copy of one small dab must not paste a
+    /// canvas-sized rect, because the floating session takes its bounding box
+    /// from these dimensions.
+    #[test]
+    fn trim_to_content_shrinks_to_opaque_pixels_and_shifts_the_origin() {
+        // 4×4, transparent but for one opaque texel at (2, 1).
+        let mut rgba = vec![0u8; 4 * 4 * 4];
+        let texel = |x: usize, y: usize| (y * 4 + x) * 4;
+        let i = texel(2, 1);
+        rgba[i..i + 4].copy_from_slice(&[10, 20, 30, 255]);
+
+        let (out, w, h, x, y) = trim_to_content(&rgba, 4, 4, 100, 200).expect("has content");
+        assert_eq!((w, h), (1, 1));
+        // Origin moves by the trimmed margin so the pixel keeps its position.
+        assert_eq!((x, y), (102, 201));
+        assert_eq!(out, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn trim_to_content_keeps_a_full_bleed_clip_intact() {
+        let rgba = vec![255u8; 3 * 2 * 4];
+        let (out, w, h, x, y) = trim_to_content(&rgba, 3, 2, -5, 7).expect("has content");
+        assert_eq!((w, h, x, y), (3, 2, -5, 7));
+        assert_eq!(out.len(), rgba.len());
+    }
+
+    /// Nothing opaque means nothing to paste: the caller treats `None` as "no
+    /// paste happened" rather than floating an empty rect.
+    #[test]
+    fn trim_to_content_rejects_a_fully_transparent_clip() {
+        assert!(trim_to_content(&[0u8; 2 * 2 * 4], 2, 2, 0, 0).is_none());
+    }
 
     #[test]
     fn round_trip_rgba() {

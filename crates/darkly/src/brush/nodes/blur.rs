@@ -1,4 +1,4 @@
-//! Blur terminal — per-dab fragment-pass neighborhood average with a
+//! Blur terminal: per-dab fragment-pass neighborhood average with a
 //! per-brush compiled WGSL shader.
 //!
 //! Rides the shared [read-mirror terminal](crate::brush::read_mirror_terminal)
@@ -12,18 +12,18 @@
 //! original by `mask × selection × opacity`. The disc radius is
 //! `blur_px = strength × radius`.
 //!
-//! ## Dwell-compounding (intentional — do not "optimize" away)
+//! ## Dwell-compounding (intentional; do not "optimize" away)
 //!
 //! A neighborhood average has no inter-dab data dependency, so blur does
 //! **not** *need* per-dab serialization for correctness. It
 //! rides the per-dab serialized path *deliberately*: each dab reads the
 //! *cumulative* scratch (the prior dab's writeback, seen through the
 //! mirror), so overlapping dabs and scrubbing back-and-forth
-//! progressively re-blur already-blurred pixels — like Photoshop's Blur
+//! progressively re-blur already-blurred pixels, like Photoshop's Blur
 //! tool and Krita's blur paintop. Collapsing the flush into a single
 //! instanced pass would silently remove that dwell-compounding behavior.
 //!
-//! ## Size-variant (intentional — the opposite of liquify)
+//! ## Size-variant (intentional: the opposite of liquify)
 //!
 //! `blur_px = strength × radius`, so a bigger brush blurs *more*. This is
 //! the deliberate opposite of [`liquify`](super::liquify)'s size-invariant
@@ -40,13 +40,14 @@ use crate::brush::read_mirror_terminal::{
 };
 use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-/// Per-dab strength below which the dab is dropped — `mix(orig, blurred, 0)`
+/// Per-dab strength below which the dab is dropped, since `mix(orig, blurred, 0)`
 /// is an identity write.
 const STRENGTH_EPSILON: f32 = 1.0e-4;
 
-/// Brush radius below which the dab is dropped — a sub-pixel disc has no
+/// Brush radius below which the dab is dropped, since a sub-pixel disc has no
 /// neighborhood to average.
 const MIN_RADIUS_PX: f32 = 1.0;
 
@@ -57,7 +58,7 @@ const BLUR_TAPS: u32 = 24;
 
 /// Kernel radius at full strength, as a fraction of the brush radius.
 /// `blur_px = strength × radius × MAX_KERNEL_FRACTION`, so the slider's
-/// full 0–100% travel maps onto a useful band — past ~25% of the radius
+/// full 0-100% travel maps onto a useful band: past ~25% of the radius
 /// each touch reaches so far it smears rather than softens.
 const MAX_KERNEL_FRACTION: f32 = 0.25;
 
@@ -68,6 +69,7 @@ pub fn register() -> BrushNodeRegistration {
         pipelines: vec![read_mirror_pipeline_reg("blur")],
         evaluator: || Box::new(BlurEvaluator),
         lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
+        scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -91,6 +93,16 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:gauge-high")
                     .exposed()
+                    // A preview stroke is read at a canonical strength, not at
+                    // the brush's own. The default's kernel is
+                    // `0.05 * 36 * MAX_KERNEL_FRACTION` ≈ 0.45 px against a
+                    // preview dab radius of ~36 px, so at the shipped value the
+                    // stroke changes a 194 x 35 patch of a 1024 x 768 canvas and
+                    // the thumbnail framer crops that fragment and blows it up
+                    // to fill the tile: two stripes and no stroke. Pinned, the
+                    // stroke spans the S-curve and the tile is a picture of it.
+                    // The smallest value measured to do that with margin.
+                    .with_preview_value(0.6)
                     .with_description(
                         "How wide a neighborhood each touch averages, as a fraction of the brush \
                          radius. Higher values soften more per touch.",
@@ -115,7 +127,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: true,
             is_terminal: true,
             supports_erase: false,
-            preview_fallback_icon: Some("mdi:blur"),
+            preview_staging: Some(PreviewStaging {
+                icon: "mdi:blur",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
     }
 }
@@ -178,8 +193,8 @@ impl ReadMirrorTerminal for BlurEvaluator {
         // texels.
         //
         // Golden-angle bokeh / sunflower-disc sampling technique adapted
-        // from the `lens_blur` veil — Shadertoy bokeh by Dave Hoskins
-        // et al., https://www.shadertoy.com/playlist/fXlGDN
+        // from the `lens_blur` veil (Shadertoy bokeh by Dave Hoskins
+        // et al., https://www.shadertoy.com/playlist/fXlGDN)
         let taps = BLUR_TAPS;
         let taps_f = format!("{:.1}", taps as f32);
         wgsl.body = format!(
@@ -214,7 +229,7 @@ impl ReadMirrorTerminal for BlurEvaluator {
         Ok(wgsl)
     }
 
-    /// Preview body — show the footprint, not the blur: neutral gray
+    /// Preview body: shows the footprint, not the blur, as neutral gray
     /// modulated by the upstream shape mask so the cursor reads the
     /// brush's actual coverage area. (The stroke body's `scratch_mirror`
     /// bindings are omitted in preview mode.)

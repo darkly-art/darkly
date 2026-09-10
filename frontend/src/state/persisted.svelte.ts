@@ -5,7 +5,7 @@
  * (`menuBar`) and any future one don't copy-paste it.
  *
  * Returns an object with a `.value` accessor: reads are reactive, writes
- * update the rune *and* persist to localStorage (best-effort — a failing
+ * update the rune *and* persist to localStorage (best-effort: a failing
  * `setItem`, e.g. private-mode quota, is swallowed so the UI never breaks).
  */
 export function persistedState<T>(key: string, initial: T) {

@@ -55,7 +55,7 @@ describe('SessionEngine.api', () => {
 
         session.kill();
         session.api.clearOverlay();
-        // Still 1 — the post-kill call was dropped.
+        // Still 1: the post-kill call was dropped.
         expect(inner.transport.postFF).toHaveBeenCalledTimes(1);
     });
 

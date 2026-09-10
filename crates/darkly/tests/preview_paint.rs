@@ -132,15 +132,15 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 }
 
 #[test]
-fn round_brush_preview_shows_color_and_shape() {
-    // Round: pressure=1 → flow=1 → centre pixel must be the seeded
+fn ink_pen_preview_shows_color_and_shape() {
+    // Ink Pen: pressure=1 → flow=1 → centre pixel must be the seeded
     // color at near-full alpha.
-    let out = render_cursor_preview("Round", 0.1, [1.0, 0.0, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
-        centre[0] > 200 && centre[1] < 30 && centre[2] < 30 && centre[3] > 200,
-        "Round centre should be opaque red; got {centre:?}",
+        centre[1] > 100 && centre[0] < 30 && centre[3] > 200,
+        "Ink Pen centre should be green-ish and opaque; got {centre:?}",
     );
 
     // Sanity-check bbox info published.
@@ -153,17 +153,6 @@ fn round_brush_preview_shows_color_and_shape() {
     assert_eq!(
         corner[3], 0,
         "corner outside brush footprint must be transparent; got {corner:?}"
-    );
-}
-
-#[test]
-fn ink_pen_preview_shows_color() {
-    let out = render_cursor_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
-    let half = PREVIEW_SIDE / 2;
-    let centre = px(&out.rgba, half, half);
-    assert!(
-        centre[1] > 100 && centre[0] < 30 && centre[3] > 200,
-        "Ink Pen centre should be green-ish; got {centre:?}",
     );
 }
 
@@ -184,12 +173,12 @@ fn rough_ink_preview_shows_color() {
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should be the brush color (orange-ish). Perlin noise can
-    // dip flow at the centre — only assert color, not full opacity.
+    // dip flow at the centre, so only assert color, not full opacity.
     assert!(
         centre[0] > centre[2] && centre[3] > 0,
         "Rough Ink centre should be visible and lean orange; got {centre:?}",
     );
     // (Boundary-variance check lives in `preview_watercolor.rs` against
-    // Rough Watercolor — that brush has a much larger amplitude so the
+    // Rough Watercolor: that brush has a much larger amplitude so the
     // shape modulation reads cleanly at our sampling resolution.)
 }

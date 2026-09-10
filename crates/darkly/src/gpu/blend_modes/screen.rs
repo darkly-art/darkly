@@ -4,6 +4,7 @@ pub fn register() -> BlendModeRegistration {
     BlendModeRegistration {
         type_id: "screen",
         display_name: "Screen",
+        description: "Inverts, multiplies and inverts back, lightening everywhere and keeping black transparent.",
         category: "Lighten",
         gpu_value: 5,
         wgsl_math: "Cs = fg.rgb + bg.rgb - fg.rgb * bg.rgb;",

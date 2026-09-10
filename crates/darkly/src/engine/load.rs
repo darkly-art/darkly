@@ -1,4 +1,4 @@
-//! `.darkly` load flow — atomic install with up-front refusal checks.
+//! `.darkly` load flow: atomic install with up-front refusal checks.
 //!
 //! The contract is **all-or-nothing**: either the file is fully
 //! representable in this build and loads completely, or it isn't, and
@@ -8,24 +8,24 @@
 //!
 //! Refusal checks happen *before* any engine mutation:
 //!
-//! 1. **Zip extraction** — malformed archive → [`LoadError::Zip`].
-//! 2. **Manifest existence + container/requires presence** — missing
+//! 1. **Zip extraction**: malformed archive → [`LoadError::Zip`].
+//! 2. **Manifest existence + container/requires presence**: missing
 //!    `manifest.json`, missing `container_version`, or missing
 //!    `requires` block → [`LoadError::CorruptManifest`].
-//! 3. **Container version** — newer than the binary understands →
+//! 3. **Container version**: newer than the binary understands →
 //!    [`LoadError::ContainerTooNew`].
-//! 4. **`requires` inventory** — diffed against the four registries
-//!    (veils, blend modes, layer kinds, filters); any miss →
+//! 4. **`requires` inventory**: diffed against the four registries
+//!    (effects, blend modes, layer kinds, filters); any miss →
 //!    [`LoadError::UnsupportedFeatures`] naming every missing
 //!    `"<registry>/<type_id>"`.
-//! 5. **Full schema parse + staging-doc construction** — any
+//! 5. **Full schema parse + staging-doc construction**: any
 //!    per-variant `type_id` the registry doesn't know, despite passing
 //!    the inventory diff, means the manifest's `requires` block lied
 //!    and the file is corrupt → [`LoadError::CorruptManifest`].
 //!
 //! Only after every check passes does [`install_staging`] swap the
-//! document, replace the compositor, upload pixels, and restore veils.
-//! That phase has no fallible operations — by construction the install
+//! document, replace the compositor, and upload pixels.
+//! That phase has no fallible operations: by construction the install
 //! either completes or panics (a logic bug to fix at the source).
 //!
 //! The staging-doc construction is registry-driven: each entity's
@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use super::DarklyEngine;
 use crate::document::filter;
 use crate::document::layer_kind::{self, IdMap};
-use crate::document::{Document, Entity};
+use crate::document::{Document, Entity, TreeSlot};
 use crate::format::error::LoadError;
 use crate::format::manifest::{Manifest, ManifestPixelRef, ManifestRequires};
 use crate::format::unzip::unzip_entries;
@@ -71,7 +71,7 @@ impl DarklyEngine {
 
         // First parse to an untyped JSON value so we can check the
         // container version + `requires` presence BEFORE trying the
-        // full typed schema — a too-new container could have schema
+        // full typed schema: a too-new container could have schema
         // shapes the typed parse can't make sense of, and we want the
         // precise refusal diagnostic rather than a confused JSON error.
         let raw: serde_json::Value = serde_json::from_slice(manifest_bytes)?;
@@ -85,7 +85,7 @@ impl DarklyEngine {
         // exact "needs <thing>, please update Darkly" message.
         pre_check_requires(self, &manifest.requires)?;
 
-        // Staging doc — built off to the side. Per-variant safety net
+        // Staging doc: built off to the side. Per-variant safety net
         // for the cases where `requires` declared what the body uses
         // but the binary's registry is still missing it (would be a
         // bug at the pre-check level), or where `requires` lies short
@@ -104,8 +104,8 @@ impl DarklyEngine {
 
 /// Refuse files whose `container_version` is newer than this binary
 /// supports, or whose value is missing/malformed entirely (we control
-/// the writer; absence means the file is corrupt, not "older format" —
-/// there's no older format).
+/// the writer; absence means the file is corrupt, not "older format",
+/// since there's no older format).
 fn pre_check_container_version(raw: &serde_json::Value) -> Result<(), LoadError> {
     let found = raw
         .get("container_version")
@@ -136,7 +136,7 @@ fn pre_check_requires_present(raw: &serde_json::Value) -> Result<(), LoadError> 
 }
 
 /// Cross-reference the manifest's `requires` inventory against the
-/// binary's four registries (veils, blend modes, layer kinds,
+/// binary's four registries (effects, blend modes, layer kinds,
 /// filters). Any miss collects a `"<registry>/<type_id>"` entry and
 /// the load is refused with [`LoadError::UnsupportedFeatures`].
 fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Result<(), LoadError> {
@@ -163,10 +163,10 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
         }
     }
 
-    let veil_registry = engine.compositor.veil_chain().registry();
-    for id in &requires.veil {
-        if !veil_registry.has(id) {
-            missing.push(format!("veil/{id}"));
+    let effect_registry = engine.compositor.effect_registry();
+    for id in &requires.effect {
+        if !effect_registry.has(id) {
+            missing.push(format!("effect/{id}"));
         }
     }
 
@@ -179,7 +179,7 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 }
 
 // ----------------------------------------------------------------------------
-// Staging doc construction (allocation only — no engine mutation)
+// Staging doc construction (allocation only, no engine mutation)
 // ----------------------------------------------------------------------------
 
 /// Build a fresh [`Document`] from a [`Manifest`], producing an
@@ -194,20 +194,24 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 ///    manifest-old ids.
 /// 2. **Remap cross-refs.** Each entity's registered `remap_ids` rewrites
 ///    its cross-references using the `id_map`. Each kind owns the
-///    knowledge of which fields hold ids — a future kind that adds a
+///    knowledge of which fields hold ids, so a future kind that adds a
 ///    private id field is forced to implement this hook by signature.
 /// 3. **Rebuild parent map.** Walk every group's `children` and every
 ///    host's `filters`; the body's child/filter list is the single
 ///    source of truth, and the `parent` SecondaryMap is derived from it.
 fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
+    // The manifest root's children replace the fresh root's wholesale below,
+    // orphaning the divider `Document::new` created. Remember it so the
+    // normalization pass can adopt the file's divider or re-link this one.
+    let fresh_divider = doc.divider_id();
     doc.name = manifest.name.clone();
     doc.canvas_origin =
         crate::coord::CanvasPoint::new(manifest.canvas.origin_x, manifest.canvas.origin_y);
 
     let mut id_map: IdMap = HashMap::with_capacity(manifest.nodes.len() + manifest.modifiers.len());
 
-    // The manifest's `root` maps to the new doc's auto-allocated root —
+    // The manifest's `root` maps to the new doc's auto-allocated root:
     // we don't re-create the root entity, we reuse the one Document::new
     // built. Every other node + filter is allocated fresh and
     // recorded.
@@ -226,8 +230,8 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
             let reg = layer_kind_registry.get(&entry.type_id).ok_or_else(|| {
                 LoadError::CorruptManifest {
                     reason: format!(
-                        "manifest root {} declares layer_kind/{} but registry is missing it \
-                         — `requires` block lies",
+                        "manifest root {} declares layer_kind/{} but registry is missing it: \
+                         `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 }
@@ -243,13 +247,13 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
                 .get(&entry.type_id)
                 .ok_or_else(|| LoadError::CorruptManifest {
                     reason: format!(
-                        "node {} declares layer_kind/{} but registry is missing it \
-                     — `requires` block lies",
+                        "node {} declares layer_kind/{} but registry is missing it: \
+                     `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 })?;
         // `insert_with_key` runs the constructor with the freshly-allocated
-        // key. `deserialize` is fallible — if it errors, we want to bubble
+        // key. `deserialize` is fallible: if it errors, we want to bubble
         // up rather than leave a half-formed slotmap entry, so we use a
         // two-step allocate-then-fill pattern via a Result-bearing temporary.
         let mut new_id_opt: Option<LayerId> = None;
@@ -286,8 +290,8 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
                 .get(&entry.type_id)
                 .ok_or_else(|| LoadError::CorruptManifest {
                     reason: format!(
-                        "filter {} declares filter/{} but registry is missing it \
-                     — `requires` block lies",
+                        "filter {} declares filter/{} but registry is missing it: \
+                     `requires` block lies",
                         entry.id, entry.type_id
                     ),
                 })?;
@@ -356,7 +360,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
     // hosts' filters. The body's lists are the single source of truth.
     rebuild_parent_map(&mut doc);
 
-    // Selection sentinel — point `Document::selection` at the
+    // Selection sentinel: point `Document::selection` at the
     // freshly-allocated id (if the manifest declared one).
     if let Some(old_sel_id) = manifest.selection_id {
         if let Some(new_id) = id_map.get(&old_sel_id) {
@@ -364,7 +368,87 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
         }
     }
 
+    // The one place the divider invariant is established by hand. Load builds
+    // the tree from the manifest and derives the parent map directly, so
+    // `link` (where every other path holds the invariant) is never called.
+    normalize_divider(&mut doc, fresh_divider)?;
+
     Ok((doc, id_map))
+}
+
+/// Re-establish "the root holds exactly one divider" on a freshly loaded tree,
+/// and degrade rather than trust a hand-edited file: nothing may sit above the
+/// divider that cannot render in screen space.
+///
+/// - The manifest carries exactly one root-level divider → adopt it and purge
+///   the orphaned fresh one.
+/// - No divider (an older or hand-edited file) → the fresh one re-links at the
+///   top, so nothing is viewport-only.
+/// - A nested divider, or more than one → `CorruptManifest`; neither is a
+///   state any producer writes.
+fn normalize_divider(doc: &mut Document, fresh_divider: LayerId) -> Result<(), LoadError> {
+    let root = doc.root_id();
+    let dividers: Vec<LayerId> = doc
+        .all_node_ids_in_order()
+        .into_iter()
+        .filter(|&id| {
+            doc.find_node(id)
+                .is_some_and(|n| n.is_screen_space_boundary())
+        })
+        .collect();
+    match dividers.as_slice() {
+        [] => {
+            let top = doc.children_of(root).len();
+            doc.reinsert_entity(
+                fresh_divider,
+                TreeSlot {
+                    parent: None,
+                    position: top,
+                },
+            );
+        }
+        [one] if doc.parent_of(*one) == Some(root) => {
+            doc.remove_entity(fresh_divider);
+        }
+        _ => {
+            return Err(LoadError::CorruptManifest {
+                reason: "the viewport divider must appear exactly once, at the root".to_string(),
+            });
+        }
+    }
+
+    // Degrade on load, refuse on move: relink the divider above the longest
+    // qualifying suffix if the file put something ineligible above it, so a
+    // hand-edited file cannot ask for a raster to be rendered after the view
+    // transform, and still opens.
+    let div = doc.divider_id();
+    let run_blocked = doc.screen_space_run().iter().any(|&c| {
+        doc.find_node(c)
+            .is_some_and(|n| !n.supports_screen_space(doc))
+    });
+    if run_blocked {
+        let qualifying = doc
+            .children_of(root)
+            .iter()
+            .rev()
+            .take_while(|&&c| {
+                c != div
+                    && doc
+                        .find_node(c)
+                        .is_some_and(|n| n.supports_screen_space(doc))
+            })
+            .count();
+        doc.detach_for_undo(div);
+        let pos = doc.children_of(root).len() - qualifying;
+        doc.reinsert_entity(
+            div,
+            TreeSlot {
+                parent: None,
+                position: pos,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Walk every group node's `children` and every host node's `filters`,
@@ -395,7 +479,7 @@ fn rebuild_parent_map(doc: &mut Document) {
 }
 
 // ----------------------------------------------------------------------------
-// Atomic install — no fallible operations from here on.
+// Atomic install: no fallible operations from here on.
 // ----------------------------------------------------------------------------
 
 /// Swap the staging doc into the engine and rebuild every derived
@@ -409,13 +493,13 @@ fn install_staging(
     entries: &HashMap<String, Vec<u8>>,
 ) {
     // Cancel any in-flight readbacks that referenced the previous
-    // document — their context ids point at the about-to-be-dropped
+    // document: their context ids point at the about-to-be-dropped
     // slotmap entries. Done before the doc swap so the cancel sees the
     // old context types correctly.
     engine.readbacks.cancel(|_| true);
 
     // The compositor caches a lot keyed off the old document's
-    // slotmap. Building a fresh one is the simplest correct route —
+    // slotmap. Building a fresh one is the simplest correct route:
     // every old texture / bind group / passthrough state is dropped.
     engine.doc = staging;
     engine.compositor = Compositor::new(
@@ -429,19 +513,14 @@ fn install_staging(
 
     upload_loaded_pixels(engine, manifest, &id_map, entries);
 
-    // The veil chain sizes to the surface in production (via
-    // `resize()`); on a freshly-loaded compositor it's still 0×0,
-    // and `add_veil`'s `ensure_textures` would no-op silently and
-    // then unwrap on `views`. Seed to canvas dimensions so the
-    // restore path always sees a sized viewport — the next real
+    // The screen-space run sizes to the surface in production (via
+    // `resize()`); on a freshly-loaded compositor it's still 0×0, so its
+    // instances would have no pair to bind. Seed to canvas dimensions so the
+    // first frame after a load always sees a sized viewport: the next real
     // resize cascades to the right surface size automatically.
-    engine.compositor.veil_chain_mut().resize(
-        &engine.gpu.device,
-        &engine.gpu.queue,
-        engine.doc.width,
-        engine.doc.height,
-    );
-    restore_veils(engine, manifest);
+    engine
+        .compositor
+        .resize_screen_run(engine.doc.width, engine.doc.height);
     ensure_selection_state(engine);
     // Register embedded fonts before `sync_compositor_layers` realizes the
     // vector scenes, so text shapes with its real face on the first frame
@@ -449,7 +528,7 @@ fn install_staging(
     register_embedded_fonts(engine, manifest, entries);
     engine.sync_compositor_layers();
     // Restore void persistent pixels (camera void's last frame, etc.)
-    // AFTER `sync_compositor_layers` — that's where the void's GPU cache
+    // AFTER `sync_compositor_layers`: that's where the void's GPU cache
     // is first allocated (with a placeholder texture), and our restore
     // method resizes + writes bytes into that cache.
     upload_loaded_void_pixels(engine, entries);
@@ -460,7 +539,7 @@ fn install_staging(
     engine.floating = None;
     // The clone pin MUST clear: the loaded doc's fresh slotmap can hand
     // out a key that collides with a stale cross-document pin. The anchor
-    // clears with it — a point in the old doc's plane is meaningless here.
+    // clears with it: a point in the old doc's plane is meaningless here.
     engine.clone_source_anchor = None;
     engine.clone_source_layer = None;
     for channel in &mut engine.overlays {
@@ -477,7 +556,7 @@ fn install_staging(
 /// Allocate GPU textures for every loaded entity and upload the
 /// matching pixel bytes from the zip. Walks each entity, reads the
 /// `pixels` ref out of the body, and routes through the appropriate
-/// allocator. Infallible — pixel-buffer size mismatches log and
+/// allocator. Infallible: pixel-buffer size mismatches log and
 /// continue (the surrounding load is already past every refusal check
 /// and we'd rather show a half-loaded layer than abort with a fresh
 /// compositor sitting around).
@@ -571,7 +650,7 @@ fn upload_loaded_pixels(
 /// Restore persistent void textures (camera void's last received frame,
 /// future screenshare, …) into their freshly-allocated GPU caches. Runs
 /// after `sync_compositor_layers` so every void already has an
-/// `EffectCache` to overwrite. Walks the doc's void layers — the
+/// `EffectCache` to overwrite. Walks the doc's void layers: the
 /// `frame` field on each is the authoritative source of "this void
 /// has a persisted texture under blob_key X at dims W×H".
 fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String, Vec<u8>>) {
@@ -589,7 +668,7 @@ fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String
         let Some(bytes) = entries.get(&blob_key) else {
             continue;
         };
-        engine.compositor.restore_void_pixels(
+        engine.compositor.set_void_source_pixels(
             &engine.gpu.device,
             &engine.gpu.queue,
             id,
@@ -602,7 +681,7 @@ fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String
 
 /// Thin wrapper that routes through `Compositor::upload_node_pixels`
 /// (which atomically writes + dirty-marks). A `false` return means the
-/// node has no texture or the buffer is short — log and continue
+/// node has no texture or the buffer is short: log and continue
 /// (the load is past every refusal gate; half a layer beats aborting
 /// with a fresh compositor sitting around).
 fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
@@ -615,7 +694,7 @@ fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
 }
 
 /// Register every font embedded in the container back into the engine's font
-/// collection so text renders self-contained — the same
+/// collection so text renders self-contained: the same
 /// [`crate::text::FontRegistry::register_font`] path uploads and Google imports
 /// use. Deduped by content hash (several families can share one blob), and
 /// best-effort: a font blob missing from the archive is skipped, and the text
@@ -639,32 +718,7 @@ fn register_embedded_fonts(
     }
 }
 
-/// Rebuild the veil chain from `manifest.veils`. The `requires`
-/// pre-check has already refused any veil the binary doesn't know
-/// about, so any miss here is a logic bug — the registry must have
-/// changed between pre-check and restore (impossible without a
-/// concurrent mutation we don't allow).
-fn restore_veils(engine: &mut DarklyEngine, manifest: &Manifest) {
-    engine.compositor.veil_chain_mut().clear_veils();
-    for veil in &manifest.veils {
-        let type_id = veil.instance.type_id.clone();
-        let params = veil.instance.params.clone();
-        if !engine.compositor.veil_chain().registry().has(&type_id) {
-            log::error!(
-                "load: veil '{type_id}' missing despite requires pre-check — \
-                 registry drift?"
-            );
-            continue;
-        }
-        engine.add_veil_layer(&type_id, &params);
-        if !veil.visible {
-            let last = engine.compositor.veil_chain().count().saturating_sub(1);
-            engine.set_veil_visible(last, false);
-        }
-    }
-}
-
-/// Allocate the selection-filter GPU state — mirrors the engine
+/// Allocate the selection-filter GPU state: mirrors the engine
 /// constructor's eager allocation.
 fn ensure_selection_state(engine: &mut DarklyEngine) {
     let id = engine.doc.ensure_selection_filter();
@@ -692,7 +746,7 @@ mod tests {
         let l = doc.add_raster_layer(Some(g));
         let m = doc.add_mask_filter(l).expect("mask added");
 
-        // Wipe parent map and force a rebuild — the derived state must
+        // Wipe parent map and force a rebuild: the derived state must
         // match the original.
         doc.parent.clear();
         rebuild_parent_map(&mut doc);
@@ -703,18 +757,22 @@ mod tests {
     }
 
     /// `build_staging_document` builds a Document via the layer-kind /
-    /// filter registries — no central match on type_id. A manifest with
+    /// filter registries: no central match on type_id. A manifest with
     /// one of every kind round-trips through `serialize` + `deserialize`
     /// and arrives with consistent tree + parent state.
     #[test]
     fn staging_document_round_trips_one_of_each_kind() {
-        // We don't go through save here — we just hand-build a manifest
+        // We don't go through save here: we just hand-build a manifest
         // shape that mirrors what a real save would produce, then assert
         // the staging doc's structure.
-        let root_id: u64 = 1;
-        let group_id: u64 = 2;
-        let raster_id: u64 = 3;
-        let mask_id: u64 = 4;
+        // Manifest ids are `LayerId::to_ffi` outputs (generation in the high
+        // bits): a bare small integer is not a valid wire id and would only
+        // resolve by slot-index coincidence.
+        let ffi = |idx: u64| (1u64 << 32) | idx;
+        let root_id: u64 = ffi(1);
+        let group_id: u64 = ffi(2);
+        let raster_id: u64 = ffi(3);
+        let mask_id: u64 = ffi(4);
 
         let manifest = Manifest {
             format: crate::format::manifest::FORMAT_TAG.to_string(),
@@ -800,7 +858,6 @@ mod tests {
                 }),
             }],
             selection_id: None,
-            veils: Vec::new(),
             fonts: Vec::new(),
         };
 

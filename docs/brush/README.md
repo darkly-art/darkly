@@ -7,13 +7,13 @@ This directory holds the reference material; code lives in
 
 Start here:
 
-- **[architecture.md](architecture.md)** — runtime: how strokes flow from tablet
+- **[architecture.md](architecture.md)** - runtime: how strokes flow from tablet
   to canvas. Stroke engine, stroke buffer, terminals, per-dab GPU dispatch.
   **Read this first if you are touching anything in `brush/` or wondering why a
   new brush doesn't appear on the canvas.**
-- **[node-system.md](node-system.md)** — authoring: how to define a new node
+- **[node-system.md](node-system.md)** - authoring: how to define a new node
   type and wire up a preset. Ports, params, `PresetBuilder`, exposed knobs.
-- **[stabilization.md](stabilization.md)** — stabilizer algorithms (Laplacian
+- **[stabilization.md](stabilization.md)** - stabilizer algorithms (Laplacian
   smoother) and their config surface.
 
 Prior-art references (for research, not implementation detail):
@@ -30,12 +30,12 @@ the dev frontend at `https://localhost:5173/?brush-inspect` (after
 chunk, every `<param>` with decoded curves and sensor IDs, the raw preset
 XML, and each embedded brush-tip resource rendered as an image (PNG / JPEG /
 SVG). GBR / GIH / ABR tips show a fallback panel with the format label and
-magic bytes — no native preview yet; we'll add a parser the first time a
+magic bytes: no native preview yet; we'll add a parser the first time a
 brush in the wild needs it.
 
 Where to find `.kpp` files to test with:
 
-- User-saved presets:
+- Artist-saved presets:
   - Linux: `~/.local/share/krita/paintoppresets/`
   - macOS: `~/Library/Application Support/krita/paintoppresets/`
   - Windows: `%APPDATA%\krita\paintoppresets\`
@@ -46,5 +46,5 @@ Where to find `.kpp` files to test with:
   [`krita/benchmarks/data/`](../../krita/benchmarks/data/).
 
 Parser code: [`crates/darkly/src/brush/import/krita/`](../../crates/darkly/src/brush/import/krita/).
-Output is a debug AST (`KritaPreset`) — conversion into Darkly's native
+Output is a debug AST (`KritaPreset`): conversion into Darkly's native
 brush graph is a later step driven by what we learn from real brushes.

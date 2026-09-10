@@ -1,6 +1,6 @@
 //! CPU-evaluation tests for the scalar binary-math nodes (add, subtract,
 //! multiply, divide). They share one implementation
-//! ([`darkly::brush::scalar_binary`]), so these pin the per-operator behavior —
+//! ([`darkly::brush::scalar_binary`]), so these pin the per-operator behavior:
 //! the operator, identity default, and divide's zero guard that distinguish
 //! them.
 

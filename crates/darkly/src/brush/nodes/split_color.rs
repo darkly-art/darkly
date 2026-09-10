@@ -1,4 +1,4 @@
-//! Split Color node — Vec4 → (Scalar, Scalar, Scalar, Scalar, Scalar).
+//! Split Color node: Vec4 → (Scalar, Scalar, Scalar, Scalar, Scalar).
 //!
 //! Decomposes an RGBA color into its individual channels plus the
 //! Rec.601 luminance. Mirrors [`super::split_vec2`] (which splits
@@ -6,7 +6,7 @@
 //! [`super::image`] result into a Scalar-only consumer like
 //! [`super::levels`] or [`super::multiply`].
 //!
-//! Luminance is computed once even when only `luminance` is wired —
+//! Luminance is computed once even when only `luminance` is wired:
 //! it's three multiplies + two adds, cheaper than branching.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
@@ -47,7 +47,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
         || Box::new(SplitColorEvaluator),
     )

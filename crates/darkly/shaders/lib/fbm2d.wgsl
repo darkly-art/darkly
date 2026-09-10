@@ -1,7 +1,7 @@
-// 2D fractional Brownian motion core — shared, binding-free GPU helpers.
+// 2D fractional Brownian motion core: shared, binding-free GPU helpers.
 //
 // The interpolated value-noise primitive, its wrapping (tileable) variant, the
-// octave loop, and domain warp — the `fbm_tile` field used by the brush
+// octave loop, and domain warp: the `fbm_tile` field used by the brush
 // `noise` node. No `@group` declarations, so this file is safe to concatenate
 // into ANY shader via Rust's `include_str!` (WGSL has no native #include). The
 // 3D texture-sampled variants live in `fbm.wgsl`, which depends on `fbm_pcg`
@@ -32,7 +32,7 @@ fn fbm_hash2(coord: vec2i, seed: u32) -> f32 {
     return f32(h) / 4294967295.0;
 }
 
-/// Quintic smoothstep — Perlin's improved fade. C2-continuous, avoids the
+/// Quintic smoothstep: Perlin's improved fade. C2-continuous, avoids the
 /// directional banding cubic smoothstep produces in stacked octaves.
 fn fbm_fade(t: vec2f) -> vec2f {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
@@ -78,7 +78,7 @@ fn fbm_value_noise_tiled(p: vec2f, seed: u32, period: i32) -> f32 {
     return mix(ab, cd, w.y);
 }
 
-/// Fractional Brownian motion — sum `octaves` octaves of value noise with
+/// Fractional Brownian motion: sum `octaves` octaves of value noise with
 /// per-octave frequency scaled by `lacunarity` and amplitude scaled by
 /// `gain`. Output is renormalized to roughly [0, 1] regardless of gain.
 fn fbm(p: vec2f, seed: u32, octaves: i32, lacunarity: f32, gain: f32) -> f32 {
@@ -89,7 +89,7 @@ fn fbm(p: vec2f, seed: u32, octaves: i32, lacunarity: f32, gain: f32) -> f32 {
     var q = p;
     let n = max(octaves, 1);
     for (var i = 0; i < n; i = i + 1) {
-        // Offset each octave's seed so they sample uncorrelated fields —
+        // Offset each octave's seed so they sample uncorrelated fields;
         // otherwise low frequencies and high frequencies would peak at the
         // same world-space coordinates and the FBM would look like a single
         // smoothed copy of itself instead of layered detail.
@@ -102,7 +102,7 @@ fn fbm(p: vec2f, seed: u32, octaves: i32, lacunarity: f32, gain: f32) -> f32 {
     return sum / norm;
 }
 
-/// 2D domain warp offset — Quilez's two-stage warp. Sample two independent
+/// 2D domain warp offset: Quilez's two-stage warp. Sample two independent
 /// FBM fields, treat them as (x, y) of a displacement vector. The void
 /// shader adds this to its base sample point; a future displacement-warp
 /// veil will use this directly to perturb the underlying composite.
@@ -130,7 +130,7 @@ fn fbm_warp_offset(
 
 /// Domain-warped FBM scalar. Computes the warp offset, adds it to `p`, then
 /// samples a fresh FBM field at the warped position. Output is in roughly
-/// [0, 1] — same range as `fbm` itself, so callers can mix freely.
+/// [0, 1] (same range as `fbm` itself), so callers can mix freely.
 fn fbm_warp(
     p: vec2f,
     seed: u32,
@@ -146,7 +146,7 @@ fn fbm_warp(
 /// Seed → a base 2D translation offset, packed `(_, ox, oy)`. PCG-hashed so
 /// adjacent seeds give uncorrelated fields rather than shifted copies. The `.x`
 /// slot is unused (it once carried a rotation angle; rotation was dropped so
-/// the field stays tileable — see `fbm_tile`).
+/// the field stays tileable; see `fbm_tile`).
 fn fbm_seed_xform(seed: u32) -> vec3f {
     let a = f32(fbm_pcg(seed)) / 4294967295.0 * 6.28318530718;
     let ox = f32(fbm_pcg(seed + 101u)) / 4294967295.0 * 64.0;
@@ -154,17 +154,28 @@ fn fbm_seed_xform(seed: u32) -> vec3f {
     return vec3f(a, ox, oy);
 }
 
+/// Seed → a 2D point scattered uniformly over `[0, period)²`. Two independent
+/// `fbm_pcg` draws (the golden-ratio salt makes the y draw independent of the
+/// x draw), so the point covers the plane rather than collapsing onto the
+/// `x == y` diagonal a single scaled scalar would trace. Used to decorrelate
+/// per-dab sampling of a period-`period` field.
+fn fbm_offset2(seed: u32, period: f32) -> vec2f {
+    let ox = f32(fbm_pcg(seed)) / 4294967295.0;
+    let oy = f32(fbm_pcg(seed ^ 0x9e3779b9u)) / 4294967295.0;
+    return vec2f(ox, oy) * period;
+}
+
 /// Domain-warped, **tileable** fBm of value noise. The lattice wraps at
 /// `base_period` cells (and `base_period * 2^i` per octave, so every octave is
 /// co-periodic), giving a field that is exactly seamless with period
-/// `base_period` — sampled through a repeat-wrapped texture it has no seam.
+/// `base_period`: sampled through a repeat-wrapped texture, it has no seam.
 ///
 /// Unlike the earlier rotated variant, octaves are **not** rotated: an
 /// arbitrary per-octave rotation maps the periodic lattice onto a tilted one
 /// that an axis-aligned tile can't wrap, which reintroduces the seam. Octaves
 /// are instead decorrelated by a seed-derived per-octave *translation*
 /// (`fbm_seed_xform` + `i * {13.7, 7.1}`), which preserves periodicity. The
-/// domain warp is kept — it reads the same wrapped value noise, so the warp
+/// domain warp is kept; it reads the same wrapped value noise, so the warp
 /// offset is itself periodic and the field stays tileable. Lacunarity is fixed
 /// at 2.0; `gain` and `warp` are caller-controlled. Output is roughly [0, 1].
 fn fbm_tile(p: vec2f, seed: u32, octaves: i32, gain: f32, warp: f32, base_period: i32) -> f32 {

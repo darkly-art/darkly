@@ -97,7 +97,7 @@ describe('two-finger canvas rotation snapping', () => {
 
         // raw 44° and 46° sit within ±2° of 45° → parked exactly at 45°.
         expect(display[0]).toBeCloseTo(CARDINAL, 6); // raw 44°
-        expect(display[2]).toBeCloseTo(CARDINAL, 6); // raw 46° — still parked
+        expect(display[2]).toBeCloseTo(CARDINAL, 6); // raw 46°, still parked
         // raw 48° escapes the band → free rotation, NOT stuck at 45°.
         expect(display[4]).toBeCloseTo(48 * DEG, 6);
     });
@@ -117,7 +117,7 @@ describe('two-finger canvas rotation snapping', () => {
         nav.onTouchPointerUp(ptr(2, 0, 0));
         nav.onTouchPointerDown(ptr(2, 0, 100)); // returns at angle +90°, far away
 
-        // A tiny subsequent move applies only its own delta — no jump from the
+        // A tiny subsequent move applies only its own delta: no jump from the
         // reposition, because prevAngle re-snapshots (from the 90° return) and
         // rawRotation is not reseeded. Move finger 2 from 90° to 89°.
         nav.onTouchPointerMove(ptr(2, 100 * Math.cos(89 * DEG), 100 * Math.sin(89 * DEG)), el);

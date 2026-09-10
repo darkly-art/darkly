@@ -2,6 +2,7 @@ import './themes/dark.css';
 import './themes/light.css';
 import './styles/reset.css';
 import './styles/tokens.css';
+import './styles/drop-indicator.css';
 import App from './App.svelte';
 import BrushInspector from './ui/brush_inspector/BrushInspector.svelte';
 import GpuErrorPage from './ui/GpuErrorPage.svelte';
@@ -18,7 +19,7 @@ strokeRecorder.init();
 const target = document.getElementById('app')!;
 
 async function boot() {
-    // Brush inspector is a self-contained dev page — no GPU init, no engine
+    // Brush inspector is a self-contained dev page: no GPU init, no engine
     // boot. Reach it via `?brush-inspect`.
     if (new URLSearchParams(window.location.search).has('brush-inspect')) {
         target.replaceChildren();

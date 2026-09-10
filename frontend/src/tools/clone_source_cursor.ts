@@ -19,12 +19,12 @@ import {
 // layer (so preset swaps + user overrides flow through), and a crosshair
 // cursor confirms sample mode while the chord is held. Hover suppression,
 // the `app.toolCursor` slot, and the suspend/restore handoff to the active
-// tool are owned by the shared engagement machinery in `modifier_cursor.ts`
-// — while armed, the brush's dab preview is suspended so it can't fight the
+// tool are owned by the shared engagement machinery in `modifier_cursor.ts`;
+// while armed, the brush's dab preview is suspended so it can't fight the
 // crosshair, and disarming restores it immediately.
 //
 // The engine-backed mirror (source anchor, needs-source cache, per-stroke
-// tracking) is per-document, so it's keyed per `DarklyInstance` — switching
+// tracking) is per-document, so it's keyed per `DarklyInstance`: switching
 // tabs shows each tab's own clone source, and one tab's stroke never drives
 // another's marker. The engagement state itself is a pointer singleton (one
 // pointer, one modifier chord) and stays module-global, always evaluated
@@ -46,7 +46,7 @@ interface CloneState {
     /** Aligned (false) vs anchored (true), cached from the engine alongside
      *  `needsSource`. Drives the on-canvas marker's stroke tracking. */
     anchoredMode: boolean;
-    /** The set source anchor in canvas / plane pixels — a local mirror of the
+    /** The set source anchor in canvas / plane pixels: a local mirror of the
      *  engine's `clone_source_anchor` (the engine exposes no getter). */
     sourceAnchor: Pt | null;
     /** Destination anchor captured at `pointerdown` (canvas pixels), mirroring
@@ -93,7 +93,7 @@ function focusedState(): { inst: DarklyInstance; st: CloneState } | null {
 
 /** Where the source marker sits for a given cursor position. Anchored mode
  *  pins it at the set source; aligned mode slides it by the same offset the
- *  cursor has travelled from the stroke's dest anchor — matching
+ *  cursor has travelled from the stroke's dest anchor, matching
  *  `clone_source.rs`'s `offset = source_anchor − dest_anchor` semantics.
  *  Pure so it can be unit-tested against the Rust formula. */
 export function trackedSourcePos(
@@ -124,7 +124,7 @@ export function setCloneSourceAnchor(cx: number, cy: number): void {
 /** Re-query whether the active brush needs a source (and its aligned /
  *  anchored mode) whenever the active brush changes. Async (engine
  *  round-trip); the cached result drives arming + the marker. Switching
- *  brushes does not clear the engine anchor — it persists as session state,
+ *  brushes does not clear the engine anchor; it persists as session state,
  *  so a clone brush reselected mid-session keeps its source. */
 function syncNeedsSource(inst: DarklyInstance, st: CloneState): void {
     const brush = brushGraph.activeBrush ?? null;
@@ -159,7 +159,7 @@ function clearCloneMarker(inst: DarklyInstance, st: CloneState): void {
 
 /** Rebuild the clone marker on the persistent `'clone'` channel: a crosshair
  *  at the (tracked) source when one is set. Screen-space, so it re-pushes
- *  on view pan/zoom via the per-frame tick — but only when its screen
+ *  on view pan/zoom via the per-frame tick, but only when its screen
  *  position actually changed (memoized). */
 function rebuildCloneMarker(inst: DarklyInstance, st: CloneState): void {
     const engine = inst.engine;
@@ -186,7 +186,7 @@ function rebuildCloneMarker(inst: DarklyInstance, st: CloneState): void {
 // Stroke tracking hooks (called by the brush tool)
 // ---------------------------------------------------------------------------
 
-/** Clone stroke started at `(cx, cy)` — capture the dest anchor (the engine
+/** Clone stroke started at `(cx, cy)`: capture the dest anchor (the engine
  *  captures the same first-dab position) so aligned-mode tracking slides the
  *  source marker with the cursor. No-op unless a clone source is set. */
 export function onCloneStrokeStart(cx: number, cy: number): void {
@@ -197,7 +197,7 @@ export function onCloneStrokeStart(cx: number, cy: number): void {
     rebuildCloneMarker(f.inst, f.st);
 }
 
-/** Clone stroke moved to `(cx, cy)` — update the tracked marker. */
+/** Clone stroke moved to `(cx, cy)`: update the tracked marker. */
 export function onCloneStrokeMove(cx: number, cy: number): void {
     const f = focusedState();
     if (!f || !f.st.needsSource) return;
@@ -205,7 +205,7 @@ export function onCloneStrokeMove(cx: number, cy: number): void {
     rebuildCloneMarker(f.inst, f.st);
 }
 
-/** Clone stroke ended — drop the dest anchor (the engine re-anchors `dest`
+/** Clone stroke ended: drop the dest anchor (the engine re-anchors `dest`
  *  at each stroke's first dab) and the dab centre with it, so the marker
  *  snaps back to the set source. */
 export function onCloneStrokeEnd(): void {
@@ -229,10 +229,10 @@ function isPaintToolActive(): boolean {
 
 /** Pure engagement decision: the crosshair arms while the active paint brush
  *  needs a source and the held modifier resolves to `setCloneSource`. Clone's
- *  binding is the most specific, so it always wins the chord — but reading
+ *  binding is the most specific, so it always wins the chord, but reading
  *  the one shared resolver means this cursor and the color picker can never
  *  disagree about who owns the modifier. `pointerDown` blocks a *first*
- *  engagement only — suppressing the hover mid-stroke would freeze the
+ *  engagement only: suppressing the hover mid-stroke would freeze the
  *  stroke's dispatch; staying engaged never consults it. Split out so the
  *  decision is unit-testable without the DOM state machine. */
 export function cloneEngages(
@@ -271,7 +271,7 @@ function refreshEngagement(): void {
     }
 }
 
-/** Per-frame tick — refreshes the (focused instance's) needs-source cache on
+/** Per-frame tick: refreshes the (focused instance's) needs-source cache on
  *  brush change, re-evaluates engagement, and rebuilds the on-canvas marker so
  *  it tracks view pan/zoom. Cheap when nothing changed (memo guards on each
  *  step). Called only from the focused instance's frame loop. */
@@ -283,7 +283,7 @@ export function tickCloneSourceCursor(): void {
     rebuildCloneMarker(f.inst, f.st);
 }
 
-/** Drop the on-canvas clone marker and any engagement — called when the
+/** Drop the on-canvas clone marker and any engagement: called when the
  *  paint tool deactivates so neither the crosshair nor the hover
  *  suppression can outlive the tool that owns them. The engine anchor
  *  persists (session state); only the overlay + arming are cleared. */
@@ -309,7 +309,7 @@ export function setupCloneSourceModifierTracking(): void {
 
     // Re-evaluate when the held set changes or a rebind changes the winner
     // (`clickIndex` is rebuilt on config change before this runs), and on
-    // pointer release — the first-engage gate re-opens after a stroke.
+    // pointer release: the first-engage gate re-opens after a stroke.
     onHeldModsChange(refreshEngagement);
     config.onChange(refreshEngagement);
     onPointerRelease(refreshEngagement);

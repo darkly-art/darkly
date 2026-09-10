@@ -5,7 +5,7 @@
 
 /// Create a headless wgpu device + queue for testing.
 ///
-/// Uses wgpu's automatic backend selection — Vulkan, Metal, DX12, or software
+/// Uses wgpu's automatic backend selection: Vulkan, Metal, DX12, or software
 /// fallback depending on the platform. No window surface required.
 pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -20,7 +20,7 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
         label: Some("test-device"),
         required_features: wgpu::Features::empty(),
         // Raised to Vello's needs so headless GPU tests can realize vector
-        // (text) layers — same bump the production wasm device applies.
+        // (text) layers, same bump the production wasm device applies.
         required_limits: crate::gpu::vector_renderer::required_limits(
             wgpu::Limits::downlevel_defaults(),
         ),
@@ -32,7 +32,7 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
 /// Like [`test_device`], but requests the adapter's full limits rather
 /// than wgpu's downlevel-defaults floor (which caps `max_texture_dimension_2d`
 /// at 2048). For perf benches that need to allocate textures larger than
-/// the portability floor — 4K canvases, large brush dabs, etc. Picks the
+/// the portability floor: 4K canvases, large brush dabs, etc. Picks the
 /// `HighPerformance` adapter to match what the real frontend uses.
 ///
 /// Also opts in to `TIMESTAMP_QUERY` (plus the inside-pass and
@@ -64,7 +64,7 @@ pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
     .expect("failed to create bench device")
 }
 
-/// Minimal future executor — blocks the current thread until the future resolves.
+/// Minimal future executor: blocks the current thread until the future resolves.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     // wgpu futures resolve after a single poll on native backends.
     let waker = noop_waker();
@@ -166,16 +166,29 @@ pub fn readback_texture(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("test-readback"),
-    });
-    let request = super::readback::request_readback(
+    readback_texture_rect(
         device,
-        &mut encoder,
+        queue,
         texture,
         format,
         crate::coord::LayerRect::from_xywh(0, 0, width, height),
-    );
+    )
+}
+
+/// Read back a sub-rect of a texture to CPU memory (blocking). For test
+/// assertions about textures whose savable region is narrower than the
+/// allocation, a void source's transparent border, for instance.
+pub fn readback_texture_rect(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    rect: crate::coord::LayerRect,
+) -> Vec<u8> {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test-readback"),
+    });
+    let request = super::readback::request_readback(device, &mut encoder, texture, format, rect);
     queue.submit([encoder.finish()]);
     request.blocking_read(device)
 }

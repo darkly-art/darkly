@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // for real under node.
 import 'fake-indexeddb/auto';
 
-// Fake multi-tab shell exposing one live engine handle — the replay target.
+// Fake multi-tab shell exposing one live engine handle, the replay target.
 const { engine, instances } = vi.hoisted(() => {
     const engine = { send: vi.fn(() => Promise.resolve({ families: ['My Font'] })) };
     const instances = [{ engine }];
@@ -52,7 +52,7 @@ describe('fontLibrary', () => {
         expect(rec.source).toBe('upload');
         expect(rec.families).toEqual(['My Font']);
 
-        // Re-adding identical bytes is a no-op beyond returning the families —
+        // Re-adding identical bytes is a no-op beyond returning the families:
         // the content hash dedups, so no second registration fires.
         engine.send.mockClear();
         const again = await fontLibrary.add(bytes, 'upload');

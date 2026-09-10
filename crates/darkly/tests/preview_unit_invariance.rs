@@ -6,7 +6,7 @@
 //! the fragment shader's discard test compared a target-pixel `local`
 //! against a canvas-pixel `bbox_radius` from the dab record. The
 //! discard never fired and the dab filled the texture to its square
-//! edge — visible as "square-clipped" cursor previews at large brush
+//! edge, visible as "square-clipped" cursor previews at large brush
 //! sizes.
 //!
 //! The fix: the intrinsic dab header is packed in the target's pixel
@@ -15,7 +15,7 @@
 //! preview path with a deliberately undersized mask to confirm the
 //! discard now fires correctly.
 //!
-//! **Pre-fix**: assertion 1 (corners transparent) FAILS — corners
+//! **Pre-fix**: assertion 1 (corners transparent) FAILS; corners
 //! come back nearly opaque because the discard never fires.
 
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
-/// Deliberately undersized vs the brush's natural bbox — simulates the
+/// Deliberately undersized vs the brush's natural bbox: simulates the
 /// production `MAX_PREVIEW_MASK_SIDE` clamp without needing a real
 /// `ToolOverlay`. A 128² mask + a brush with canvas-px bbox ~512 puts
 /// the dab well over the texture's inscribed disc (`texture_half = 64`).
@@ -61,17 +61,17 @@ struct Out {
     half_extent_canvas_px: [f32; 2],
 }
 
-/// Render `Round` at a brush size whose canvas-px bbox exceeds the
+/// Render `Ink Pen` at a brush size whose canvas-px bbox exceeds the
 /// 128² test mask's inscribed half-side (64). The exact size value
-/// is pinned so future default-tuning of `Round` doesn't drift the
+/// is pinned so future default-tuning of `Ink Pen` doesn't drift the
 /// assertions.
-fn render_big_round() -> Out {
+fn render_big_disc() -> Out {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Round")
-        .expect("Round brush is registered");
+        .find(|b| b.metadata.name == "Ink Pen")
+        .expect("Ink Pen brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let _term_id = darkly::brush::find_terminal(&graph).expect("Round has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink Pen has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).
@@ -111,7 +111,7 @@ fn render_big_round() -> Out {
         view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        // Drive the test-fallback path on `ensure_cursor_preview_mask` — the
+        // Drive the test-fallback path on `ensure_cursor_preview_mask`: the
         // production clamp path needs a real `ToolOverlay`, which is
         // heavier to construct than this test needs. The undersized
         // mask reproduces the exact same target-vs-canvas unit
@@ -161,7 +161,7 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn large_brush_does_not_fill_preview_mask_with_square() {
-    let out = render_big_round();
+    let out = render_big_disc();
 
     // The overlay consumer-facing bbox stays in canvas px. With size
     // 2.0 → radius 512 and extent factor ≥ 1, the published bbox
@@ -176,7 +176,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
 
     // ── Headline regression: the four corners must be transparent.
     //
-    // The corners sit at distance ~85 from the centre (64, 64) — well
+    // The corners sit at distance ~85 from the centre (64, 64), well
     // outside the dab's `bbox_target_px = 64`, so the fragment discard
     // fires and writes nothing.
     //
@@ -187,7 +187,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         let p = px(&out.rgba, cx, cy);
         assert_eq!(
             p[3], 0,
-            "corner ({cx}, {cy}) must be transparent — discard fires past `bbox_target_px`; got {p:?}",
+            "corner ({cx}, {cy}) must be transparent (discard fires past `bbox_target_px`); got {p:?}",
         );
     }
 
@@ -200,9 +200,9 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         "centre must be inside the dab and have non-zero alpha; got {centre:?}",
     );
 
-    // ── Radial symmetry. Round has no angular dependence; four
+    // ── Radial symmetry. The circle tip has no angular dependence; four
     // symmetric points well inside the bbox should agree closely.
-    // Pick offset 32 from centre (half the bbox half-extent) — deep
+    // Pick offset 32 from centre (half the bbox half-extent), deep
     // in the falloff, so any rotational asymmetry would read clearly
     // but we're not sitting on the discard boundary.
     let half = PREVIEW_SIDE / 2;
@@ -218,7 +218,7 @@ fn large_brush_does_not_fill_preview_mask_with_square() {
         .unwrap();
     assert!(
         max_dev <= 3,
-        "axial samples at radius {r} should be ~equal (Round is rotationally invariant); \
+        "axial samples at radius {r} should be ~equal (the circle tip is rotationally invariant); \
          N={north:?} S={south:?} E={east:?} W={west:?}",
     );
 }

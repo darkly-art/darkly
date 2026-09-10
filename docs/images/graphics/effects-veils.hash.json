@@ -1,0 +1,39 @@
+{
+  "svg": "322f857f0201cc51",
+  "width": 1472,
+  "height": 802,
+  "entries": [
+    {
+      "type": "chromatic_aberration",
+      "displayName": "Chromatic Aberration"
+    },
+    {
+      "type": "frozen",
+      "displayName": "Frozen"
+    },
+    {
+      "type": "grain",
+      "displayName": "Grain"
+    },
+    {
+      "type": "lens_blur",
+      "displayName": "Lens Blur"
+    },
+    {
+      "type": "painting",
+      "displayName": "Painting"
+    },
+    {
+      "type": "pixelate",
+      "displayName": "Pixelate"
+    },
+    {
+      "type": "rainy_glass",
+      "displayName": "Rainy Glass"
+    },
+    {
+      "type": "vhs",
+      "displayName": "VHS"
+    }
+  ]
+}

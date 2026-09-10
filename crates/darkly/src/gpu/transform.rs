@@ -1,4 +1,4 @@
-//! Floating content GPU pipeline — source-texture management + the commit
+//! Floating content GPU pipeline: source-texture management + the commit
 //! render pass that writes transformed pixels into a target texture.
 //!
 //! Used by both paste-in-place and the interactive transform tool. The
@@ -17,8 +17,8 @@ use crate::layer::LayerId;
 //
 // The affine math + the `Transform` record now live in the dependency-free
 // `crate::transform` module (the consumer-agnostic helper). Re-exported here so
-// the GPU pipeline keeps referring to `gpu::transform::Affine2D` etc. — one
-// home for the math, no duplication.
+// the GPU pipeline keeps referring to `gpu::transform::Affine2D` etc.
+// (one home for the math, no duplication).
 pub use crate::transform::{
     affine_inverse, affine_multiply, affine_rotate, affine_scale, affine_transform,
     affine_translate, mat3_apply, mat3_inverse, Affine2D, Mat3, Transform, IDENTITY, MAT3_IDENTITY,
@@ -29,7 +29,7 @@ pub use crate::transform::{
 /// transform-sampling shaders. A singular matrix (e.g. a corner dragged behind
 /// the camera mid-gesture) falls back to identity so the sample stays finite.
 ///
-/// The one home for this packing — shared by the floating commit uniforms
+/// The one home for this packing: shared by the floating commit uniforms
 /// ([`TransformBlendUniforms`]) and the void uniform builders. Pass a void's
 /// `transform.to_projective()`, or the floating path's already-baked [`Mat3`].
 pub fn pack_inv_rows(m: &Mat3) -> [[f32; 4]; 3] {
@@ -42,8 +42,22 @@ pub fn pack_inv_rows(m: &Mat3) -> [[f32; 4]; 3] {
 }
 
 // ---------------------------------------------------------------------------
-// FloatingContent — CPU-side data owned by the engine
+// FloatingContent: CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
+
+/// Where a transform session's lifted content goes when the session ends.
+///
+/// A session always owes its source a hole: the lift took those pixels out.
+/// What differs is whether the transformed content is drawn back in on top of
+/// that hole (an ordinary destructive move) or leaves the layer entirely to
+/// become a smart object, in which case the hole is all the source gets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LiftedContent {
+    /// Drawn back into the source, transformed.
+    ReturnedToSource,
+    /// Kept by the caller; nothing is drawn back.
+    TakenByCaller,
+}
 
 /// Type-owned source-clear shape for one interactive transform target.
 pub enum ClearShape {
@@ -52,7 +66,7 @@ pub enum ClearShape {
     Rect(crate::coord::CanvasRect),
     /// `setup_transform` did a selection-shaped clear (selection branch).
     /// `mask_bind_group` references a canvas-sized R8 snapshot of the
-    /// selection that was active at setup time — retained because
+    /// selection that was active at setup time: retained because
     /// `gpu_selection.clear()` runs at the end of `setup_transform` (so
     /// the marching ants disappear during the drag preview), and the
     /// commit-side replay needs that mask shape.
@@ -62,9 +76,9 @@ pub enum ClearShape {
     },
 }
 
-/// How the floating content was created — determines commit/cancel behavior.
+/// How the floating content was created: determines commit/cancel behavior.
 pub enum FloatingMode {
-    /// Clipboard paste — commit composites INTO target.
+    /// Clipboard paste: commit composites INTO target.
     /// `created_layer_id = Some(id)` means the target layer was auto-created
     /// for this paste and should be removed on cancel. `None` means paste
     /// targets a pre-existing layer; cancel is a no-op.
@@ -81,12 +95,12 @@ pub struct FloatingContent {
     /// Source dimensions in pixels.
     pub source_width: u32,
     pub source_height: u32,
-    /// Current user transform — affine (`Basic`) or projective
+    /// Current artist transform: affine (`Basic`) or projective
     /// (`Perspective`). The GPU consumes its [`Transform::to_projective`].
     pub transform: Transform,
     /// Target node id. Resolves to either a raster layer or a mask filter;
     /// the texture's own format (looked up via `compositor.node_texture(...)`)
-    /// distinguishes the two — no sidecar boolean needed.
+    /// distinguishes the two, no sidecar boolean needed.
     pub target_layer: LayerId,
     /// Determines commit/cancel behavior.
     pub mode: FloatingMode,
@@ -142,14 +156,14 @@ impl FloatingContent {
 }
 
 // ---------------------------------------------------------------------------
-// TransformPass — GPU pipeline and active state, owned by compositor
+// TransformPass: GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
 /// Uniforms for the transform-commit shader (96 bytes, std140-aligned).
 ///
 /// One uniform struct; one shader (commit). The preview is now a derived
 /// view of the target node's texture, rebuilt by running the same commit
-/// shader into a preview texture — no separate preview pipeline.
+/// shader into a preview texture, no separate preview pipeline.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
@@ -170,16 +184,16 @@ pub struct TransformBlendUniforms {
     pub target_size: [f32; 2],
     /// Full document canvas dimensions in pixels.
     pub canvas_size: [f32; 2],
-    /// Opacity (0.0–1.0).
+    /// Opacity (0.0-1.0).
     pub opacity: f32,
     /// Format flag (0.0 = RGBA, 1.0 = R8). The shader uses this to pick the
-    /// output channel layout — it's a format property, not a mask concept.
+    /// output channel layout; it's a format property, not a mask concept.
     pub is_r8: f32,
 }
 
 /// GPU resources for an active floating content.
 ///
-/// The "preview" — what the canvas would show if commit ran right now — is
+/// The "preview" (what the canvas would show if commit ran right now) is
 /// a derived view of the target's texture: each time the matrix updates,
 /// `render_preview` rebuilds `preview_texture` from a copy of the live
 /// target plus the commit shader at the current matrix. The compositor's
@@ -208,12 +222,12 @@ pub struct TransformState {
 
     /// Per-target preview texture. Canvas-sized so a translate that drags
     /// content past the source bounding box still has somewhere on the
-    /// preview to write — clipped at canvas bounds (the only thing the
+    /// preview to write, clipped at canvas bounds (the only thing the
     /// viewport renders), not at the live texture's bounds. Owned by this
-    /// state — destroyed when floating ends.
+    /// state, destroyed when floating ends.
     pub preview_texture: wgpu::Texture,
     pub preview_view: wgpu::TextureView,
-    /// Bind group sampling `preview_view` against the mask BGL — built
+    /// Bind group sampling `preview_view` against the mask BGL, built
     /// only when the target is R8, so the host's mask sampling can route
     /// through the preview during a mask transform.
     pub preview_mask_bind_group: Option<wgpu::BindGroup>,
@@ -224,6 +238,33 @@ pub struct TransformState {
     /// extent. Decouples preview's sampling geometry from the live
     /// texture's so the preview can be sized independently.
     pub preview_blend_uniform_buf: wgpu::Buffer,
+}
+
+/// Split a straight-alpha RGBA clip into the two channels a mask target needs:
+/// `(values, coverage)`.
+///
+/// A mask texel is a single grayscale value with no alpha of its own, so the
+/// clip's own alpha cannot ride along in the pixel; it becomes coverage, which
+/// is what the commit shader weights the write by. That is what makes the
+/// transparent parts of a clip leave the mask's existing pixels untouched
+/// instead of stamping a rectangle over them. GIMP draws the same line,
+/// converting a floating paste to the pasted-to drawable's own format *with
+/// alpha* (`gimp_edit_paste_get_layers`, app/core/gimp-edit.c).
+///
+/// Values are emitted as opaque RGBA so they ride the same staging upload and
+/// premultiply pass the RGBA path uses; premultiplying by an alpha of 1 is the
+/// identity, and the shader reads the red channel for an R8 target. Luminance
+/// uses the BT.709 weights shared with `lib/black_and_white.wgsl`.
+fn rgba_to_mask_values(rgba: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut values = Vec::with_capacity(rgba.len());
+    let mut coverage = Vec::with_capacity(rgba.len() / 4);
+    for px in rgba.as_chunks::<4>().0 {
+        let luma = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) / 255.0;
+        let v = (luma.clamp(0.0, 1.0) * 255.0).round() as u8;
+        values.extend_from_slice(&[v, v, v, 255]);
+        coverage.push(px[3]);
+    }
+    (values, coverage)
 }
 
 /// GPU pipelines for the floating-content commit pass + optional active state.
@@ -317,7 +358,7 @@ impl TransformPass {
             ),
         });
 
-        // Commit uses REPLACE blend — shader computes Porter-Duff manually
+        // Commit uses REPLACE blend: shader computes Porter-Duff manually
         // to avoid premultiplied-stored-as-straight artifacts (lesson #4).
         let make_commit_pipeline = |label: &str, format: wgpu::TextureFormat| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -496,8 +537,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader: converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -517,6 +562,14 @@ impl TransformPass {
             view_formats: &[],
         });
 
+        // An RGBA clip has to be converted into the target's terms before the
+        // commit shader can sample it: for an R8 target that shader reads the
+        // red channel, which is a real mask value only once the conversion has
+        // happened, and weights the write by coverage, which is where the clip's
+        // alpha has to go.
+        let mask_conversion =
+            (target_format == wgpu::TextureFormat::R8Unorm).then(|| rgba_to_mask_values(rgba_data));
+
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &temp_texture,
@@ -524,7 +577,9 @@ impl TransformPass {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba_data,
+            mask_conversion
+                .as_ref()
+                .map_or(rgba_data, |(values, _)| values.as_slice()),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(source_width * 4),
@@ -583,6 +638,24 @@ impl TransformPass {
             mapped_at_creation: false,
         });
 
+        // A mask target's coverage is the clip's own alpha, narrowed by whatever
+        // coverage the caller already imposed (a selection). An RGBA target's
+        // source keeps its alpha channel and the shader's source-over consumes
+        // it directly, so there only the caller's coverage applies.
+        let mask_coverage = mask_conversion.as_ref().map(|(_, alpha)| {
+            source_coverage.map_or_else(
+                || alpha.clone(),
+                |caller| {
+                    alpha
+                        .iter()
+                        .zip(caller)
+                        .map(|(&a, &c)| ((a as u16 * c as u16) / 255) as u8)
+                        .collect()
+                },
+            )
+        });
+        let source_coverage = mask_coverage.as_deref().or(source_coverage);
+
         let source_coverage = source_coverage.map(|coverage| {
             Self::create_source_coverage(
                 device,
@@ -624,7 +697,7 @@ impl TransformPass {
     /// `target_format` matches the layer's format. RGBA8 sources are
     /// premultiplied (straight-alpha layer data needs premul for correct
     /// bilinear interpolation in the commit shader). R8 (mask) sources skip
-    /// premultiply — single-channel, no alpha.
+    /// premultiply, single-channel, no alpha.
     #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content_from_gpu(
         &mut self,
@@ -661,8 +734,12 @@ impl TransformPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: target_format,
+            // COPY_SRC so the trimmed, premultiplied source can be handed to
+            // something other than the commit shader: converting a float or a
+            // layer to a smart object blits straight out of it.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -1009,9 +1086,44 @@ mod tests {
     use super::*;
     use crate::transform::homography_from_corners;
 
+    /// A mask stores a value and no alpha, so an RGBA clip splits into a
+    /// luminance value plus a coverage channel carrying the clip's alpha.
+    /// Reading the source's red channel instead (which is what the commit
+    /// shader does for an R8 target before this conversion) turns any
+    /// non-red clip into a black rectangle over the mask.
+    #[test]
+    fn rgba_to_mask_values_splits_luminance_from_alpha() {
+        // Opaque green, opaque white, fully transparent, half-transparent black.
+        let src = [
+            0, 255, 0, 255, //
+            255, 255, 255, 255, //
+            0, 255, 0, 0, //
+            0, 0, 0, 128,
+        ];
+        let (values, coverage) = rgba_to_mask_values(&src);
+
+        // BT.709 luminance, independent of alpha; alpha rides `coverage`.
+        assert_eq!(values[0], (0.7152f32 * 255.0).round() as u8);
+        assert_eq!(values[4], 255);
+        assert_eq!(values[8], (0.7152f32 * 255.0).round() as u8);
+        assert_eq!(values[12], 0);
+
+        // Values are opaque so the shared premultiply pass is the identity.
+        assert!(values.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
+        // Gray, so the shader's red-channel read is the value whatever it picks.
+        assert!(values
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| px[0] == px[1] && px[1] == px[2]));
+
+        // Coverage is the clip's alpha: transparent texels write nothing.
+        assert_eq!(coverage, vec![255, 255, 0, 128]);
+    }
+
     /// A near-degenerate matrix (a corner driving the homogeneous `w → 0`,
     /// folding behind the camera) has no usable inverse; `pack_inv_rows` must
-    /// fall back to identity rows rather than emit NaN/∞ — the CPU half of the
+    /// fall back to identity rows rather than emit NaN/∞: the CPU half of the
     /// shader's degenerate guard. The matching shader-side clamp is
     /// `proj_local`'s `abs(hw) < 1e-8 → ok = 0` (transparent).
     #[test]

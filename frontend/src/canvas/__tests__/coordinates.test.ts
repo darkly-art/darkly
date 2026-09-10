@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Minimal stand-in for the Svelte-runic `app` state. `coordinates.ts` now
-// consumes `app.viewMatrices` — the screen↔plane affines built in Rust — so the
+// consumes `app.viewMatrices` (the screen↔plane affines built in Rust), so the
 // test supplies KNOWN matrices and exercises only the matvec + DPR/rect handling
 // (the construction math is covered by the Rust `gpu::view` tests). Packing:
 // `[screen→plane (6), plane→screen (6)]`, each row-major `[m00,m01,m02,m10,m11,m12]`.
@@ -62,7 +62,7 @@ describe('screen/canvas coordinate transforms (matvec over app.viewMatrices)', (
 
     it('applies the screen→plane translate column (origin-like offset)', () => {
         // A pure +t translate in the plane→screen direction shows up as a -t/s
-        // shift on screen→plane — verify the translate column is honored.
+        // shift on screen→plane: verify the translate column is honored.
         fakeApp.viewMatrices = scaleTranslateMatrices(1, 40, 15);
         const el = fakeCanvas();
         const p = screenToCanvas(50, 50, el);

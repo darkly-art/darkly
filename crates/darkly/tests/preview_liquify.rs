@@ -1,7 +1,7 @@
 //! Hover-cursor preview render through `liquify`. The
 //! preview body shows the brush's softness-shaped disc in neutral
-//! gray — same `falloff_fn` the stroke body emits as a node decl,
-//! so scrubbing softness visibly reshapes the cursor.
+//! gray, using the same `falloff_fn` the stroke body emits as a node
+//! decl, so scrubbing softness visibly reshapes the cursor.
 
 use std::sync::Arc;
 
@@ -120,7 +120,7 @@ fn liquify_preview_shows_neutral_gray_disc() {
 
     let half = PREVIEW_SIDE / 2;
     let centre = px(&rgba, half, half);
-    // Centre with softness=0.5 (default) produces a peaked falloff —
+    // Centre with softness=0.5 (default) produces a peaked falloff:
     // f(0) ≈ 1, so centre ≈ (153, 153, 153, 255).
     assert!(
         centre[3] > 100,
@@ -133,7 +133,7 @@ fn liquify_preview_shows_neutral_gray_disc() {
     );
 
     // The disc has finite extent (bbox_radius). Sample a corner of
-    // the mask well outside the brush — must be transparent.
+    // the mask well outside the brush, which must be transparent.
     let corner = px(&rgba, 4, 4);
     assert_eq!(
         corner[3], 0,

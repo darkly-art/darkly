@@ -4,7 +4,7 @@
  * Font Browser reads.
  *
  * Google's metadata endpoint (`https://fonts.google.com/metadata/fonts`) is
- * keyless and returns the full ~2.7 MB catalog — but it sends no
+ * keyless and returns the full ~2.7 MB catalog, but it sends no
  * `Access-Control-Allow-Origin`, so a browser `fetch` is blocked. `curl`/`node`
  * aren't subject to CORS, so we snapshot at build time instead. The css2 byte
  * path the browser actually downloads fonts from *is* CORS-enabled; only this

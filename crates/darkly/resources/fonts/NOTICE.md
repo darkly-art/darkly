@@ -2,7 +2,7 @@
 
 These fonts are embedded into the engine binary (`include_bytes!`) and registered
 into the font collection at startup so text renders identically on every
-platform — see `crates/darkly/src/text/mod.rs`.
+platform; see `crates/darkly/src/text/mod.rs`.
 
 ## NotoSans-VF.ttf / NotoSans-Italic-VF.ttf
 

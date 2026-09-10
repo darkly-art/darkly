@@ -27,7 +27,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 
 /// Paint a horizontal brush stroke at plane-y `py`, sweeping plane-x `[x0, x1)`.
 fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     let steps = 48;
     for i in 0..=steps {
         let x = x0 + (x1 - x0) * (i as f32 / steps as f32);
@@ -49,6 +49,276 @@ fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1:
     engine.end_stroke();
 }
 
+/// Alpha of the plane pixel `(x, y)` in a node readback laid out over `ext`.
+/// A node texture is neither canvas-sized nor plane-origin-anchored once it has
+/// grown, so its stride and origin come from the extent rather than the canvas.
+fn alpha_at_plane(pixels: &[u8], ext: CanvasRect, x: i32, y: i32) -> u8 {
+    channel_at_plane(pixels, ext, x, y, 3)
+}
+
+/// Channel `c` (0=R, 3=A) of the plane pixel `(x, y)` in an RGBA node readback.
+fn channel_at_plane(pixels: &[u8], ext: CanvasRect, x: i32, y: i32, c: usize) -> u8 {
+    assert!(
+        ext.contains(CanvasRect::from_xywh(x, y, 1, 1)),
+        "plane ({x}, {y}) is outside the node extent {ext:?}"
+    );
+    let lx = (x - ext.x0()) as usize;
+    let ly = (y - ext.y0()) as usize;
+    pixels[(ly * ext.width as usize + lx) * 4 + c]
+}
+
+/// Apply a linear gradient along the plane-space axis `(x0, y0) → (x1, y1)`.
+fn apply_gradient(
+    engine: &mut DarklyEngine,
+    layer_id: LayerId,
+    (x0, y0): (f32, f32),
+    (x1, y1): (f32, f32),
+    c0: [u8; 4],
+    c1: [u8; 4],
+) {
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(StrokeOp::LinearGradient {
+        x0,
+        y0,
+        x1,
+        y1,
+        r0: c0[0],
+        g0: c0[1],
+        b0: c0[2],
+        a0: c0[3],
+        r1: c1[0],
+        g1: c1[1],
+        b1: c1[2],
+        a1: c1[3],
+    });
+    engine.end_stroke();
+}
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+/// GRADIENT-EXTENT regression (the reported bug): after growing the canvas, a
+/// gradient must fill the **new** canvas window, not the old one.
+///
+/// `resize_canvas` is document-only: layer textures are plane-anchored and stay
+/// at whatever extent they were allocated with, which for a layer created before
+/// the resize is the *pre-resize canvas rect*. The gradient took its quad from
+/// that texture extent instead of `doc.canvas_rect()`, so it reproduced the old
+/// canvas exactly. Fixing it needs both halves: the op has to be handed the
+/// canvas rect, and the layer has to grow to cover it (a generative op
+/// manufactures pixels where the layer had none).
+#[test]
+fn gradient_covers_the_grown_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    assert_eq!(
+        engine.test_node_extent(layer_id),
+        CanvasRect::from_xywh(0, 0, w, h),
+        "a fresh layer is allocated at the canvas rect; test premise"
+    );
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 96));
+
+    apply_gradient(&mut engine, layer_id, (0.0, 48.0), (128.0, 48.0), RED, BLUE);
+
+    // Assert the extent first: a layer that never grew makes every pixel probe
+    // below an out-of-bounds index rather than a legible failure.
+    let ext = engine.test_node_extent(layer_id);
+    assert!(
+        ext.contains(engine.canvas_rect()),
+        "the gradient must grow its target to cover the canvas {:?}; extent is {ext:?}",
+        engine.canvas_rect()
+    );
+
+    let px = engine.test_readback_layer(layer_id);
+    assert!(
+        alpha_at_plane(&px, ext, 100, 80) > 0,
+        "the canvas area exposed by the resize must receive paint"
+    );
+    assert!(
+        alpha_at_plane(&px, ext, 2, 2) > 0,
+        "the pre-resize canvas area must still receive paint"
+    );
+
+    // The axis spans the NEW canvas: near-red at its left edge, near-blue at its
+    // right. A gradient stretched over the old 64-wide rect would already be
+    // fully blue by x=63.
+    assert!(
+        channel_at_plane(&px, ext, 2, 48, 0) > 150 && channel_at_plane(&px, ext, 2, 48, 2) < 100,
+        "left edge of the new canvas should be near the start color"
+    );
+    assert!(
+        channel_at_plane(&px, ext, 125, 48, 2) > 150
+            && channel_at_plane(&px, ext, 125, 48, 0) < 100,
+        "right edge of the new canvas should be near the end color"
+    );
+}
+
+/// GRADIENT-EXTENT regression, converse direction: after a crop, a gradient must
+/// not paint **outside** the canvas window.
+///
+/// A layer texture is routinely larger than the canvas (after a crop, a paste of
+/// an oversized image, or brush growth's 256px chunk rounding). Deriving the quad
+/// from the texture extent deposited paint on off-window plane pixels, which
+/// survive in the document and resurface on un-crop or export. Uses a NON-ZERO
+/// `canvas_origin`: a fix that used `from_xywh(0, 0, w, h)` would pass the grow
+/// case and fail here.
+#[test]
+fn gradient_does_not_paint_outside_the_cropped_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.resize_canvas(CanvasRect::from_xywh(16, 16, 32, 32));
+
+    apply_gradient(&mut engine, layer_id, (16.0, 16.0), (48.0, 16.0), RED, BLUE);
+
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+
+    assert!(
+        alpha_at_plane(&px, ext, 20, 20) > 0,
+        "a plane pixel inside the canvas window must be painted"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 4, 4),
+        0,
+        "a plane pixel before the window origin must stay untouched"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 60, 60),
+        0,
+        "a plane pixel past the window's far edge must stay untouched"
+    );
+}
+
+/// GRADIENT-SELECTION regression: a gradient must respect the active marquee.
+///
+/// The engine passed `None` for the selection bind group, so the op fell back to
+/// the 1x1 all-white default selection texture and painted straight through the
+/// marquee, unlike every other paint path.
+#[test]
+fn gradient_respects_the_active_selection() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Left half of the canvas.
+    engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
+
+    apply_gradient(
+        &mut engine,
+        layer_id,
+        (0.0, 32.0),
+        (w as f32, 32.0),
+        RED,
+        BLUE,
+    );
+
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+
+    assert!(
+        alpha_at_plane(&px, ext, 10, 32) > 0,
+        "a selected pixel must be painted"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 50, 32),
+        0,
+        "an unselected pixel must be left untouched (the shader multiplies alpha \
+         by selection coverage, so masked-out fragments composite as a no-op)"
+    );
+}
+
+/// Undo across the growth a gradient triggers restores the pre-stroke pixels,
+/// including in the area the layer did not cover before the op. Guards the
+/// ordering the fix depends on: growth happens *before* the lazy scratch
+/// snapshot, so the snapshot spans the grown extent and records the newly
+/// allocated pixels' transparent fill as their pre-stroke value.
+#[test]
+fn gradient_after_resize_undo_restores_pixels() {
+    let mut engine = test_engine(64, 64);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.resize_canvas(CanvasRect::from_xywh(0, 0, 128, 96));
+    apply_gradient(&mut engine, layer_id, (0.0, 48.0), (128.0, 48.0), RED, BLUE);
+    for _ in 0..4 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    engine.undo();
+    for _ in 0..4 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+    }
+
+    // Growth itself is not undone (there is no bounds-undo op, matching brush
+    // growth), so the extent stays and the assertion is about pixels.
+    let ext = engine.test_node_extent(layer_id);
+    let px = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        alpha_at_plane(&px, ext, 100, 80),
+        0,
+        "undo must clear paint from the area the gradient grew into"
+    );
+    assert_eq!(
+        alpha_at_plane(&px, ext, 2, 2),
+        0,
+        "undo must clear paint from the originally-covered area"
+    );
+}
+
+/// A gradient while mask-editing covers the canvas, even when the host layer is
+/// smaller than it. `grow_filter`'s contract is that a filter grows itself "fully
+/// decoupled from its host", which is already how a brush stroke on a mask
+/// behaves; the gradient follows the same rule rather than clamping to the host.
+#[test]
+fn gradient_on_a_mask_covers_the_canvas() {
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+
+    // Host is a 16x16 paste-extent layer: far smaller than the canvas.
+    let rgba = vec![255u8; 16 * 16 * 4];
+    let host = engine.paste_image(16, 16, &rgba, 0, 0, None);
+    engine.add_mask(host).expect("add mask");
+    let mask = engine.test_mask_id(host).expect("host has a mask filter");
+
+    // Black to white across the full canvas width: a fresh mask is uniform, so
+    // both ends of the axis are distinguishable from the initial value.
+    apply_gradient(
+        &mut engine,
+        mask,
+        (0.0, 32.0),
+        (w as f32, 32.0),
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+    );
+
+    let ext = engine.test_node_extent(mask);
+    assert!(
+        ext.contains(engine.canvas_rect()),
+        "a gradient on a mask must grow it to the canvas {:?}; extent is {ext:?}",
+        engine.canvas_rect()
+    );
+
+    // R8: one byte per pixel, indexed through the mask's own extent.
+    let px = engine.test_readback_mask(host);
+    let stride = ext.width as usize;
+    let at = |x: i32, y: i32| px[(y - ext.y0()) as usize * stride + (x - ext.x0()) as usize];
+    assert!(
+        at(2, 32) < 60,
+        "mask start of the axis should be near black, got {}",
+        at(2, 32)
+    );
+    assert!(
+        at(60, 32) > 195,
+        "mask end of the axis, well outside the 16x16 host, should be near white, got {}",
+        at(60, 32)
+    );
+}
+
 /// MARQUEE regression: a selection made before a crop must keep masking the
 /// **same plane pixels** afterward. This exercises the selection-mask
 /// re-realization (overlap copy preserving the plane anchor) and the brush
@@ -62,7 +332,7 @@ fn marquee_selection_masks_same_plane_pixels_after_crop() {
     // Select a vertical band: plane x in [8, 32), full height.
     engine.select_rect(8.0, 0.0, 24.0, h as f32, SelectionMode::Replace, false, 0.0);
 
-    // Crop to a window anchored at plane (8, 0), size 40×64 — a NON-ZERO
+    // Crop to a window anchored at plane (8, 0), size 40×64: a NON-ZERO
     // origin. The selection band [8, 32) sits fully inside this window.
     engine.resize_canvas(CanvasRect::from_xywh(8, 0, 40, h));
     assert_eq!(engine.canvas_rect().origin, CanvasPoint::new(8, 0));
@@ -85,7 +355,7 @@ fn marquee_selection_masks_same_plane_pixels_after_crop() {
     );
 }
 
-/// Crop moves the canvas window and preserves off-window layer pixels — the
+/// Crop moves the canvas window and preserves off-window layer pixels: the
 /// raster layer keeps its full plane extent; only display/export is clipped.
 #[test]
 fn crop_preserves_off_window_layer_pixels() {
@@ -131,7 +401,7 @@ fn resize_canvas_undo_restores_window() {
 
 /// RECT-RESIZE regression: the interactive resize preview drives the canvas
 /// window as an explicit plane-space rect (WASM `resize_canvas_rect`), which can
-/// express a **pure translation** — same size, shifted origin. The retired
+/// express a **pure translation**: same size, shifted origin. The retired
 /// anchor-only path could not (a zero size-delta forced a zero offset). Moving
 /// the window without resizing must land the origin exactly and undo cleanly.
 #[test]
@@ -151,7 +421,7 @@ fn resize_canvas_pure_translation_moves_window_and_undoes() {
 /// PRESENT-PATH regression: the cached view transform embeds the canvas
 /// dimensions (`canvas_w/h` as the present shader's sampling-normalization +
 /// the canvas center). A resize/crop changes the dims but is otherwise
-/// document-only, so the view matrix must be **rebuilt** to match — otherwise
+/// document-only, so the view matrix must be **rebuilt** to match; otherwise
 /// the present pass samples the new-size composite through a stale-dim matrix
 /// and the image shows stretched/offset until the next pointer event re-pushes
 /// the view (the reported "glitch that heals on interaction" / "stretched
@@ -160,7 +430,7 @@ fn resize_canvas_pure_translation_moves_window_and_undoes() {
 /// `screen_to_plane` reads the same cached `view_transform` the present pass
 /// consumes, so probing it is the present-path invariant without GPU-readback
 /// flakiness. With an identity-fit view (pan 0, zoom 1), the screen center
-/// resolves to the canvas center `(canvas_w/2, canvas_h/2)` — which tracks the
+/// resolves to the canvas center `(canvas_w/2, canvas_h/2)`, which tracks the
 /// matrix's embedded dims.
 #[test]
 fn resize_rebuilds_view_transform_for_new_dims() {
@@ -191,7 +461,7 @@ fn resize_rebuilds_view_transform_for_new_dims() {
         "screen center must map to the NEW canvas center y (48) after resize, got {cy1}"
     );
 
-    // Undo reconciles dims back to 64×64 via the same chokepoint — the view
+    // Undo reconciles dims back to 64×64 via the same chokepoint: the view
     // matrix must rebuild on undo too (bug #3: undo restores dims but shows
     // stretched).
     engine.undo();
@@ -232,7 +502,7 @@ fn screen_to_plane_includes_canvas_origin() {
 }
 
 /// Bounding box of all marching-ants (`KIND_DASHED_LINE`, `FLAG_CANVAS_SPACE`)
-/// vertices — returned as a plane-space `(min_x, min_y, max_x, max_y)`.
+/// vertices, returned as a plane-space `(min_x, min_y, max_x, max_y)`.
 fn ants_bbox(prims: &[OverlayPrimitive]) -> (f32, f32, f32, f32) {
     let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     let mut found = false;
@@ -256,7 +526,7 @@ fn ants_bbox(prims: &[OverlayPrimitive]) -> (f32, f32, f32, f32) {
 /// (`FLAG_CANVAS_SPACE`) overlay primitives, but the contours are extracted from
 /// the **window-local** selection texture. Without lifting them by `canvas_origin`
 /// the ants render short of the selection by the crop offset. After a non-zero
-/// crop the ant bbox must coincide with the selection's **plane** rect — not its
+/// crop the ant bbox must coincide with the selection's **plane** rect, not its
 /// window-local rect.
 #[test]
 fn marching_ants_track_selection_plane_bounds_after_crop() {
@@ -317,7 +587,7 @@ fn transform_from_selection_uses_plane_source_origin() {
 }
 
 /// TRANSFORM-PREVIEW regression: entering a transform with the identity matrix
-/// is a visual no-op — the live target was only copied out, then re-stamped in
+/// is a visual no-op: the live target was only copied out, then re-stamped in
 /// the same place. After a non-zero crop the preview is built on a window-sized
 /// texture; if its copy/target frames disagree with where the host composites it
 /// (`layer_offset = canvas_origin`), the content jumps by the crop offset on
@@ -350,7 +620,7 @@ fn transform_preview_matches_pretransform_present_after_crop() {
     assert!(
         (px - bx).abs() <= 2.0 && (py - by).abs() <= 2.0,
         "identity-transform preview moved the content: baseline centroid ({bx:.1}, {by:.1}) \
-         vs preview ({px:.1}, {py:.1}) — a `canvas_origin` shift in the floating preview frame"
+         vs preview ({px:.1}, {py:.1}): a `canvas_origin` shift in the floating preview frame"
     );
 }
 
@@ -412,18 +682,20 @@ fn copy_selection_after_crop_extracts_plane_pixels_and_offset() {
     }
     let export = export.expect("copy readback should complete");
 
-    // Clipboard offset is the PLANE position of the selection (30, 28) — not the
+    // Clipboard offset is the PLANE position of the selection (30, 28), not the
     // window-local (14, 16) the pre-fix code produced.
     assert_eq!(
         (export.offset_x, export.offset_y),
         (30, 28),
         "clipboard offset must be the selection's plane position"
     );
-    // And the extracted pixels are the red square — proving the layer read came
+    // And the extracted pixels are the red square, proving the layer read came
     // from the right plane location, not from the empty (14, 16) region.
     let any_red = export
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|p| p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] > 200);
     assert!(
         any_red,
@@ -457,7 +729,7 @@ fn identity_transform_with_selection_preserves_content_after_crop() {
     // Crop to a NON-ZERO origin window (24, 16) that contains the square.
     engine.resize_canvas(CanvasRect::from_xywh(24, 16, 48, 48));
 
-    // Select the square (plane coords) and run an IDENTITY transform — a no-op
+    // Select the square (plane coords) and run an IDENTITY transform: a no-op
     // that must leave the content exactly where it was.
     engine.select_rect(40.0, 32.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
     assert!(engine.begin_transform(layer_id), "transform should set up");
@@ -478,7 +750,7 @@ fn identity_transform_with_selection_preserves_content_after_crop() {
 /// `screenToCanvas`). The merged composite is window-local, so a merged pick must
 /// sample `plane − canvas_origin`. The pre-fix code sampled the composite at the
 /// raw plane texel (and bounds-checked plane against the window size), so after a
-/// crop a merged pick read the wrong pixel — or fell outside the window and
+/// crop a merged pick read the wrong pixel, or fell outside the window and
 /// returned black.
 #[test]
 fn pick_color_merged_reads_plane_pixel_after_crop() {
@@ -489,7 +761,7 @@ fn pick_color_merged_reads_plane_pixel_after_crop() {
 
     // Full-canvas layer: red everywhere, with a distinct green 4×4 at plane (40, 40).
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[200, 0, 0, 255]);
     }
     for y in 40..44 {
@@ -581,11 +853,11 @@ fn crop_to_selection_matches_selection_bounds() {
 
 /// Paint a red `+` into `layer`: a horizontal and a vertical arm of equal plane
 /// length `2*arm`, crossing at plane (cx, cy). The presented width vs height of
-/// the red is a brush-size-independent probe of per-axis scale — an isotropic
+/// the red is a brush-size-independent probe of per-axis scale: an isotropic
 /// present yields equal arms, an anisotropic (squashed) present unequal arms.
 fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, arm: f32) {
     for horizontal in [true, false] {
-        engine.begin_stroke(layer_id);
+        engine.begin_stroke(layer_id).unwrap();
         let steps = 48;
         for i in 0..=steps {
             let t = i as f32 / steps as f32;
@@ -671,7 +943,7 @@ fn presented_cross_ratio(crop: Option<CanvasRect>) -> f32 {
 /// REGRESSION (Round 1-3 squash, "even the dabs are squashed sidewise"):
 /// cropping to a non-zero origin with a changed aspect ratio must NOT
 /// anisotropically squash the presented image. Probed via the PRODUCTION view
-/// transform (`test_readback_viewport`) — the identity / composite-cache /
+/// transform (`test_readback_viewport`): the identity / composite-cache /
 /// layer readbacks are all blind to this (they showed false-green for two
 /// fix rounds).
 #[test]
@@ -688,7 +960,7 @@ fn crop_does_not_anisotropically_squash_presented_content() {
     );
 }
 
-/// REGRESSION: the squash must not COMPOUND across successive crops (the user
+/// REGRESSION: the squash must not COMPOUND across successive crops (the artist
 /// reports each resize/crop "progressively fucks up the situation even more").
 #[test]
 fn successive_crops_do_not_compound_squash() {
@@ -709,5 +981,163 @@ fn successive_crops_do_not_compound_squash() {
     assert!(
         (one / uncropped - 1.0).abs() < 0.08 && (two / uncropped - 1.0).abs() < 0.08,
         "squash compounds across crops: uncropped {uncropped:.3}, 1 crop {one:.3}, 2 crops {two:.3}"
+    );
+}
+
+/// REGRESSION: a present dropped by a `Lost`/`Outdated` surface acquire must
+/// keep the frame loop alive. On resize, the compositor's acquire can return
+/// `Outdated`; that path reconfigures the surface and returns *without*
+/// presenting, leaving `needs_present` set. If `render`'s returned `needs_more`
+/// ignores that pending present, JS never reschedules and the reconfigured
+/// surface never gets a real frame: a stale/frozen canvas. `needs_more` must
+/// therefore surface `compositor.needs_present()`.
+#[test]
+fn dropped_present_keeps_requesting_frames() {
+    let mut engine = test_engine(64, 64);
+
+    // Drain startup async work (thumbnail readbacks, etc.), then clear the
+    // pending-present flag so the baseline is genuinely quiescent; headless
+    // renders never reach `finish_present`, so `needs_present` would otherwise
+    // stay stuck set from engine setup.
+    for _ in 0..8 {
+        engine.render(0.0);
+    }
+    engine.test_clear_needs_present();
+    assert!(
+        !engine.test_frame_needs_more(),
+        "engine did not settle to quiescence; test baseline is unreliable"
+    );
+
+    // Mimic the compositor's `Lost`/`Outdated` early-return: a present is owed
+    // but was dropped without `finish_present` clearing the flag.
+    engine.test_mark_needs_present();
+
+    assert!(
+        engine.test_frame_needs_more(),
+        "a pending present must keep the frame loop alive so the dropped frame reschedules"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Effect-instance invalidation. An instance's bind groups point at the pair it
+// was prepared against: a group accumulator in canvas space, the run's
+// ping-pong in screen space. Both are replaced under it: the canvas rect
+// recreates every accumulator, and a viewport resize recreates the run's
+// textures, which `set_canvas_rect` never touches. A missed invalidation leaves
+// a bind group pointing at a freed texture.
+// ---------------------------------------------------------------------------
+
+/// Add an effect layer at the top of the stack.
+fn effect_layer(engine: &mut DarklyEngine, pipeline: &str) -> LayerId {
+    let defaults: Vec<_> = engine
+        .filter_param_defs(pipeline)
+        .iter()
+        .map(darkly::gpu::params::ParamDef::default_value)
+        .collect();
+    engine
+        .add_filter_layer(pipeline, defaults, None)
+        .expect("effect layer is addable")
+}
+
+fn fill(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+}
+
+fn rgba_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * w + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+}
+
+/// A canvas-space effect layer keeps working after the canvas rect moves.
+#[test]
+fn effect_layer_survives_canvas_resize() {
+    let mut engine = test_engine(16, 16);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), 16, 8, 8),
+        [0, 255, 255, 255],
+        "baseline: the effect inverts before the resize"
+    );
+
+    engine.resize_canvas(CanvasRect::new(CanvasPoint::new(0, 0), 32, 32));
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), 32, 4, 4),
+        [0, 255, 255, 255],
+        "the effect must still invert against the recreated accumulators"
+    );
+}
+
+/// Moving an effect across the divider re-prepares it against the other
+/// space's pair: the second invalidation trigger, and the one no canvas-rect
+/// change can stand in for.
+#[test]
+fn effect_layer_survives_crossing_the_divider() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+
+    engine.test_set_screen_space_boundary(1);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let screen = engine.test_readback_screen_run(cw, ch);
+    assert_eq!(
+        rgba_at(&screen, cw, 8, 8),
+        [0, 255, 255, 255],
+        "prepared against the run's pair"
+    );
+
+    engine.test_set_screen_space_boundary(0);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    assert_eq!(
+        rgba_at(&engine.test_readback_canvas(), cw, 8, 8),
+        [0, 255, 255, 255],
+        "and re-prepared against the accumulator on the way back"
+    );
+}
+
+/// A viewport resize replaces the run's textures. `set_canvas_rect` does not
+/// touch them, so this is the one invalidation trigger the canvas-rect path
+/// cannot cover.
+#[test]
+fn screen_space_effect_survives_viewport_resize() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let red = engine.add_raster_layer(None);
+    fill(&mut engine, red, 255, 0, 0);
+    let _inv = effect_layer(&mut engine, "invert");
+    engine.test_set_screen_space_boundary(1);
+
+    let first = engine.test_readback_screen_run(cw, ch);
+    assert_eq!(rgba_at(&first, cw, 8, 8), [0, 255, 255, 255]);
+
+    // A second read at a different size forces the run's textures to be
+    // recreated between the two.
+    let grown = engine.test_readback_screen_run(cw * 2, ch * 2);
+    assert_eq!(
+        rgba_at(&grown, cw * 2, 8, 8),
+        [0, 255, 255, 255],
+        "the instance must be rebuilt against the resized run textures"
     );
 }

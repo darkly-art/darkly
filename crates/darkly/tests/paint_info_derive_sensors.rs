@@ -3,7 +3,7 @@
 //! calls this every pointer event with the chord between the previous
 //! and current hover positions. Coalesced events can land at the same
 //! coordinates, which used to make `atan2(0, 0) = 0` snap drawing_angle
-//! to 0 for that frame — flickering the hover cursor between the real
+//! to 0 for that frame, flickering the hover cursor between the real
 //! direction and 0° on alternating events.
 //!
 //! `derive_sensors` now preserves the previous sample's `drawing_angle`
@@ -21,7 +21,7 @@ fn zero_delta_preserves_drawing_angle() {
     prev.drawing_angle = 0.7;
 
     let mut cur = PaintInformation {
-        pos: prev.pos, // identical position — chord = 0
+        pos: prev.pos, // identical position, chord = 0
         ..Default::default()
     };
     cur.derive_sensors(Some(&prev), 0.0);
@@ -64,6 +64,6 @@ fn first_point_leaves_drawing_angle_at_default() {
 
     assert_eq!(
         cur.drawing_angle, 0.0,
-        "first point has no segment — drawing_angle stays at its default 0",
+        "first point has no segment, so drawing_angle stays at its default 0",
     );
 }

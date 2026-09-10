@@ -2,7 +2,7 @@
 // and composite onto a layer/mask texture with shader-side Porter-Duff.
 //
 // The inverse matrix maps destination (canvas-local) coordinates back to
-// source pixels with a per-pixel perspective divide — the same dst→src inverse
+// source pixels with a per-pixel perspective divide, the same dst→src inverse
 // mapping Krita (kis_perspectivetransform_worker) and GIMP (gimpdrawable-
 // transform) use. Affine is the special case `inv_row2 == [0, 0, 1]`, so the
 // one shader subsumes both basic and perspective transforms.
@@ -47,13 +47,13 @@ struct Uniforms {
     canvas_size: vec2f,
     opacity: f32,
     // Format flag: 0.0 = RGBA passthrough, 1.0 = R8 (output the R channel
-    // straight — see the fix in fs_main).
+    // straight; see the fix in fs_main).
     is_r8: f32,
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
 @group(0) @binding(3) var t_coverage: texture_2d<f32>;
 
-// Destination copy (straight alpha) — for shader-side Porter-Duff.
+// Destination copy (straight alpha) for shader-side Porter-Duff.
 @group(1) @binding(0) var t_dest: texture_2d<f32>;
 
 struct SourceSample {
@@ -106,7 +106,7 @@ fn sample_src(local: vec2f) -> SourceSample {
         discard;
     }
 
-    // Read destination (straight alpha — the layer's existing pixels).
+    // Read destination (straight alpha, the layer's existing pixels).
     let bg = textureLoad(t_dest, vec2i(in.position.xy), 0);
 
     if (u.is_r8 > 0.5) {

@@ -4,7 +4,7 @@ name: Publish to crates.io
 # when a `v*` tag is pushed. The tag is the version source of truth (the same
 # tags build.rs bakes into DARKLY_VERSION); the versions in the crates' Cargo.toml
 # are vestigial and overwritten here. Both crates are published at the same
-# version — `darkly` pins `darkly-macros` from its path dependency, so they move
+# version: `darkly` pins `darkly-macros` from its path dependency, so they move
 # in lockstep and `darkly-macros` must go up first.
 on:
   push:

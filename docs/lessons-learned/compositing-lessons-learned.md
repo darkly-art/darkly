@@ -7,16 +7,16 @@
 **Root cause**: The selection-coverage copy path in `ImageClip::from_layer` (`clipboard.rs`) scaled both RGB and alpha by coverage, producing premultiplied pixel values that were stored into the straight-alpha tile grid:
 
 ```rust
-// Bug: scales RGB by coverage — produces premultiplied output
+// Bug: scales RGB by coverage, producing premultiplied output
 let a = (pixel[3] as f32 * coverage).round() as u8;
 let ratio = a as f32 / pixel[3] as f32;  // ≈ coverage
 out[0] = (pixel[0] as f32 * ratio).round() as u8;
 out[3] = a;
 ```
 
-For `[255, 0, 0, 255]` at 50% coverage this produced `[128, 0, 0, 128]`. As premultiplied that's correct (full red at half opacity). But stored as straight alpha, the compositor reads it as color=128, alpha=0.5 — dark red at half opacity. The correct straight-alpha result is `[255, 0, 0, 128]`.
+For `[255, 0, 0, 255]` at 50% coverage this produced `[128, 0, 0, 128]`. As premultiplied that's correct (full red at half opacity). But stored as straight alpha, the compositor reads it as color=128, alpha=0.5: dark red at half opacity. The correct straight-alpha result is `[255, 0, 0, 128]`.
 
-**Why it was hard to find**: The bug was in the copy path, but the symptom appeared during transform/paste. The darkened pixels looked identical to what you'd expect from a compositing or interpolation error, so every debugging session focused on the transform and compositor pipelines — which were all correct. The key clue was that pure transforms (no copy/paste) didn't produce the fringe.
+**Why it was hard to find**: The bug was in the copy path, but the symptom appeared during transform/paste. The darkened pixels looked identical to what you'd expect from a compositing or interpolation error, so every debugging session focused on the transform and compositor pipelines, which were all correct. The key clue was that pure transforms (no copy/paste) didn't produce the fringe.
 
 **Fix**: In straight alpha, coverage scaling only affects the alpha channel. The RGB channels are the actual color and don't change:
 
@@ -26,15 +26,15 @@ new_straight_R = (R · α · coverage) / (α · coverage) = R
 
 Just copy RGB through, scale only alpha.
 
-**Takeaway**: When manipulating pixel alpha in a straight-alpha pipeline, never touch the RGB channels. The color is the color — alpha is a separate, independent quantity. If you find yourself multiplying RGB by an alpha-related factor and storing the result as straight alpha, you're producing premultiplied values in a straight-alpha container. This is the single most common alpha compositing bug and it's invisible until something downstream reveals it (blending, interpolation, repeated operations).
+**Takeaway**: When manipulating pixel alpha in a straight-alpha pipeline, never touch the RGB channels. The color is the color; alpha is a separate, independent quantity. If you find yourself multiplying RGB by an alpha-related factor and storing the result as straight alpha, you're producing premultiplied values in a straight-alpha container. This is the single most common alpha compositing bug and it's invisible until something downstream reveals it (blending, interpolation, repeated operations).
 
-**Corollary — GPU blend states**: This same bug appears in hardware blend configuration. A blend state with `color.dst_factor = SrcAlpha` does `dst.rgb *= src.a` — the blend-state equivalent of `pixel.rgb *= coverage`. For straight-alpha targets, the color blend component must use `dst_factor = One` to preserve RGB; only the alpha blend component should use `SrcAlpha` or `OneMinusSrcAlpha`. This is easy to miss because blend states feel like a different domain than per-pixel math, but the alpha semantics are identical. The GPU cut/copy mask multiply had this exact bug: `blend_mask_multiply` used `SrcAlpha` for both color and alpha components, darkening extracted and erased content at feathered selection edges.
+**Corollary (GPU blend states)**: This same bug appears in hardware blend configuration. A blend state with `color.dst_factor = SrcAlpha` does `dst.rgb *= src.a`: the blend-state equivalent of `pixel.rgb *= coverage`. For straight-alpha targets, the color blend component must use `dst_factor = One` to preserve RGB; only the alpha blend component should use `SrcAlpha` or `OneMinusSrcAlpha`. This is easy to miss because blend states feel like a different domain than per-pixel math, but the alpha semantics are identical. The GPU cut/copy mask multiply had this exact bug: `blend_mask_multiply` used `SrcAlpha` for both color and alpha components, darkening extracted and erased content at feathered selection edges.
 
 ## 2. Premultiplied interpolation for GPU texture sampling
 
-**Problem**: Hardware bilinear filtering on `Rgba8Unorm` textures operates in straight-alpha space by default. At content edges (opaque pixel adjacent to transparent-black), interpolating `[255, 0, 0, 255]` with `[0, 0, 0, 0]` at 50% gives `[128, 0, 0, 128]` — which in straight alpha means dark red at half opacity, not bright red at half opacity. This is the classic "dark halo" artifact.
+**Problem**: Hardware bilinear filtering on `Rgba8Unorm` textures operates in straight-alpha space by default. At content edges (opaque pixel adjacent to transparent-black), interpolating `[255, 0, 0, 255]` with `[0, 0, 0, 0]` at 50% gives `[128, 0, 0, 128]`, which in straight alpha means dark red at half opacity, not bright red at half opacity. This is the classic "dark halo" artifact.
 
-**Fix**: Upload source texture data as premultiplied (multiply RGB by alpha before `write_texture`), and adjust the shader to treat sampled values as premultiplied in the blend formula. The CPU bilinear sampler already did this correctly — the GPU path needed to match.
+**Fix**: Upload source texture data as premultiplied (multiply RGB by alpha before `write_texture`), and adjust the shader to treat sampled values as premultiplied in the blend formula. The CPU bilinear sampler already did this correctly; the GPU path needed to match.
 
 **Takeaway**: Any time you sample a texture with hardware bilinear filtering and the texture contains transparency boundaries, either upload as premultiplied or use a premultiplied texture format. Straight-alpha + linear filtering = dark halos. This applies to transform previews, texture atlases with transparent regions, and any filtered sampling near alpha edges.
 
@@ -65,16 +65,16 @@ Common errors:
 
 **Problem**: GPU brush dabs had visible dark outlines, especially on transparent canvas regions. A white brush stroke appeared with grey edges. The dab texture was correctly stored as premultiplied (per lesson #2), but the dark fringe persisted.
 
-**Root cause**: Hardware alpha blending — both `SrcAlpha/OneMinusSrcAlpha` (straight source) and `One/OneMinusSrcAlpha` (premultiplied source) — inherently produces premultiplied output. The blend equation is:
+**Root cause**: Hardware alpha blending, both `SrcAlpha/OneMinusSrcAlpha` (straight source) and `One/OneMinusSrcAlpha` (premultiplied source), inherently produces premultiplied output. The blend equation is:
 
 ```
 out.rgb = src_color * src_alpha + dst.rgb * (1 - src_alpha)
 out.a   = src_alpha + dst.a * (1 - src_alpha)
 ```
 
-On a transparent canvas `(0, 0, 0, 0)`, painting white at α=0.5 stores `(0.5, 0.5, 0.5, 0.5)`. The compositor reads layer textures as straight alpha, so it interprets the color as grey — not white at half opacity. The correct straight-alpha value is `(1.0, 1.0, 1.0, 0.5)`.
+On a transparent canvas `(0, 0, 0, 0)`, painting white at α=0.5 stores `(0.5, 0.5, 0.5, 0.5)`. The compositor reads layer textures as straight alpha, so it interprets the color as grey, not white at half opacity. The correct straight-alpha value is `(1.0, 1.0, 1.0, 0.5)`.
 
-This is invisible at full opacity (premultiplied = straight when α=1) and on fully opaque backgrounds (the RGB just works out). It's only visible in the soft-edge region of dabs on transparent or partially transparent canvas — exactly where it manifests as a dark outline.
+This is invisible at full opacity (premultiplied = straight when α=1) and on fully opaque backgrounds (the RGB just works out). It's only visible in the soft-edge region of dabs on transparent or partially transparent canvas: exactly where it manifests as a dark outline.
 
 The existing paint pipeline (`paint_circle.wgsl`) has the same theoretical issue, but its 1px softness edge makes it imperceptible. The brush system has wide softness (up to half the dab radius), making the artifact very visible.
 
@@ -84,12 +84,12 @@ The existing paint pipeline (`paint_circle.wgsl`) has the same theoretical issue
 out.rgb = (fg.a * fg.rgb + (1-fg.a) * bg.a * bg.rgb) / out_a
 ```
 
-Fixed-function blend hardware can only do `A*src + B*dst` — no division, no access to the result alpha. Straight-alpha compositing is fundamentally impossible with a single hardware-blended render pass.
+Fixed-function blend hardware can only do `A*src + B*dst`: no division, no access to the result alpha. Straight-alpha compositing is fundamentally impossible with a single hardware-blended render pass.
 
-**Fix — shader-side Porter-Duff with canvas copy**: Before the composite render pass, `copy_texture_to_texture` copies the dab's bounding rect from the canvas layer to a pre-allocated 512×512 temp texture (`canvas_copy_texture` in `BrushPipelines`). The composite shader then:
+**Fix (shader-side Porter-Duff with canvas copy)**: Before the composite render pass, `copy_texture_to_texture` copies the dab's bounding rect from the canvas layer to a pre-allocated 512×512 temp texture (`canvas_copy_texture` in `BrushPipelines`). The composite shader then:
 
-1. Samples the dab texture (premultiplied — correct for bilinear filtering, per lesson #2)
-2. Samples the canvas copy (straight alpha — the existing layer data)
+1. Samples the dab texture (premultiplied: correct for bilinear filtering, per lesson #2)
+2. Samples the canvas copy (straight alpha: the existing layer data)
 3. Computes Porter-Duff source-over manually in the shader (premultiplied fg, straight bg → straight output)
 4. Outputs with **REPLACE** blend (no hardware alpha blending)
 
@@ -99,7 +99,7 @@ This produces correct straight-alpha values in the canvas layer. The GPU copy is
 
 ## 5. REPLACE blend + shared uniforms = one submit per dab
 
-**Problem**: Brush strokes showed square artifacts at fast stroke speeds. The artifacts were position-dependent — dabs appeared to jump or composite at wrong locations.
+**Problem**: Brush strokes showed square artifacts at fast stroke speeds. The artifacts were position-dependent: dabs appeared to jump or composite at wrong locations.
 
 **Root cause**: `queue.write_buffer()` in wgpu stages buffer writes that execute *before* the next `queue.submit()`, not inline with the command encoder. When multiple dabs were recorded into a single command encoder and submitted together, all `write_buffer` calls for uniform data were batched and only the last write survived:
 
@@ -114,15 +114,15 @@ submit(encoder)
   → GPU sees: write dab_2_data, then runs all 4 passes with dab_2_data
 ```
 
-All render passes used the last dab's position, UV mapping, and canvas copy region. With the old hardware alpha blending this was mostly invisible (each dab just accumulated onto the canvas at slightly wrong positions). With REPLACE blend, it was catastrophic — each pass overwrote the canvas with data computed from wrong uniforms, producing visible rectangular artifacts.
+All render passes used the last dab's position, UV mapping, and canvas copy region. With the old hardware alpha blending this was mostly invisible (each dab just accumulated onto the canvas at slightly wrong positions). With REPLACE blend, it was catastrophic: each pass overwrote the canvas with data computed from wrong uniforms, producing visible rectangular artifacts.
 
-**Why it wasn't caught earlier**: Before the shader-side Porter-Duff fix (lesson #4), the composite pass used hardware alpha blending (`SrcAlpha`). Incorrect uniform data still produced roughly correct results because alpha blending is additive — painting the same dab twice at the wrong position just made it slightly brighter/shifted, not destructively wrong. REPLACE blend has no such forgiveness: wrong data overwrites correct data completely.
+**Why it wasn't caught earlier**: Before the shader-side Porter-Duff fix (lesson #4), the composite pass used hardware alpha blending (`SrcAlpha`). Incorrect uniform data still produced roughly correct results because alpha blending is additive: painting the same dab twice at the wrong position just made it slightly brighter/shifted, not destructively wrong. REPLACE blend has no such forgiveness: wrong data overwrites correct data completely.
 
-The full-screen triangle trick (vertices at unit coords (0,0), (2,0), (0,2)) also contributed: the triangle extends 2× beyond the intended quad, so fragments outside the quad read stale data from the canvas copy texture and overwrote the canvas. The fix was to use a proper 6-vertex quad (two triangles) instead of the oversized triangle — the geometry now covers exactly the intended region.
+The full-screen triangle trick (vertices at unit coords (0,0), (2,0), (0,2)) also contributed: the triangle extends 2× beyond the intended quad, so fragments outside the quad read stale data from the canvas copy texture and overwrote the canvas. The fix was to use a proper 6-vertex quad (two triangles) instead of the oversized triangle: the geometry now covers exactly the intended region.
 
 **Fix**: Two changes:
 
-1. **Proper quad geometry**: Replace the full-screen triangle trick with a 6-vertex quad (two triangles at unit corners (0,0), (1,0), (0,1), (1,1)). The rendered region now matches the intended composite area exactly. This is better than a scissor rect because future effects (e.g. liquify) may legitimately need a larger output region — the quad and canvas copy should grow together, not be artificially clipped.
+1. **Proper quad geometry**: Replace the full-screen triangle trick with a 6-vertex quad (two triangles at unit corners (0,0), (1,0), (0,1), (1,1)). The rendered region now matches the intended composite area exactly. This is better than a scissor rect because future effects (e.g. liquify) may legitimately need a larger output region; the quad and canvas copy should grow together, not be artificially clipped.
 
 2. **Per-dab submit**: `BrushGpuContext::submit_and_reset()` finishes the current encoder, submits it, and creates a fresh encoder. Called after each dab in `place_dab()`. This ensures each dab's `write_buffer` uniforms are consumed by `submit()` before the next dab overwrites them.
 
@@ -136,13 +136,13 @@ pub fn submit_and_reset(&mut self) {
 }
 ```
 
-**Takeaway**: `queue.write_buffer()` is not a command encoder operation — it's a queue-level staging write that flushes at the next `submit()`. If multiple render passes in one encoder depend on different uniform values written via `write_buffer`, only the last write is visible to all of them. When using REPLACE blend (or any pattern where correct per-pass uniform data is critical), submit after each logical unit of work. The per-submit overhead is negligible compared to the GPU work in each dab.
+**Takeaway**: `queue.write_buffer()` is not a command encoder operation: it's a queue-level staging write that flushes at the next `submit()`. If multiple render passes in one encoder depend on different uniform values written via `write_buffer`, only the last write is visible to all of them. When using REPLACE blend (or any pattern where correct per-pass uniform data is critical), submit after each logical unit of work. The per-submit overhead is negligible compared to the GPU work in each dab.
 
 ## 6. Reusing a shader across alpha-convention boundaries
 
 **Problem**: Painting white on a transparent layer looked correct, but painting white on black produced hard, pixelated edges where soft gradients should have been. Every partially-transparent pixel at the brush edge rendered at full white intensity instead of blending proportionally with the background.
 
-**Root cause**: The brush composite shader (`composite.wgsl`) was written for per-dab compositing, where the foreground ("dab") input is premultiplied alpha (output of the stamp shader). When the stroke buffer system was added, `composite_onto_layer` reused the same shader — binding the stroke buffer as the "dab" and the pre-stroke snapshot as the "canvas copy". But the stroke buffer contains straight alpha (that's what `source_over()` returns). The shader treated un-attenuated straight-alpha RGB as if it were premultiplied:
+**Root cause**: The brush composite shader (`composite.wgsl`) was written for per-dab compositing, where the foreground ("dab") input is premultiplied alpha (output of the stamp shader). When the stroke buffer system was added, `composite_onto_layer` reused the same shader, binding the stroke buffer as the "dab" and the pre-stroke snapshot as the "canvas copy". But the stroke buffer contains straight alpha (that's what `source_over()` returns). The shader treated un-attenuated straight-alpha RGB as if it were premultiplied:
 
 ```wgsl
 let fg_rgb_pre = dab.rgb * sel;  // assumes dab.rgb is already premultiplied
@@ -154,7 +154,7 @@ For white at α=0.1 in straight alpha: RGB = (1.0, 1.0, 1.0). The shader used th
 out_rgb = (1.0 + 0.9 * 0.0) / 1.0 = 1.0   (should be 0.1)
 ```
 
-Every partially-transparent pixel became fully white — the soft gradient collapsed into a hard, aliased edge.
+Every partially-transparent pixel became fully white; the soft gradient collapsed into a hard, aliased edge.
 
 **Why it was invisible on transparent backgrounds**: With bg = (0, 0, 0, 0):
 
@@ -162,9 +162,9 @@ Every partially-transparent pixel became fully white — the soft gradient colla
 out_a = 0.1,  out_rgb = 1.0 / 0.1 = 10.0 → clamped to 1.0
 ```
 
-Result: (1.0, 1.0, 1.0, 0.1) — correct straight-alpha white at 10% opacity. The wrong RGB is masked by the correct alpha when displayed. The bug only manifests when the background has nonzero alpha, because then `out_a` is large enough that the inflated RGB isn't divided back down.
+Result: (1.0, 1.0, 1.0, 0.1), correct straight-alpha white at 10% opacity. The wrong RGB is masked by the correct alpha when displayed. The bug only manifests when the background has nonzero alpha, because then `out_a` is large enough that the inflated RGB isn't divided back down.
 
-**Why it wasn't caught by lesson #3**: Lesson #3 warns about cross-space blends in the formula. Here the formula was correct — for its original calling context. The bug appeared when the shader was reused at a new call site (`composite_onto_layer`) where the foreground input had a different alpha convention. The shader's implicit contract ("dab input is premultiplied") wasn't encoded anywhere machine-checkable, so the new caller silently violated it.
+**Why it wasn't caught by lesson #3**: Lesson #3 warns about cross-space blends in the formula. Here the formula was correct, but only for its original calling context. The bug appeared when the shader was reused at a new call site (`composite_onto_layer`) where the foreground input had a different alpha convention. The shader's implicit contract ("dab input is premultiplied") wasn't encoded anywhere machine-checkable, so the new caller silently violated it.
 
 **Fix**: Added a `fg_premultiplied` flag to `CompositeUniforms`. The per-dab path sets it to 1 (stamp output is premultiplied). The stroke→layer path sets it to 0 (stroke buffer is straight alpha). The shader conditionally premultiplies:
 
@@ -172,4 +172,4 @@ Result: (1.0, 1.0, 1.0, 0.1) — correct straight-alpha white at 10% opacity. Th
 let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel;
 ```
 
-**Takeaway**: When reusing a shader or pipeline at a new call site, audit every input's alpha convention at that call site — not just the formula. A shader that is correct for premultiplied input is wrong for straight-alpha input even though the code is identical. The convention is part of the interface contract, not just an implementation detail. If a shader accepts textures that could be either convention depending on the caller, make the convention an explicit uniform rather than an implicit assumption.
+**Takeaway**: When reusing a shader or pipeline at a new call site, audit every input's alpha convention at that call site, not just the formula. A shader that is correct for premultiplied input is wrong for straight-alpha input even though the code is identical. The convention is part of the interface contract, not just an implementation detail. If a shader accepts textures that could be either convention depending on the caller, make the convention an explicit uniform rather than an implicit assumption.

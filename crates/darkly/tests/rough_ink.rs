@@ -1,17 +1,17 @@
-//! Integration tests for the Rough Ink brush — the first 100%-
-//! compiled brush. Exercises the full `paint` pipeline
+//! Integration tests for the Rough Ink brush (the first 100%-compiled brush).
+//! Exercises the full `paint` pipeline
 //! end-to-end on a real GPU device:
 //!
-//! 1. **Single dab renders** — one dab through the compiled pipeline
+//! 1. **Single dab renders**: one dab through the compiled pipeline
 //!    deposits color where it should. Smoke test that the pipeline
 //!    builds and the dab buffer round-trips through the storage
 //!    binding.
-//! 2. **Two dabs in the same flush produce distinct silhouettes** —
+//! 2. **Two dabs in the same flush produce distinct silhouettes**:
 //!    two dabs queued in the same phase get independent per-dab
 //!    random seeds (the runner's `dab_index` increments) and the
 //!    compiled shader reads them per-instance. Catches accidentally
 //!    indexing all instances into slot 0 of the dab buffer.
-//! 3. **Zero amplitude collapses to a disc** — with all three random
+//! 3. **Zero amplitude collapses to a disc**: with all three random
 //!    nodes forced to 0 and the perlin amplitude defaulted via wire
 //!    remap, the rendered shape is a disc within blend tolerance.
 //!    Validates the compiled `shape_r_theta` parity with the existing
@@ -101,7 +101,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     graph.set_port_default(&terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(&terminal, "flow", 1.0).unwrap();
 
-    // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
+    // No `pen.pressure → terminal.flow` wire, so tests that scale alpha by
     // flow rely on the per-test `set_port_default(terminal, "flow", …)`
     // override, which a wire would shadow.
     let wires = [
@@ -139,7 +139,13 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -255,7 +261,7 @@ fn center_pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// Initial canvas: opaque black, so a dab depositing red is unmistakable.
 fn black_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     out
@@ -296,7 +302,7 @@ fn single_dab_deposits_color_at_center() {
 #[test]
 fn two_dabs_same_flush_both_deposit() {
     // Two dabs at distinct positions in one flush. Both must reach
-    // the layer — catches accidentally indexing all instances to dab
+    // the layer. This catches accidentally indexing all instances to dab
     // 0 in the storage buffer.
     let graph = build_test_graph(0, 0.0, 0.1);
     let mut h = harness(&black_canvas(), graph);
@@ -335,7 +341,7 @@ fn two_dabs_same_flush_both_deposit() {
 
 #[test]
 fn builtin_rough_ink_brush_renders_within_declared_bbox() {
-    // Render the actual Rough Ink builtin — exercises `random →
+    // Render the actual Rough Ink builtin: exercises `random →
     // shape` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
     // for the case where the shape evaluator's body was emitted as a
@@ -346,7 +352,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // rendered footprint must fall inside the brush's declared
     // bbox (effective_radius × `brush_extent_factor`). If the shader
     // writes outside the bbox, the save-point system on rewind
-    // truncates previous dabs to the un-inflated square — the bug
+    // truncates previous dabs to the un-inflated square, the bug
     // the protocol was introduced to fix.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
@@ -360,7 +366,13 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,
@@ -374,7 +386,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     queue.submit([enc.finish()]);
 
     // Override the brush's size port so the dab fits in the test
-    // canvas — the builtin's exposed size is small by default.
+    // canvas, since the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
     let _term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph
@@ -413,7 +425,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     h.dab_and_flush(&info, [1.0, 0.5, 0.0, 1.0], 0);
 
     let rgba = h.readback_canvas();
-    // Perlin shape varies per random seed — the centre may be inside
+    // Perlin shape varies per random seed, so the centre may be inside
     // or outside, but *some* deposition has to land within the dab
     // footprint (radius ~38px around (64, 64)) if the shader
     // compiled.
@@ -452,14 +464,14 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         compiled.brush_extent_factor,
     );
     // Sanity: shape must extend at least to the unmodulated disc
-    // boundary somewhere — confirms perlin is actually drawing past
+    // boundary somewhere, confirming perlin is actually drawing past
     // the un-inflated radius, which is the half of the bug we're
     // defending against (bbox too small → clipping inside the bbox
     // is the "bug not present" check).
     assert!(
         max_dist >= effective_radius * 0.5,
         "rendered footprint suspiciously small (max_dist {max_dist}, \
-         effective_radius {effective_radius}) — shader may be \
+         effective_radius {effective_radius}): shader may be \
          clipping inside the declared bbox",
     );
 }
@@ -486,26 +498,11 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
             0.15,
         )
         .unwrap();
-    // Replace the builtin's pressure-shaping curve (a monotone Hermite
-    // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
-    // so this test's `r_a` / `r_b` math (radius ∝ pressure) lines up
-    // with what the CPU side packs into the dab record. The QUAD_R_MAX-
-    // vs-radius divergence we're guarding against is independent of the
-    // curve shape.
-    let curve_id = graph
-        .nodes()
-        .iter()
-        .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
-        .map(|(id, _)| id.clone())
-        .unwrap();
-    graph
-        .set_port_value(
-            &curve_id,
-            "curve",
-            InputValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
-        )
-        .unwrap();
-
+    // Rough Ink wires `pen_input.pressure` straight into `paint.size`, so
+    // radius is already ∝ pressure and the `r_a` / `r_b` math below lines
+    // up with what the CPU side packs into the dab record without any
+    // shaping to undo. The QUAD_R_MAX-vs-radius divergence this guards
+    // against is independent of how pressure is shaped anyway.
     let mut h = harness(&black_canvas(), graph);
     let compiled = h.runner.compiled_brush().expect("compiled brush attached");
     h.begin_stroke();
@@ -530,8 +527,8 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     let mut dab_a_pixels = 0;
     let mut dab_b_pixels = 0;
     let dab_size = 0.15 * darkly::brush::DAB_REFERENCE_SIZE as f32 * 0.5;
-    // Per-dab effective_radius differs only through the curve(pressure)
-    // wire; the brush's curve is identity-shape so radius ∝ pressure.
+    // Per-dab effective_radius differs only through the pressure → size
+    // wire, which the brush drives directly, so radius ∝ pressure.
     let r_a = (dab_size * 0.5 * bbox_factor) + 1.0;
     let r_b = (dab_size * 1.0 * bbox_factor) + 1.0;
     for y in 0..CANVAS {
@@ -560,12 +557,12 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
             }
         }
     }
-    // Both dabs must have actually deposited something — catches the
+    // Both dabs must have actually deposited something: catches the
     // case where a per-instance buffer index bug aliases all draws
     // to dab 0 (or one dab gets entirely clipped).
     assert!(
         dab_a_pixels > 20 && dab_b_pixels > 20,
-        "both dabs must render — got A={dab_a_pixels}, B={dab_b_pixels}",
+        "both dabs must render, got A={dab_a_pixels}, B={dab_b_pixels}",
     );
 }
 
@@ -599,8 +596,8 @@ fn terminal_flow_scales_dab_alpha() {
     let full = deposit_red_at_center(1.0);
     let third = deposit_red_at_center(0.3);
     // Both render red (no green/blue), opaque (canvas is opaque
-    // black underneath). Difference is the per-pixel red intensity
-    // — at flow=0.3 the source RGB only deposits ~30% over the
+    // black underneath). Difference is the per-pixel red intensity:
+    // at flow=0.3 the source RGB only deposits ~30% over the
     // underlying black.
     assert!(
         full[0] > 200,

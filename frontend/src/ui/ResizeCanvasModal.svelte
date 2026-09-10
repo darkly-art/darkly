@@ -1,6 +1,6 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
-    import Icon from '../icons/Icon.svelte';
+    import LinkToggle from './LinkToggle.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
     import {
@@ -224,7 +224,7 @@
         ctx.fillRect(cx2, cy, W - cx2, cy2 - cy); // right band
     });
 
-    // Refit when the stage resizes (but never mid-drag — the fit is held then).
+    // Refit when the stage resizes (but never mid-drag: the fit is held then).
     $effect(() => {
         void previewW;
         if (!dragging) refit();
@@ -261,7 +261,7 @@
     const ANCHORS = [0, 0.5, 1];
 </script>
 
-<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="md">
+<Modal bind:open={resizeCanvas.open} title="Canvas Size" size="lg">
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="dim-row">
             <label class="field">
@@ -278,17 +278,7 @@
                     <span class="unit">px</span>
                 </div>
             </label>
-            <button
-                type="button"
-                class="link-toggle"
-                class:active={linkAspect}
-                aria-pressed={linkAspect}
-                aria-label={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
-                title={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
-                onclick={() => (linkAspect = !linkAspect)}
-            >
-                <Icon name={linkAspect ? 'fa6-solid:link' : 'fa6-solid:link-slash'} />
-            </button>
+            <LinkToggle linked={linkAspect} onchange={(v) => (linkAspect = v)} label="aspect ratio" />
         </div>
 
         <div class="preview-stage checker" bind:clientWidth={previewW} style={`height:${PREVIEW_H}px`}>
@@ -414,31 +404,6 @@
         color: var(--text-muted);
         font-family: var(--font-mono, monospace);
         font-size: 12px;
-    }
-
-    .link-toggle {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 34px;
-        height: 34px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        color: var(--text-muted);
-        font-size: 14px;
-        cursor: pointer;
-    }
-
-    .link-toggle:hover {
-        background: var(--bg-hover);
-        color: var(--text);
-    }
-
-    .link-toggle.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
     }
 
     /* Interactive preview ------------------------------------------------ */

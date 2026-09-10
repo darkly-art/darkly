@@ -2,19 +2,19 @@
 //!
 //! A brush `noise` node with a static field bakes that field once into a
 //! texture (running the existing `fbm_tile` shader over a tile) and then
-//! samples it like any `@group(3)` graph texture — turning an ~80-hash fBm
+//! samples it like any `@group(3)` graph texture, turning an ~80-hash fBm
 //! kernel re-run per fragment per overlapping dab into a single
 //! `textureSample`. This cache owns the bake render pipelines and the baked
 //! tiles, keyed by the field-defining [`BakeSpec`]. Two brushes (or two
 //! nodes) with an equal spec share one tile.
 //!
-//! Lifecycle: this is **Compositor** state — a baked tile is derived from and
+//! Lifecycle: this is **Compositor** state; a baked tile is derived from and
 //! fully rebuildable from the graph, never stored in the Document. It lives
 //! beside [`crate::gpu::texture_registry::TextureRegistry`] on
 //! `BrushPipelines`, reached through `&self` at bind-group build time (hence
 //! the interior-mutable tile map).
 //!
-//! The bake is a **render pass**, not a GPU readback — no
+//! The bake is a **render pass**, not a GPU readback, so there is no
 //! No-Blocking-GPU-Readbacks concern (the `fbm_tile` field is a pure,
 //! binding-free function; the void noise pass is the same technique).
 
@@ -34,13 +34,13 @@ struct BakeParams {
     octaves: i32,
     gain: f32,
     warp: f32,
-    tile_span: f32,
+    field_span: f32,
     channels: u32,
     _pad0: u32,
     _pad1: u32,
 }
 
-/// The bake render pipelines — the uniform bind-group layout and one pipeline
+/// The bake render pipelines: the uniform bind-group layout and one pipeline
 /// per output format. Built lazily on the first actual bake (see
 /// [`BakedSourceCache`]), so an engine whose brushes never bake noise does no
 /// GPU pipeline work for this feature.
@@ -72,7 +72,7 @@ impl BakePipes {
         });
 
         // WGSL has no `#include`; concatenate the fBm math (which owns the
-        // noise algorithm) ahead of the bake shader — the void noise pattern.
+        // noise algorithm) ahead of the bake shader: the void noise pattern.
         // The field is not reimplemented here; the bake runs `fbm_tile`.
         let fbm2d_src = include_str!("../../shaders/lib/fbm2d.wgsl");
         let bake_src = include_str!("../../shaders/brush/bake_source.wgsl");
@@ -190,7 +190,7 @@ impl BakedSourceCache {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            // `COPY_SRC` lets a baked tile be read back — used by the seam
+            // `COPY_SRC` lets a baked tile be read back, used by the seam
             // regression test to verify the field tiles; a nil always-on cost.
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -210,7 +210,7 @@ impl BakedSourceCache {
             octaves,
             gain: BakeKind::dequantize(roughness_q),
             warp: BakeKind::dequantize(warp_q),
-            tile_span: BakeSpec::TILE_SPAN,
+            field_span: BakeSpec::FIELD_SPAN,
             channels,
             _pad0: 0,
             _pad1: 0,

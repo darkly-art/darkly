@@ -18,7 +18,7 @@ function setup() {
         uploadVoidExternalImage: () => {},
         api: { requestRecordingCapture: vi.fn() },
     } as any;
-    // rAF + engine touch — neither exists in the node test env.
+    // rAF + engine touch; neither exists in the node test env.
     inst.requestFrame = vi.fn();
     inst.refreshLayerTree = vi.fn(async () => {}) as any;
     return inst;
@@ -118,7 +118,7 @@ describe('startStreamSource replacement guard', () => {
 
     it('replaces a source whose acquisition failed without ever ending', async () => {
         // A `MediaStreamSource` denied by getUserMedia has `error` set but
-        // `ended === false` — the retry must be admitted anyway, and the
+        // `ended === false`: the retry must be admitted anyway, and the
         // failure must clear the session opt-in so Resume reappears.
         const inst = setup();
 

@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-// @ts-ignore — Node builtin; the project intentionally omits @types/node (see
+// @ts-ignore: Node builtin; the project intentionally omits @types/node (see
 // vite.config.ts). Vitest runs under node, so this resolves at runtime.
 import { readFileSync } from 'node:fs';
-// The REAL decoder — deliberately not mocked. `google_fonts.test.ts` mocks this
+// The REAL decoder, deliberately not mocked. `google_fonts.test.ts` mocks this
 // module to test the pipeline wiring; this file exercises the actual WASM decode
 // so a broken/renamed/hanging decoder can't pass silently (the fully-mocked
-// pipeline test would). NB: this runs in node — it guards the decoder's contract
+// pipeline test would). NB: this runs in node; it guards the decoder's contract
 // (import path, export shape, resolves without hanging, valid SFNT out), but a
 // browser-only bundler failure still needs a real-browser check.
 import decompress from 'woff2-encoder/decompress';

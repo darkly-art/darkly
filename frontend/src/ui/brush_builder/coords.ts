@@ -6,7 +6,7 @@
  * between a pointer event's `clientX`/`clientY` (post-transform, in screen
  * pixels) and the node-layer's pre-transform layout coordinate system
  * (the units that `clientWidth`, inline SVG user-units, and stored node
- * positions all live in) goes through this module — so no consumer ever
+ * positions all live in) goes through this module, so no consumer ever
  * has to know what `zoom` is, and adding a new interactive widget inside
  * a node can't reintroduce the divide-by-zoom-by-hand class of bug.
  */
@@ -18,7 +18,7 @@ export interface GraphCoords {
     clientToGraph(clientX: number, clientY: number): { x: number; y: number };
 
     /** Convert a client-pixel point to coords local to `el`'s pre-transform
-     *  layout system — the same units as `el.clientWidth` and inline SVG
+     *  layout system: the same units as `el.clientWidth` and inline SVG
      *  user units. Use for widgets that read pointer position relative
      *  to themselves (curve editors, scrub bars, sliders). */
     clientToElementLocal(el: Element, clientX: number, clientY: number): { x: number; y: number };

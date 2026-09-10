@@ -3,7 +3,7 @@
  *
  * CONTRACT: row-major `[a, b, tx, c, d, ty]`, transforming `(x, y)` →
  * `(a*x + b*y + tx, c*x + d*y + ty)`. This is a hand-kept mirror of the Rust
- * helpers in `crates/darkly/src/transform/mod.rs` — the two cannot share one
+ * helpers in `crates/darkly/src/transform/mod.rs`: the two cannot share one
  * implementation (the gizmo computes interactively in JS and ships the baked
  * affine over the WASM boundary), so the layout is pinned by
  * `transform_affine.test.ts` here and `transform::tests::affine_contract`
@@ -18,7 +18,7 @@ export function affineTransform(m: Affine2D, x: number, y: number): [number, num
     return [m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]];
 }
 
-/** `a ∘ b` — apply `b` first, then `a`. */
+/** `a ∘ b`: apply `b` first, then `a`. */
 export function affineMultiply(a: Affine2D, b: Affine2D): Affine2D {
     return [
         a[0] * b[0] + a[1] * b[3],

@@ -1,7 +1,7 @@
 //! Layer / group / node structural requests that can't be `#[handler]`-derived.
 //!
 //! The rest of this domain (add / remove / move / duplicate / group / merge /
-//! flatten / void params) is generated from the engine methods themselves —
+//! flatten / void params) is generated from the engine methods themselves:
 //! tag a method `#[handler]` (see `crate::engine::layers` and friends), no entry
 //! here. What remains is the one query whose engine return can't serialize
 //! straight to the wire:
@@ -26,7 +26,7 @@ pub struct VoidTransformInfoReq {
     pub id: LayerId,
 }
 
-/// Flat transform info for a void layer — `mode`/`matrix` derived from the
+/// Flat transform info for a void layer: `mode`/`matrix` derived from the
 /// engine's `Transform` (6 affine floats for `Basic`, 9 homography floats for
 /// `Perspective`; the frontend's `liftMatrix` picks the variant by `mode`).
 #[derive(Serialize)]

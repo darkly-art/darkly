@@ -7,7 +7,7 @@ import { canonicalModsFromEvent } from './mods';
 //
 // The string is a canonical `+`-joined modifier list (e.g. `""`, `"ctrl"`,
 // `"ctrl+alt"`) in `MOD_ORDER`, matching what `canonicalModsFromEvent`
-// reports off a real event — so it compares literal-vs-literal against the
+// reports off a real event, so it compares literal-vs-literal against the
 // `$mod`-substituted chords the trigger index resolves.
 
 let held = '';
@@ -50,7 +50,7 @@ export function setupHeldModsTracking(): void {
     wired = true;
 
     // Any key event (not just the modifier keys) carries the full modifier
-    // state — read it off the event so we never map physical keys ourselves.
+    // state: read it off the event so we never map physical keys ourselves.
     const onKey = (e: KeyboardEvent) => set(modsFromEvent(e));
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
@@ -59,7 +59,7 @@ export function setupHeldModsTracking(): void {
     // the corresponding key-up. Reset to nothing held.
     window.addEventListener('blur', () => set(''));
 
-    // Pointer events also expose modifier state — pick up drift if a
+    // Pointer events also expose modifier state: pick up drift if a
     // keydown/keyup was swallowed (focus changes can lose them).
     window.addEventListener('pointermove', (e) => set(modsFromEvent(e)));
 }

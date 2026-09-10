@@ -3,13 +3,14 @@
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import { isModEvent } from '../../actions/mods';
+    import { isEditableTarget } from '../../lib/isEditableTarget';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
     import BrushBarNode from './BrushBarNode.svelte';
     import { createGraphCoords, type GraphCoords } from './coords';
 
     interface Props {
-        /** Fires when the user requests "add node" from inside the canvas
+        /** Fires when the artist requests "add node" from inside the canvas
          *  (currently: Shift+A while the cursor is over the graph). The
          *  parent owns the popup; coords let it both place the popup and
          *  drop the resulting node at the cursor. */
@@ -26,8 +27,8 @@
     // --- Auto-layout when nodes lack positions ---
     // Positions are UI-only state. After a brush load/reset they're
     // cleared, and this effect lays everything out using DOM-measured
-    // sizes for tight packing. User drags update positions in place;
-    // re-laying out then would clobber the user's arrangement, so the
+    // sizes for tight packing. Artist drags update positions in place;
+    // re-laying out then would clobber the artist's arrangement, so the
     // guard keeps this a one-shot per fresh graph.
     $effect(() => {
         if (!brushGraph.needsInitialLayout) return;
@@ -47,7 +48,7 @@
     // and registers it here. Wire paths use the node's auto-layout
     // position + this port offset.
     //
-    // The same context exposes `coords` — the single source of truth for
+    // The same context exposes `coords`: the single source of truth for
     // screen<->graph coordinate conversion. Descendants never have to
     // know about `zoom` or `pan`; they ask the coord system instead.
 
@@ -129,7 +130,7 @@
         const key = `${nodeId}:${portName}:${dir}`;
         let offset = portOffsets.get(key);
         if (!offset) {
-            // onMount hasn't fired yet — measure directly from the DOM.
+            // onMount hasn't fired yet, so measure directly from the DOM.
             const dotEl = document.querySelector(
                 `[data-port-node="${nodeId}"][data-port-name="${portName}"][data-port-dir="${dir}"]`
             ) as HTMLElement | null;
@@ -215,17 +216,22 @@
         }
     }
 
-    function onPointerDown(e: PointerEvent) {
-        // Middle-click → pan
-        if (e.button === 1) {
-            e.preventDefault();
-            isPanning = true;
-            panStartX = e.clientX; panStartY = e.clientY;
-            panOriginX = panX; panOriginY = panY;
-            capturePointer(e);
-            return;
-        }
+    /** Middle-drag pans the graph, and it does so from the capture phase so the
+     *  gesture belongs to the canvas no matter what sits under the cursor:
+     *  nodes, port dots and sliders all claim pointerdown for their own drags
+     *  and would otherwise swallow it. Text fields are the exception: middle
+     *  click pastes the primary selection there on X11. */
+    function onPointerDownCapture(e: PointerEvent) {
+        if (e.button !== 1 || isEditableTarget(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        isPanning = true;
+        panStartX = e.clientX; panStartY = e.clientY;
+        panOriginX = panX; panOriginY = panY;
+        capturePointer(e);
+    }
 
+    function onPointerDown(e: PointerEvent) {
         // Wire drag bubbled up from PortWidget
         if (brushGraph.draggingFrom) {
             capturePointer(e);
@@ -301,7 +307,7 @@
 
     // --- 'addBrushNode' action → open menu at the cursor ---
     // The action lives in the global registry (so it appears in the
-    // hotkey cheat sheet and respects user-overridden shortcuts). Its
+    // hotkey cheat sheet and respects artist-overridden shortcuts). Its
     // handler dispatches `darkly:add-node-request`; we listen here
     // because pan/zoom and cursor tracking are local to this component.
     function handleAddNodeRequest() {
@@ -357,6 +363,7 @@
     bind:this={containerEl}
     style="background-position: {panX}px {panY}px; background-size: {20 * zoom}px {20 * zoom}px; --mouse-x: {mouseX}px; --mouse-y: {mouseY}px;"
     onwheel={onWheel}
+    onpointerdowncapture={onPointerDownCapture}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
@@ -377,7 +384,7 @@
         {#each brushGraph.nodeList as node (node.id)}
             <NodeWidget {node} />
         {/each}
-        <!-- Brush Bar lives in graph-space alongside the nodes — pans
+        <!-- Brush Bar lives in graph-space alongside the nodes: pans
              and zooms with them; the author drags it around like any
              other node. -->
         <BrushBarNode />

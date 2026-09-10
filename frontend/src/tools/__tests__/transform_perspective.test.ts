@@ -64,7 +64,7 @@ describe('perspective mode corner drag', () => {
             hitTest: () => null,
         };
         const bbox = perspectiveMode.buildOverlay(geo, o as never);
-        expect(calls.handles).toBe(4); // corner handles only — no edge/rotate
+        expect(calls.handles).toBe(4); // corner handles only (no edge/rotate)
         expect(bbox[0]).toEqual(destCorner(geo, 0, 0));
         expect(bbox[2]).toEqual(destCorner(geo, SRC_W, SRC_H));
     });

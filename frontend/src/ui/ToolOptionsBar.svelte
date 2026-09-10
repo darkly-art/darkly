@@ -3,7 +3,7 @@
     import { toolRegistry } from '../tools/registry';
     import { brushGraph } from '../state/brush_graph.svelte';
 
-    // The strip itself is always mounted — only the content inside (and
+    // The strip itself is always mounted: only the content inside (and
     // any optional panel above) varies per tool. Keeping the same DOM
     // node across tool switches avoids a flicker / layout reflow.
     let tool = $derived(toolRegistry.get(app.activeToolId));
@@ -16,7 +16,7 @@
         {#if Options}
             <Options />
         {:else}
-            <span class="tool-name">{tool ? app.toolDisplayName(tool.id) : ''}</span>
+            <span class="tool-name">{tool ? app.displayName('tools', tool.id) : ''}</span>
             <div class="spacer"></div>
         {/if}
     </div>
@@ -51,8 +51,8 @@
         padding: 4px 8px;
         background: var(--canvas-bg);
         flex-shrink: 0;
-        /* Minimum (not fixed) height: the bar is 40px at rest — sized to
-         * fit the tallest control (~32px) with a 4px breather — but grows
+        /* Minimum (not fixed) height: the bar is 40px at rest, sized to
+         * fit the tallest control (~32px) with a 4px breather, but grows
          * taller when controls wrap onto extra lines in a narrow window
          * (see ToolBarLayout `.center`). */
         min-height: 40px;

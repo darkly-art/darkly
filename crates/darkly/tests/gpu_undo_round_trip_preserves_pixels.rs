@@ -24,7 +24,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Paint 20 full-canvas commits across a 2048² canvas (~320 MB of undo
-/// pixels — well past the legacy 256 MB ring), then undo all 20 times.
+/// pixels, well past the legacy 256 MB ring), then undo all 20 times.
 /// The final canvas must match the initial post-A state pixel-for-pixel.
 #[test]
 fn gpu_undo_round_trip_preserves_pixels() {
@@ -34,7 +34,7 @@ fn gpu_undo_round_trip_preserves_pixels() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    // Anchor state A — solid red across the layer. This is the snapshot
+    // Anchor state A: solid red across the layer. This is the snapshot
     // every subsequent fill's `save_region` captures, so it's also what the
     // final undo step must reproduce.
     engine.fill_background_color(layer, [255, 0, 0, 255]);
@@ -52,7 +52,7 @@ fn gpu_undo_round_trip_preserves_pixels() {
     }
 
     // Undo all 20 fills. After the last undo the layer must equal
-    // pixels_a — every intermediate restore must produce valid pixels for
+    // pixels_a; every intermediate restore must produce valid pixels for
     // the round-trip to land correctly.
     for _ in 0..20 {
         engine.undo();

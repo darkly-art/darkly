@@ -18,13 +18,13 @@
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
     /** A node shows an in-card preview thumbnail iff one of its outputs is
-     *  flagged `preview_image` — a spatial coverage mask or colour field
+     *  flagged `preview_image`: a spatial coverage mask or colour field
      *  (`shape.mask`, `image.color`, …). Read straight off the port data (like
      *  `wirable` / `exposable`), the same flag the engine's
      *  `BrushNodeRegistration::preview_output` picks. Per-dab constants and
      *  sensor/math outputs leave it off, so `random` / `paint_color` don't show
      *  a meaningless flat blob. New nodes opt in by flagging their image
-     *  output — no allowlist on either side. The engine's `brush_node_preview`
+     *  output: no allowlist on either side. The engine's `brush_node_preview`
      *  renders a subgraph rooted at that output; an empty Vec means "no
      *  preview yet". */
     let isPreviewable = $derived(outputPorts.some(p => p.preview_image));
@@ -33,8 +33,15 @@
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
 
+    /** The scalar math nodes (add/subtract/multiply/divide) offer an editor
+     *  toggle that unlocks their numeric-input sliders from `0-1` to the
+     *  extended range, for entering large gains. Frontend-only: see
+     *  `brushGraph.extendedRangeNodes`. */
+    let isMathNode = $derived(typeInfo?.category === 'math');
+    let extendedRange = $derived(brushGraph.extendedRangeNodes.has(node.id));
+
     /** Apply the port's `visible_when` rule against the referenced sibling
-     *  input's current value. Engine-side the port still works regardless —
+     *  input's current value. Engine-side the port still works regardless;
      *  this is purely UI. */
     function isPortVisible(port: PortDef): boolean {
         if (!port.visible_when) return true;
@@ -48,7 +55,7 @@
     );
 
     // --- Drag to move (from any point on the node) ---
-    // Updates `brushGraph.nodePositions` directly — positions are
+    // Updates `brushGraph.nodePositions` directly: positions are
     // UI-only state and never round-trip to Rust.
     let dragging = false;
     let dragStartX = 0;
@@ -77,7 +84,7 @@
         editingComment = true;
     }
 
-    /** Live local feedback while typing — no engine round-trip per keystroke. */
+    /** Live local feedback while typing: no engine round-trip per keystroke. */
     function onCommentInput() {
         brushGraph.setNodeCommentLocal(node.id, commentDraft);
     }
@@ -121,7 +128,7 @@
         nodeEl.releasePointerCapture(e.pointerId);
     }
 
-    /** Guaranteed cleanup — fires when capture ends for any reason. */
+    /** Guaranteed cleanup: fires when capture ends for any reason. */
     function onNodeLostCapture() {
         dragging = false;
         app.endInteraction();
@@ -164,6 +171,17 @@
                     <PortWidget {port} nodeId={node.id} side="left" />
                 {/each}
             </div>
+        {/if}
+
+        {#if isMathNode}
+            <label class="extended-range" title="Unlock the sliders to 0-1000 for large gains (editor only, the value is unchanged)">
+                <input
+                    type="checkbox"
+                    checked={extendedRange}
+                    onchange={() => brushGraph.toggleExtendedRange(node.id)}
+                />
+                Extended range
+            </label>
         {/if}
 
         {#if isPreviewable}
@@ -301,5 +319,19 @@
         display: flex;
         flex-direction: column;
         gap: 2px;
+    }
+
+    .extended-range {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px 0;
+        font-size: 11px;
+        color: var(--text-muted);
+        cursor: pointer;
+        user-select: none;
+    }
+    .extended-range input {
+        cursor: pointer;
     }
 </style>

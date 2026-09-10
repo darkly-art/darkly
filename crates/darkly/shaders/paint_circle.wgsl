@@ -1,6 +1,6 @@
 // Circle / rect painting: positions a quad at the paint region, computes
 // SDF coverage for circles, applies selection masking.
-// Hardware blend state handles alpha compositing — see PaintPipelines for blend config.
+// Hardware blend state handles alpha compositing (see PaintPipelines for blend config).
 
 struct Uniforms {
     // Quad origin in canvas pixels (top-left corner).

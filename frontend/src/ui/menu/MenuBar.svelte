@@ -5,12 +5,12 @@
     import MenuItems from './MenuItems.svelte';
     import { menuBar } from '../../state/menuBar.svelte';
     import { commandPalette } from '../../state/commandPalette.svelte';
-    import { config, formatHotkey } from '../../config/store.svelte';
+    import { hotkeyLabel } from '../../config/store.svelte';
     import { watchDismiss } from '../../lib/dismiss';
     import Icon from '../../icons/Icon.svelte';
 
-    const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
-    const paletteHotkey = $derived(formatHotkey(config.get('hotkeys.commandPalette') as string | undefined));
+    const settingsHotkey = $derived(hotkeyLabel('openSettings'));
+    const paletteHotkey = $derived(hotkeyLabel('commandPalette'));
 
     // Actions register asynchronously (after the editor handle boots), so the
     // menu structure is keyed on the registry epoch to recompute once it's

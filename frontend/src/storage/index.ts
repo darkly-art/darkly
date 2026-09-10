@@ -27,30 +27,41 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 /** Read a UTF-8 text file. Returns null if not found. */
-export async function readText(path: string): Promise<string | null> {
-    const bytes = await storage.read(path);
+export async function readText(path: string, s: DarklyStorage = storage): Promise<string | null> {
+    const bytes = await s.read(path);
     return bytes ? textDecoder.decode(bytes) : null;
 }
 
 /** Read JSON. Returns null if file not found or content fails to parse. */
-export async function readJson<T = unknown>(path: string): Promise<T | null> {
-    const text = await readText(path);
+export async function readJson<T = unknown>(
+    path: string,
+    s: DarklyStorage = storage,
+): Promise<T | null> {
+    const text = await readText(path, s);
     if (text === null) return null;
     try { return JSON.parse(text) as T; }
     catch { return null; }
 }
 
 /** Write a UTF-8 text file. */
-export async function writeText(path: string, contents: string): Promise<void> {
-    await storage.write(path, textEncoder.encode(contents));
+export async function writeText(
+    path: string,
+    contents: string,
+    s: DarklyStorage = storage,
+): Promise<void> {
+    await s.write(path, textEncoder.encode(contents));
 }
 
 /** Write a JSON file (pretty-printed). */
-export async function writeJson(path: string, value: unknown): Promise<void> {
-    await writeText(path, JSON.stringify(value, null, 2));
+export async function writeJson(
+    path: string,
+    value: unknown,
+    s: DarklyStorage = storage,
+): Promise<void> {
+    await writeText(path, JSON.stringify(value, null, 2), s);
 }
 
-/** Sanitize a user-supplied name into something safe to use as a filename
+/** Sanitize an artist-supplied name into something safe to use as a filename
  *  inside the Darkly directory. Strips path separators, control chars, and
  *  trims to a sane length. */
 export function sanitizeFilename(name: string): string {

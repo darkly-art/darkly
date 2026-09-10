@@ -1,4 +1,4 @@
-//! Image node — sample a named texture in the compiled fragment shader.
+//! Image node samples a named texture in the compiled fragment shader.
 //!
 //! Looks up `texture_name` in
 //! [`crate::gpu::texture_registry::TextureRegistry`] at brush-load time.
@@ -9,9 +9,9 @@
 //! [`crate::brush::wgsl::frame_sample_coord_expr`]), wrapped in `fract`.
 //!
 //! Sampling frame: because an `image` node is a brush *tip*, it defaults
-//! to **Dab** space — the picture rides the stamp, rotating and
+//! to **Dab** space: the picture rides the stamp, rotating and
 //! translating with each dab (`local_uv` rotated by the `rotation` input).
-//! **Canvas** space is also available for users who tile a picture as a
+//! **Canvas** space is also available for artists who tile a picture as a
 //! fixed canvas texture: it anchors the pattern to the canvas so
 //! overlapping strokes share phase. `fract(...)` wraps cleanly in either
 //! frame because the registry's shared sampler uses repeat addressing.
@@ -21,7 +21,7 @@
 //! `BrushWireType::Texture` wire and downstream nodes received it
 //! as a per-dab value. The current node is shaped for the
 //! WGSL-compiled pipeline: it doesn't move texture data through
-//! wires — it inlines a `textureSample` call into the compiled
+//! wires; it inlines a `textureSample` call into the compiled
 //! shader and the binding lives in the per-brush pipeline. The
 //! output is `color` (Vec4); scalar consumers chain through
 //! [`super::split_color`].
@@ -45,7 +45,7 @@ pub fn register() -> BrushNodeRegistration {
             description: "Uses a picture from the brush bundle as the brush tip shape.",
             ports: vec![
                 // Per-dab orientation and decorrelation for Dab-space
-                // sampling — the same input-port path `circle.rotation_input`
+                // sampling, the same input-port path `circle.rotation_input`
                 // uses. Hidden in Canvas mode.
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
@@ -64,7 +64,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Per-dab decorrelation offset for Dab space. Wire random (Per-Dab) so overlapping dabs sample independent regions.",
                     ),
-                // Named texture, resolved at compile time — not wirable.
+                // Named texture, resolved at compile time; not wirable.
                 PortDef::input("texture_name", BrushWireType::String)
                     .with_value(InputValue::String(String::new()))
                     .with_label("Texture")
@@ -84,12 +84,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_value(InputValue::Int(1))
                     .with_label("Space")
                     .with_description("Sample in canvas space (pinned) or the dab's oriented frame."),
-                // Dab-space only: `true` scales the picture with the brush,
-                // `false` keeps its texel density constant in canvas pixels.
-                PortDef::input("scale_with_brush", BrushWireType::Bool)
-                    .with_value(InputValue::Bool(true))
-                    .with_label("Scale With Brush")
-                    .with_description("Dab space only: scale the picture with the brush size."),
                 PortDef::output("color", BrushWireType::Vec4)
                     .preview_image()
                     .with_description("RGBA value sampled from the named texture at the fragment's sample position"),
@@ -97,7 +91,7 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: None,
+            preview_staging: None,
         },
         || Box::new(ImageEvaluator),
     )
@@ -106,7 +100,7 @@ pub fn register() -> BrushNodeRegistration {
 pub struct ImageEvaluator;
 
 impl BrushNodeEvaluator for ImageEvaluator {
-    /// CPU evaluation returns a neutral grey — `image` is only
+    /// CPU evaluation returns a neutral grey: `image` is only
     /// meaningful per-fragment, and the per-dab CPU dispatch path is
     /// dead for compiled-WGSL brushes. The constant exists so brushes
     /// that mix CPU and compiled execution don't `NaN` through the
@@ -118,7 +112,7 @@ impl BrushNodeEvaluator for ImageEvaluator {
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("color") {
-            // Nothing downstream consumes the sample — skip the
+            // Nothing downstream consumes the sample, so skip the
             // `textureSample` and don't reserve a binding either.
             return Ok(wgsl);
         }
@@ -130,15 +124,17 @@ impl BrushNodeEvaluator for ImageEvaluator {
         // expression (a literal when unwired, an upstream expr when wired).
         let scale_expr = cctx.input("scale").as_f32();
         let space = SampleFrame::from_index(cctx.input("space").enum_index().max(0) as u32);
-        let scale_with_brush = cctx.input("scale_with_brush").boolean();
         let rotation = cctx.input("rotation").as_f32();
         let variation = cctx.input("variation").as_f32();
+        // The sampled uv is `fract`-wrapped against a repeat sampler, so the
+        // texture is effectively periodic with period 1.0: the per-dab
+        // decorrelation offset must span exactly one period.
         let (frame_pre, coord) = frame_sample_coord_expr(
             space,
             &scale_expr,
-            scale_with_brush,
             &rotation,
             &variation,
+            1.0,
             &cctx.ident("img"),
         );
 
@@ -164,15 +160,14 @@ mod tests {
         let reg = register();
         assert_eq!(reg.node.type_id, "image");
         assert_eq!(reg.node.category, "texture");
-        // rotation, variation, texture_name, scale, space, scale_with_brush
-        // inputs plus the color output — all unified as ports now.
-        assert_eq!(reg.node.ports.len(), 7);
+        // rotation, variation, texture_name, scale, space inputs plus the
+        // color output, all unified as ports now.
+        assert_eq!(reg.node.ports.len(), 6);
         assert!(reg.node.ports.iter().any(|p| p.name == "color"));
         assert!(reg.node.ports.iter().any(|p| p.name == "rotation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "variation"));
         assert!(reg.node.ports.iter().any(|p| p.name == "texture_name"));
         assert!(reg.node.ports.iter().any(|p| p.name == "scale"));
         assert!(reg.node.ports.iter().any(|p| p.name == "space"));
-        assert!(reg.node.ports.iter().any(|p| p.name == "scale_with_brush"));
     }
 }

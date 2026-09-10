@@ -58,7 +58,7 @@ impl DarklyEngine {
         }
         // Keep only nodes that own a GPU texture in the unified pool. The
         // selection filter's pixels live in the compositor's selection_state
-        // (window-sized), not node_textures — it's cleared separately below.
+        // (window-sized), not node_textures; it's cleared separately below.
         let mut nodes: Vec<(LayerId, CanvasRect, wgpu::TextureFormat)> = Vec::new();
         for id in candidate_ids {
             if let Some(t) = self.compositor.node_texture(id) {
@@ -84,7 +84,7 @@ impl DarklyEngine {
         }
 
         // 2. Clear the active selection while dims are still old (the selection
-        //    texture is window-sized) — folded into this single undo step.
+        //    texture is window-sized), folded into this single undo step.
         let selection = self.clear_selection_collecting_undo();
 
         // 3. Resample all node textures on the GPU.

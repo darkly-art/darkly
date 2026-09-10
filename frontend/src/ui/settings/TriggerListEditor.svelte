@@ -1,10 +1,6 @@
 <script lang="ts">
     import { config } from '../../config/store.svelte';
-    import {
-        sites,
-        contextSatisfied,
-        type ActionRegistration,
-    } from '../../actions/registry';
+    import { sites, type Action } from '../../actions/registry';
     import {
         readTriggers,
         writeTriggers,
@@ -21,45 +17,32 @@
     import Icon from '../../icons/Icon.svelte';
 
     type Props = {
-        action: ActionRegistration;
+        action: Action;
         /** When true, each row shows an editable scope <select>. When
          *  false, non-global scope is still surfaced via a small read-only
-         *  chip so the user knows the binding isn't unconditional. */
+         *  chip so the artist knows the binding isn't unconditional. */
         showScope: boolean;
     };
     let { action, showScope }: Props = $props();
 
-    /** Compatible binding sites for this action — i.e. sites whose
-     *  `provides` is a superset of `action.requires`. `keyboard` is
-     *  excluded because it's the implicit global fallback (selected via
-     *  "Anywhere"). The "Anywhere" option itself is offered iff the
-     *  `keyboard` site satisfies the action's requirements. */
-    const compatibleSites = $derived.by(() =>
-        sites.all().filter(s =>
-            s.name !== 'keyboard'
-            && contextSatisfied(action, s.provides),
-        ),
-    );
+    /** Binding sites a trigger can be scoped to. `keyboard` is excluded
+     *  because it's the implicit global fallback, offered as "Anywhere". */
+    const pickableSites = $derived(sites.all().filter(s => s.name !== 'keyboard'));
 
-    const allowsAnywhere = $derived.by(() => {
-        const kbd = sites.get('keyboard');
-        return kbd ? contextSatisfied(action, kbd.provides) : false;
-    });
-
-    /** Persistent rows — read from config and re-evaluated on every
+    /** Persistent rows: read from config and re-evaluated on every
      *  store mutation via the `void config.get('')` reactivity tap. */
     const stored = $derived.by(() => {
         void config.get('');
         return readTriggers(action.id);
     });
 
-    /** Ephemeral rows — added by "+ Add trigger" but not yet captured into.
+    /** Ephemeral rows: added by "+ Add trigger" but not yet captured into.
      *  Lives in component state instead of config because
      *  `serializeTriggers` filters out empty-chord rows on write (to keep
      *  storage clean of ghost overrides). If we wrote a fresh empty row
      *  through config, it'd be filtered out before the reactive re-read
      *  could surface it, and "Add trigger" would visibly do nothing.
-     *  Promoted to `stored` the moment the user captures a chord; dropped
+     *  Promoted to `stored` the moment the artist captures a chord; dropped
      *  silently on ×, modal close, or reset. */
     let pending = $state<Trigger[]>([]);
 
@@ -83,7 +66,7 @@
     });
 
     /** Index of the row to auto-start capture on. Set by "+ Add trigger"
-     *  to save the user a click; cleared on next mutation. */
+     *  to save the artist a click; cleared on next mutation. */
     let pendingAutostart = $state<number | null>(null);
 
     /** Compose a binding string from kind + site + chord. Mouse chords
@@ -93,8 +76,8 @@
         if (!chord) return '';
         if (kind === 'mouse' && !site) {
             // A mouse chord without a site can't dispatch (dispatchClick
-            // demands a site). Auto-pick the first compatible site.
-            site = compatibleSites[0]?.name ?? null;
+            // demands a site). Auto-pick the first one.
+            site = pickableSites[0]?.name ?? null;
         }
         return site ? `${site}:${chord}` : chord;
     }
@@ -137,19 +120,16 @@
     }
 
     function addTrigger() {
-        // Default new trigger: keyboard, global if allowed, else first
-        // compatible site (chord empty until captured).
-        const initialSite = allowsAnywhere ? null : (compatibleSites[0]?.name ?? null);
-        const binding = initialSite ? `${initialSite}:` : '';
-        pending = [...pending, { kind: 'kbd', binding } satisfies Trigger];
+        // Default new trigger: a global keyboard chord, empty until captured.
+        pending = [...pending, { kind: 'kbd', binding: '' } satisfies Trigger];
         // Autostart index = position in the combined list.
         pendingAutostart = stored.length + pending.length - 1;
     }
 
     function onCapture(index: number, newChord: string) {
         if (!newChord) {
-            // Cleared via Backspace/Delete — drop the row entirely so the
-            // user doesn't end up with a ghost row that can't dispatch.
+            // Cleared via Backspace/Delete: drop the row entirely so the
+            // artist doesn't end up with a ghost row that can't dispatch.
             removeTrigger(index);
             return;
         }
@@ -187,7 +167,7 @@
     {#each triggers as t, i (`${t.kind}:${t.binding}:${i}`)}
         {@const site = siteOf(t.binding)}
         {@const chord = chordOf(t.binding)}
-        {@const allowAnywhereHere = allowsAnywhere && t.kind === 'kbd'}
+        {@const allowAnywhereHere = t.kind === 'kbd'}
         <div class="row">
             {#if showScope}
                 <select
@@ -199,7 +179,7 @@
                     {#if allowAnywhereHere}
                         <option value="">Anywhere</option>
                     {/if}
-                    {#each compatibleSites as s (s.name)}
+                    {#each pickableSites as s (s.name)}
                         <option value={s.name}>On {s.displayName ?? s.name}</option>
                     {/each}
                 </select>

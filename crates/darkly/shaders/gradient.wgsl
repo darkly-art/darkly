@@ -1,7 +1,8 @@
-// Linear gradient: fullscreen quad with per-pixel gradient interpolation.
+// Linear gradient: a canvas-space quad with per-pixel gradient interpolation.
 // Selection masking via bound selection texture.
-// Hardware blend state = REPLACE (gradient overwrites existing content,
-// modulated by selection coverage).
+// Hardware blend state = composite (alpha-over), so a fragment the selection
+// masks out (alpha 0) leaves the destination untouched. Opaque gradient colors
+// at full coverage overwrite, as replace would.
 
 struct Uniforms {
     // Quad origin in canvas pixels (top-left corner).

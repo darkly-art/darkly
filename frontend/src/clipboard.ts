@@ -1,21 +1,21 @@
 /**
- * System clipboard integration — image encode/decode via Canvas API, plus
+ * System clipboard integration: image encode/decode via Canvas API, plus
  * a custom `web application/x-darkly-layer` MIME for cross-tab paste with
  * full blend mode + opacity + name preservation.
  *
  * All image decoding uses the browser's createImageBitmap + OffscreenCanvas,
- * which handles PNG, JPEG, WebP, GIF, BMP, SVG, AVIF, ICO — anything the
- * browser supports — and always outputs sRGB RGBA8. No prompts, no color
+ * which handles PNG, JPEG, WebP, GIF, BMP, SVG, AVIF, ICO (anything the
+ * browser supports) and always outputs sRGB RGBA8. No prompts, no color
  * profile dialogs.
  *
- * The custom MIME ("web custom" types — Chrome 104+, Edge, Safari 17.4+)
+ * The custom MIME ("web custom" types, Chrome 104+, Edge, Safari 17.4+)
  * lets two Darkly tabs round-trip a layer's full state (including blend
  * mode and opacity) through the system clipboard, while still leaving a
  * standard PNG fallback for paste into other apps.
  */
 
 /** MIME type for our rich-layer JSON envelope. The `web ` prefix is
- *  required by the Web Custom Formats spec — without it, browsers refuse
+ *  required by the Web Custom Formats spec: without it, browsers refuse
  *  to write or read the type. */
 export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
 
@@ -23,11 +23,11 @@ export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
  * Write a copied layer to the system clipboard.
  *
  * Writes BOTH a standard `image/png` (so paste into any other app works)
- * AND the custom Darkly layer JSON. When the same Darkly tab — or another
- * Darkly tab — pastes, the rich path picks up the JSON first; other apps
+ * AND the custom Darkly layer JSON. When the same Darkly tab, or another
+ * Darkly tab, pastes, the rich path picks up the JSON first; other apps
  * see the PNG.
  *
- * `richJson` is optional — pass `undefined` for the existing pixels-only
+ * `richJson` is optional: pass `undefined` for the existing pixels-only
  * path (e.g. when the rich payload isn't ready yet).
  */
 export async function copyToSystemClipboard(
@@ -53,7 +53,7 @@ export async function copyToSystemClipboard(
         }
         await navigator.clipboard.write([new ClipboardItem(items)]);
     } catch (e) {
-        // Permission denied or API unavailable — silently ignore.
+        // Permission denied or API unavailable: silently ignore.
         console.warn('Failed to write to system clipboard:', e);
     }
 }
@@ -63,7 +63,7 @@ export async function copyToSystemClipboard(
  * `null` when no Darkly tab put a layer there (e.g. content was pasted
  * from another app, or the clipboard is empty).
  *
- * Always returns synchronously-resolvable strings — no pixel decoding here;
+ * Always returns synchronously-resolvable strings: no pixel decoding here;
  * the JSON itself carries base64-encoded RGBA which the engine decodes.
  */
 export async function readLayerFromClipboard(): Promise<string | null> {
@@ -85,7 +85,7 @@ export async function readLayerFromClipboard(): Promise<string | null> {
  * Read an image from the system clipboard and decode to raw RGBA bytes.
  * Returns null if no image is found or the Clipboard API is unavailable.
  *
- * Used as the fallback when the rich layer MIME isn't present — content
+ * Used as the fallback when the rich layer MIME isn't present: content
  * came from another app, or from a Darkly version that didn't write JSON.
  */
 export async function readImageFromClipboard(): Promise<{

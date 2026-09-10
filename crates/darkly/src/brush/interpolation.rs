@@ -10,7 +10,7 @@ use super::paint_info::PaintInformation;
 
 /// Linearly interpolate all fields of two `PaintInformation` samples.
 ///
-/// `t` is 0.0–1.0: 0 returns `a`, 1 returns `b`.
+/// `t` is 0.0-1.0: 0 returns `a`, 1 returns `b`.
 pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> PaintInformation {
     PaintInformation {
         pos: lerp2(a.pos, b.pos, t),
@@ -24,11 +24,11 @@ pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> Pa
         distance: lerp(a.distance, b.distance, t),
         drawing_angle: lerp_angle(a.drawing_angle, b.drawing_angle, t),
         // Motion is filled by `StrokeEngine::place_dab` from the previous-dab
-        // delta — interpolators have no view of dab order, so they leave it zero.
+        // delta; interpolators have no view of dab order, so they leave it zero.
         motion: [0.0, 0.0],
         tilt_magnitude: lerp(a.tilt_magnitude, b.tilt_magnitude, t),
         tilt_direction: lerp_angle(a.tilt_direction, b.tilt_direction, t),
-        // Index is not meaningful for interpolated points — use b's index.
+        // Index is not meaningful for interpolated points, so use b's index.
         index: b.index,
         // Fade lerps with distance.
         fade: lerp(a.fade, b.fade, t),
@@ -45,22 +45,31 @@ fn lerp2(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
     [lerp(a[0], b[0], t), lerp(a[1], b[1], t)]
 }
 
+/// Shortest signed difference `b - a`, wrapped to (−π, π].
+///
+/// The one wrap implementation: angle lerping, Catmull-Rom angle unwrapping,
+/// and the stroke engine's stamp-orientation tracker all route through it.
+#[inline]
+pub fn shortest_angle_diff(a: f32, b: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let mut diff = (b - a) % TAU;
+    if diff > PI {
+        diff -= TAU;
+    } else if diff < -PI {
+        diff += TAU;
+    }
+    diff
+}
+
 /// Lerp angles via shortest arc (handles wrapping around 2π).
 #[inline]
 fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
-    use std::f32::consts::TAU;
-    let mut diff = (b - a) % TAU;
-    if diff > std::f32::consts::PI {
-        diff -= TAU;
-    } else if diff < -std::f32::consts::PI {
-        diff += TAU;
-    }
-    a + diff * t
+    a + shortest_angle_diff(a, b) * t
 }
 
 // ── Catmull-Rom spline interpolation ──────────────────────────────────
 
-/// Evaluate a Catmull-Rom spline at parameter `t` (0–1) for a scalar value.
+/// Evaluate a Catmull-Rom spline at parameter `t` (0-1) for a scalar value.
 ///
 /// Interpolates between `p1` and `p2` using `p0` and `p3` as outer
 /// control points for tangent estimation.
@@ -89,17 +98,8 @@ fn catmull_rom2(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) 
 /// discontinuities at the ±π boundary.
 #[inline]
 fn catmull_rom_angle(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-    use std::f32::consts::{PI, TAU};
     // Unwrap all angles relative to p1.
-    let unwrap = |a: f32, ref_: f32| -> f32 {
-        let mut d = (a - ref_) % TAU;
-        if d > PI {
-            d -= TAU;
-        } else if d < -PI {
-            d += TAU;
-        }
-        ref_ + d
-    };
+    let unwrap = |a: f32, ref_: f32| -> f32 { ref_ + shortest_angle_diff(ref_, a) };
     let u0 = unwrap(p0, p1);
     let u2 = unwrap(p2, p1);
     let u3 = unwrap(p3, p1);
@@ -108,7 +108,7 @@ fn catmull_rom_angle(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 
 /// Interpolate all fields of `PaintInformation` along a Catmull-Rom spline.
 ///
-/// Interpolates between `p1` and `p2` at parameter `t` (0–1), using
+/// Interpolates between `p1` and `p2` at parameter `t` (0-1), using
 /// `p0` and `p3` as outer control points.  Clamps pressure and
 /// tilt_magnitude to [0, 1] to prevent overshoot.
 pub fn catmull_rom_paint_info(
@@ -330,10 +330,35 @@ mod tests {
     #[test]
     fn angle_wrapping() {
         use std::f32::consts::PI;
-        // From near 2π to near 0 — should go the short way.
+        // From near 2π to near 0, it should go the short way.
         let result = lerp_angle(PI * 1.9, PI * 0.1, 0.5);
         // Midpoint should be near 0/2π, not near π.
         assert!(result.abs() < 0.5 || (result - std::f32::consts::TAU).abs() < 0.5);
+    }
+
+    /// The one wrap implementation behind `lerp_angle`, `catmull_rom_angle`'s
+    /// unwrap, and the stroke engine's orientation tracker: always the
+    /// shortest signed arc, always within (−π, π].
+    #[test]
+    fn shortest_angle_diff_wraps_at_pi() {
+        use std::f32::consts::{PI, TAU};
+
+        assert!((shortest_angle_diff(0.0, 0.5) - 0.5).abs() < 1e-6);
+        assert!((shortest_angle_diff(0.5, 0.0) + 0.5).abs() < 1e-6);
+
+        // Across the wrap: 0.1 rad short of a full turn is −0.1, not +6.18.
+        assert!((shortest_angle_diff(0.0, TAU - 0.1) + 0.1).abs() < 1e-5);
+        assert!((shortest_angle_diff(TAU - 0.1, 0.0) - 0.1).abs() < 1e-5);
+
+        // Multiple turns of winding collapse to the same short arc.
+        assert!((shortest_angle_diff(0.0, TAU * 3.0 + 0.25) - 0.25).abs() < 1e-4);
+
+        // Never leaves (−π, π], including at the antipode.
+        for i in 0..64 {
+            let b = -TAU * 2.0 + i as f32 * (TAU * 4.0 / 64.0);
+            let d = shortest_angle_diff(0.7, b);
+            assert!(d > -PI - 1e-5 && d <= PI + 1e-5, "diff {d} out of range");
+        }
     }
 
     // ── Catmull-Rom tests ────────────────────────────────────────────
@@ -355,7 +380,7 @@ mod tests {
 
     #[test]
     fn catmull_rom_collinear_matches_lerp() {
-        // Four collinear points — CR should produce the same result as lerp
+        // Four collinear points, so CR should produce the same result as lerp
         // between p1 and p2 (within floating-point tolerance).
         let p0 = pt(0.0, 0.0);
         let p1 = pt(10.0, 10.0);
@@ -375,7 +400,7 @@ mod tests {
     fn catmull_rom_right_angle_produces_curve() {
         // A right-angle turn: (0,0) → (10,0) → (10,10).
         // With CR, the midpoint (t=0.5) should NOT be on the straight line
-        // from (10,0) to (10,10) — it should curve inward.
+        // from (10,0) to (10,10); it should curve inward.
         let p0 = pt(0.0, 0.0);
         let p1 = pt(10.0, 0.0);
         let p2 = pt(10.0, 10.0);
@@ -415,7 +440,7 @@ mod tests {
         let p2 = pt_full(20.0, 0.0, 1.0);
         let p3 = pt_full(30.0, 0.0, 1.0);
 
-        // Sample at many t values — pressure should always be in [0, 1].
+        // Sample at many t values; pressure should always be in [0, 1].
         for i in 0..=20 {
             let t = i as f32 / 20.0;
             let result = catmull_rom_paint_info(&p0, &p1, &p2, &p3, t);
@@ -429,7 +454,7 @@ mod tests {
 
     #[test]
     fn catmull_rom_duplicate_endpoint_no_nan() {
-        // Duplicate endpoints (p0=p1, p3=p2) — should not produce NaN.
+        // Duplicate endpoints (p0=p1, p3=p2): should not produce NaN.
         let p1 = pt(10.0, 20.0);
         let p2 = pt(30.0, 40.0);
 

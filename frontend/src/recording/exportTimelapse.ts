@@ -1,13 +1,13 @@
 /**
- * Timelapse export — turn a tab's recorded segments into an MP4 or GIF at
- * user-chosen options (playback rate, output resolution, target aspect
- * ratio + stretch/fit/fill conversion for segments of other aspects — see
+ * Timelapse export: turn a tab's recorded segments into an MP4 or GIF at
+ * artist-chosen options (playback rate, output resolution, target aspect
+ * ratio + stretch/fit/fill conversion for segments of other aspects, see
  * `exportOptions.ts`).
  *
  * MP4 (primary): when every segment shares a decoder config AND the
  * requested resolution is exactly the packets' ({@link canPassthrough}),
  * the encoded packets pass straight through into the MP4 container via
- * Mediabunny's `EncodedVideoPacketSource` — a near-free re-mux, no decode,
+ * Mediabunny's `EncodedVideoPacketSource`: a near-free re-mux, no decode,
  * at any playback rate. Anything else (mixed aspects, non-native
  * resolution) decodes and re-encodes at a probed encoder config for the
  * requested dims, drawing each frame per the conversion method.
@@ -15,7 +15,7 @@
  * GIF (secondary): decode → draw per the conversion method at the
  * requested dims → gifenc, one GIF frame per recorded frame.
  *
- * All timestamps are synthetic — frame N plays at N/fps — regardless of
+ * All timestamps are synthetic (frame N plays at N/fps), regardless of
  * the (possibly non-monotonic) wall-clock stamps in the chunk framing.
  */
 // gifenc: https://github.com/mattdesl/gifenc by Matt DesLauriers (@mattdesl).
@@ -49,7 +49,7 @@ export interface RecordingInfo {
     /** On-disk size of the encoded segments, in bytes. */
     byteSize: number;
     segmentCount: number;
-    /** Segments grouped by document aspect ratio — more than one group
+    /** Segments grouped by document aspect ratio; more than one group
      *  means the canvas aspect changed mid-recording and the modal offers
      *  the target-aspect + conversion choice. */
     groups: AspectGroup[];
@@ -57,7 +57,7 @@ export interface RecordingInfo {
     defaultGroupIndex: number;
 }
 
-/** User-chosen export parameters, sanitized by the modal
+/** Artist-chosen export parameters, sanitized by the modal
  *  (`clampFps` / `lockedDims`). */
 export interface TimelapseExportOptions {
     fps: number;
@@ -227,7 +227,7 @@ export async function exportTimelapseGif(
     }
     gif.finish();
     // BlobPart requires Uint8Array<ArrayBuffer>; gifenc's buffer is typed
-    // ArrayBufferLike. The bytes are plain (non-shared) — cast is safe.
+    // ArrayBufferLike. The bytes are plain (non-shared), so the cast is safe.
     return new Blob([gif.bytes() as Uint8Array<ArrayBuffer>], { type: 'image/gif' });
 }
 

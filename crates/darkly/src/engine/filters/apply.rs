@@ -1,11 +1,11 @@
-//! Destructive color filters — apply a `MaskedFilterPipeline` to a node's
+//! Destructive effects: apply a registered effect to a node's
 //! pixels in place, respecting an active selection.
 //!
 //! Mirrors [`layer_flip`](super::super::layer_flip)'s structure: the region machinery
 //! is node-generic (layers and masks both live in `node_textures` keyed by
 //! `LayerId`, RGBA8 vs R8 driven by format), so a single `apply_filter`
 //! inverts a raster layer or a mask with no per-kind branching. With an active
-//! selection only the selected region changes — clipped to the selection
+//! selection only the selected region changes, clipped to the selection
 //! *shape* via the uploaded mask; with none, the whole node is filtered. The
 //! pixel extent never changes, so undo is a single [`GpuRegionAction`].
 
@@ -15,7 +15,6 @@ use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, FilterPreview, PendingFilter};
 use crate::coord::{CanvasRect, WindowRect};
 use crate::engine::protocol::{params_from_json, RawParams};
-use crate::engine::types::{ParamInfo, VeilTypeInfo};
 use crate::gpu::params::ParamValue;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
@@ -27,7 +26,7 @@ use crate::undo::GpuRegionAction;
 pub(crate) enum FilterRegion {
     /// Filter this region, masked to the selection shape when `Some`.
     Ready(CanvasRect, Option<wgpu::Texture>),
-    /// The selection resolved but is degenerate — nothing to filter.
+    /// The selection resolved but is degenerate: nothing to filter.
     Empty,
     /// The selection bbox isn't cached yet; the caller kicks a readback.
     NeedsSelection,
@@ -35,32 +34,7 @@ pub(crate) enum FilterRegion {
 
 #[handlers]
 impl DarklyEngine {
-    /// All registered filter types (id + display name + param schema), as the
-    /// same `VeilTypeInfo` shape veils/voids use. Parameter-free filters (invert)
-    /// carry an empty `params`; parametric ones (curves) carry their schema.
-    /// Drives both the frontend's dynamic Colors-menu action registration and
-    /// the filter-layer properties panel.
-    #[handler]
-    pub fn filter_types(&self) -> Vec<VeilTypeInfo> {
-        let registry = self.compositor.filter_pipeline_registry();
-        registry
-            .types()
-            .into_iter()
-            .map(|(type_id, display_name, icon, description)| VeilTypeInfo {
-                type_id,
-                display_name,
-                icon,
-                description,
-                params: registry
-                    .params(type_id)
-                    .iter()
-                    .map(|d| ParamInfo::from_def(d, None))
-                    .collect(),
-            })
-            .collect()
-    }
-
-    /// Wire entry for `apply_filter` — coerces `params` against the filter
+    /// Wire entry for `apply_filter`: coerces `params` against the filter
     /// type's schema (defaults fill any omitted values), then
     /// [`Self::apply_filter_typed`]. Parameter-free filters (invert) carry an
     /// empty `params`; parametric ones (curves/levels/hsv) carry the values the
@@ -79,9 +53,9 @@ impl DarklyEngine {
     /// Apply a destructive filter (by registered `filter_type` id) to the given
     /// node (raster layer or mask filter) with typed `params`. Returns `false`
     /// if the node isn't editable, has no texture, the type is unknown, or the
-    /// filter was deferred waiting on the selection cache. Parametric filters
-    /// bake `params` into a throwaway cache inside `filter_node_region`, exactly
-    /// as the filter-layer compose path does.
+    /// apply was deferred waiting on the selection cache. The effect instance
+    /// and its resources are built inside `apply_effect_to_region`, at the
+    /// node's own format.
     pub fn apply_filter_typed(
         &mut self,
         node_id: LayerId,
@@ -91,7 +65,7 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        if !self.compositor.filter_pipeline_registry().has(filter_type) {
+        if !self.compositor.effect_registry().has(filter_type) {
             return false;
         }
         self.auto_commit_floating();
@@ -116,17 +90,6 @@ impl DarklyEngine {
                 self.kick_selection_readback();
                 return false;
             }
-        };
-
-        // Resolve the (lazily-built, shared) pipeline before touching undo so a
-        // missing type fails before we snapshot. `has()` above guarantees Some.
-        let pipeline = match self
-            .compositor
-            .filter_pipeline_registry_mut()
-            .pipeline(filter_type, &self.gpu.device)
-        {
-            Some(p) => p,
-            None => return false,
         };
 
         // Snapshot the affected region for a single-step undo.
@@ -155,14 +118,14 @@ impl DarklyEngine {
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         self.gpu.encode("apply-filter", |enc| {
-            self.compositor.filter_node_region(
+            self.compositor.apply_effect_to_region(
                 &self.gpu.device,
                 &self.gpu.queue,
                 enc,
                 node_id,
                 region,
                 mask_view.as_ref(),
-                pipeline.as_ref(),
+                filter_type,
                 &params,
             );
         });
@@ -172,10 +135,10 @@ impl DarklyEngine {
         true
     }
 
-    /// Wire entry for `preview_filter` — coerces `params`, then
+    /// Wire entry for `preview_filter`: coerces `params`, then
     /// [`Self::preview_filter_typed`]. Drives the destructive modal's live
     /// preview: the effect is shown on the canvas non-destructively until the
-    /// user commits or cancels.
+    /// artist commits or cancels.
     #[handler]
     pub fn preview_filter(
         &mut self,
@@ -199,7 +162,7 @@ impl DarklyEngine {
         filter_type: &str,
         params: Vec<ParamValue>,
     ) -> bool {
-        if !self.compositor.filter_pipeline_registry().has(filter_type) {
+        if !self.compositor.effect_registry().has(filter_type) {
             return false;
         }
         // A preview for a different node/type must be undone before starting a new one.
@@ -253,31 +216,20 @@ impl DarklyEngine {
             preview.region,
             &preview.snapshot,
         );
-        let pipeline = match self
-            .compositor
-            .filter_pipeline_registry_mut()
-            .pipeline(filter_type, &self.gpu.device)
-        {
-            Some(p) => p,
-            None => {
-                self.filter_preview = Some(preview);
-                return false;
-            }
-        };
         let mask_view = preview
             .mask
             .as_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         let region = preview.region;
         self.gpu.encode("preview-filter", |enc| {
-            self.compositor.filter_node_region(
+            self.compositor.apply_effect_to_region(
                 &self.gpu.device,
                 &self.gpu.queue,
                 enc,
                 node_id,
                 region,
                 mask_view.as_ref(),
-                pipeline.as_ref(),
+                filter_type,
                 &params,
             );
         });
@@ -287,7 +239,7 @@ impl DarklyEngine {
     }
 
     /// Discard a live preview, restoring the node's pristine pixels. A no-op
-    /// when no preview is active (e.g. the user never edited a param).
+    /// when no preview is active (e.g. the artist never edited a param).
     #[handler]
     pub fn cancel_filter_preview(&mut self) {
         if let Some(preview) = self.filter_preview.take() {
@@ -303,7 +255,7 @@ impl DarklyEngine {
 
     /// Commit a destructive filter from the modal: restore the pristine pixels
     /// (so the authoritative apply snapshots the true "before" and clips the
-    /// selection itself), then [`Self::apply_filter_typed`] once — one undo
+    /// selection itself), then [`Self::apply_filter_typed`] once for one undo
     /// entry. Works whether or not a live preview was ever established.
     #[handler]
     pub fn commit_filter_preview(
@@ -339,7 +291,7 @@ impl DarklyEngine {
     /// Resolve the region a node filter should touch (canvas coords), plus the
     /// cropped R8 selection mask when a selection is active. With no selection
     /// the whole node extent is returned unmasked. `NeedsSelection` means the
-    /// selection bbox readback hasn't landed — the caller decides whether to
+    /// selection bbox readback hasn't landed; the caller decides whether to
     /// defer (destructive apply) or fall back (live preview).
     pub(crate) fn resolve_filter_region(&mut self, node_id: LayerId) -> FilterRegion {
         let node_extent = match self.compositor.node_texture(node_id) {
@@ -349,7 +301,7 @@ impl DarklyEngine {
         if !self.has_selection() {
             return FilterRegion::Ready(node_extent, None);
         }
-        // Selection bbox (window-local) — recomputed from the cpu cache if the
+        // Selection bbox (window-local), recomputed from the cpu cache if the
         // readback hasn't populated bounds yet, else NeedsSelection.
         let bounds = match self.selection_pixel_bounds() {
             Some(b) => b,

@@ -60,12 +60,12 @@ fn run_paint_benchmark(
 
     for _i in 0..num_frames {
         let t_paint = Instant::now();
-        // No CPU paint — GPU strokes bypass Document. Mark dirty to trigger composite.
+        // No CPU paint: GPU strokes bypass Document. Mark dirty to trigger composite.
         compositor.mark_dirty();
         let paint_us = t_paint.elapsed().as_micros();
 
         let t_render = Instant::now();
-        let submitted = compositor.render_offscreen(device, queue, doc);
+        let submitted = compositor.render_offscreen(device, queue, doc, None);
         let render_us = t_render.elapsed().as_micros();
 
         timings.push(FrameTiming {
@@ -87,7 +87,7 @@ fn profile_render_pipeline() {
     let height = 1080u32;
     // Use Rgba8Unorm as the "surface format" for the compositor.
     // In the browser this would be an sRGB surface, but for profiling the
-    // compositing pipeline the format of the present pipeline doesn't matter —
+    // compositing pipeline the format of the present pipeline doesn't matter;
     // we never call render() with a surface.
     let surface_format = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -101,7 +101,7 @@ fn profile_render_pipeline() {
         doc.root_id(),
     );
 
-    // Set up layers: bg + paint layer (gradient fill removed — GPU-only now).
+    // Set up layers: bg + paint layer (gradient fill removed, GPU-only now).
     let _bg_id = doc.add_raster_layer(None);
 
     let paint_id = doc.add_raster_layer(None);
@@ -114,7 +114,7 @@ fn profile_render_pipeline() {
 
     // Warm up: first render composites everything (full canvas)
     let t_warmup = Instant::now();
-    let _ = compositor.render_offscreen(&device, &queue, &mut doc);
+    let _ = compositor.render_offscreen(&device, &queue, &mut doc, None);
     let warmup_us = t_warmup.elapsed().as_micros();
     eprintln!(
         "warmup (full composite): {:.1}ms",

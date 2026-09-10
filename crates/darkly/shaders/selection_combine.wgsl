@@ -1,4 +1,4 @@
-// Selection boolean ops — combines two R8 selection masks.
+// Selection boolean ops: combines two R8 selection masks.
 //
 // Modes: 0=Add, 1=Subtract, 2=Intersect, 3=Invert (ignores shape).
 // Uses the shared fullscreen triangle vertex shader.

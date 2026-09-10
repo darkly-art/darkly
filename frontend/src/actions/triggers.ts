@@ -9,7 +9,7 @@ import { brushGraph } from '../state/brush_graph.svelte';
 /** Derive a canonical chord from a MouseEvent's modifier state.
  *  Format: sorted modifiers joined with '+', then the interaction type.
  *  Examples: "click", "alt+click", "ctrl+shift+doubleClick".
- *  Primitive modifier vocabulary — `$mod` is resolved at chord-index
+ *  Primitive modifier vocabulary: `$mod` is resolved at chord-index
  *  build time (see `rebuildClickIndex`), not here. */
 export function chordName(e: MouseEvent): string {
     const mods = canonicalModsFromEvent(e);
@@ -28,7 +28,7 @@ export function chordName(e: MouseEvent): string {
 
 // Drag verb vocabulary. `DRAG_VERB_BY_BUTTON` is the sole owner of the
 // button→verb mapping; `DRAG_VERBS` derives the full verb set from it so the
-// vocabulary lives in exactly one place — `dragChord` maps a button onto a
+// vocabulary lives in exactly one place: `dragChord` maps a button onto a
 // verb, `dragModifierActions` enumerates them all.
 const DEFAULT_DRAG_VERB = 'drag';
 const DRAG_VERB_BY_BUTTON: Record<number, string> = { 1: 'middleDrag', 2: 'rightDrag' };
@@ -45,13 +45,13 @@ export function dragChord(e: PointerEvent): string {
 
 /**
  * Resolve an action's effective mouse trigger list. The binding lives in
- * `mouseclicks.<id>` under the three-layer config — defaults.yaml +
+ * `mouseclicks.<id>` under the three-layer config: defaults.yaml +
  * overlay + user override. Multi-binding entries (e.g. `isolateLayer`
  * firing from both `layerThumb:alt+click` and `maskThumb:alt+click`) are
  * joined with `|` in the YAML parser; we split them back here.
  *
  * Format: each entry is `"<site>:<chord>"`. Empty string means
- * "no mouse trigger" — used by overlays that explicitly disable a binding.
+ * "no mouse trigger", used by overlays that explicitly disable a binding.
  */
 export function effectiveMouseClicks(actionId: string): string[] {
     const v = config.get(`mouseclicks.${actionId}`);
@@ -122,7 +122,7 @@ function resolveChordAt(site: string, chord: string) {
 }
 
 /** The winning actions for every drag verb under a held modifier set at a
- *  site — the specificity-aware arbiter that modifier-armed cursors (the
+ *  site: the specificity-aware arbiter that modifier-armed cursors (the
  *  color picker, the clone set-source crosshair) gate on. Because
  *  `resolveChordAt` runs the same resolution the dispatcher uses, an
  *  engaged cursor and the eventual dispatch can never disagree about which
@@ -184,16 +184,23 @@ export function dispatchDrag(
     const startX = e.clientX;
     const startY = e.clientY;
 
+    // Window-level listeners hear every pointer; only the one that started
+    // the drag may scrub or end it, or a stray palm touch would cut a
+    // gesture short.
     const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== e.pointerId) return;
         const action = actions.get(actionId);
         action?.onMove?.(dragCtx, ev, ev.clientX - startX, ev.clientY - startY);
     };
     const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== e.pointerId) return;
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
         target?.releasePointerCapture?.(ev.pointerId);
-        actions.release(actionId, dragCtx);
+        // `upEvent` is the terminating event, so a deactivate hook can tell
+        // a pointerup apart from a pointercancel.
+        actions.release(actionId, { ...dragCtx, upEvent: ev });
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);

@@ -1,4 +1,4 @@
-//! Multiply node — Scalar * Scalar → Scalar.
+//! Multiply node: Scalar * Scalar → Scalar.
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::node::BrushNodeRegistration;
@@ -10,7 +10,7 @@ pub fn register() -> BrushNodeRegistration {
     ScalarBinaryNode {
         type_id: TYPE_ID,
         display_name: "Multiply",
-        description: "Multiplies two values — use it to scale one signal by another, e.g. fade pressure by texture.",
+        description: "Multiplies two values: use it to scale one signal by another, e.g. fade pressure by texture.",
         a_description: "First factor",
         b_description: "Second factor",
         result_description: "Product of a \u{00d7} b",

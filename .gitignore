@@ -4,6 +4,7 @@ target
 Graphite
 /krita
 /gimp
+/gegl
 .claude
 frontend/wasm/pkg
 frontend/dist

@@ -1,5 +1,5 @@
 // Pure vector <-> pad-position math for the OffsetPad widget. Kept free of DOM
-// so it can be unit-tested headlessly (vitest runs in node — no `window`),
+// so it can be unit-tested headlessly (vitest runs in node, no `window`),
 // mirroring the `lib/slider.ts` precedent.
 //
 // The pad is a square of `size` px with the crosshair center at its middle. A
@@ -47,7 +47,7 @@ export function clampOffset(offset: [number, number], max: number): [number, num
     return [(offset[0] / mag) * max, (offset[1] / mag) * max];
 }
 
-/** Angle (degrees, 0–360, 0 = +x / right) and magnitude of an offset vector —
+/** Angle (degrees, 0-360, 0 = +x / right) and magnitude of an offset vector:
  *  the compact numeric readout beside the pad. */
 export function offsetPolar(offset: [number, number]): { angle: number; distance: number } {
     const distance = Math.hypot(offset[0], offset[1]);

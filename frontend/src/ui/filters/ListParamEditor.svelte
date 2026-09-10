@@ -6,13 +6,14 @@
         listItemSchema,
         newListEntry,
         cloneParamValue,
-        type FilterParam,
+        channelLabel,
+        type ParamInfo,
         type FilterParamValue,
         type ListValue,
         type ColorValue,
     } from './filterParams';
 
-    // Generic editor for a `list` param — a dynamic list of homogeneous entries,
+    // Generic editor for a `list` param: a dynamic list of homogeneous entries,
     // each a bordered group of `ParamRow`s bound into its `{ name: value }`
     // record. Add appends `newListEntry()`; per-entry Remove drops it. "Add" is
     // disabled at the schema's `max` cap (no silently-dropped entries, no
@@ -24,7 +25,7 @@
     // drag-reordered by its header. Collapse is ephemeral UI state kept in a
     // parallel array that moves/splices in lockstep with the entries.
     type Props = {
-        param: FilterParam;
+        param: ParamInfo;
         oninput?: () => void;
         onchange?: () => void;
     };
@@ -37,7 +38,7 @@
     // Parallel to `entries`; a missing/false slot means collapsed (the default).
     let expanded = $state<boolean[]>([]);
 
-    // The first `color`-kind field in the schema, if any — its per-entry value
+    // The first `color`-kind field in the schema, if any: its per-entry value
     // becomes the header swatch (falls back to the entry index when absent).
     const colorField = $derived(schema.find((d) => d.kind === 'color')?.name);
 
@@ -133,7 +134,9 @@
 
 <div class="list-editor">
     <div class="list-head">
-        <span class="label">{param.name}</span>
+        <span class="label" title={param.description ?? undefined}
+            >{param.label ?? channelLabel(param.name)}</span
+        >
         <span class="count">{entries.length}{maxLen !== Infinity ? ` / ${maxLen}` : ''}</span>
     </div>
 

@@ -18,7 +18,7 @@ class RectSelectTool extends ToolBase {
     // Krita-style integer-pixel snapping: rectangle selections always commit to
     // pixel-aligned bounds (mirrors `QRectF::toRect()` in Krita's
     // `KisToolSelectRectangular::finishRect`). The preview overlay snaps too so
-    // what the user sees during the drag matches what they get on release.
+    // what the artist sees during the drag matches what they get on release.
     private pushPreviewOverlay(): void {
         const engine = this.engine;
         if (!engine || !this.dragStart || !this.dragEnd) return;
@@ -77,7 +77,7 @@ class RectSelectTool extends ToolBase {
         const h = Math.abs(sy1 - sy0);
 
         // Only commit if the snapped rect has meaningful size. `antialias`
-        // is off — pixel-aligned bounds need no SDF smoothing and the result
+        // is off: pixel-aligned bounds need no SDF smoothing and the result
         // is a crisp 1-bit mask.
         if (w > 0 && h > 0) {
             const mode = selectionMode(e);
@@ -101,9 +101,7 @@ class RectSelectTool extends ToolBase {
 
 export const rectSelectTool: ToolDescriptor = {
     id: 'rect_select',
-    icon: 'boxicons:square-dashed',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'rectSelectTool',
     create: (inst: DarklyInstance) => new RectSelectTool(inst),
 };

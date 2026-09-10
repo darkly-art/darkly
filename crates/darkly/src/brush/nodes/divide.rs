@@ -1,4 +1,4 @@
-//! Divide node — Scalar / Scalar → Scalar.
+//! Divide node: Scalar / Scalar → Scalar.
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::node::BrushNodeRegistration;
@@ -10,7 +10,7 @@ pub fn register() -> BrushNodeRegistration {
     ScalarBinaryNode {
         type_id: TYPE_ID,
         display_name: "Divide",
-        description: "Divides one value by another — use it to normalize one signal against another, e.g. scale pressure down where a texture is bright. Dividing by zero yields zero.",
+        description: "Divides one value by another: use it to normalize one signal against another, e.g. scale pressure down where a texture is bright. Dividing by zero yields zero.",
         a_description: "Dividend",
         b_description: "Divisor",
         result_description: "Quotient of a \u{00f7} b (zero when b is zero)",

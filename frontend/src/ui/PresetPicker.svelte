@@ -13,7 +13,7 @@
 
     function pick(name: string) {
         // Just sets `app.baseSettings` in the user layer. The overlay
-        // resolves live underneath any future user overrides — no file
+        // resolves live underneath any future user overrides: no file
         // copy, no "apply preset" step.
         config.setBase(name);
     }

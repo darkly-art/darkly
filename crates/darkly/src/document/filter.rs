@@ -1,4 +1,4 @@
-//! Filter nodes — typed effects attached to a host layer or group.
+//! Filter nodes: typed effects attached to a host layer or group.
 //!
 //! A filter is a node in its own right (its own id, its own `NodeCommon`)
 //! that sits on a host's `filters` list, separate from the regular layer
@@ -7,8 +7,8 @@
 //! `FilterKind::apply` for each visible filter. The outer compositor never
 //! branches on whether a host has a mask.
 //!
-//! Per the Modularity Principle in [AGENTS.md], each kind lives in a single
-//! file under `document/filters/<kind>.rs` and exports a `register()` that
+//! Per the Modularity Principle in [CONTRIBUTING.md], each kind lives in a
+//! single file under `document/filters/<kind>.rs` and exports a `register()` that
 //! returns a [`FilterEntityRegistration`]. `build.rs` auto-discovers the directory
 //! and emits `document/filters/mod.rs`.
 
@@ -23,11 +23,15 @@ use crate::format::error::LoadError;
 use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 
 /// What each filter module returns from its `register()` function.
-/// Mirrors `VeilRegistration` / `ToolRegistration` / `FilterRegistration` —
+/// Mirrors `VeilRegistration` / `ToolRegistration` / `FilterRegistration`,
 /// auto-discovered by `build.rs` via the directory scan.
 pub struct FilterEntityRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Iconify name shown on the filter's row under its host layer.
+    pub icon: &'static str,
+    /// One-sentence summary of what attaching this filter does.
+    pub description: &'static str,
     /// Produce the manifest body + any pixel-blob refs. Infallible by
     /// construction; see the analogous note on
     /// [`crate::document::layer_kind::LayerKindRegistration::serialize`].
@@ -36,13 +40,40 @@ pub struct FilterEntityRegistration {
     /// freshly-allocated slotmap key.
     pub deserialize: fn(body: &serde_json::Value, id: LayerId) -> Result<Filter, LoadError>,
     /// Rewrite every cross-reference inside this filter from
-    /// manifest-old id to fresh slotmap id. Non-optional — same
+    /// manifest-old id to fresh slotmap id. Non-optional, same
     /// rationale as
     /// [`crate::document::layer_kind::LayerKindRegistration::remap_ids`].
     pub remap_ids: fn(&mut Filter, &IdMap),
 }
 
-/// Auto-discovered filter registry — owns the per-kind registration records
+/// Id of the catalog this registry projects into. Distinct from the `filters`
+/// catalog of `crate::gpu::filter`, which registers colour adjustments rather
+/// than the mask and selection modifiers attached to a host layer.
+pub const CATALOG_ID: &str = "layerFilters";
+
+impl FilterEntityRegistration {
+    pub fn catalog_entry(&self) -> crate::catalog::CatalogEntry {
+        crate::catalog::CatalogEntry::new(self.type_id, self.display_name)
+            .with_icon(self.icon)
+            .with_description(self.description)
+    }
+}
+
+/// The layer-filter catalog: every registered kind, sorted by `type_id`.
+pub fn catalog() -> crate::catalog::Catalog {
+    crate::catalog::Catalog::new(
+        CATALOG_ID,
+        "Layer Filters",
+        registry()
+            .all()
+            .into_iter()
+            .map(FilterEntityRegistration::catalog_entry)
+            .collect(),
+    )
+    .with_description("Typed effects attached to a single host layer or group.")
+}
+
+/// Auto-discovered filter registry: owns the per-kind registration records
 /// and hands out `&'static FilterEntityRegistration` references for the dispatch
 /// surface (`Filter::kind`) and the UI.
 pub struct FilterRegistry {
@@ -121,7 +152,7 @@ impl Filter {
         }
     }
 
-    /// Registration record for this filter's kind — owns `type_id` (wire
+    /// Registration record for this filter's kind: owns `type_id` (wire
     /// format) and `display_name` (UI). The match dispatch references each
     /// kind module's own `TYPE_ID` constant, so the identity string is
     /// declared exactly once per kind.
@@ -129,7 +160,7 @@ impl Filter {
         self.kind.kind_reg()
     }
 
-    /// Convenience for the wire format / save file — just the stable `type_id`.
+    /// Convenience for the wire format / save file: just the stable `type_id`.
     pub fn type_id(&self) -> &'static str {
         self.kind_reg().type_id
     }
@@ -166,7 +197,7 @@ impl FilterKind {
     }
 
     /// Registration record for this kind. Pulled from the filter registry
-    /// keyed by each kind module's own `TYPE_ID` constant — no parallel
+    /// keyed by each kind module's own `TYPE_ID` constant, with no parallel
     /// string literals.
     pub fn kind_reg(&self) -> &'static FilterEntityRegistration {
         use super::filters::{mask, selection};

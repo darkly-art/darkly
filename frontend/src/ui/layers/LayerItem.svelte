@@ -7,6 +7,8 @@
     import { toast } from '../../state/toast.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
+    import { flattenOffer, smartObjectOffer } from './menu_offers';
+    import { layerDropTarget } from './dropTarget.svelte';
     import MaskChainControl from './MaskChainControl.svelte';
 
     interface Modifier {
@@ -17,18 +19,26 @@
     let { layer, depth = 0, onupdate }: {
         layer: {
             type: string; id: number; name: string; visible: boolean; locked?: boolean;
-            // Mirrors `Document::is_node_editable` — false when this node OR
+            // Mirrors `Document::is_node_editable`: false when this node OR
             // any ancestor is locked. `locked` is the node's own flag (drives
             // the icon); `editable` is the effective form (drives interaction
             // gates: rename, drag, mask/layer menu mutations).
             editable?: boolean;
+            // Whether paint lands on this layer: false for kinds whose pixels
+            // are generated (void, filter, vector). Mirrors
+            // `DarklyEngine::is_node_paintable`; drives the Rasterize offer.
+            paintable?: boolean;
             // Per-kind capability flags from the layer's registration (see
             // LayerKindRegistration). The panel reads these instead of
-            // branching on `type` — a new layer kind declares its own and the
+            // branching on `type`; a new layer kind declares its own and the
             // UI follows with no edit here.
             canHaveMask?: boolean;
             canRename?: boolean;
             hasThumbnail?: boolean;
+            // Whether this row offers "Convert to Smart Object", answered by
+            // the engine (`can_convert_layer_to_smart_object`) so the rule
+            // lives with the operation rather than being restated here.
+            canBecomeSmartObject?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
             // Iconify icon rendered as the panel thumbnail when the kind has no
@@ -42,6 +52,7 @@
     } = $props();
 
     let editable = $derived(layer.editable !== false);
+    let paintable = $derived(layer.paintable !== false);
 
     // The mask modifier (if any) is one of the host's modifiers. The model
     // permits N; the UI exposes one.
@@ -62,13 +73,12 @@
     let dupLabel = $derived(isMulti ? `Duplicate ${selectionSize} Layers` : 'Duplicate Layer');
     let mergeLabel = $derived(isMulti ? `Merge ${selectionSize} Layers` : 'Merge Down');
     // The mask is the active edit target whenever the active node id IS the
-    // mask modifier id — no session redirect.
+    // mask modifier id (no session redirect).
     let isEditingMask = $derived(
         maskModifier !== null && app.activeLayerId === maskModifier.id,
     );
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
-    let dropPos = $state<'none' | 'above' | 'below'>('none');
 
     let layerThumb = $derived(layer.hasThumbnail && app.engine ? getNodeThumbnail(layer.id) : '');
     let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
@@ -104,8 +114,12 @@
 
     let canAddMask = $derived(Boolean(layer.canHaveMask) && !hasMask && editable);
 
+    // Drives both the menu entry and its click handler (see `flattenOffer`).
+    let flattenLabel = $derived(flattenOffer({ paintable, hasMask }));
+    let offersSmartObject = $derived(smartObjectOffer(layer, isMulti));
+
     // Chord dispatch is owned by `use:bindingSite` on each preview
-    // element below — `bindingSite` intercepts modifier+click in capture
+    // element below: `bindingSite` intercepts modifier+click in capture
     // phase and dispatches against its named site. These onclick handlers
     // are the no-chord fallback (plain click → select / toggle visibility).
     function toggleVisibility(e: MouseEvent) {
@@ -121,7 +135,7 @@
     }
 
     function onLayerClick(e: MouseEvent) {
-        // The layer-item body has no chord bindings — modifier+click is
+        // The layer-item body has no chord bindings; modifier+click is
         // reserved for the previews. Plain / ctrl / shift dispatch is
         // shared with LayerGroup via app.handleLayerRowClick.
         app.handleLayerRowClick(layer.id, e);
@@ -152,7 +166,7 @@
         e.preventDefault();
         e.stopPropagation();
         // If the right-clicked row is already in the multi-selection,
-        // keep the selection intact — the menu acts on the whole set.
+        // keep the selection intact, since the menu acts on the whole set.
         // If it's not in the selection, replace the selection with just
         // this row (Photoshop / GIMP behavior). This way the menu and
         // every action it dispatches operate on a selection that
@@ -179,14 +193,33 @@
         ];
         if (!isMulti) {
             items.push({ label: 'Add mask', disabled: !canAddMask, onclick: menuAddMask });
+            items.push({
+                label: 'Alpha to Selection',
+                disabled: !layer.hasThumbnail,
+                onclick: menuAlphaToSelection,
+            });
         }
         items.push({
             label: mergeLabel,
             disabled: !isMulti && (!canMergeDownForThis || !editable),
             onclick: menuMerge,
         });
-        if (!isMulti && hasMask) {
-            items.push({ label: 'Flatten', disabled: !editable, onclick: menuFlatten });
+        if (!isMulti && flattenLabel) {
+            items.push({
+                label: flattenLabel,
+                disabled: !editable,
+                onclick: menuFlatten,
+            });
+        }
+        // Sits next to Flatten: both swap the layer for a different
+        // representation of the same picture, in opposite directions: one
+        // bakes it down to pixels, the other keeps the pixels as a source you
+        // can keep rescaling.
+        if (offersSmartObject) {
+            items.push({
+                label: 'Convert to Smart Object',
+                onclick: menuConvertToSmartObject,
+            });
         }
         items.push({ separator: true });
         items.push({
@@ -197,7 +230,7 @@
         return items;
     });
 
-    // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
+    // Structural menu items dispatch WITHOUT `ctx.layerId`: the action
     // handler reads `app.selectedLayerIds` (the right-click handler above
     // guarantees the clicked row is in the selection). This is what
     // makes "Delete 3 Layers" actually delete 3 layers; the v1 attempt
@@ -220,8 +253,17 @@
     }
 
     function menuFlatten() {
-        if (!hasMask) return;
+        if (!flattenLabel) return;
         actions.dispatch('flatten');
+        onupdate();
+    }
+
+    // Dispatched with an explicit `layerId`: this one acts on the row that was
+    // right-clicked, not on the selection, because the entry is offered for a single
+    // row only (see `smartObjectOffer`).
+    function menuConvertToSmartObject() {
+        if (!offersSmartObject) return;
+        actions.dispatch('convertLayerToSmartObject', { layerId: layer.id });
         onupdate();
     }
 
@@ -268,6 +310,14 @@
         onupdate();
     }
 
+    // Same seam as the mask entry above: the menu row and the layerThumb
+    // $mod+click gesture both land on the action.
+    function menuAlphaToSelection() {
+        if (!layer.hasThumbnail) return;
+        actions.dispatch('alphaToSelection', { layerId: layer.id });
+        onupdate();
+    }
+
     function removeMask() {
         if (app.engine) {
             app.engine.api.removeMask({ id: layer.id });
@@ -292,71 +342,6 @@
 
     let draggable = $state(true);
 
-    function onDragStart(e: DragEvent) {
-        // Grabbed row IS in selection → drag the whole set. Grabbed row
-        // is NOT in selection → drag only it, and replace the selection
-        // with just it (focus commits to what the user grabbed).
-        const ids = app.isSelected(layer.id)
-            ? [...app.selectedLayerIds]
-            : [layer.id];
-        if (!app.isSelected(layer.id)) {
-            app.selectLayer(layer.id);
-        }
-        e.dataTransfer?.setData(
-            'application/x-darkly-layers',
-            JSON.stringify(ids),
-        );
-        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-    }
-
-    function onDragOver(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.dataTransfer) return;
-        e.dataTransfer.dropEffect = 'move';
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        dropPos = ratio < 0.5 ? 'above' : 'below';
-    }
-
-    function onDragLeave(e: DragEvent) {
-        const related = e.relatedTarget as Node | null;
-        if (!related || !(e.currentTarget as HTMLElement).contains(related)) {
-            dropPos = 'none';
-        }
-    }
-
-    async function onDrop(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        dropPos = 'none';
-        const payload = e.dataTransfer?.getData('application/x-darkly-layers');
-        const engine = app.engine;
-        if (!payload || !engine) return;
-        let ids: number[];
-        try { ids = JSON.parse(payload) as number[]; } catch { return; }
-        if (!Array.isArray(ids) || ids.length === 0) return;
-        // Dropping the dragged set onto one of its own members is a no-op
-        // — the engine would reject it as self-referential anyway.
-        if (ids.includes(layer.id)) return;
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        const where = ratio < 0.5 ? 'after' : 'before';
-
-        try {
-            const skipped = await engine.api.moveLayers({
-                ids, target: { target_type: where, target_id: layer.id },
-            });
-            if (skipped > 0) {
-                toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
-            }
-        } catch (e: any) {
-            toast.show('error', e.message ?? String(e));
-        }
-        onupdate();
-    }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -364,19 +349,17 @@
     class="layer-item"
     class:active={isActive}
     class:selected={isSelected}
-    class:drop-above={dropPos === 'above'}
-    class:drop-below={dropPos === 'below'}
     onclick={onLayerClick}
     ondblclick={startRename}
     oncontextmenu={onLayerContextMenu}
     role="button"
     tabindex="-1"
     draggable={draggable && editable ? 'true' : 'false'}
-    ondragstart={onDragStart}
-    ondragover={onDragOver}
-    ondragleave={onDragLeave}
-    ondrop={onDrop}
-    ondragend={() => { dropPos = 'none'; }}
+    use:layerDropTarget={{
+        rowId: layer.id,
+        draggable: draggable && editable,
+        onupdate,
+    }}
     style:padding-left="{8 + depth * 16}px"
 >
     <button
@@ -504,27 +487,7 @@
         background: var(--bg-active);
     }
 
-    .layer-item.drop-above::before {
-        content: '';
-        position: absolute;
-        top: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
-    .layer-item.drop-below::after {
-        content: '';
-        position: absolute;
-        bottom: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
     .vis-btn {
         width: 24px;

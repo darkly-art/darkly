@@ -6,7 +6,7 @@ const PI = Math.PI;
 const ALL_UNITS: UnitType[] = ['Normalized', 'Percent', 'Degrees', 'Raw', 'Pixels'];
 
 describe('units', () => {
-    // Round-trip across every unit — mirrors graph.rs `unit_type_conversion_round_trip`.
+    // Round-trip across every unit, mirroring graph.rs `unit_type_conversion_round_trip`.
     it('toPort(toDisplay(v)) ≈ v for every unit', () => {
         for (const u of ALL_UNITS) {
             for (const v of [0, 0.25, 0.5, 0.75, 1]) {
@@ -16,7 +16,7 @@ describe('units', () => {
         }
     });
 
-    // Reference values — the drift guard. These are the *exact same literals*
+    // Reference values: the drift guard. These are the *exact same literals*
     // as the Rust reference test (graph.rs `unit_type_display_values`), so the
     // TS table can never silently diverge from `UnitType`. Pixels is added here
     // (Rust's test omits it) because aligning Pixels is a goal of this change.
@@ -35,7 +35,7 @@ describe('units', () => {
         expect(UNITS.Pixels.toDisplay(0.5)).toBe(0.5);
     });
 
-    // Suffix — mirrors graph.rs `unit_type_suffix`, plus Pixels.
+    // Suffix, mirroring graph.rs `unit_type_suffix`, plus Pixels.
     it('has the correct suffix per unit', () => {
         expect(UNITS.Percent.suffix).toBe('%');
         expect(UNITS.Degrees.suffix).toBe('°');

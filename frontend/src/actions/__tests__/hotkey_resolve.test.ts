@@ -27,17 +27,18 @@ describe('parseBinding', () => {
     });
 
     it('parses a tool-scope on a sited binding', () => {
-        // `<site>@<toolGroup>:<chord>` — site=canvas, scope=paint, chord=shift+drag.
-        // This is the exact form `brushSizeAdjust` uses so its shift+drag scrub
-        // only fires when a paint-group tool is active and not when selection
-        // tools are using shift+drag for add-to-selection.
+        // `<site>@<toolGroup>:<chord>`, with site=canvas, scope=paint,
+        // chord=shift+drag. This is the exact form `brushSizeAdjust` uses so
+        // its shift+drag scrub only fires when a paint-group tool is active
+        // and not when selection tools are using shift+drag for
+        // add-to-selection.
         expect(parseBinding('canvas@paint:shift+drag')).toEqual({
             site: 'canvas', scope: 'paint', brush: null, chord: 'shift+drag',
         });
     });
 
     it('parses a tool-scope with no site (global-but-tool-scoped)', () => {
-        // `@<toolGroup>:<chord>` — no DOM site, only tool-scope. Useful for
+        // `@<toolGroup>:<chord>`: no DOM site, only tool-scope. Useful for
         // future keyboard hotkeys that should only fire under a specific tool.
         expect(parseBinding('@paint:KeyB')).toEqual({
             site: null, scope: 'paint', brush: null, chord: 'KeyB',
@@ -45,7 +46,7 @@ describe('parseBinding', () => {
     });
 
     it('parses a brush dimension after the tool-scope', () => {
-        // `<site>@<toolGroup>@<brush>:<chord>` — the clone brush's set-source
+        // `<site>@<toolGroup>@<brush>:<chord>`: the clone brush's set-source
         // gesture. Brush is the third `@`-part.
         expect(parseBinding('canvas@paint@clone:$mod+drag')).toEqual({
             site: 'canvas', scope: 'paint', brush: 'clone', chord: '$mod+drag',
@@ -165,20 +166,20 @@ describe('resolveChord', () => {
     it('regression (bug: shift+drag w/ select tool fired brushSizeAdjust): tool-scoped entry skipped when active tool group differs', () => {
         // brushSizeAdjust binding becomes `canvas@paint:shift+drag`. When the
         // active tool is a select-group tool, the lookup must NOT resolve to
-        // it — even though the click site (canvas) matches — because the tool
+        // it, even though the click site (canvas) matches, because the tool
         // scope doesn't. The dispatcher then returns null and the pointer
         // falls through to rect_select.onPointerDown, where selectionMode(e)
         // reads e.shiftKey and commits add-to-selection.
         const e = scopedEntries(['canvas', 'paint', 'brushSizeAdjust']);
-        // Active tool group is 'select' — does not match 'paint' scope.
+        // Active tool group is 'select': does not match 'paint' scope.
         expect(resolveChord(e, [{ name: 'canvas' }], 'select')).toBeNull();
-        // Active tool group is 'paint' — matches; action fires.
+        // Active tool group is 'paint': matches; action fires.
         const r = resolveChord(e, [{ name: 'canvas' }], 'paint');
         expect(r?.entry.actionId).toBe('brushSizeAdjust');
     });
 
     it('tool-scope alone (no site) fires regardless of site chain', () => {
-        // `@paint:KeyB` — no DOM site, only tool-scope. Fires whenever paint
+        // `@paint:KeyB`: no DOM site, only tool-scope. Fires whenever paint
         // group is active, independent of focus.
         const e = scopedEntries([null, 'paint', 'brushPresetReset']);
         expect(resolveChord(e, [], 'paint')?.entry.actionId).toBe('brushPresetReset');

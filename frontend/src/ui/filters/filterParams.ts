@@ -11,38 +11,26 @@
  * grouping is unit-testable.
  */
 
+import type { ParamInfo, ParamValue } from '../../engine/protocol_gen';
+
+// The panel's own vocabulary for param *values*; the wire type is authoritative
+// and is re-exported rather than restated. (The hand-written union that used to
+// live here had already drifted: it omitted `string`, which the blender void's
+// `url` param carries.)
+export type { ParamInfo };
+
 export type CurvePoints = [number, number][];
-/** `[inBlack, inWhite, gamma, outBlack, outWhite]` — a Levels transfer. */
+/** `[inBlack, inWhite, gamma, outBlack, outWhite]`: a Levels transfer. */
 export type LevelsValues = [number, number, number, number, number];
-/** Normalized sRGB `[r, g, b]` in `[0,1]` — a `ParamValue::Color`. */
+/** Normalized sRGB `[r, g, b]` in `[0,1]`: a `ParamValue::Color`. */
 export type ColorValue = [number, number, number];
-/** A 2D vector `[x, y]` — a `ParamValue::Vec2` (offset pad). */
+/** A 2D vector `[x, y]`: a `ParamValue::Vec2` (offset pad). */
 export type Vec2Value = [number, number];
-/** A dynamic list of named-value entries — a `ParamValue::List`. */
+/** A dynamic list of named-value entries: a `ParamValue::List`. */
 export type ListValue = Record<string, FilterParamValue>[];
 
-/** A concrete param value on the wire (matches `ParamValue` in `protocol_gen`). */
-export type FilterParamValue =
-    | number
-    | boolean
-    | CurvePoints
-    | LevelsValues
-    | ColorValue
-    | Vec2Value
-    | ListValue;
-
-/** One entry of a filter's `params` array — a `ParamInfo` view. */
-export interface FilterParam {
-    kind: string;
-    name: string;
-    min?: number;
-    max?: number;
-    default: FilterParamValue;
-    value?: FilterParamValue;
-    /** Enum: the option labels (stored value is the index into this).
-     *  List: the item schema, one `FilterParam` per entry field. */
-    options?: string[] | FilterParam[];
-}
+/** A concrete param value on the wire. */
+export type FilterParamValue = ParamValue;
 
 /** Kinds that are per-channel tone params, sharing the channel selector. */
 export function isChannelParam(kind: string): boolean {
@@ -51,7 +39,7 @@ export function isChannelParam(kind: string): boolean {
 
 /** Deep-clone a param value (curve pairs / levels arrays / list entries can't be
  *  `structuredClone`d through Svelte proxies, so copy by hand; scalars pass
- *  through). List entries are `{ name: value }` objects — cloned field-by-field
+ *  through). List entries are `{ name: value }` objects, cloned field-by-field
  *  so a modal's scratch copy never aliases back into the shared schema. */
 export function cloneParamValue<T extends FilterParamValue>(v: T): T {
     if (!Array.isArray(v)) return v;
@@ -68,11 +56,11 @@ export function cloneParamValue<T extends FilterParamValue>(v: T): T {
 
 /** True when a param has a meaningful neutral center to snap back to, and so
  *  earns a reset-to-default button: a 2D offset pad (recenters), or a numeric
- *  slider whose default sits in the *interior* of its range — a value you nudge
+ *  slider whose default sits in the *interior* of its range: a value you nudge
  *  away from in both directions, like scale's 1.0 between 0.9 and 1.1. Sliders
  *  whose default is a range endpoint (blur, which rests at 0) and deliberate
  *  picks (color) get none. */
-export function paramIsResettable(param: FilterParam): boolean {
+export function paramIsResettable(param: ParamInfo): boolean {
     if (param.kind === 'vec2') return true;
     if (param.kind === 'float' || param.kind === 'int') {
         const { min, max, default: d } = param;
@@ -87,17 +75,17 @@ export function paramIsResettable(param: FilterParam): boolean {
     return false;
 }
 
-/** The item schema of a `list` param — one `FilterParam` per entry field.
+/** The item schema of a `list` param: one `ParamInfo` per entry field.
  *  Empty for non-list params (whose `options` is enum labels, not a schema). */
-export function listItemSchema(param: FilterParam): FilterParam[] {
+export function listItemSchema(param: ParamInfo): ParamInfo[] {
     if (param.kind !== 'list' || !Array.isArray(param.options)) return [];
-    const opts = param.options as (string | FilterParam)[];
-    return opts.every((o) => typeof o === 'object') ? (opts as FilterParam[]) : [];
+    const opts = param.options as (string | ParamInfo)[];
+    return opts.every((o) => typeof o === 'object') ? (opts as ParamInfo[]) : [];
 }
 
 /** Build a fresh list entry from an item schema: each field seeded to a
  *  deep-clone of its default. */
-export function newListEntry(schema: FilterParam[]): Record<string, FilterParamValue> {
+export function newListEntry(schema: ParamInfo[]): Record<string, FilterParamValue> {
     const entry: Record<string, FilterParamValue> = {};
     for (const p of schema) entry[p.name] = cloneParamValue(p.default);
     return entry;
@@ -106,13 +94,13 @@ export function newListEntry(schema: FilterParam[]): Record<string, FilterParamV
 /** Seed an editable scratch copy of a schema's params for a modal: each param's
  *  `value` set to a deep-clone of its `default`. Editing the copy never touches
  *  the shared schema array. */
-export function seedScratchParams(params: FilterParam[]): FilterParam[] {
+export function seedScratchParams(params: ParamInfo[]): ParamInfo[] {
     return params.map((p) => ({ ...p, value: cloneParamValue(p.default) }));
 }
 
 /** Build the `{ name: value }` map the engine's `updateFilterParams` /
- *  `applyFilter` expects — the effective value (`value ?? default`) per param. */
-export function filterParamMap(params: FilterParam[]): Record<string, FilterParamValue> {
+ *  `applyFilter` expects: the effective value (`value ?? default`) per param. */
+export function filterParamMap(params: ParamInfo[]): Record<string, FilterParamValue> {
     const out: Record<string, FilterParamValue> = {};
     for (const p of params) out[p.name] = p.value ?? p.default;
     return out;
@@ -120,25 +108,25 @@ export function filterParamMap(params: FilterParam[]): Record<string, FilterPara
 
 /** True when a `colorize` bool param is on. HSV's colorize overrides the model
  *  selector, so the editor disables the `model` enum while this holds. */
-export function colorizeActive(params: FilterParam[]): boolean {
+export function colorizeActive(params: ParamInfo[]): boolean {
     const c = params.find((p) => p.name === 'colorize');
     return Boolean(c?.value ?? c?.default ?? false);
 }
 
 /**
- * Partition a filter's params into its per-channel tone params — each a channel
- * that gets its own entry in the channel selector — and its scalar params,
+ * Partition a filter's params into its per-channel tone params (each a channel
+ * that gets its own entry in the channel selector) and its scalar params,
  * preserving declaration order within each group. A filter with N channel params
  * (Curves and Levels both expose rgb/red/green/blue/alpha/hue/saturation/
  * lightness) surfaces one selector with N options and a single per-channel
  * editor bound to the chosen channel.
  */
-export function partitionFilterParams(params: FilterParam[]): {
-    channels: FilterParam[];
-    scalars: FilterParam[];
+export function partitionFilterParams(params: ParamInfo[]): {
+    channels: ParamInfo[];
+    scalars: ParamInfo[];
 } {
-    const channels: FilterParam[] = [];
-    const scalars: FilterParam[] = [];
+    const channels: ParamInfo[] = [];
+    const scalars: ParamInfo[] = [];
     for (const p of params) {
         (isChannelParam(p.kind) ? channels : scalars).push(p);
     }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::protocol::{decode, RequestRegistration, Response};
 
-/// `{ origin_x, origin_y, w, h }` — a new canvas window rect (flat ints, not the
+/// `{ origin_x, origin_y, w, h }`: a new canvas window rect (flat ints, not the
 /// nested `CanvasRect` serde shape).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -24,7 +24,7 @@ pub enum FlipAxis {
     V,
 }
 
-/// `{ axis }` — which way to flip the canvas.
+/// `{ axis }`: which way to flip the canvas.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct FlipCanvasReq {
@@ -42,7 +42,7 @@ pub enum RotateDir {
     Half,
 }
 
-/// `{ dir }` — which way to rotate the canvas.
+/// `{ dir }`: which way to rotate the canvas.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct RotateCanvasReq {

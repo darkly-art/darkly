@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { detectKind, isImageKind } from '../detectKind';
 
 /** Build a Uint8Array from a magic-byte prefix + arbitrary tail. The
- *  detector only sniffs the first few bytes — anything past the
+ *  detector only sniffs the first few bytes, so anything past the
  *  signature is irrelevant content padding. */
 function withPrefix(prefix: number[], tailLen = 0): Uint8Array {
     const out = new Uint8Array(prefix.length + tailLen);
@@ -50,7 +50,7 @@ describe('detectKind', () => {
     });
 
     it('does NOT false-positive WebP on a bare RIFF without WEBP tag', () => {
-        // RIFF + matching size + non-WEBP fourcc (e.g. WAVE) — not an image.
+        // RIFF + matching size + non-WEBP fourcc (e.g. WAVE): not an image.
         const bytes = withPrefix(
             [
                 0x52, 0x49, 0x46, 0x46,

@@ -20,7 +20,7 @@
 const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 // ---------------------------------------------------------------------------
-// ReadbackRequest — a single pending GPU→CPU copy
+// ReadbackRequest - a single pending GPU→CPU copy
 // ---------------------------------------------------------------------------
 
 /// A pending GPU→CPU readback.
@@ -40,7 +40,7 @@ pub struct ReadbackRequest {
 ///
 /// The `rect` is **texture-local** ([`LayerRect`]): `(0, 0)` is the top-left
 /// of the texture, regardless of where the texture sits in canvas space. This
-/// is enforced by the type — callers can't accidentally pass a canvas rect
+/// is enforced by the type: callers can't accidentally pass a canvas rect
 /// (which may have a negative origin, or extend past the texture). Translate
 /// canvas → layer via [`LayerTexture::canvas_to_layer_rect`] before calling.
 ///
@@ -130,7 +130,7 @@ impl ReadbackRequest {
 
     /// Start the async buffer mapping.
     ///
-    /// **Must** be called after `queue.submit()` — the copy command must be
+    /// **Must** be called after `queue.submit()`: the copy command must be
     /// submitted before the map can complete.
     fn begin_mapping(&mut self) {
         let slice = self.buffer.slice(..);
@@ -141,7 +141,7 @@ impl ReadbackRequest {
         self.rx = Some(rx);
     }
 
-    /// Blocking read — **native / test only**.
+    /// Blocking read, **native / test only**.
     ///
     /// On WebGPU/WASM this deadlocks: `recv()` spin-waits (Rust's thread
     /// parker is a no-op on wasm32), blocking the JS event loop, so the
@@ -190,7 +190,7 @@ impl ReadbackRequest {
 }
 
 // ---------------------------------------------------------------------------
-// ReadbackScheduler<C> — generic async readback queue
+// ReadbackScheduler<C> - generic async readback queue
 // ---------------------------------------------------------------------------
 
 /// A scheduler that manages pending GPU→CPU readbacks.
@@ -214,7 +214,7 @@ impl<C> ReadbackScheduler<C> {
 
     /// Submit a readback request with its associated context.
     ///
-    /// Mapping is deferred to the next `poll()` call — safe to call inside a
+    /// Mapping is deferred to the next `poll()` call, safe to call inside a
     /// `gpu.encode()` closure before the encoder has been submitted.
     pub fn submit(&mut self, request: ReadbackRequest, context: C) {
         self.tasks.push((request, context));
@@ -233,7 +233,7 @@ impl<C> ReadbackScheduler<C> {
             }
         }
 
-        // One poll call for all pending readbacks — the device processes all
+        // One poll call for all pending readbacks: the device processes all
         // ready callbacks in a single pass.
         if !self.tasks.is_empty() {
             let _ = device.poll(wgpu::PollType::Poll);
@@ -242,7 +242,7 @@ impl<C> ReadbackScheduler<C> {
         let mut completed = Vec::new();
         let mut i = 0;
         while i < self.tasks.len() {
-            // Skip the device.poll inside ReadbackRequest::poll — we already
+            // Skip the device.poll inside ReadbackRequest::poll; we already
             // did it above. Just check the channel directly.
             let ready = self.tasks[i]
                 .0
@@ -257,7 +257,7 @@ impl<C> ReadbackScheduler<C> {
                     let pixels = req.extract_pixels(&slice);
                     req.buffer.unmap();
                     completed.push((ctx, pixels));
-                    // Don't increment i — swap_remove moved the last element here.
+                    // Don't increment i; swap_remove moved the last element here.
                 }
                 Some(Err(e)) => {
                     log::error!("readback buffer mapping failed: {e}");

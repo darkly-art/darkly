@@ -8,7 +8,7 @@
  * today; `warp` would slot in as a new file + one entry in `index.ts`, with
  * the gizmo shell unchanged.
  *
- * Modes are consumer-agnostic — they know nothing about voids, floating, or
+ * Modes are consumer-agnostic: they know nothing about voids, floating, or
  * layers. They operate purely on a bounding box (`GizmoGeometry`) and produce
  * an updated 3×3 matrix that the gizmo hands back to whatever
  * `TransformBinding` is wired to it.
@@ -21,7 +21,7 @@ export interface GizmoGeometry {
     /** Current transform (local → local), edited by dragging. Always a 3×3
      *  projective matrix; affine modes carry it with bottom row [0,0,1]. */
     matrix: Mat3;
-    /** Source origin in plane (canvas) space — the matrix's local frame anchor. */
+    /** Source origin in plane (canvas) space, the matrix's local frame anchor. */
     origin: [number, number];
     /** Source extent in local pixels. */
     srcW: number;
@@ -54,7 +54,7 @@ export interface TransformMode {
     readonly liveCapable: boolean;
 
     /** Produce this mode's matrix from the current geometry when switching
-     *  INTO it — i.e. the matrix that best reproduces the geometry's current
+     *  INTO it, i.e. the matrix that best reproduces the geometry's current
      *  destination quad under this mode's representation. */
     seedMatrix(geo: GizmoGeometry): Mat3;
 

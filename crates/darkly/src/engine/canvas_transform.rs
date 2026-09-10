@@ -1,7 +1,7 @@
 //! Canvas flip & 90°-rotate.
 //!
 //! Like [`image_rescale`](super::image_rescale), this permutes **every
-//! pixel-bearing node** (raster layers + mask filters) — but exactly, via the
+//! pixel-bearing node** (raster layers + mask filters), but exactly, via the
 //! ortho GPU pass rather than a resample. Each node moves to its transformed
 //! extent about the canvas window; rotations additionally swap the canvas
 //! dimensions and recentre `canvas_origin` (GIMP's `offset = (old − new)/2`).
@@ -72,7 +72,7 @@ impl DarklyEngine {
         }
 
         // 2. Selection: carry it through dimension-preserving transforms, clear
-        //    it (folded) through dimension-swapping ones — see module docs.
+        //    it (folded) through dimension-swapping ones; see module docs.
         let selection = self.transform_or_clear_selection(xform);
 
         // 3. Permute all node textures on the GPU about the (old) canvas window.

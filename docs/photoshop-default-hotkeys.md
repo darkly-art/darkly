@@ -1,14 +1,14 @@
-# Adobe Photoshop — Default Keyboard Shortcuts Reference
+# Adobe Photoshop: Default Keyboard Shortcuts Reference
 
 A comprehensive reference of the default keyboard shortcuts shipped with Adobe Photoshop for desktop. Compiled from Adobe's official _Default keyboard shortcuts in Adobe Photoshop_ documentation, with sections marked _(legacy)_ recovered from the 2013 archived edition of the same page (some tables on the modern HelpX page render duplicate placeholder content due to a publishing bug). Both Windows and macOS key combinations are listed.
 
-> **Tip** — Open the in-app shortcut editor via **Edit ▸ Keyboard Shortcuts** (Windows: `Alt + Shift + Ctrl + K`, macOS: `Option + Shift + Cmd + K`). From the **Shortcuts For** menu you can browse Application Menus, Panel Menus, Tools, and Taskspaces.
+> **Tip**: Open the in-app shortcut editor via **Edit ▸ Keyboard Shortcuts** (Windows: `Alt + Shift + Ctrl + K`, macOS: `Option + Shift + Cmd + K`). From the **Shortcuts For** menu you can browse Application Menus, Panel Menus, Tools, and Taskspaces.
 
 ## Conventions
 
 - Modifier keys are written out: `Ctrl`, `Alt`, `Shift`, `Cmd`, `Option`, `Control`. _(Adobe uses `Control` and `Command` interchangeably with `Ctrl`/`Cmd`.)_
 - `+` joins keys pressed simultaneously; `,` joins keys pressed in sequence.
-- When several tools share a shortcut letter, they are joined by ` · ` in the **Result** column and cycle on `Shift + <letter>` (when _Use Shift Key for Tool Switch_ preference is enabled — **Preferences ▸ Tools**).
+- When several tools share a shortcut letter, they are joined by ` · ` in the **Result** column and cycle on `Shift + <letter>` (when _Use Shift Key for Tool Switch_ preference is enabled, in **Preferences ▸ Tools**).
 - `†` after a tool name marks the default tool of its group.
 - `‡` marks shortcuts that also apply when using shape tools.
 - All shortcuts assume the default workspace, US English layout, and no custom keymap.
@@ -244,7 +244,7 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
 | Mixer Brush changes Mix setting | Alt + Shift + number | Option + Shift + number |
 | Mixer Brush changes Wet setting | Number keys | Number keys |
 | Mixer Brush changes Wet and Mix to zero | 00 | 00 |
-| Cycle through blending modes | Shift + + (plus) or – (minus) | Shift + + (plus) or – (minus) |
+| Cycle through blending modes | Shift + + (plus) or - (minus) | Shift + + (plus) or - (minus) |
 | Open Fill dialog box on the background or standard layer | Backspace or Shift + Backspace | Delete or Shift + Delete |
 | Fill with foreground or background color | Alt + Backspace or Control + Backspace† | Option + Delete or Command + Delete† |
 | Fill from history | Control + Alt + Backspace† | Command + Option + Delete† |
@@ -257,7 +257,7 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
 
 | Result | Windows | macOS |
 | --- | --- | --- |
-| Cycle through blending modes | Shift + + (plus) or – (minus) | Shift + + (plus) or – (minus) |
+| Cycle through blending modes | Shift + + (plus) or - (minus) | Shift + + (plus) or - (minus) |
 | Normal | Shift + Alt + N | Shift + Option + N |
 | Dissolve | Shift + Alt + I | Shift + Option + I |
 | Behind (Brush tool only) | Shift + Alt + Q | Shift + Option + Q |
@@ -494,7 +494,7 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
 | Cycle through Display menu in preview from bottom to top | Shift + F | Shift + F |
 | Decrease/increase brush size by 1 | Down Arrow/Up Arrow in Brush Size text box† | Down Arrow or Up Arrow in Brush Size text box† |
 | Decrease/increase brush size by 1 | Left Arrow/Right Arrow with Brush Size Slider showing† | Left Arrow/Right Arrow with Brush Size Slider showing† |
-| Set strength of Cleanup or Edge Touch‑up tool | 0–9 | 0–9 |
+| Set strength of Cleanup or Edge Touch‑up tool | 0-9 | 0-9 |
 | †Hold down Shift to decrease/increase by 10 |  |  |
 | Result (Pattern Maker only) | Windows | macOS |
 | Delete current selection | Control + D | Command + D |
@@ -514,7 +514,7 @@ A comprehensive reference of the default keyboard shortcuts shipped with Adobe P
 
 ### Keys for the Image ▸ Adjustments menu
 
-The menu-command bindings themselves — absent from the HelpX page (whose tables cover dialogs and workspaces, not menus), recovered from [NYIM's Photoshop CS6 shortcut sheet](https://training-nyc.com/legacy/photoshop_cs6_all_keyboard_shortcuts_sheet.pdf); these bindings are unchanged in current Photoshop.
+The menu-command bindings themselves are absent from the HelpX page (whose tables cover dialogs and workspaces, not menus); they were recovered from [NYIM's Photoshop CS6 shortcut sheet](https://training-nyc.com/legacy/photoshop_cs6_all_keyboard_shortcuts_sheet.pdf), and these bindings are unchanged in current Photoshop.
 
 | Result | Windows | macOS |
 | --- | --- | --- |
@@ -615,7 +615,7 @@ The menu-command bindings themselves — absent from the HelpX page (whose table
 | --- | --- | --- |
 | Open the Curves dialog box | Control + M | Command + M |
 | Select next point on the curve | + (plus) | + (plus) |
-| Select the previous point on the curve | – (minus) | – (minus) |
+| Select the previous point on the curve | - (minus) | - (minus) |
 | Select multiple points on the curve | Shift-click the points | Shift-click the points |
 | Deselect a point | Control + D | Command + D |
 | To delete a point on the curve | Select a point and press Delete | Select a point and press Delete |
@@ -919,8 +919,8 @@ The menu-command bindings themselves — absent from the HelpX page (whose table
 
 ## Sources
 
-- Adobe Help Center — _Default keyboard shortcuts in Adobe Photoshop_ (modern, 2024 snapshot): <https://web.archive.org/web/20241228075812/https://helpx.adobe.com/photoshop/using/default-keyboard-shortcuts.html>
-- Adobe Help Center — _Default keyboard shortcuts_ (2013 archive, used to recover tables that render as placeholders on the modern page): <https://web.archive.org/web/20131128145732/https://helpx.adobe.com/photoshop/using/default-keyboard-shortcuts.html>
-- Adobe Help Center — _View keyboard shortcuts in Photoshop_: <https://helpx.adobe.com/photoshop/desktop/get-started/settings-and-preferences/view-keyboard-shortcuts.html>
-- Adobe Help Center — _Customize keyboard shortcuts in Photoshop_: <https://helpx.adobe.com/photoshop/using/customizing-keyboard-shortcuts.html>
-- Adobe Help Center — _Make selections using the Select and Mask workspace_: <https://helpx.adobe.com/photoshop/using/select-mask.html>
+- Adobe Help Center, _Default keyboard shortcuts in Adobe Photoshop_ (modern, 2024 snapshot): <https://web.archive.org/web/20241228075812/https://helpx.adobe.com/photoshop/using/default-keyboard-shortcuts.html>
+- Adobe Help Center, _Default keyboard shortcuts_ (2013 archive, used to recover tables that render as placeholders on the modern page): <https://web.archive.org/web/20131128145732/https://helpx.adobe.com/photoshop/using/default-keyboard-shortcuts.html>
+- Adobe Help Center, _View keyboard shortcuts in Photoshop_: <https://helpx.adobe.com/photoshop/desktop/get-started/settings-and-preferences/view-keyboard-shortcuts.html>
+- Adobe Help Center, _Customize keyboard shortcuts in Photoshop_: <https://helpx.adobe.com/photoshop/using/customizing-keyboard-shortcuts.html>
+- Adobe Help Center, _Make selections using the Select and Mask workspace_: <https://helpx.adobe.com/photoshop/using/select-mask.html>

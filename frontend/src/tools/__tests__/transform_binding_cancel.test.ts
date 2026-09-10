@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { withApi } from '../../engine/testApi';
 
-// The void binding captures the pre-edit transform — INCLUDING its mode — on
+// The void binding captures the pre-edit transform (including its mode) on
 // first read, so cancelling reverts faithfully. Engine transport is mocked; the
 // real typed `api` forwards to the `send`/`post` spies, so `cancel` crosses the
 // wire as `updateVoidTransform({ id, transform: { mode, data } })`.
@@ -16,7 +16,7 @@ import { SessionEngine } from '../tool_session';
 import type { Mat3 } from '../transform_projective';
 
 // Attach a real transport + typed api to the fake engine, then open a session
-// over it so the bindings' session accessor resolves — its api forwards to the
+// over it so the bindings' session accessor resolves; its api forwards to the
 // same `send`/`post` spies, so assertions still inspect them by kind.
 withApi(fakeApp.engine);
 let session: SessionEngine | null = null;

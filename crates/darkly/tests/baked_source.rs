@@ -58,7 +58,7 @@ fn bake_cache_dedups_equal_specs_and_separates_distinct() {
 /// The baked tile is **seamless** under repeat wrap: the field is periodic, so
 /// the last column is one continuous texel-step from the first. That wrap
 /// difference must be the same order as an ordinary interior adjacent-column
-/// step — a non-tileable (rotated) field would jump ~randomly across the seam.
+/// step; a non-tileable (rotated) field would jump ~randomly across the seam.
 #[test]
 fn baked_tile_is_seamless_under_repeat_wrap() {
     let (device, queue) = test_device();

@@ -1,9 +1,9 @@
-import { parseMenuSegment, type ActionRegistration } from '../../actions/registry';
+import { parseMenuSegment, type Action } from '../../actions/registry';
 
 /** Actions eligible for the command palette: everything except `type:'hold'`
  *  actions (drag-bound primitives like `sampleColor` / `brushSizeAdjust`
  *  that make no sense to fire from a list). */
-export function paletteActions(regs: ActionRegistration[]): ActionRegistration[] {
+export function paletteActions(regs: Action[]): Action[] {
     return regs.filter(r => r.type !== 'hold');
 }
 
@@ -15,12 +15,12 @@ export function paletteActions(regs: ActionRegistration[]): ActionRegistration[]
  * description / path / category. Array#sort is stable, so ties keep
  * registration order.
  */
-export function filterPalette(regs: ActionRegistration[], query: string): ActionRegistration[] {
+export function filterPalette(regs: Action[], query: string): Action[] {
     const eligible = paletteActions(regs);
     const q = query.trim().toLowerCase();
     if (!q) return eligible;
 
-    const scored: { reg: ActionRegistration; score: number }[] = [];
+    const scored: { reg: Action; score: number }[] = [];
     for (const reg of eligible) {
         const name = reg.displayName.toLowerCase();
         const haystack = [

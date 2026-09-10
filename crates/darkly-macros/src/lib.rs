@@ -1,9 +1,9 @@
-//! `darkly-macros` — the `#[handlers]` engine-bridge macro.
+//! `darkly-macros`: the `#[handlers]` engine-bridge macro.
 //!
 //! Tag an `impl DarklyEngine { … }` block with `#[handlers]` and mark the
 //! methods that should be reachable over the request/response protocol with an
 //! inner `#[handler]` (or `#[handler(returns = graph)]`). For each marked
-//! method the macro derives — from the signature alone — everything the old
+//! method the macro derives (from the signature alone) everything the old
 //! hand-written `handlers/*.rs` files spelled out:
 //!
 //! - a `#[derive(Deserialize)]` `…Req` struct, one field per parameter (the
@@ -15,8 +15,8 @@
 //!   converts the return through the autoref-specialized response tags
 //!   (`()`/`T: Serialize` → JSON, `Result<T, String>` → JSON or engine error).
 //!
-//! The kind string is the method name verbatim — the signature is the single
-//! source of truth. `build.rs` scans for `#[handler]` and aggregates every
+//! The kind string is the method name verbatim, so the signature is the
+//! single source of truth. `build.rs` scans for `#[handler]` and aggregates every
 //! generated registration (no `linkme`: it doesn't compile on wasm32).
 //!
 //! Why an impl-block attribute rather than a per-method one: an attribute macro
@@ -157,7 +157,7 @@ fn parse_handler_args(attr: &syn::Attribute) -> syn::Result<HandlerArgs> {
     }
 }
 
-/// If `ty` is `Result<T, _>`, return `T` — the success type the response
+/// If `ty` is `Result<T, _>`, return `T`: the success type the response
 /// metadata (and the `Send` `Promise<Resp>`) is shaped from.
 fn result_ok_type(ty: &Type) -> Option<&Type> {
     let Type::Path(p) = ty else { return None };
@@ -185,7 +185,7 @@ fn returns_unit(ret: &syn::ReturnType) -> bool {
 /// One decoded parameter of a handler method.
 struct Param {
     /// `req.<field>` access (owned) or `&req.<field>` (re-borrowed) or the raw
-    /// `bytes` side-channel — the expression passed at the call site.
+    /// `bytes` side-channel: the expression passed at the call site.
     call_expr: TokenStream2,
     /// `Some((field_ident, field_ty))` for a JSON `Req` field; `None` for the
     /// `bytes` side-channel parameter.
@@ -374,7 +374,7 @@ fn parse_param(ident: Ident, ty: &Type) -> syn::Result<Param> {
                 ))
             }
         }
-        // Owned parameter — the `Req` field is the type verbatim.
+        // Owned parameter: the `Req` field is the type verbatim.
         _ => Ok(Param {
             call_expr: quote!(req.#ident),
             field: Some((ident.clone(), quote!(#ty))),

@@ -3,7 +3,7 @@
 //
 // This is the SINGLE SOURCE OF TRUTH for straight-alpha compositing in Darkly.
 // Include it in any shader that composites onto a straight-alpha target. Never
-// inline this formula — use this function.
+// inline this formula; use this function.
 //
 // Usage: prepend this file to your shader source via concat! in Rust:
 //   concat!(include_str!("source_over.wgsl"), "\n", include_str!("my_shader.wgsl"))

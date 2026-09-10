@@ -10,7 +10,9 @@ pub mod manifest;
 pub mod registry_io;
 pub mod stroke_recording;
 pub mod unzip;
-#[cfg(test)]
+// Zip assembly mirrors what the frontend does with `fflate` (see the module
+// docs). `brush::pack_file` writes `.darkly-brush` archives with it, so it is
+// part of the production build and not only of the round-trip tests.
 pub mod zip_io;
 
 #[cfg(test)]
@@ -19,7 +21,7 @@ mod tests;
 pub use error::LoadError;
 pub use manifest::{
     texture_format_from_str, texture_format_to_str, Manifest, ManifestCanvas, ManifestEntry,
-    ManifestPixelRef, ManifestRequires, ManifestVeil, ManifestWriter, SaveBlob, SaveBundle,
-    CONTAINER_VERSION, FORMAT_TAG,
+    ManifestPixelRef, ManifestRequires, ManifestWriter, SaveBlob, SaveBundle, CONTAINER_VERSION,
+    FORMAT_TAG,
 };
 pub use registry_io::{deserialize_instance, serialize_instance, InstancePayload};

@@ -15,7 +15,7 @@ use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
 
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -46,7 +46,7 @@ fn two_engines_share_one_device_without_crosstalk() {
     let gpu_a = GpuContext::new_headless_shared(Arc::clone(&shared));
     let gpu_b = GpuContext::new_headless_shared(Arc::clone(&shared));
 
-    // Confirm both contexts point at the same underlying device — that's the
+    // Confirm both contexts point at the same underlying device: that's the
     // whole point. If `Arc::strong_count` shows 3 (this fn + two contexts),
     // the device is genuinely shared.
     assert_eq!(Arc::strong_count(&shared), 3);

@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { registerActions } from '../index';
-import { actions, actionEnablement, parseMenuSegment, type ActionRegistration } from '../registry';
+import { addSources } from '../../ui/layers/addSources';
+import { actions, actionEnablement, parseMenuSegment, type Action } from '../registry';
 import { buildTopMenus } from '../../ui/menu/menuModel';
+import { filterPalette } from '../../ui/menu/paletteFilter';
 import { app } from '../../state/app.svelte';
+import { rustActionDocs } from './rust_action_docs';
 
 // Populate the real registry once. `registerActions` is idempotent enough for
 // our purposes (re-registering overwrites by id), and tool actions are absent
-// here because `tools/index` isn't imported — that's fine, we only assert on
-// the menu/palette actions this feature owns.
+// here because `tools/index` isn't imported: that's fine, we only assert on
+// the menu/palette actions this feature owns. Documentation comes from the Rust
+// tables, standing in for the `actions` catalog the editor is handed at init.
 beforeAll(() => {
+    actions.setDocs(rustActionDocs());
     registerActions();
 });
 
@@ -40,7 +45,7 @@ describe('menu action registrations', () => {
     });
 
     it('puts the selection commands under Select', () => {
-        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection']) {
+        for (const id of ['selectAll', 'clearSelection', 'invertSelection', 'clearSelectionContents', 'maskToSelection', 'alphaToSelection']) {
             const seg = actions.get(id)?.menuPath?.[0];
             expect(parseMenuSegment(seg ?? '').title, id).toBe('Select');
         }
@@ -49,6 +54,20 @@ describe('menu action registrations', () => {
     it('slots maskToSelection into Select right after Invert', () => {
         expect(actions.get('maskToSelection')?.menuPath).toEqual(['Select:35']);
         expect(actions.get('maskToSelection')?.category).toBe('selection');
+    });
+
+    it('slots alphaToSelection into Select right after maskToSelection', () => {
+        expect(actions.get('alphaToSelection')?.menuPath).toEqual(['Select:36']);
+        expect(actions.get('alphaToSelection')?.category).toBe('selection');
+    });
+
+    it('disables alphaToSelection with a reason when the active node has no pixels', () => {
+        // No layer tree in this environment → activeNode is null, so the
+        // action can't know of any pixels to load.
+        const a2s = actions.get('alphaToSelection')!;
+        expect(a2s.enabled?.()).not.toBe(true);
+        expect(actionEnablement(a2s)).toMatchObject({ enabled: false });
+        expect(actionEnablement(a2s).reason).toBe('Active layer has no pixels');
     });
 
     it('disables maskToSelection with a reason when the active layer has no mask', () => {
@@ -102,7 +121,11 @@ describe('menu action registrations', () => {
             .filter(e => e.kind === 'action')
             .map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual([
+            'addLayer',
             'newLayer',
+            'newFilterLayer',
+            'newVeil',
+            'newVoid',
             'newGroup',
             'duplicateLayer',
             'flipLayerH',
@@ -114,7 +137,29 @@ describe('menu action registrations', () => {
             'addMask',
             'mergeDown',
             'flatten',
+            'convertLayerToSmartObject',
         ]);
+    });
+
+    it('makes every layer kind the new-layer menu can add reachable from the palette', () => {
+        // Searching the palette for a layer kind used to come up empty for
+        // veils, voids and filter layers; those existed only as local state
+        // inside the layer panel's dropdown.
+        const hit = (query: string) => filterPalette(actions.all(), query).map(r => r.id);
+        expect(hit('veil')).toContain('newVeil');
+        expect(hit('void')).toContain('newVoid');
+        expect(hit('filter layer')).toContain('newFilterLayer');
+        expect(hit('group')).toContain('newGroup');
+    });
+
+    it('backs every add source with a registered action', () => {
+        // The add-layer modal's tab rail renders label, icon and position
+        // straight from these registrations, so a source naming an
+        // unregistered action would produce a tab with no name.
+        const missing = addSources
+            .map(s => s.action)
+            .filter(id => !actions.get(id));
+        expect(missing).toEqual([]);
     });
 
     it('disables cropToSelection with a reason when no selection is active', () => {
@@ -125,15 +170,15 @@ describe('menu action registrations', () => {
         expect(actionEnablement(crop).reason).toBe('No active selection');
     });
 
-    it("save actions' enabled() follows canSave (disabled-with-reason here)", () => {
-        // The test environment has no File System Access API, so canSave is
-        // false; enabled() returns the disabled-reason string (not `true`).
-        const save = actions.get('saveDocument');
-        const e = save?.enabled?.();
-        expect(e).not.toBe(true);
-        expect(typeof e).toBe('string');
-        expect(actionEnablement(save!)).toMatchObject({ enabled: false });
-        expect(actionEnablement(save!).reason).toBeTruthy();
+    it('leaves save actions always enabled (download fallback works everywhere)', () => {
+        // Save no longer gates on the File System Access API: browsers without
+        // it (Firefox/Safari) fall back to a download, so there's no `enabled`
+        // gate at all.
+        for (const id of ['saveDocument', 'saveDocumentAs']) {
+            const save = actions.get(id)!;
+            expect(save.enabled).toBeUndefined();
+            expect(actionEnablement(save)).toMatchObject({ enabled: true });
+        }
     });
 
     it('orders items within a menu by the menuPath order suffix, not registration sequence', () => {
@@ -144,10 +189,12 @@ describe('menu action registrations', () => {
         expect(ids).toEqual([
             'newDocument',
             'open',
+            'placeSmartObject',
             'saveDocument',
             'saveDocumentAs',
-            'exportImage',
             'exportTimelapse',
+            'importBrushPack',
+            'exportBrushPack',
         ]);
     });
 
@@ -157,7 +204,7 @@ describe('menu action registrations', () => {
             { id: 'noOrder1', displayName: 'N1', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
             { id: 'a', displayName: 'A', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X:10'], handler() {} },
             { id: 'noOrder2', displayName: 'N2', category: 'file', icon: 'fa6-solid:circle', menuPath: ['X'], handler() {} },
-        ] as ActionRegistration[];
+        ] as Action[];
         const x = buildTopMenus(regs).find(m => m.title === 'X');
         const ids = x!.entries.map(e => (e as { actionId: string }).actionId);
         expect(ids).toEqual(['a', 'b', 'noOrder1', 'noOrder2']);
@@ -166,7 +213,7 @@ describe('menu action registrations', () => {
     it('parseMenuSegment splits the title from the optional order suffix', () => {
         expect(parseMenuSegment('Help')).toEqual({ title: 'Help' });
         expect(parseMenuSegment('Help:10')).toEqual({ title: 'Help', order: 10 });
-        // Non-numeric suffix is not an order — treat the whole thing as a title.
+        // Non-numeric suffix is not an order, so treat the whole thing as a title.
         expect(parseMenuSegment('A:B')).toEqual({ title: 'A:B' });
     });
 

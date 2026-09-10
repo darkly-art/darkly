@@ -1,4 +1,4 @@
-// Shared colour-space conversions — HSV (Krita KoColorConversions RGBToHSV /
+// Shared colour-space conversions: HSV (Krita KoColorConversions RGBToHSV /
 // HSVToRGB) and CIELAB (sRGB / D65). Prepended to both the LUT filter shader
 // (`filters/curves.wgsl`, used by Curves and Levels) and `histogram.wgsl`, so
 // the histogram bins Hue/Saturation/Lightness with the exact math the filter
@@ -135,7 +135,7 @@ fn rgb_to_hsy(col: vec3f) -> vec3f {
 }
 
 // HCY → RGB, but with the requested chroma capped to the largest value that
-// keeps the luma-offset RGB inside [0,1] — so luma `y` is preserved *exactly*.
+// keeps the luma-offset RGB inside [0,1], so luma `y` is preserved *exactly*.
 // This deviates from Krita's HCYToRGB, which clamps out-of-gamut RGB to ≥0
 // post-hoc and thereby shifts luma; capping chroma instead is the defining
 // luma-preserving property of the HSY model (and of colorize).
@@ -166,7 +166,7 @@ fn hsy_to_rgb(hcy: vec3f) -> vec3f {
     return clamp(d * c + vec3f(luma), vec3f(0.0), vec3f(1.0));
 }
 
-// --- CIELAB (sRGB / D65) — Krita's "Lightness L*a*b*" channel -----------------
+// --- CIELAB (sRGB / D65, Krita's "Lightness L*a*b*" channel) ------------------
 
 fn srgb_to_linear(c: f32) -> f32 {
     if (c <= 0.04045) { return c / 12.92; }

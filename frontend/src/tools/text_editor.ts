@@ -54,7 +54,7 @@ export interface EditorHost {
     requestFrame(): void;
 }
 
-/** Deferred create — the text layer is born on the first typed character of a
+/** Deferred create: the text layer is born on the first typed character of a
  *  pending placement, so an abandoned placement never makes a layer.
  *
  *  Sequencing is load-bearing: we resolve the new object id and flush any
@@ -71,7 +71,7 @@ export async function createTextFromPending(
     color: Rgba,
     latest: () => string,
     targetLayerId: number | null,
-    /** Called with the new ids the instant they're known — BEFORE the layer-tree
+    /** Called with the new ids the instant they're known: BEFORE the layer-tree
      *  refresh that re-fetches the panel's bound blocks. The panel uses this to
      *  mark which object the pending textarea hands its key to, so the refetch
      *  doesn't remount it (and lose the caret). */
@@ -165,9 +165,9 @@ export function queueTextContent(host: EditorHost, layer: number, object: number
 
 /** Dispatch every queued content write now. The rAF tick calls this; callers
  *  also call it synchronously on blur / tool-switch so the final keystroke is
- *  never dropped. (Document undo can only fire while the textarea is blurred —
- *  global hotkeys are suppressed over a focused TEXTAREA — so the blur flush is
- *  also the "flush before undo" guarantee.) */
+ *  never dropped. (Document undo can only fire while the textarea is blurred,
+ *  because global hotkeys are suppressed over a focused TEXTAREA, so the
+ *  blur flush is also the "flush before undo" guarantee.) */
 export function flushTextContent() {
     if (pendingContent.size === 0) return;
     const hosts = new Set<EditorHost>();
@@ -181,7 +181,7 @@ export function flushTextContent() {
 
 /** Map a *scalar* engine style field to its `TextSession` default property.
  *  `color` is absent (never a placement default); `variations`/`features` are
- *  absent because they're nested maps that get *merged*, not overwritten — see
+ *  absent because they're nested maps that get *merged*, not overwritten; see
  *  `applyStyleDefaults`. */
 const SESSION_DEFAULT_KEY: Record<string, string> = {
     font_family: 'fontFamily',
@@ -196,7 +196,7 @@ const SESSION_DEFAULT_KEY: Record<string, string> = {
 /** Mirror a style edit into the placement defaults so the next new block reuses
  *  the latest style. Scalars overwrite via the flat map; `variations`/`features`
  *  are **merged** into the existing defaults (editing one axis keeps the rest).
- *  Skips `color` (never a default — new blocks take the current foreground). */
+ *  Skips `color` (never a default: new blocks take the current foreground). */
 export function applyStyleDefaults(defaults: Record<string, unknown>, fields: StyleFields) {
     for (const [k, v] of Object.entries(fields)) {
         if (k === 'variations' || k === 'features') {
@@ -224,7 +224,7 @@ export function dispatchStyle(
 }
 
 /** Whether an incoming engine content value should re-seed the (uncontrolled)
- *  textarea. True only for an *external* change (undo/redo) — a self-echo of
+ *  textarea. True only for an *external* change (undo/redo); a self-echo of
  *  what we last sent leaves the field untouched, preserving the caret. */
 export function shouldReseed(incoming: string, lastSent: string | undefined): boolean {
     return incoming !== lastSent;

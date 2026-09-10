@@ -4,10 +4,10 @@
 //! dab, averages the taps, and writes the softened pixel back. Two
 //! behaviors are load-bearing:
 //!
-//! 1. **Neighborhood averaging** — a dab straddling a hard black/white
+//! 1. **Neighborhood averaging**: a dab straddling a hard black/white
 //!    edge produces an intermediate gray at the edge, while pixels
 //!    outside the dab footprint stay untouched.
-//! 2. **Dwell-compounding** — because each dab reads the *cumulative*
+//! 2. **Dwell-compounding**: because each dab reads the *cumulative*
 //!    scratch through the per-dab read-mirror barrier (the same barrier
 //!    smudge/liquify rely on), a second overlapping pass softens further
 //!    than one. If the flush were ever collapsed into a single instanced
@@ -40,7 +40,7 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         .clone()
 }
 
-/// Pre-stroke canvas: a hard vertical edge — opaque white in `x < EDGE_X`,
+/// Pre-stroke canvas: a hard vertical edge, opaque white in `x < EDGE_X`,
 /// opaque black elsewhere. Gives the blur a sharp boundary to soften.
 fn hard_edge_canvas() -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
@@ -96,7 +96,13 @@ fn render_blur_dabs(size: f32, strength: f32, opacity: f32, dabs: &[[f32; 2]]) -
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+    let mut stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+    );
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -186,7 +192,7 @@ fn render_blur_dabs(size: f32, strength: f32, opacity: f32, dabs: &[[f32; 2]]) -
 /// the dab footprint untouched.
 #[test]
 fn blur_dab_softens_hard_edge_to_gray() {
-    // Radius ≈ 0.15 * 256 ≈ 38 px — wide enough that the kernel at the
+    // Radius ≈ 0.15 * 256 ≈ 38 px, wide enough that the kernel at the
     // edge spans both the white and black halves.
     let rgba = render_blur_dabs(0.15, 1.0, 1.0, &[[EDGE_X as f32, 64.0]]);
 
@@ -198,7 +204,7 @@ fn blur_dab_softens_hard_edge_to_gray() {
     );
 
     // Far inside the white half and the black half, outside the dab
-    // footprint — must be untouched.
+    // footprint, must be untouched.
     let far_white = pixel(&rgba, 8, 8);
     let far_black = pixel(&rgba, CANVAS - 8, CANVAS - 8);
     assert_eq!(
@@ -214,9 +220,9 @@ fn blur_dab_softens_hard_edge_to_gray() {
 }
 
 /// **Dwell-compounding test.** With `opacity < 1`, each pass blends only
-/// a fraction of the blurred result, so a second overlapping dab — which
-/// reads the *cumulative* scratch through the per-dab read-mirror barrier
-/// — pushes the edge centre further toward gray than one pass does.
+/// a fraction of the blurred result, so a second overlapping dab, which
+/// reads the *cumulative* scratch through the per-dab read-mirror barrier,
+/// pushes the edge centre further toward gray than one pass does.
 ///
 /// Working barrier: pass 2 reads pass 1's grayer writeback and softens
 /// further, so the (initially black) edge centre rises more.

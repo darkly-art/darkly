@@ -7,10 +7,9 @@
 //! `from_brush` → YAML → `into_brush`.
 //!
 //! Compared to the raw `Graph<W>` JSON, this representation drops
-//! everything that can be re-derived from the node registration — port
-//! definitions, registration metadata — and
-//! presents input values by name. The result is something a human can
-//! read and an AI can describe.
+//! everything that can be re-derived from the node registration (port
+//! definitions, registration metadata) and presents input values by name.
+//! The result is something a human can read and an AI can describe.
 //!
 //! Round-trip rules:
 //! - Node ids are kind-derived strings: the first node of a kind is its
@@ -21,7 +20,7 @@
 //!   follows the `BTreeMap` key order of the source file (lexicographic), so
 //!   a hand-edited file using arbitrary same-kind keys normalizes on export.
 //! - `inputs` is a single by-name map of every input whose authored value
-//!   differs from the node registration's default — one map for every
+//!   differs from the node registration's default: one map for every
 //!   input kind (scalar default, enum index, texture name, curve points).
 //!   Only overrides appear in YAML, so the format stays compact given that
 //!   brushes typically override 1-3 inputs out of 10+. Each value is
@@ -36,8 +35,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::input_value::InputValue;
+use crate::brush::metadata::{Brush, BrushMetadata};
 use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
@@ -46,15 +45,13 @@ use crate::nodegraph::{exposed_port_key, ExposedPortMeta, Graph, NodeId, PortDir
 use indexmap::IndexMap;
 
 /// Portable, YAML-friendly snapshot of a brush. Top-level metadata is
-/// optional — present for full brushes, omitted for graph-only snippets
+/// optional: present for full brushes, omitted for graph-only snippets
 /// copied out of the brush builder.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PortableBrush {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub category: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -70,7 +67,7 @@ pub struct PortableBrush {
     /// Ordered brush-bar entries. Keys are `"<yaml_node_id>.<port_name>"`
     /// (matching the `nodes` map). On import the yaml id is rewritten to
     /// the freshly-assigned internal `NodeId`. Order is the brush-bar
-    /// display order — `IndexMap` preserves it through every YAML/JSON
+    /// display order: `IndexMap` preserves it through every YAML/JSON
     /// round trip.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub exposed_ports: IndexMap<String, ExposedPortMeta>,
@@ -87,17 +84,29 @@ pub struct PortableNode {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
     /// Input values that differ from the node registration's defaults, keyed
-    /// by input name. One unified map — every input kind (scalar default,
+    /// by input name. One unified map: every input kind (scalar default,
     /// enum index, texture name, curve points, …) rides the same
     /// [`PortableValue`] DTO. Only overrides serialize, so the format stays
     /// a compact diff.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, PortableValue>,
+    /// Per-input slider-bound overrides, keyed by input name, as
+    /// `[min, max]`. Diffed against the registration exactly like `inputs`,
+    /// so only genuinely re-ranged ports serialize.
+    ///
+    /// Where `inputs` authors *where the knob sits*, this authors *how far it
+    /// travels*: the escape hatch for a port whose registration range is a
+    /// poor fit for one brush. A math node declaring `0..1` can be given a
+    /// bipolar `[-1.0, 1.0]` control, or a port whose useful band is a sliver
+    /// of its declared range can be narrowed onto it, without a helper node
+    /// in the graph doing the arithmetic.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ranges: BTreeMap<String, [f32; 2]>,
 }
 
 /// A wire serialized as `"<from_id>.<from_port> -> <to_id>.<to_port>"`.
 /// One line per wire makes the connections list scannable for both
-/// humans and AIs — and shorter than any nested tuple form YAML can
+/// humans and AIs, and shorter than any nested tuple form YAML can
 /// emit. Round-trips through `Display`/`FromStr`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PortableConnection {
@@ -161,7 +170,6 @@ impl PortableBrush {
             .then(|| brush.metadata.stabilizer.clone());
         Ok(Self {
             name: brush.metadata.name.clone(),
-            category: brush.metadata.category.clone(),
             description: brush.metadata.description.clone(),
             author: brush.metadata.author.clone(),
             tags: brush.metadata.tags.clone(),
@@ -170,11 +178,11 @@ impl PortableBrush {
         })
     }
 
-    /// Build the portable form from a bare graph — no envelope.
+    /// Build the portable form from a bare graph, no envelope.
     ///
     /// Fails if any node in the graph has a type missing from the
     /// registry. Silently emitting a param-less stub would produce YAML
-    /// that always errors on reimport — better to fail at export.
+    /// that always errors on reimport; better to fail at export.
     pub fn from_graph_only(
         graph: &Graph<BrushWireType>,
         registry: &BrushNodeRegistry,
@@ -183,7 +191,7 @@ impl PortableBrush {
         for (id, node) in graph.nodes() {
             let reg = registry.get(&node.type_id).ok_or_else(|| {
                 format!(
-                    "node {} has unknown type '{}' — cannot serialize",
+                    "node {} has unknown type '{}', cannot serialize",
                     id.0, node.type_id
                 )
             })?;
@@ -208,12 +216,28 @@ impl PortableBrush {
                 }
             }
 
+            // Slider bounds: the same diff-against-registration treatment,
+            // so a brush that never re-ranges anything emits no `ranges` key.
+            let mut ranges = BTreeMap::new();
+            for port in &node.ports {
+                if port.dir != PortDir::Input {
+                    continue;
+                }
+                let Some(reg_port) = reg.ports.iter().find(|p| p.name == port.name) else {
+                    continue;
+                };
+                if reg_port.min != port.min || reg_port.max != port.max {
+                    ranges.insert(port.name.clone(), [port.min, port.max]);
+                }
+            }
+
             nodes.insert(
                 id.0.clone(),
                 PortableNode {
                     type_id: node.type_id.clone(),
                     comment: node.comment.clone(),
                     inputs,
+                    ranges,
                 },
             );
         }
@@ -251,13 +275,18 @@ impl PortableBrush {
         })
     }
 
-    /// Materialize a full `Brush` from the portable form. Re-derives port
-    /// shapes from the registration and validates the graph compiles.
-    pub fn into_brush(self, registry: &BrushNodeRegistry) -> Result<Brush, String> {
+    /// Materialize a full `Brush` from the portable form under the identity
+    /// `id`. Re-derives port shapes from the registration and validates the
+    /// graph compiles.
+    ///
+    /// The id is the caller's to supply: the portable form is a graph plus
+    /// describing metadata, and which brush it *is* depends on where it came
+    /// from: a shipped brush's file stem, or a minted id for one the painter
+    /// saved.
+    pub fn into_brush(self, registry: &BrushNodeRegistry, id: &str) -> Result<Brush, String> {
         let graph = self.graph_from_nodes(registry)?;
         crate::brush::compile_graph(&graph)?;
-        let mut metadata = BrushMetadata::from_graph(self.name, graph);
-        metadata.category = self.category;
+        let mut metadata = BrushMetadata::from_graph(id, self.name, graph);
         metadata.description = self.description;
         metadata.author = self.author;
         metadata.tags = self.tags;
@@ -316,6 +345,14 @@ impl PortableBrush {
                     .set_node_comment(&new_id, pn.comment.clone())
                     .expect("node just added by add_node must exist");
             }
+            // Applied through the graph setter rather than onto the cloned
+            // ports above so the ascending-and-finite invariant is enforced
+            // in one place for every author: yaml, editor, and paste alike.
+            for (name, [min, max]) in &pn.ranges {
+                graph
+                    .set_port_range(&new_id, name, *min, *max)
+                    .map_err(|e| format!("range '{name}' on '{}': {e}", pn.type_id))?;
+            }
             id_map.insert(yaml_id.clone(), new_id);
         }
 
@@ -356,7 +393,7 @@ impl PortableBrush {
         // from each registration's `.exposed()` flag. The portable form
         // is authoritative, so clear that and re-populate from the saved
         // map, rewriting yaml ids to the freshly-assigned NodeIds.
-        // Malformed or stale keys are skipped silently — the import
+        // Malformed or stale keys are skipped silently, since the import
         // already validated nodes/ports above.
         graph.exposed_ports.clear();
         for (yaml_key, meta) in &self.exposed_ports {
@@ -421,7 +458,7 @@ mod tests {
     }
 
     /// Port-default overrides and brush-bar exposure (with custom meta)
-    /// must survive a round trip — the round trip is reversible if and
+    /// must survive a round trip; the round trip is reversible if and
     /// only if both per-port defaults and the graph-level
     /// `exposed_ports` map return intact.
     #[test]
@@ -471,6 +508,69 @@ mod tests {
         assert_eq!(meta.icon, "fa6-solid:circle-half-stroke");
     }
 
+    /// A re-ranged port survives the yaml round trip, and a graph that
+    /// re-ranges nothing emits no `ranges` key at all: the diff stays a
+    /// diff, so untouched brushes' yaml doesn't churn.
+    #[test]
+    fn port_ranges_survive_and_stay_a_diff() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+
+        // Untouched graph: no node carries a `ranges` entry.
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(
+            clean.nodes.values().all(|n| n.ranges.is_empty()),
+            "unmodified graph must not serialize any ranges"
+        );
+        assert!(!serde_yaml_ng::to_string(&clean).unwrap().contains("ranges"));
+
+        graph
+            .set_port_range(&circle, "softness", -1.0, 2.5)
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        let port = restored
+            .nodes()
+            .values()
+            .find(|n| n.type_id == "circle")
+            .expect("restored graph has a circle node")
+            .ports
+            .iter()
+            .find(|p| p.name == "softness")
+            .unwrap();
+        assert_eq!((port.min, port.max), (-1.0, 2.5));
+    }
+
+    /// A hand-edited yaml carrying a degenerate or inverted range is
+    /// rejected at import rather than producing a control whose normalize
+    /// and clamp arithmetic silently misbehaves.
+    #[test]
+    fn inverted_yaml_range_is_rejected_at_import() {
+        let registry = registry();
+        let graph = crate::brush::default_graph();
+        let mut portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let circle = portable
+            .nodes
+            .values_mut()
+            .find(|n| n.type_id == "circle")
+            .expect("default has a circle node");
+        circle.ranges.insert("softness".into(), [1.0, 0.0]);
+
+        let err = portable.into_graph(registry).unwrap_err();
+        assert!(err.contains("softness"), "unexpected error: {err}");
+    }
+
     /// The unified model's headline guarantee: a non-wirable input (here
     /// the circle node's `algorithm` Enum) is fully *exposable*, and both the
     /// exposure and a non-default enum value survive a YAML round trip.
@@ -485,7 +585,7 @@ mod tests {
             .map(|(id, _)| id.clone())
             .expect("default has a circle node");
 
-        // Override the enum to Perlin (1) and expose it — neither was
+        // Override the enum to Perlin (1) and expose it; neither was
         // possible under the old param system.
         graph
             .set_port_value(&shape, "algorithm", InputValue::Int(1))
@@ -529,7 +629,7 @@ nodes:
         assert!(err.contains("unknown node type"), "got: {err}");
     }
 
-    /// Unknown input name must be rejected loudly — the format is
+    /// Unknown input name must be rejected loudly, since the format is
     /// small enough that silently dropping fields would hide bugs in
     /// hand-edited YAML and built-in brush files.
     #[test]
@@ -547,7 +647,7 @@ nodes:
         assert!(err.contains("unknown input"), "got: {err}");
     }
 
-    /// Input type-mismatch must be rejected — passing a curve into an
+    /// Input type-mismatch must be rejected: passing a curve into an
     /// enum slot should fail with a clear error.
     #[test]
     fn input_type_mismatch_rejected() {
@@ -564,7 +664,7 @@ nodes:
         assert!(err.contains("expected integer"), "got: {err}");
     }
 
-    /// Unknown top-level keys must be rejected — `deny_unknown_fields`
+    /// Unknown top-level keys must be rejected: `deny_unknown_fields`
     /// keeps typos from being absorbed silently.
     #[test]
     fn unknown_top_level_field_rejected() {
@@ -583,6 +683,7 @@ nodes: {}
     fn stabilizer_round_trip_and_elision() {
         let registry = registry();
         let mut brush = Brush::from_metadata(BrushMetadata::from_graph(
+            "test",
             "Test",
             crate::brush::default_graph(),
         ));
@@ -603,14 +704,14 @@ nodes: {}
         let portable = PortableBrush::from_brush(&brush, registry).unwrap();
         let yaml = serde_yaml_ng::to_string(&portable).unwrap();
         let parsed: PortableBrush = serde_yaml_ng::from_str(&yaml).unwrap();
-        let restored = parsed.into_brush(registry).unwrap();
+        let restored = parsed.into_brush(registry, "test").unwrap();
         assert_eq!(restored.metadata.stabilizer.algorithm, "laplacian");
         assert_eq!(restored.metadata.stabilizer.params.len(), 1);
     }
 
     /// Two nodes of the same kind serialize to `random` + `random_2` YAML
-    /// keys, re-import to the same two ids, and re-serialize byte-identically
-    /// — locking the kind-derived id scheme through a full round trip.
+    /// keys, re-import to the same two ids, and re-serialize byte-identically,
+    /// locking the kind-derived id scheme through a full round trip.
     #[test]
     fn two_random_round_trip() {
         let registry = registry();

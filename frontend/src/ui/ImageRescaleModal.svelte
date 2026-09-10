@@ -1,6 +1,6 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
-    import Icon from '../icons/Icon.svelte';
+    import LinkToggle from './LinkToggle.svelte';
     import { imageRescale } from '../state/imageRescale.svelte';
     import { app } from '../state/app.svelte';
     import { MAX_DIM, clampDim } from './resizePreview';
@@ -9,7 +9,7 @@
     let oldW = $state(1);
     let oldH = $state(1);
 
-    // Target dimensions in pixels — the model. Inputs (`wInput`/`hInput`) are
+    // Target dimensions in pixels: the model. Inputs (`wInput`/`hInput`) are
     // shown in the current `unit` and converted to/from these.
     let pxW = $state(1);
     let pxH = $state(1);
@@ -84,7 +84,7 @@
         const w = clampDim(pxW);
         const h = clampDim(pxH);
         app.engine?.api.rescaleImage({ new_width: w, new_height: h });
-        // New dims are known synchronously this JS turn — recenter the
+        // New dims are known synchronously this JS turn; recenter the
         // coordinate transforms before any pointer event reads them.
         app.syncCanvasRect();
         app.refreshLayerTree();
@@ -139,17 +139,7 @@
                     <span class="unit">{unit}</span>
                 </div>
             </label>
-            <button
-                type="button"
-                class="link-toggle"
-                class:active={linkAspect}
-                aria-pressed={linkAspect}
-                aria-label={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
-                title={linkAspect ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
-                onclick={() => (linkAspect = !linkAspect)}
-            >
-                <Icon name={linkAspect ? 'fa6-solid:link' : 'fa6-solid:link-slash'} />
-            </button>
+            <LinkToggle linked={linkAspect} onchange={(v) => (linkAspect = v)} label="aspect ratio" />
         </div>
 
         <div class="actions">
@@ -240,24 +230,6 @@
     .num .unit {
         color: var(--text-muted);
         font-size: 12px;
-    }
-
-    .link-toggle {
-        background: transparent;
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        color: var(--text-muted);
-        cursor: pointer;
-        height: 32px;
-        width: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .link-toggle.active {
-        color: var(--text);
-        border-color: var(--accent, var(--text-muted));
     }
 
     .actions {

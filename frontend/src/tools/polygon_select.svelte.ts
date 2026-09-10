@@ -1,5 +1,5 @@
 /**
- * Polygon select tool — vertices are placed with discrete clicks.
+ * Polygon select tool: vertices are placed with discrete clicks.
  * Companion to the freehand lasso; both commit through the same
  * `select_lasso` WASM bridge (vertex list → sdf_polygon).
  *
@@ -17,7 +17,7 @@
  *                            selection if no polygon is being drawn.
  *
  * Modifier keys at the *closing* event map to selection mode via
- * `selectionMode(e)` — Shift = add, Alt = subtract, Shift+Alt = intersect.
+ * `selectionMode(e)`: Shift = add, Alt = subtract, Shift+Alt = intersect.
  */
 import { ToolBase, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
@@ -26,7 +26,7 @@ import {
     prim, selectionMode,
 } from './selection_helpers';
 
-/** Snap zone radius in buffer pixels — matches Krita's 10px screen-space
+/** Snap zone radius in buffer pixels, matching Krita's 10px screen-space
  *  threshold (kis_tool_polyline_base.cpp:26). Converted to canvas-space
  *  per use via `/ zoom`, so the on-screen hit-target stays constant. */
 const SNAP_RADIUS_BUFFER_PX = 10;
@@ -148,7 +148,7 @@ class PolygonSelectTool extends ToolBase {
 
     onPointerLeave(): void {
         // Drop the rubber-band so it doesn't dangle off-canvas, but keep
-        // the placed vertices so the user can come back and continue.
+        // the placed vertices so the artist can come back and continue.
         this.cursor = null;
         if (this.points.length > 0) this.pushPreviewOverlay();
     }
@@ -186,9 +186,7 @@ class PolygonSelectTool extends ToolBase {
 
 export const polygonSelectTool: ToolDescriptor = {
     id: 'polygon_select',
-    icon: 'lucide:triangle-dashed',
     group: 'select',
     cluster: 'select',
-    hotkeyAction: 'polygonSelectTool',
     create: (inst: DarklyInstance) => new PolygonSelectTool(inst),
 };

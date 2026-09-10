@@ -19,7 +19,7 @@
             if (copyTimer) clearTimeout(copyTimer);
             copyTimer = setTimeout(() => { copied = false; }, 1500);
         } catch {
-            // Clipboard unavailable — the text is still selectable to copy by hand.
+            // Clipboard unavailable; the text is still selectable to copy by hand.
         }
     }
 </script>

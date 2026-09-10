@@ -1,4 +1,4 @@
-//! Clone Source node — samples a frozen source snapshot at an offset,
+//! Clone Source node: samples a frozen source snapshot at an offset,
 //! turning the reused `paint` terminal into a clone-stamp brush.
 //!
 //! ## What it does
@@ -8,19 +8,19 @@
 //! source snapshot**. Wire `clone_source.color → stamp.color →
 //! paint.rgba` and the terminal deposits copied pixels under the cursor,
 //! inheriting shape, spacing, pressure-size, flow, opacity, erase,
-//! selection, preview, and undo for free. No new terminal — see the plan
+//! selection, preview, and undo for free. No new terminal; see the plan
 //! in `docs`/PR for why `paint` is the right base.
 //!
 //! ## Source binding
 //!
-//! Compilation calls [`CompileWgslCtx::request_source_texture`], which
-//! sets [`crate::brush::wgsl::CompiledBrush::samples_source`] and reserves
+//! Compilation calls [`CompileWgslCtx::request_live_texture`], which
+//! reserves
 //! the `@group(3)` source slot. `paint`'s `flush_dabs` binds the stroke's
 //! source snapshot there: the pre-stroke snapshot of the painted layer
 //! (same-layer clone), or a separate snapshot frozen at stroke start when
 //! a source layer is pinned or `merged` is on
 //! (`StrokeBuffer::save_source_snapshot`). The hover preview binds the registry
-//! `_fallback` tile (there is no snapshot at hover — the cursor thumbnail
+//! `_fallback` tile (there is no snapshot at hover, so the cursor thumbnail
 //! comes out neutral). The bind/sample plumbing is shared with `image`
 //! via [`crate::brush::wgsl::sample_graph_texture`].
 //!
@@ -35,9 +35,9 @@
 //! Per fragment the node computes `src = target_pos + offset` and samples
 //! the snapshot there. `offset` is the clone offset:
 //!
-//! - **Aligned** (`mode = 0`): `offset = source_anchor − dest_anchor` —
+//! - **Aligned** (`mode = 0`): `offset = source_anchor − dest_anchor`:
 //!   constant for the whole stroke, so the source tracks the cursor.
-//! - **Anchored** (`mode = 1`): `offset = source_anchor − center` — every
+//! - **Anchored** (`mode = 1`): `offset = source_anchor − center`: every
 //!   dab samples the fixed `source_anchor` (the freeze-source toggle).
 //!
 //! `source_anchor` / `dest_anchor` are stroke-constant uniforms seeded by
@@ -46,14 +46,14 @@
 //! exposed port default and baked into the emitted WGSL.
 //!
 //! **Coordinate frame:** `target_pos`, `center`, and the anchors are all
-//! plane/canvas pixels. The snapshot is local to the *source's* frame —
+//! plane/canvas pixels. The snapshot is local to the *source's* frame:
 //! its plane rect arrives as the per-node `source_offset` / `source_size`
 //! uniforms, seeded each pen event from
 //! [`CloneState`](crate::brush::eval::CloneState) (the frozen snapshot's
 //! frame when one exists, else the paint target's current extent, so
 //! same-layer clone keeps tracking mid-stroke layer growth). The sample
 //! UV is `(src − source_offset) / source_size`. Out-of-source UVs read
-//! transparent — see [`docs/coordinate-systems.md`].
+//! transparent; see [`docs/coordinate-systems.md`].
 
 use std::sync::Arc;
 
@@ -63,6 +63,7 @@ use crate::brush::wgsl::{
     sample_graph_texture, CompileWgslCtx, InputBinding, NodeWgsl, UniformField, WgslType,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::preview::{PreviewBackdrop, PreviewStaging};
 use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "clone_source";
@@ -73,7 +74,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Clone Source",
-            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's colour input.",
+            description: "Samples pixels from a set source point onto the canvas under your cursor. Set the source with the clone set-source gesture, then paint. Feed into a Stamp Tip's color input.",
             ports: vec![
                 PortDef::input("center", BrushWireType::Vec2)
                     .with_description("Per-dab pen position in canvas pixels (wire Pen Input → Position)."),
@@ -109,7 +110,10 @@ pub fn register() -> BrushNodeRegistration {
             is_gpu: false,
             is_terminal: false,
             supports_erase: true,
-            preview_fallback_icon: Some("fa6-solid:clone"),
+            preview_staging: Some(PreviewStaging {
+                icon: "fa6-solid:clone",
+                backdrop: PreviewBackdrop::Stripes,
+            }),
         },
         || Box::new(CloneSourceEvaluator),
     )
@@ -117,7 +121,7 @@ pub fn register() -> BrushNodeRegistration {
 
 /// A Bool toggle port reads "on" at or above this threshold, "off" below.
 /// The single source of truth for the 0/1 split of this node's exposed
-/// toggles — shared by the compile-time bake ([`mode_is_anchored`]) and the
+/// toggles, shared by the compile-time bake ([`mode_is_anchored`]) and the
 /// engine's structural queries (`clone_source_anchored`,
 /// `clone_sample_merged`) so the frontend, the stroke-start resolution, and
 /// the emitted WGSL can't disagree.
@@ -152,7 +156,7 @@ fn mode_is_anchored(cctx: &CompileWgslCtx) -> bool {
 pub struct CloneSourceEvaluator;
 
 impl BrushNodeEvaluator for CloneSourceEvaluator {
-    /// CPU evaluation returns a neutral grey — `clone_source` is only
+    /// CPU evaluation returns a neutral grey: `clone_source` is only
     /// meaningful per-fragment in the compiled shader, and the per-dab
     /// CPU dispatch path is dead for compiled-WGSL brushes. Mirrors
     /// `image`'s placeholder so mixed CPU/compiled graphs don't `NaN`
@@ -164,18 +168,19 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("color") {
-            // Nothing downstream samples the source — don't reserve the
+            // Nothing downstream samples the source, so don't reserve the
             // binding or emit the sample.
             return Ok(wgsl);
         }
 
-        let slot = cctx.request_source_texture();
+        let slot =
+            cctx.request_live_texture(crate::brush::texture_source::LiveSource::StrokeSnapshot);
 
         // Stroke-constant uniforms, seeded per pen event by the runner
         // from `CloneState` (keyed `n{id}_source_anchor` etc.): the two
         // clone anchors plus the source snapshot's plane frame. Each
         // field carries its own unseeded default (the hover preview and
-        // non-clone paths have no live `CloneState`) — `source_size`
+        // non-clone paths have no live `CloneState`); `source_size`
         // MUST default to `[1, 1]`: a zero size NaNs the UV, and NaN
         // passes the `uv < 0 || uv > 1` bounds check below.
         let sa_field = cctx.uniform_field_name("source_anchor");
@@ -212,7 +217,7 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
         // references the module-scope `u` uniform and the `@group(3)`
         // source texture directly. `tp` is the fragment's plane-space
         // position in canvas pixels; `off` the clone offset. The source
-        // frame comes from the per-node uniforms above — not
+        // frame comes from the per-node uniforms above, not
         // `u.intrinsic.layer_*`, which is the *painted* layer's frame and
         // diverges from the source under cross-layer / merged clone.
         let fn_name = cctx.ident("clone_sample");
@@ -239,7 +244,7 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
     /// sample (the preview pipeline binds the registry `_fallback` tile to
     /// the declared source slot), so sampling it would stamp a meaningless
     /// flat tile. Instead emit an opaque neutral constant for the `color`
-    /// output — the terminal deposits it through the brush tip, so the
+    /// output: the terminal deposits it through the brush tip, so the
     /// cursor preview shows the tip *shape* in neutral grey (matching
     /// Krita's `kis_duplicateop` and GIMP's source-tool outline). The
     /// output name matches `compile_wgsl`'s so the terminal's preview body,
@@ -260,7 +265,7 @@ impl BrushNodeEvaluator for CloneSourceEvaluator {
 /// CPU-side spec of the clone offset formula, mirrored by the WGSL
 /// emitted in [`CloneSourceEvaluator::compile_wgsl`]. This is the one
 /// unavoidable CPU↔WGSL duplication (the same kind `IntrinsicUniforms`
-/// carries) — kept tiny and covered by a unit test so the two-mode
+/// carries), kept tiny and covered by a unit test so the two-mode
 /// semantics can't silently drift.
 ///
 /// `center` is the per-dab pen position; the returned offset is added to

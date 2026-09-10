@@ -160,7 +160,7 @@ describe('elementCenterInParent', () => {
         });
         // At zoom=2, a 140-graph-pixel right port appears 280px right of
         // the node on screen. The stored offset must be 140 (graph), not
-        // 280 (screen) — otherwise wire paths double-apply the zoom.
+        // 280 (screen); otherwise wire paths double-apply the zoom.
         const nodeEl = fakeEl({ left: 0, top: 0, width: 400, height: 200 });
         const dotEl  = fakeEl({ left: 270, top: 90, width: 20, height: 20 });
         expect(coords.elementCenterInParent(dotEl, nodeEl)).toEqual({ x: 140, y: 50 });

@@ -62,7 +62,7 @@ describe('chunk framing', () => {
         const torn = encodeChunkRecord(chunk({ data: new Uint8Array(64).fill(3) }));
         const full = concat([complete, torn]);
         // Every strict prefix that cuts into the second record must decode
-        // to exactly the first — crash-safe at every byte.
+        // to exactly the first, crash-safe at every byte.
         for (let cut = complete.length; cut < full.length; cut++) {
             const decoded = decodeChunkRecords(full.subarray(0, cut));
             expect(decoded).toHaveLength(1);

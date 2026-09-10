@@ -23,13 +23,13 @@
     let dragOver = $state(false);
 
     // The Google grid is virtualized (prior art: Graphite's font menu,
-    // `frontend/src/components/floating-menus/MenuList.svelte` — virtual
+    // `frontend/src/components/floating-menus/MenuList.svelte`: virtual
     // scrolling + a lazily-loaded `<link>` per visible entry). Each tile loads a
     // network preview font, and the catalog is 1900+ fonts, so only the rows in
     // (or near) the viewport are put in the DOM: the whole catalog is browsable
     // with a correct scrollbar, but preview fetches and node count stay bounded
     // to the visible window no matter how far you scroll.
-    /** Tile footprint — kept in sync with the CSS via the `--tile-h` custom
+    /** Tile footprint: kept in sync with the CSS via the `--tile-h` custom
      *  property set on the container. `MIN_W` matches the grid's min column. */
     const TILE_H = 74;
     const TILE_MIN_W = 150;
@@ -47,8 +47,8 @@
      *  Installed section + headings sit above it), so scroll math is grid-local. */
     let googleOffsetTop = $state(0);
 
-    // Load the catalog only once the browser is actually opened — it's hundreds
-    // of KB most sessions never need.
+    // Load the catalog only once the browser is actually opened, since it's
+    // hundreds of KB most sessions never need.
     $effect(() => {
         if (open && !catalogLoaded) {
             catalogLoaded = true;
@@ -135,17 +135,17 @@
         if (scrollEl) scrollEl.scrollTop = 0;
     });
 
-    /** What a tile renders in its own face: the user's custom preview text, or
+    /** What a tile renders in its own face: the artist's custom preview text, or
      *  the family's own name when the override is empty. */
     function sampleFor(family: string): string {
         const custom = preview.trim();
         return custom.length ? preview : family;
     }
 
-    /** Preview stylesheet URLs — one keyless css2 embed per *visible* Google font
+    /** Preview stylesheet URLs: one keyless css2 embed per *visible* Google font
      *  so each tile renders in its own face. Virtualization keeps this list small
      *  (only the on-screen window), so preview fetches are bounded no matter how
-     *  large the catalog or how far the user scrolls. Loads the full Latin subset
+     *  large the catalog or how far the artist scrolls. Loads the full Latin subset
      *  (not a per-tile `&text=` subset, which hits a CORS-flaky endpoint), so the
      *  custom preview override re-renders from already-loaded glyphs. */
     const previewLinks = $derived(googleWindow.map((f) => previewUrl(f)));
@@ -213,7 +213,7 @@
     {/each}
 </svelte:head>
 
-<Modal bind:open title="Fonts" size="lg">
+<Modal bind:open title="Fonts" size="xl">
     <div class="font-browser">
         <div class="fields">
             <input

@@ -1,7 +1,7 @@
 /**
  * High-level GPU overlay builder.
  *
- * Why GPU instead of SVG/DOM?  Not because the CPU can't draw 14 circles —
+ * Why GPU instead of SVG/DOM?  Not because the CPU can't draw 14 circles;
  * it can.  The problem is that DOM-based overlays (SVG, HTML) go through the
  * browser's rendering pipeline (Svelte reactivity → DOM diff → style →
  * layout → paint → composite) on the **main thread**, on every pointer
@@ -10,8 +10,8 @@
  * buffer that the GPU renders as part of the present pass it's already
  * doing.  Zero main-thread rendering work per frame.
  *
- * Tools describe overlays declaratively — lines and interactive handles in
- * canvas space — and the builder converts them to low-level GPU primitives,
+ * Tools describe overlays declaratively (lines and interactive handles in
+ * canvas space) and the builder converts them to low-level GPU primitives,
  * handles DPR scaling and coordinate conversion, and provides hit-testing.
  *
  * All positions are in canvas space (document pixels).
@@ -35,13 +35,13 @@ import { app } from '../state/app.svelte';
 type Color = string | [number, number, number, number];
 
 /** Which engine overlay channel an `OverlayBuilder` pushes to. Mirrors the
- *  Rust `OverlayChannel` split — `'tool'` is churned every hover move, so
+ *  Rust `OverlayChannel` split: `'tool'` is churned every hover move, so
  *  persistent markers (the clone source crosshair) use `'clone'`. */
 export type OverlayChannel = 'tool' | 'clone';
 
 const colorCache = new Map<string, [number, number, number, number]>();
 
-/** Convert a hex color string to [r, g, b, a] floats in 0–1. */
+/** Convert a hex color string to [r, g, b, a] floats in 0-1. */
 function hexToRgba(hex: string): [number, number, number, number] {
     const cached = colorCache.get(hex);
     if (cached) return cached;
@@ -90,7 +90,7 @@ export interface CrosshairOpts {
     thickness?: number;   // CSS pixels, default 1.5
     gap?: number;         // half-gap left blank at the centre, CSS px, default 0
     /** Render via the snapshot-invert overlay path (white on dark, black on
-     *  light — same as the selection marching ants). Supersedes `color`'s
+     *  light, same as the selection marching ants). Supersedes `color`'s
      *  rgb; alpha still applies. Default false. */
     invert?: boolean;
 }
@@ -188,7 +188,7 @@ export class OverlayBuilder {
         const dpr = window.devicePixelRatio || 1;
         const prims: GpuPrim[] = [];
 
-        // Lines — canvas space, transformed by GPU shader
+        // Lines: canvas space, transformed by GPU shader
         for (const l of this.lines) {
             const kind = l.dash > 0 ? KIND_DASHED_LINE : KIND_LINE;
             prims.push(prim(kind, FLAG_CANVAS_SPACE, l.from, l.to, {
@@ -198,7 +198,7 @@ export class OverlayBuilder {
             }));
         }
 
-        // Handles — screen space (constant pixel size)
+        // Handles: screen space (constant pixel size)
         for (const h of this.handles) {
             const sp = canvasToScreen(h.canvasPos[0], h.canvasPos[1], this.canvasEl);
             const center: [number, number] = [sp.x * dpr, sp.y * dpr];
@@ -213,7 +213,7 @@ export class OverlayBuilder {
             }));
         }
 
-        // Crosshairs — screen space (constant pixel size), same frame as
+        // Crosshairs: screen space (constant pixel size), same frame as
         // handles. Each arm is a separate line so an optional centre gap
         // leaves the exact source pixel visible.
         for (const c of this.crosshairs) {

@@ -1,10 +1,10 @@
 /**
- * Generic transform gizmo — the consumer-agnostic helper.
+ * Generic transform gizmo: the consumer-agnostic helper.
  *
  * It takes a bounding box + an initial transform + pointer input and outputs
  * numbers (an updated affine), which it hands to whatever `TransformBinding` is
  * wired to it. It has ZERO knowledge of voids, floating, layers, or the
- * document — it imports only the overlay renderer, the affine util, and the
+ * document; it imports only the overlay renderer, the affine util, and the
  * mode registry. A consumer owns a transform and supplies a binding; the gizmo
  * just drives it.
  *
@@ -15,7 +15,7 @@
 import { app } from '../state/app.svelte';
 import type { SessionEngine } from './tool_session';
 import { OverlayBuilder } from '../canvas/gpu_overlay';
-import { MAT3_IDENTITY, type Mat3 } from './transform_projective';
+import { mat3Multiply, MAT3_IDENTITY, type Mat3 } from './transform_projective';
 import {
     allModes,
     modeForTag,
@@ -56,7 +56,7 @@ export class TransformGizmo {
     private canvasEl: HTMLCanvasElement;
     /** Live accessor for the owning instance's current tool session. Read on
      *  every overlay push/clear so the gizmo always targets the *instance's*
-     *  fresh session (which survives a layer rebind), never a stale capture —
+     *  fresh session (which survives a layer rebind), never a stale capture:
      *  the per-instance replacement for the old global `toolEngine()`. */
     private session: () => SessionEngine | null;
     private binding: TransformBinding | null = null;
@@ -80,7 +80,7 @@ export class TransformGizmo {
     async attach(binding: TransformBinding): Promise<boolean> {
         this.binding = binding;
         if ((await this.adopt(binding)) !== 'adopted') {
-            // 'stale' means we were re-attached to a newer binding mid-read —
+            // 'stale' means we were re-attached to a newer binding mid-read:
             // leave that one alone; only clear if we're still on this binding.
             if (this.binding === binding) this.clear();
             return false;
@@ -159,7 +159,7 @@ export class TransformGizmo {
 
     /**
      * Switch the gizmo to `tag`, seeding the new mode's matrix from the current
-     * geometry and **pushing it through the binding** — mode is
+     * geometry and **pushing it through the binding**: mode is
      * document-derived (the stored `Transform`), not a session-local flag, so
      * the next `adopt()` reads the same mode back and the gizmo stays put. A
      * no-op when inactive or already in `tag`.
@@ -168,21 +168,36 @@ export class TransformGizmo {
         if (!this.binding || this.mode.tag === tag) return;
         const target = modeForTag(tag);
         const m = target.seedMatrix(this.geo);
-        this.geo.matrix = m;
         this.mode = target;
-        this.binding.update(m, tag);
-        this.rebuildOverlay();
-        app.requestFrame();
+        this.applyMatrix(m);
+    }
+
+    /**
+     * Mirror the content about the source rect's centre, horizontally (`'h'`) or
+     * vertically (`'v'`): Krita's transform-tool `Mirror Horizontal` /
+     * `Mirror Vertical` (`kis_tool_transform_config_widget.cpp::slotFlipX`,
+     * which negates `scaleX` around the anchor).
+     *
+     * Composing the mirror in *source* space (`M · mirror`) leaves the
+     * destination quad exactly where it is and only swaps which side of the
+     * content lands on which edge. That makes it exact and mode-agnostic: every
+     * mode's matrix maps the source rect onto that quad, so the same
+     * composition mirrors an affine box and a perspective quad alike.
+     */
+    flip(axis: 'h' | 'v'): void {
+        const { srcW, srcH } = this.geo;
+        if (!this.binding || srcW <= 0 || srcH <= 0) return;
+        const mirror: Mat3 =
+            axis === 'h'
+                ? [-1, 0, srcW, 0, 1, 0, 0, 0, 1]
+                : [1, 0, 0, 0, -1, srcH, 0, 0, 1];
+        this.applyMatrix(mat3Multiply(this.geo.matrix, mirror));
     }
 
     pointerMove(cx: number, cy: number, shift: boolean): void {
         if (!this.binding) return;
         if (this.drag != null) {
-            const m = this.mode.updateDrag(this.geo, this.drag, cx, cy, shift);
-            this.geo.matrix = m;
-            this.binding.update(m, this.mode.tag);
-            this.rebuildOverlay();
-            app.requestFrame();
+            this.applyMatrix(this.mode.updateDrag(this.geo, this.drag, cx, cy, shift));
         } else {
             app.toolCursor = this.mode.resolveHandle(this.geo, this.overlay, this.bbox, cx, cy).cursor;
         }
@@ -203,6 +218,17 @@ export class TransformGizmo {
     cancel(): void {
         this.binding?.cancel();
         this.clear();
+        app.requestFrame();
+    }
+
+    /** Adopt `m` as the current transform: store it, push it through the binding
+     *  under the active mode, and redraw. The one path every matrix edit (drag,
+     *  mode switch, flip) takes. */
+    private applyMatrix(m: Mat3): void {
+        if (!this.binding) return;
+        this.geo.matrix = m;
+        this.binding.update(m, this.mode.tag);
+        this.rebuildOverlay();
         app.requestFrame();
     }
 

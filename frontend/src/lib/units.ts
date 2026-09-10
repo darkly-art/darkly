@@ -30,7 +30,7 @@ export const UNITS: Record<UnitType, Unit> = {
 };
 
 /** Resolve a unit table entry from a (possibly unknown) unit_type string,
- *  defaulting to Normalized — matches Rust's `UnitType::default()`. */
+ *  defaulting to Normalized, which matches Rust's `UnitType::default()`. */
 export function unitFor(unitType: string | null | undefined): Unit {
     return (unitType && UNITS[unitType as UnitType]) || UNITS.Normalized;
 }

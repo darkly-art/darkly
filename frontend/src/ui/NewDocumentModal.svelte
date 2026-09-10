@@ -5,17 +5,19 @@
     import { config } from '../config/store.svelte';
     import { app } from '../state/app.svelte';
     import { readImageFromClipboard } from '../clipboard';
+    import { hexToColor } from '../lib/color';
+    import ColorInput from './settings/widgets/ColorInput.svelte';
 
     // Seeded from the global canvas defaults each time the modal opens, so the
-    // user always starts from "what a fresh tab would normally be" but can
+    // artist always starts from "what a fresh tab would normally be" but can
     // override per document. Black bg matches the spec.
     let width = $state(1920);
     let height = $state(1080);
     let color = $state('#000000');
 
     // Reseed dimensions whenever the modal transitions to open. Reading
-    // `config.get` requires the WASM module to be initialised — the modal is
-    // gated on a user click well after boot, so by the time the user can open
+    // `config.get` requires the WASM module to be initialised: the modal is
+    // gated on an artist click well after boot, so by the time the artist can open
     // it, config has already loaded.
     let prevOpen = false;
     $effect(() => {
@@ -32,8 +34,8 @@
         prevOpen = newDocument.open;
     });
 
-    // Clipboard peek — populated when the modal opens, surfaces the dimensions
-    // and a thumbnail above the "From Clipboard" button so the user can see
+    // Clipboard peek: populated when the modal opens, surfaces the dimensions
+    // and a thumbnail above the "From Clipboard" button so the artist can see
     // what they're about to paste before committing. Silently empty when no
     // image is on the clipboard or permission is denied; the button still
     // works as a fallback (it reads again on click).
@@ -71,18 +73,11 @@
         newDocument.open = false;
     }
 
-    function parseHex(hex: string): [number, number, number, number] {
-        const h = hex.replace('#', '');
-        const r = parseInt(h.slice(0, 2), 16);
-        const g = parseInt(h.slice(2, 4), 16);
-        const b = parseInt(h.slice(4, 6), 16);
-        return [r, g, b, 255] as [number, number, number, number];
-    }
-
     function create() {
         const w = Math.max(1, Math.min(16384, Math.round(width)));
         const h = Math.max(1, Math.min(16384, Math.round(height)));
-        const rgba = parseHex(color);
+        const c = hexToColor(color) ?? { r: 0, g: 0, b: 0, a: 255 };
+        const rgba: [number, number, number, number] = [c.r, c.g, c.b, 255];
 
         // Fresh tab with the chosen canvas size. Setting `onHandleReady`
         // suppresses the default white-image bg seed in CanvasView, leaving
@@ -166,10 +161,7 @@
 
         <label class="row color-row">
             <span class="label">Background</span>
-            <div class="color">
-                <input type="color" bind:value={color} />
-                <span class="hex">{color.toUpperCase()}</span>
-            </div>
+            <ColorInput value={color} oninput={(hex) => (color = hex)} onchange={(hex) => (color = hex)} />
         </label>
 
         {#if clipboardPeek}
@@ -260,32 +252,6 @@
     }
 
     .num .unit {
-        color: var(--text-muted);
-        font-family: var(--font-mono, monospace);
-        font-size: 12px;
-    }
-
-    .color {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 4px 8px;
-    }
-
-    .color input[type="color"] {
-        width: 36px;
-        height: 24px;
-        border: 1px solid var(--bg-hover);
-        border-radius: 3px;
-        background: transparent;
-        padding: 0;
-        cursor: pointer;
-    }
-
-    .color .hex {
         color: var(--text-muted);
         font-family: var(--font-mono, monospace);
         font-size: 12px;

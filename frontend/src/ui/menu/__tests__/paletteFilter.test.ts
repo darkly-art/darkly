@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { paletteActions, filterPalette } from '../paletteFilter';
-import type { ActionRegistration } from '../../../actions/registry';
+import type { Action } from '../../../actions/registry';
 
 function reg(
     id: string,
     displayName: string,
-    extra: Partial<ActionRegistration> = {},
-): ActionRegistration {
+    extra: Partial<Action> = {},
+): Action {
     return { id, displayName, category: 'edit', icon: 'fa6-solid:circle', handler: () => {}, ...extra };
 }
 
