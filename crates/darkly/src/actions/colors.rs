@@ -20,6 +20,12 @@ const ACTIONS: &[ActionDef] = &[
             "Hold the modifier and drag on the canvas to sample a color into the foreground swatch.",
         icon: "fa6-solid:eye-dropper",
     },
+    ActionDef {
+        id: "palettePopup",
+        display_name: "Palette Popup",
+        description: "With the trigger held (a pen's barrel button by default), touch the canvas to summon a radial wheel of recent colors and brushes; drag through it and lift to pick.",
+        icon: "fa6-solid:palette",
+    },
 ];
 
 pub fn register() -> ActionCategory {

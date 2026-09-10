@@ -3,7 +3,7 @@ import type { Catalog, CatalogEntry, JsonValue } from '../engine/protocol_gen';
 import type { SaveBundle } from '../storage/saveDocument';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry, type Tool } from '../tools/registry';
-import { tooltipForAction } from '../config/store.svelte';
+import { config, tooltipForAction } from '../config/store.svelte';
 import { pollPick } from '../tools/color_pick_sync';
 import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -14,7 +14,7 @@ import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
 import { freshDocument } from './freshDocument';
 import { recentColors } from './recents.svelte';
-import { colorToHex } from '../lib/color';
+import { colorToHex, hexToColor } from '../lib/color';
 import { newId } from '../lib/id';
 import {
     appearedRoots,
@@ -952,9 +952,12 @@ export class DarklyInstance {
         this.background = tmp;
     }
 
+    /** Return both swatches to the painter's configured defaults; a pref that
+     *  is unset or malformed falls back to this build's fresh-document pair. */
     resetColors() {
-        this.foreground = { ...freshDocument.foreground };
-        this.background = { ...freshDocument.background };
+        const pref = (key: string) => hexToColor((config.get(key) as string | undefined) ?? '');
+        this.foreground = pref('colors.defaultForeground') ?? { ...freshDocument.foreground };
+        this.background = pref('colors.defaultBackground') ?? { ...freshDocument.background };
     }
 
     /** Sync the JS canvas-window mirror (`docW`/`docH`/`canvasOriginX`/

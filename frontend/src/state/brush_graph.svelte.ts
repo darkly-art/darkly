@@ -7,7 +7,9 @@
  * `nodePositions` here, populated by `autoLayout` after every structural
  * change, and never travel back to Rust.
  */
-import { app } from './app.svelte';
+import { app, getActiveInstance } from './app.svelte';
+import { brushColors } from './brushColors.svelte';
+import { config } from '../config/store.svelte';
 import { freshDocument } from './freshDocument';
 import { recentBrushes } from './recents.svelte';
 import { brushLibrary } from './brush_library.svelte';
@@ -224,8 +226,27 @@ export class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
+    /** The library brush the active graph came from (null = custom/modified).
+     *  One value for one fact: the name is what the engine loads by and what
+     *  the UI shows; the id is what recents and the per-brush color memory key
+     *  by, so a rename cannot orphan either. */
+    #active = $state<{ name: string; id: string } | null>(null);
+
     /** Currently loaded brush name (null = custom/modified). */
-    activeBrush = $state<string | null>(null);
+    get activeBrush(): string | null {
+        return this.#active?.name ?? null;
+    }
+
+    /** Currently loaded brush id (null = custom/modified). */
+    get activeBrushId(): string | null {
+        return this.#active?.id ?? null;
+    }
+
+    /** Declare the active graph to be library brush `id` named `name`, as
+     *  after saving it there: the graph did not change, only what it is. */
+    setActiveBrush(brush: { name: string; id: string }) {
+        this.#active = { ...brush };
+    }
 
     /** Ports exposed in the brush properties panel. */
     exposedPorts = $state<ExposedPortInfo[]>([]);
@@ -278,7 +299,7 @@ export class BrushGraphState {
             if (app.engine) {
                 const topo = (await app.engine.api.brushTopologyVersion()).value;
                 if (topo !== this.lastTopologyVersion) {
-                    this.activeBrush = null;
+                    this.#active = null;
                     this.lastTopologyVersion = topo;
                 }
             }
@@ -375,7 +396,7 @@ export class BrushGraphState {
         if (defaultBrush) {
             // Deliberately not `loadBrush`: the painter did not reach for this
             // one, so it must not take the top slot in their recents.
-            await this.#load(defaultBrush.name);
+            await this.#load(defaultBrush.name, defaultBrush.id);
         } else {
             // No library brushes available: fall through to the engine's
             // default graph as a degenerate fallback.
@@ -394,7 +415,7 @@ export class BrushGraphState {
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
         this.error = null;
-        this.activeBrush = null;
+        this.#active = null;
         await this.snapshotTopologyVersion();
     }
 
@@ -424,7 +445,7 @@ export class BrushGraphState {
         await this.refreshExposedPorts();
         await this.refreshCapabilities();
         this.error = null;
-        this.activeBrush = null;
+        this.#active = null;
         await this.snapshotTopologyVersion();
         return null;
     }
@@ -511,11 +532,23 @@ export class BrushGraphState {
      * `id` is the brush's identity and `name` is what the engine looks it up
      * by; `brush_load` is the one name-keyed call in the library API. Recents
      * stores the id, so a later rename does not drop the entry.
+     *
+     * This is the one chokepoint every brush switch passes through, so it is
+     * also where the paint stays on the brush: the outgoing brush remembers
+     * the focused instance's foreground/background pair, and, when colors are
+     * locked to brushes, the incoming brush's remembered pair replaces it.
+     * Recording happens regardless of the lock so that turning it on later
+     * already has history; a failed load switches nothing and restores
+     * nothing.
      */
     async loadBrush(name: string, id: string) {
+        const inst = getActiveInstance();
+        if (inst) brushColors.record(this.activeBrushId, inst);
         // Only a successful load counts as use: a brush that never loaded was
         // never used.
-        if (await this.#load(name)) recentBrushes.use(id);
+        if (!(await this.#load(name, id))) return;
+        recentBrushes.use(id);
+        if (inst && config.get('colors.lockToBrush') === true) brushColors.restore(id, inst);
     }
 
     /** Load a brush by name, without recording it. Returns whether it loaded.
@@ -523,7 +556,7 @@ export class BrushGraphState {
      *  `loadBrush` is the painter-facing entry point; this is the mechanism
      *  under it, so a selection the painter did not make (the boot default)
      *  can reach the engine without claiming the top of their recents. */
-    async #load(name: string): Promise<boolean> {
+    async #load(name: string, id: string): Promise<boolean> {
         if (!app.engine) return false;
         // brush_load rejects on error (old Result throw path).
         try {
@@ -532,7 +565,7 @@ export class BrushGraphState {
             this.error = String(e instanceof Error ? e.message : e);
             return false;
         }
-        this.activeBrush = name;
+        this.#active = { name, id };
         // `fetchGraph` begins a new layout generation atomically with the
         // graph swap, so the canvas effect re-runs auto-layout for the
         // freshly-loaded graph.

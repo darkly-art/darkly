@@ -108,6 +108,10 @@ hotkeys:
   #     can't live here per rule #3). Also reachable via the mask context
   #     menu and the command palette.
 
+mouse_clicks:
+  # Darkly-original (rule #2). Krita's popup palette is also on right-click.
+  palettePopup: canvas:rightDrag
+
 settings:
   # Canvas defaults.
   canvas.width: 1920
@@ -152,3 +156,4 @@ settings:
   # Colors.
   colors.defaultForeground: "#ffffff"
   colors.defaultBackground: "#000000"
+  colors.lockToBrush: false

@@ -25,6 +25,8 @@ export interface PanelMeta {
      *  canvas) is a fixed *anchor*: it renders with no tab bar, can't be grabbed,
      *  and can't be tabbed into; other panels dock *around* its edges only. */
     movable: boolean;
+    /** Iconify icon for the panel's show/hide action in menus and the palette. */
+    icon?: string;
 }
 
 const registry = new Map<PanelType, PanelMeta>();
@@ -43,3 +45,7 @@ export function isPanelRegistered(type: PanelType): boolean {
     return registry.has(type);
 }
 
+/** Every registered panel type, in registration order. */
+export function registeredPanels(): PanelType[] {
+    return [...registry.keys()];
+}

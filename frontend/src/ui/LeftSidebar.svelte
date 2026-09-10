@@ -2,15 +2,11 @@
     import { untrack } from 'svelte';
     import { app } from '../state/app.svelte';
     import { toolRegistry, toolClusterRegistry, type ToolDescriptor, type ToolCluster as ToolClusterDef } from '../tools/registry';
-    import { tooltipForAction } from '../config/store.svelte';
-    import ColorPicker from './ColorPicker.svelte';
+    import FgBgSwatches from './color/FgBgSwatches.svelte';
     import HamburgerMenu from './HamburgerMenu.svelte';
     import ToolCluster from './ToolCluster.svelte';
     import Icon from '../icons/Icon.svelte';
     import { menuBar } from '../state/menuBar.svelte';
-    import { watchDismiss } from '../lib/dismiss';
-
-    let showColorPicker = $state(false);
 
     // Track the last-activated sub-tool per cluster id so a cluster-button
     // click can restore the artist's previous choice. The mutation is wrapped
@@ -24,18 +20,6 @@
             app.lastToolByCluster[clusterId] = id;
         });
     });
-
-    function colorStyle(c: { r: number; g: number; b: number; a: number }): string {
-        return `rgb(${c.r}, ${c.g}, ${c.b})`;
-    }
-
-    function toggleColorPicker() {
-        showColorPicker = !showColorPicker;
-    }
-
-    // A pointerdown outside the picker (swatch + panel, both tagged
-    // data-keep-open="color-picker") closes it.
-    $effect(() => watchDismiss('color-picker', () => (showColorPicker = false)));
 
     // Build a flat list of toolbar items (individual tool buttons OR cluster
     // flyouts), then split into groups by tool.group for visual separators.
@@ -111,30 +95,9 @@
 
     <div class="toolbar-spacer"></div>
 
-    <!-- Color swatches + swap (bottom) -->
     <div class="toolbar-bottom">
-        <div class="color-swatches">
-            <button class="swatch-stack" data-keep-open="color-picker" onclick={toggleColorPicker} title="Pick color">
-                <div
-                    class="swatch bg"
-                    style="background: {colorStyle(app.background)}"
-                ></div>
-                <div
-                    class="swatch fg"
-                    style="background: {colorStyle(app.foreground)}"
-                ></div>
-            </button>
-        </div>
-        <button class="tool swap" onclick={() => app.swapColors()} title={tooltipForAction('Swap colors', 'swapColors')}>
-            <Icon name="fa6-solid:arrow-right-arrow-left" />
-        </button>
+        <FgBgSwatches mode="popup" />
     </div>
-
-    {#if showColorPicker}
-        <div class="color-picker-wrapper" data-keep-open="color-picker">
-            <ColorPicker onclose={() => showColorPicker = false} />
-        </div>
-    {/if}
 </div>
 
 <style>
@@ -147,46 +110,6 @@
         padding: 6px 0;
         gap: 2px;
         flex-shrink: 0;
-    }
-
-    .color-swatches {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-    }
-
-    .swatch-stack {
-        position: relative;
-        width: 28px;
-        height: 28px;
-        cursor: pointer;
-        background: none;
-        border: none;
-        padding: 0;
-    }
-
-    .swatch {
-        position: absolute;
-        border-radius: 4px;
-        cursor: pointer;
-    }
-
-    .swatch.fg {
-        width: 20px;
-        height: 20px;
-        top: 0;
-        left: 0;
-        z-index: 1;
-        box-shadow: 0 0 0 1px var(--text-dim);
-    }
-
-    .swatch.bg {
-        width: 20px;
-        height: 20px;
-        bottom: 0;
-        right: 0;
-        box-shadow: 0 0 0 1px var(--text-dim);
     }
 
     .tool-group {
@@ -239,12 +162,6 @@
         color: #ffffff;
     }
 
-    .tool.swap {
-        width: 28px;
-        height: 20px;
-        font-size: 10px;
-    }
-
     .toolbar-spacer {
         flex: 1;
     }
@@ -258,7 +175,4 @@
         border-top: 1px solid var(--bg-hover);
     }
 
-    .color-picker-wrapper {
-        display: contents;
-    }
 </style>

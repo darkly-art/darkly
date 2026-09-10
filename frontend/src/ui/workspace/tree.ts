@@ -21,7 +21,7 @@
  *  Graphite), so the whole window tiles and horizontal splitting (canvas |
  *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
  *  present by {@link ensureDocument}. */
-export type PanelType = 'document' | 'layers' | 'properties';
+export type PanelType = 'document' | 'layers' | 'properties' | 'color';
 
 export interface PanelGroupState {
     tabs: PanelType[];
@@ -459,7 +459,10 @@ export function renumber(node: Subdivision, start = 0): number {
     return next;
 }
 
-const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties'];
+/** Every panel type a persisted layout may name. Stated here, import-free,
+ *  for the same reason as {@link ANCHOR_PANELS}: the tree loads before the
+ *  registry is populated. `panelTypes.test.ts` pins it to the registry. */
+export const KNOWN_PANEL_TYPES: readonly PanelType[] = ['document', 'layers', 'properties', 'color'];
 
 function stripUnknownTabs(node: Subdivision): void {
     if (node.kind === 'group') {

@@ -32,9 +32,9 @@
         style:transform-origin={rolodex.origin}
         style:opacity={curve.opacity}
     >
-        <span class="face">
+        <span class="face pack-face">
             <Icon name={group.icon} class="card-icon" />
-            <span class="label">{group.label}</span>
+            <span class="label pack-name">{group.label}</span>
             <span class="count">{group.brushes.length}</span>
         </span>
     </span>
@@ -141,17 +141,9 @@
      * border would draw a line exactly where the strands have to run
      * uninterrupted into the list. `aria-current` carries the fact instead. */
 
-    /* The card's name, written in the vivid pair rather than in an ink: chroma
-     * where the icon is and refraction by the time the count is reached, so the
-     * text crosses the same two colours in the same direction the beam does.
-     *
-     * This is the pack's own colour on the pack's own surface with nothing
-     * neutral in between, which a saturated pair can carry and a tinted
-     * near-white cannot; the vivid pair reads against a light theme and a dark
-     * one alike, so the card needs no colour picked for one of them.
-     *
-     * A box of its own because `background-clip: text` claims the element's
-     * background, and the card's is spoken for twice over: surface beneath and
+    /* `.pack-face` writes the name in the pack's pair; this is only the row it
+     * is written along. A box of its own because the clip claims an element's
+     * background and the card's is spoken for twice over, surface beneath and
      * beam above. Here there is nothing else to spend it on. */
     .face {
         display: flex;
@@ -159,28 +151,17 @@
         gap: 8px;
         width: 100%;
         min-width: 0;
-        background-image: linear-gradient(90deg, var(--pack-chroma), var(--pack-refraction));
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
     }
-    /* The icon is an SVG and takes `currentColor`, which the clip above has
-     * emptied for the text's sake. It sits at the gradient's own left end, so
-     * naming that colour outright is what the ramp would have given it. */
+    /* The icon's colour comes with the face; its size and its refusal to shrink
+     * are the card's own. */
     .pack-card :global(.card-icon) {
         font-size: 13px;
         flex: none;
-        color: var(--pack-chroma);
     }
+    /* `.pack-name` sets it; the card supplies only the room it is set in. */
     .label {
         flex: 1;
         min-width: 0;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
     /* The same gradient, held back: a count is a footnote on the label, and any
      * separate grey would fight whatever colour the pack brought.

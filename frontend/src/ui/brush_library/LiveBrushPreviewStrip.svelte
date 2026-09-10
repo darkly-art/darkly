@@ -1,7 +1,8 @@
 <!--
-    Live equivalent of `BrushPreviewStrip`: same square-dab + S-curve
-    layout, but the bytes come from the live engine (`brush_active_dab_preview`
-    + `brush_stroke_preview`) instead of the library's baked PNG cache.
+    Live equivalent of `BrushPreviewStrip`: the shared `.brush-thumbs`
+    envelope over a square dab and an S-curve, but the bytes come from the
+    live engine (`brush_active_dab_preview` + `brush_stroke_preview`) instead
+    of the library's baked PNG cache.
 
     Used wherever a preview of the *active* graph is needed: the brush
     builder's preview dock, and the picker dropdown's active strip when
@@ -27,7 +28,7 @@
     const strokeWidth = $derived(width - stripHeight);
 </script>
 
-<div class="thumbs" style="width: {width}px; height: {stripHeight}px">
+<div class="brush-thumbs" style="width: {width}px; height: {stripHeight}px">
     <div class="dab" style="width: {dabSize}px; height: {dabSize}px">
         {#if brushGraph.previewIcon}
             <BrushPreviewFallback icon={brushGraph.previewIcon} />
@@ -39,19 +40,3 @@
         <BrushStrokePreview width={strokeWidth} height={stripHeight} />
     </div>
 </div>
-
-<style>
-    .thumbs {
-        display: flex;
-        background: var(--bg-hover);
-        border-radius: 4px;
-        overflow: hidden;
-    }
-    .dab {
-        flex-shrink: 0;
-    }
-    .stroke {
-        flex: 1;
-        min-width: 0;
-    }
-</style>

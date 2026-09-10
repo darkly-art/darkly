@@ -35,6 +35,8 @@ import {
     foldPanelsIntoMain,
     loadOrDefault,
     resolveSplitByPath,
+    firstDockableGroupId,
+    groupHolding,
 } from './tree';
 import { resolvePanel } from './panelTypes';
 import { detectDockingEdge, edgeToSplit, tabInsertionIndex } from './dropZones';
@@ -113,7 +115,7 @@ export function hitTest(doc: Document, x: number, y: number): HitTarget {
 
 // ---------------------------------------------------------------------------
 
-class WorkspaceStore {
+export class WorkspaceStore {
     workspaces = $state<WorkspaceWindow[]>([]);
     /** Shared across all windows so group ids never collide. */
     nextGroupId = 1;
@@ -176,6 +178,47 @@ class WorkspaceStore {
                 if (idx !== -1) group.state.activeTabIndex = idx;
             }
         });
+    }
+
+    // ---- panel visibility --------------------------------------------------
+
+    /** The workspace whose tree holds `tab`, if any window shows it. */
+    #workspaceHolding(tab: PanelType): WorkspaceWindow | undefined {
+        return this.workspaces.find((w) => groupHolding(w.layout.root, tab) !== null);
+    }
+
+    isPanelOpen(tab: PanelType): boolean {
+        return this.#workspaceHolding(tab) !== undefined;
+    }
+
+    /** Show `tab`: raise it where it already lives, else dock it into the main
+     *  window's first dockable group. */
+    openPanel(tab: PanelType) {
+        const holder = this.#workspaceHolding(tab);
+        if (holder) {
+            const group = groupHolding(holder.layout.root, tab)!;
+            this.setActiveTab(holder.id, group.id, tab);
+            return;
+        }
+        this.#mutate(MAIN_ID, (root) => {
+            const target = firstDockableGroupId(root);
+            if (target !== null) insertTab(root, target, tab);
+        });
+    }
+
+    /** Hide `tab` wherever it lives. Refused for a panel that declares itself
+     *  non-closable. */
+    closePanel(tab: PanelType) {
+        if (!resolvePanel(tab).closable) return;
+        const holder = this.#workspaceHolding(tab);
+        if (!holder) return;
+        const group = groupHolding(holder.layout.root, tab)!;
+        this.#mutate(holder.id, (root) => removeTab(root, group.id, tab));
+    }
+
+    togglePanel(tab: PanelType) {
+        if (this.isPanelOpen(tab)) this.closePanel(tab);
+        else this.openPanel(tab);
     }
 
     // ---- drag coordinator --------------------------------------------------

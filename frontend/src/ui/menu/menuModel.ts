@@ -25,7 +25,7 @@ export interface TopMenu {
 /** Fixed ordering for the known top-level menus. Any group not in this list
  *  (forward-compat for a new `menuPath[0]`) is appended after, in first-seen
  *  order. */
-const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Colors', 'View', 'Help'];
+const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Colors', 'View', 'Window', 'Help'];
 
 function groupByTop(regs: Action[]): Map<string, Action[]> {
     const m = new Map<string, Action[]>();

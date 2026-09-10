@@ -15,3 +15,12 @@ export function detentAngle(angle: number, stepRad: number, tolRad: number): num
     const m = Math.round(angle / stepRad) * stepRad;
     return Math.abs(angle - m) <= tolRad ? m : angle;
 }
+
+const TAU = 2 * Math.PI;
+
+/** The rotation from `from` to `to`, normalized into `[0, 2π)`. Wrap-aware:
+ *  an arc containment test reduces to `angularOffset(theta, a0) < span`
+ *  regardless of where the arc sits relative to the ±π seam. */
+export function angularOffset(to: number, from: number): number {
+    return (((to - from) % TAU) + TAU) % TAU;
+}

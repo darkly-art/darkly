@@ -8,7 +8,8 @@
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
     import Icon from '../icons/Icon.svelte';
-    import { tooltipForAction } from '../config/store.svelte';
+    import LinkToggle from './LinkToggle.svelte';
+    import { config, tooltipForAction } from '../config/store.svelte';
     import BrushExplorer from './brush_explorer/BrushExplorer.svelte';
     import { brushLibrary } from '../state/brush_library.svelte';
     import { packPalette } from '../lib/packPalette';
@@ -70,6 +71,11 @@
         brushGraph.setInput(port.nodeId, port.portName, 'enum', index);
     }
 
+    /** Whether each brush keeps its own foreground/background pair (see
+     *  `state/brushColors.svelte.ts`). A painter preference, so it lives in
+     *  config beside the other `colors.*` prefs and also appears in Settings. */
+    const lockColors = $derived(config.get('colors.lockToBrush') === true);
+
     function toggleEraseMode() {
         brushSession.eraseMode = !brushSession.eraseMode;
         app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
@@ -96,6 +102,17 @@
              from, that wraps alongside them. It opens the brush explorer, which
              takes the screen and closes again as soon as a brush is picked. -->
         <div class="brush-picker-section">
+            <!-- The chain sits in the gap between the toolbar's color swatches
+                 (pinned at the bottom of the rail, immediately left of this
+                 bar) and the brush picker, joining the two controls it ties
+                 together: engaged, each brush carries the color pair it was
+                 last used with, so switching brushes switches colors with it. -->
+            <LinkToggle
+                linked={lockColors}
+                onchange={(v) => config.set('colors.lockToBrush', v)}
+                label="colors to brush"
+                bracket
+            />
             <button
                 class="brush-picker-button bar-control"
                 use:packPalette={activePalette}
@@ -199,9 +216,14 @@
 </ToolBarLayout>
 
 <style>
-    /* Anchor for the dropdown menu; the button itself sizes to content so it
-     * wraps in the scrub row like any other control. */
+    /* The chain leads, so it lands in the gap between the rail's color
+     * swatches and the picker: the two controls it ties together. The 7px gap
+     * is what its connector stub spans. Sizes to content so the group wraps in
+     * the scrub row like any other control. */
     .brush-picker-section {
+        display: flex;
+        align-items: center;
+        gap: 7px;
         flex-shrink: 0;
     }
 
@@ -249,10 +271,8 @@
      *
      * The pack is worn as a rim in its vivid pair and a wash of its surface,
      * which is the order a pack card spends its palette in: the pair on the
-     * edge, the surface on the body. The pair runs as a gradient because
-     * refraction is chroma bent and is drawn with it, never alone
-     * (`brush/pack.rs`), at half strength, so the chip carries the pack without
-     * outranking the scrubs it sits in a row with.
+     * edge, the surface on the body. The pair is `--pack-rim-fill`, the same
+     * edge every surface outside the explorer's field states a pack with.
      *
      * A gradient cannot be a border colour, so the border is transparent and
      * the ring is painted as the bottom background layer: clipped to the border
@@ -269,12 +289,6 @@
      * The padding gives back what the border takes, so the chip stands exactly
      * as tall as the borderless scrubs it wraps alongside. */
     .brush-picker-button {
-        --pack-rim-fill:
-            linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--pack-chroma) 50%, transparent),
-                color-mix(in srgb, var(--pack-refraction) 50%, transparent))
-            border-box;
         --bar-control-fill:
             linear-gradient(var(--pack-surface) 0 0) padding-box,
             linear-gradient(var(--bg) 0 0) padding-box,

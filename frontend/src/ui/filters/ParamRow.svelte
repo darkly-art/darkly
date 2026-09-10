@@ -75,6 +75,7 @@
     {:else if param.kind === 'color'}
         <ColorInput
             value={rgb01ToHex((param.value ?? param.default) as ColorValue)}
+            oninput={(hex) => live(hexToRgb01(hex))}
             onchange={(hex) => commit(hexToRgb01(hex))}
         />
     {:else if param.kind === 'vec2'}

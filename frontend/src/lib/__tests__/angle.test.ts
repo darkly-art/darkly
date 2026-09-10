@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     snapAngleToGrid,
     detentAngle,
+    angularOffset,
     SNAP_ANGLE_RAD,
     CARDINAL_ANGLE_RAD,
     CARDINAL_TOL_RAD,
@@ -56,5 +57,25 @@ describe('detentAngle', () => {
         expect(SNAP_ANGLE_RAD).toBeCloseTo(15 * DEG, 12);
         expect(CARDINAL_ANGLE_RAD).toBeCloseTo(45 * DEG, 12);
         expect(CARDINAL_TOL_RAD).toBeCloseTo(2 * DEG, 12);
+    });
+});
+
+describe('angularOffset', () => {
+    it('is the plain difference when no wrap is involved', () => {
+        expect(angularOffset(30 * DEG, 10 * DEG)).toBeCloseTo(20 * DEG, 9);
+    });
+
+    it('normalizes a negative difference into [0, 2π)', () => {
+        expect(angularOffset(10 * DEG, 30 * DEG)).toBeCloseTo(340 * DEG, 9);
+    });
+
+    it('wraps across the ±π seam', () => {
+        // An arc starting at 170° that spans 20° contains -175° (= 185°).
+        expect(angularOffset(-175 * DEG, 170 * DEG)).toBeCloseTo(15 * DEG, 9);
+    });
+
+    it('is zero for identical angles, including off-range ones', () => {
+        expect(angularOffset(5, 5)).toBeCloseTo(0, 12);
+        expect(angularOffset(5 + 4 * Math.PI, 5)).toBeCloseTo(0, 9);
     });
 });

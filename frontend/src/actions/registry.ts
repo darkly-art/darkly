@@ -163,6 +163,18 @@ class ActionRegistry {
         return [...this.actions.keys()];
     }
 
+    /** Ids of the actions whose documentation the `actions` catalog owns, i.e.
+     *  every registration that did not bring its own `doc`.
+     *
+     *  This is the set the catalog is expected to cover exactly, so it is what
+     *  the metadata join test compares against. An action carrying its own
+     *  `doc` is documented by whatever catalog it derives from (a panel's
+     *  `PanelMeta`, a tool, a filter) or by nothing outside itself, and has no
+     *  business being in the Rust tables. */
+    catalogIds(): string[] {
+        return [...this.actions.values()].filter(a => !a.doc).map(a => a.id);
+    }
+
     /** All registrations (for shortcuts editor UI). */
     all(): Action[] {
         return [...this.actions.values()].map(reg => this.resolve(reg));
