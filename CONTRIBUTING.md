@@ -105,6 +105,7 @@ Each of these is required reading *before* you change the area it covers, and sa
 | A registration a README table or graphic names | [`docs/generated-markdown.md`](docs/generated-markdown.md) | Those spans are generated from the registries; see [Generated Markdown](#generated-markdown) |
 | The JS/Rust boundary or the async model | [`docs/architecture-history.md`](docs/architecture-history.md) | Most "obvious simplifications" there have already been tried and reverted |
 | The brush engine or its node graph | [`docs/brush/README.md`](docs/brush/README.md) | Stroke engine, node system, stabilization, and the imported brush formats |
+| The version string, or anything a `v*` tag triggers | [`docs/versioning.md`](docs/versioning.md) | The version is derived from git tags at build time and baked twice (Rust and Vite) as declared canonical twins; the `Cargo.toml` / `package.json` values are vestigial |
 
 ## DRY Principle
 

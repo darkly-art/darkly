@@ -23,9 +23,11 @@ use serde::{Deserialize, Serialize};
 use crate::coord::CanvasRect;
 
 /// Current container schema version. Bumped *only* for fundamental
-/// container-structure breaks; see [the plan's "two version concepts"
-/// section](../../../../darkly-file-format-plan.md#two-version-concepts-kept-strictly-separate).
-/// Expect zero bumps in the near term.
+/// container-structure breaks, never for feature additions: what a file needs
+/// from the binary is carried by [`ManifestRequires`], not by this number.
+/// Expect zero bumps in the near term. Unrelated to the application version
+/// (`crate::VERSION`, see `docs/versioning.md`), which only rides along in
+/// [`ManifestWriter`] as an informational breadcrumb.
 pub const CONTAINER_VERSION: u32 = 1;
 
 /// Magic value for the `format` field. Identifies the file as a Darkly

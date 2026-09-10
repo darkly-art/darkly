@@ -2,7 +2,9 @@
 name = "darkly-wasm"
 version = "0.1.0"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+license.workspace = true
+repository.workspace = true
+description = "WebAssembly bridge for the darkly GPU-native paint engine: the browser-side DarklySession / DarklyHandle API."
 # The browser bridge depends on `darkly` by path and is built with wasm-pack,
 # never shipped to a registry.
 publish = false
