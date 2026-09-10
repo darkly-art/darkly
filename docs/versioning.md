@@ -1,103 +1,63 @@
-# Versioning: one git-derived string, two bake paths
+# Versioning
 
-Darkly has exactly one version, and it is not written down anywhere in the
-repository. It is derived from git tags at build time, independently on the Rust
-side and the frontend side, and every place that displays or stamps a version
-reads the result of that derivation.
+Darkly's version is `git describe --tags --long` off the `v*` tags, derived at
+build time. It is not stored anywhere in the repo: the `version` fields in
+`Cargo.toml` and `package.json` sit at `0.1.0` and are vestigial.
 
-This file covers the *application* version. Save-file compatibility is a
-separate axis with its own rules (`container_version` and `requires` in
-[`crates/darkly/src/format/manifest.rs`](../crates/darkly/src/format/manifest.rs)),
-governed by [No Migrations / No Backwards
-Compatibility](../CONTRIBUTING.md#no-migrations--no-backwards-compatibility-pre-release).
+```
+v0.7.0-2-g1eabe67
+ tag    |      SHA
+    commits since tag
+```
 
-## The tag is the source of truth
+## Commands
 
-The version is `git describe --tags --long`: the latest `v*` tag, the commit
-height since it, and the abbreviated SHA, for example `v0.7.0-2-g1eabe67`. At
-height 0 (HEAD *is* the tag) it reads `v0.7.0-0-g<sha>`.
+```bash
+# What version would a build from this checkout bake?
+git describe --tags --long
 
-`--long` is deliberate: the height and SHA are always present, so a build from a
-tagged commit and a build from two commits later can never render as the same
-string. That is what makes a pasted version from a bug report actionable.
+# Cut a release: fires publish.yml (crates.io) and docs-artifact.yml.
+git tag -a v0.8.0 -m v0.8.0 && git push origin v0.8.0
 
-There is no `--always`. On a tagless or shallow checkout we want describe to
-fail so the fallback fires, rather than silently degrading to a bare SHA that
-does not parse as a version.
+# Verify the baked Rust constant matches live git (also runs in the suite).
+cargo test -p darkly --lib version_tests
 
-**The fallback is `0.0.0-0-gunknown`**, byte-identical on both sides. It keeps
-the describe shape, so consumers and tests need no special case for it.
+# Force a re-stamp if the constant went stale (a `git gc` repack can do it).
+cargo clean -p darkly
 
-**The `version` fields in `Cargo.toml` and `package.json` are vestigial.** They
-sit at `0.1.0` and are meaningless. `publish.yml` overwrites the crates' values
-from the tag at publish time. Never read `env!("CARGO_PKG_VERSION")`; there is a
-test that fails if the crate version ever silently reverts to it.
+# What build wrote this document?
+unzip -p painting.darkly manifest.json | jq -r .writer.version
+```
 
-## Two derivations, declared as canonical twins
+The frontend's version is in the About modal, copyable.
 
-Cargo and Vite share no runtime, so the same three-line derivation exists twice.
-This is a documented exception to the [DRY
-Principle](../CONTRIBUTING.md#dry-principle), and each side names the other:
+## Where it comes from
 
-| Side | Derives in | Exposed as | Read through |
+Cargo and Vite share no runtime, so the derivation exists twice. Each file names
+the other its **canonical twin**: a documented exception to the [DRY
+Principle](../CONTRIBUTING.md#dry-principle). Change one, change the other.
+
+| | Derives in | Exposed as | Import from |
 | --- | --- | --- | --- |
-| Rust | [`crates/darkly/build.rs`](../crates/darkly/build.rs) `emit_darkly_version` | `DARKLY_VERSION` compile-time env | [`darkly::VERSION`](../crates/darkly/src/lib.rs) |
-| Frontend | [`frontend/vite.config.ts`](../frontend/vite.config.ts) `gitVersion` | `__DARKLY_VERSION__` define | [`darklyVersion`](../frontend/src/version.ts) |
+| Rust | [`build.rs`](../crates/darkly/build.rs) | `DARKLY_VERSION` env | [`darkly::VERSION`](../crates/darkly/src/lib.rs) |
+| Frontend | [`vite.config.ts`](../frontend/vite.config.ts) | `__DARKLY_VERSION__` | [`darklyVersion`](../frontend/src/version.ts) |
 
-Change one, change the other. The command and the fallback string must stay
-identical, or a saved file will disagree with the About modal of the build that
-saved it.
+Both fall back to `0.0.0-0-gunknown` when describe fails.
 
-Nothing else may shell out to `git describe` or re-derive a version. Both sides
-have exactly one home for the string; import it.
+## Rules
 
-`build.rs` also emits `cargo:rerun-if-changed` hints for `.git/HEAD`,
-`.git/packed-refs`, `.git/refs/tags`, and HEAD's own ref, so a new tag or a
-checkout re-stamps the constant. It is best-effort by design: a `git gc` repack
-can move refs without touching those paths, and a stale constant after one is
-not worth a mandatory rebuild on every build. `cargo clean -p darkly` if you
-ever see one.
+- **Never read `env!("CARGO_PKG_VERSION")`** or a `package.json` version. Import
+  from the two homes above. A test fails if the crate reverts to it.
+- **Never re-derive the string.** No third `git describe` call.
+- **Any CI job that builds needs `fetch-depth: 0`.** A shallow checkout has no
+  tags, so the build silently ships `0.0.0-0-gunknown`.
+- **`--long` and no `--always` are deliberate.** The height and SHA are always
+  present, so two builds off the same tag never render alike; and a tagless
+  checkout throws through to the fallback instead of degrading to a bare SHA.
+- `darkly-macros` publishes before `darkly` and at the same version: `darkly`
+  pins it by path, so they move in lockstep.
 
-## Where the string surfaces
-
-- **About modal** ([`AboutModal.svelte`](../frontend/src/ui/AboutModal.svelte)):
-  shown verbatim and copyable, no decoration, so what an artist pastes into an
-  issue is exactly what the build stamps elsewhere.
-- **Saved documents**: `ManifestWriter::current()` stamps it into every
-  `.darkly` file as an informational breadcrumb of which build wrote it. It is
-  never read back for compatibility decisions.
-- **Brush bundles**: `default_engine_version()` in
-  [`brush/metadata.rs`](../crates/darkly/src/brush/metadata.rs).
-- **Docs artifact**: `export-docs` and `render-docs` both stamp it, and it is
-  the pairing key that stops a consumer from combining prose, metadata, or a
-  preview from mismatched builds.
-
-## Cutting a release
-
-Push a `v*` tag. Two workflows fire from it:
-
-- [`publish.yml`](../.github/workflows/publish.yml) publishes `darkly-macros`
-  then `darkly` to crates.io at the tag's version. They move in lockstep because
-  `darkly` pins `darkly-macros` through its path dependency, so the macro crate
-  must go up first.
-- [`docs-artifact.yml`](../.github/workflows/docs-artifact.yml) builds the
-  documentation tarball for the release.
-
-**Any CI job that builds Darkly needs `fetch-depth: 0`.** A shallow checkout has
-no tags, `git describe` fails, and the build silently ships
-`0.0.0-0-gunknown`.
-
-## What the tests guard
-
-On the Rust side, [`lib.rs`](../crates/darkly/src/lib.rs) `version_tests`:
-
-- `version_matches_live_git_describe` is the feature test. It compares the baked
-  constant against a live `git describe`, and only asserts equality when the
-  command succeeds, so it exercises the real pipeline instead of passing
-  vacuously on the fallback in a git-less checkout.
-- `version_is_not_cargo_pkg_version` is the regression guard against reverting
-  to the stale `Cargo.toml` semver, and also asserts the describe shape.
-
-On the frontend side,
-[`version.test.ts`](../frontend/src/__tests__/version.test.ts) asserts the same
-shape for `darklyVersion`.
+Save-file compatibility is a separate axis: `container_version` and `requires`
+in [`format/manifest.rs`](../crates/darkly/src/format/manifest.rs), under [No
+Migrations](../CONTRIBUTING.md#no-migrations--no-backwards-compatibility-pre-release).
+The app version rides along in a saved file only as a breadcrumb.
