@@ -23,6 +23,22 @@ function mask(id: number) {
 const flat = [layer(3), layer(2), layer(1)];
 
 describe('indexLayerTree', () => {
+    it('makes the divider a drop row but never a selectable node', () => {
+        // Regression (`docs/plans/divider-as-a-node.md`): the divider must be
+        // a row (the gaps around it are the two sides of the boundary) while
+        // staying out of selection, reselection, and keyboard order.
+        const index = indexLayerTree([
+            layer(2),
+            { type: 'divider', id: 9 },
+            layer(1),
+        ]);
+        expect(index.rows.map((r) => r.id)).toEqual([2, 9, 1]);
+        expect(index.ids.has(9)).toBe(false);
+        expect(index.order).toEqual([2, 1]);
+        expect(index.visibleOrder).toEqual([2, 1]);
+        expect(index.slots.get(2)?.siblings).toEqual([2, 1]);
+    });
+
     it('collects every selectable id at any depth, modifiers included', () => {
         const index = indexLayerTree([
             group(100, [layer(1, { modifiers: [mask(900)] })]),

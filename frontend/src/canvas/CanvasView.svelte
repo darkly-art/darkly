@@ -122,7 +122,7 @@
                 providedInstance.pendingDims = null;
                 await createInstance(canvas, docW, docH, providedInstance, { seedBackground });
                 if (seedBackground) {
-                    seedFreshDocument(providedInstance, docW, docH);
+                    await seedFreshDocument(providedInstance, docW, docH);
                 }
             } else {
                 // Single-instance path: existing initEditor creates an

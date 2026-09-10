@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use darkly::document::SelectionMode;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::effect::EffectRegistry;
 use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::*;
-use darkly::gpu::veil::VeilRegistry;
 
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
     let (device, queue) = test_device();
@@ -187,9 +187,11 @@ fn veil_produces_non_identity_output() {
         ..Default::default()
     });
 
-    let mut registry = VeilRegistry::new();
+    let mut registry = EffectRegistry::new();
     let params = ca_params(vec![entry([4.0, 0.0], 1.0, [1.0, 1.0, 1.0], 0.0)]);
-    let mut veil = registry.create_veil("chromatic_aberration", &params, &device, format);
+    let mut veil = registry
+        .instance("chromatic_aberration", &params, &device, format)
+        .expect("registered effect");
     let cache = veil.create_cache(&device, &queue, &[view0, view1], &sampler, w, h);
 
     let (dst, dst_view) = create_test_texture(&device, &queue, w, h, &[]);

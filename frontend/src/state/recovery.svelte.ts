@@ -58,7 +58,6 @@ class RecoveryState {
                 engine.api.markDirty();
                 await inst.syncCanvasRect();
                 await app.refreshLayerTree();
-                await app.refreshVeilList();
                 app.requestFrame();
             } catch (e) {
                 loadError.show(parseLoadErrorMessage(e));

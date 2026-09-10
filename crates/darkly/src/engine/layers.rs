@@ -2,8 +2,9 @@
 
 use darkly_macros::handlers;
 
+use super::types::{node_to_layer_info, LayerTree};
 use super::DarklyEngine;
-use crate::document::MoveTarget;
+use crate::document::{MoveTarget, TreeSlot};
 use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
@@ -107,9 +108,8 @@ impl DarklyEngine {
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         id
     }
@@ -284,9 +284,8 @@ impl DarklyEngine {
         self.sync_vector_layer(id);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
         (id, object_id)
     }
 
@@ -593,9 +592,8 @@ impl DarklyEngine {
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let id = self.doc.add_group(anchor);
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         id
     }
@@ -624,7 +622,16 @@ impl DarklyEngine {
             if !self.doc.is_node_editable(id) {
                 continue;
             }
-            // Drop any id whose ancestor is also in the batch: moving
+            // The boundary is never grouped: a selection that includes the
+            // divider groups everything else, like the locked-layer skip.
+            if self
+                .doc
+                .find_node(id)
+                .is_some_and(|n| n.is_screen_space_boundary())
+            {
+                continue;
+            }
+            // Drop any id whose ancestor is also in the batch, moving
             // the ancestor brings the descendant along; processing both
             // would yank the descendant out of its group.
             if ids
@@ -654,15 +661,10 @@ impl DarklyEngine {
         // `add_group(Some(group))` resolves to `IntoGroupTop(group)`).
         // We'll move the group to the topmost's slot at the end.
         let group_id = self.doc.add_group(None);
-        let group_initial_parent = self.doc.parent_of(group_id);
-        let group_initial_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+        let group_initial_slot = self.doc.slot_of(group_id).unwrap_or_default();
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(editable.len() + 2);
-        actions.push(Box::new(EntityAddAction::new(
-            group_id,
-            group_initial_parent,
-            group_initial_pos,
-        )));
+        actions.push(Box::new(EntityAddAction::new(group_id, group_initial_slot)));
 
         // Move sources into the group, preserving bottom-first ordering
         // (so panel order top-first reads as the original layout). The
@@ -687,24 +689,27 @@ impl DarklyEngine {
         // one entry; `topmost_pos` now points at whatever was just
         // above topmost in panel order. Inserting the group there
         // lands it exactly where topmost used to be.
-        let group_pre_move_parent = self.doc.parent_of(group_id);
-        let group_pre_move_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
-        self.doc.detach_for_undo(group_id);
-        let clamped_pos = topmost_pos.min(match topmost_parent {
-            Some(p) => self.doc.children_of(p).len(),
-            None => self.doc.children_of(self.doc.root_id()).len(),
-        });
-        self.doc
-            .reinsert_entity(group_id, topmost_parent, clamped_pos);
-        let group_final_parent = self.doc.parent_of(group_id);
-        let group_final_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
-        if (group_pre_move_parent, group_pre_move_pos) != (group_final_parent, group_final_pos) {
+        let group_pre_move_slot = self.doc.slot_of(group_id).unwrap_or_default();
+        // Through the placement policy, not verbatim: the slot is derived from
+        // the topmost source's old index, and a group holding canvas-only
+        // content must be redirected below the divider rather than landed
+        // above it. A group of viewport effects goes exactly where asked,
+        // taking the topmost source's side of the divider with it. Positions
+        // clamp on attach, so an index left dangling by the detached sources
+        // lands at the end of the list.
+        self.doc.place_at_slot(
+            group_id,
+            TreeSlot {
+                parent: topmost_parent,
+                position: topmost_pos,
+            },
+        );
+        let group_final_slot = self.doc.slot_of(group_id).unwrap_or_default();
+        if group_pre_move_slot != group_final_slot {
             actions.push(Box::new(LayerMoveAction::new(
                 group_id,
-                group_pre_move_parent,
-                group_pre_move_pos,
-                group_final_parent,
-                group_final_pos,
+                group_pre_move_slot,
+                group_final_slot,
             )));
         }
 
@@ -745,9 +750,8 @@ impl DarklyEngine {
         // this adds the undo entry that makes it a standalone user action.
         let id = self.create_void_layer(void_type, params, anchor, transform_override)?;
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         Some(id)
     }
@@ -800,6 +804,7 @@ impl DarklyEngine {
         self.compositor
             .update_void_layer_transform(&self.gpu.queue, id, &initial_transform);
         self.compositor.mark_dirty();
+
         Some(id)
     }
 
@@ -818,21 +823,17 @@ impl DarklyEngine {
         params: Vec<crate::gpu::params::ParamValue>,
         anchor: Option<LayerId>,
     ) -> Option<LayerId> {
-        if !self.compositor.filter_pipeline_registry().has(pipeline) {
+        if !self.compositor.effect_registry().has(pipeline) {
             return None;
         }
-        let display_label = self
-            .compositor
-            .filter_pipeline_registry()
-            .display_name(pipeline);
+        let display_label = self.compositor.effect_registry().display_name(pipeline);
         let id = self
             .doc
             .add_filter_layer(pipeline.to_string(), display_label, params, anchor);
         self.compositor.mark_dirty();
 
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.push_undo(Box::new(EntityAddAction::new(id, parent, pos)));
+        let slot = self.doc.slot_of(id).unwrap_or_default();
+        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
 
         Some(id)
     }
@@ -879,7 +880,7 @@ impl DarklyEngine {
     /// Parameter schema for a filter type (empty for parameter-free filters).
     /// Backs the protocol handler's JSON→`ParamValue` conversion.
     pub fn filter_param_defs(&self, type_id: &str) -> &'static [crate::gpu::params::ParamDef] {
-        self.compositor.filter_pipeline_registry().params(type_id)
+        self.compositor.effect_registry().params(type_id)
     }
 
     /// Replace a filter layer's parameter values. Coalesces with prior
@@ -1149,10 +1150,10 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
-            // Voids, filter, and vector layers store no pixels; their "bounds"
-            // concept is the canvas itself, which callers can ask for directly
-            // via `canvas_dimensions`.
-            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) => None,
+            // Voids, filter, vector, and divider layers store no pixels:
+            // their "bounds" concept is the canvas itself, which callers can
+            // ask for directly via `canvas_dimensions`.
+            Layer::Void(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
 
@@ -1178,6 +1179,11 @@ impl DarklyEngine {
         }
         if !self.doc.is_node_editable(id) {
             return Err("Layer is locked".into());
+        }
+        if let Some(node) = self.doc.find_node(id) {
+            if !node.kind().can_delete {
+                return Err(format!("{} cannot be deleted", node.kind().display_name));
+            }
         }
         // A modifier is a selectable row, so the delete hotkey forwards its id
         // here, but it hangs off a host rather than occupying a slot in the
@@ -1212,16 +1218,19 @@ impl DarklyEngine {
         if self.doc.is_filter(id) {
             return self.detach_modifier_for_remove(id);
         }
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        // A kind that cannot be deleted (the viewport divider) is refused at
+        // the mutation chokepoint, so every removal path (single, batch,
+        // merge cleanup) gets the gate without repeating it.
+        if self.doc.find_node(id).is_some_and(|n| !n.kind().can_delete) {
+            return None;
+        }
+        let slot = self.doc.slot_of(id).unwrap_or_default();
         // Collect tombstones before detaching: `detach_for_undo` severs
         // the parent links `collect_pixel_node_ids` walks to enumerate
         // the subtree.
         let tombstones = self.collect_pixel_node_ids(id);
         self.doc.detach_for_undo(id)?;
-        Some(Box::new(EntityRemoveAction::new(
-            id, parent, pos, tombstones,
-        )))
+        Some(Box::new(EntityRemoveAction::new(id, slot, tombstones)))
     }
 
     /// Remove every id in `ids` in a single undo step. Locked layers and
@@ -1279,14 +1288,60 @@ impl DarklyEngine {
     }
 
     #[handler]
-    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) {
+    pub fn move_layer(&mut self, id: LayerId, target: MoveTarget) -> Result<(), String> {
         if !self.resolve_transform_conflict() {
-            return;
+            return Err("Active transform could not be committed".into());
         }
+        self.check_screen_space_move(id, target)?;
         if let Some(action) = self.move_layer_inner(id, target) {
             self.push_undo(action);
         }
         self.compositor.mark_dirty();
+        Ok(())
+    }
+
+    /// Refuse a move that would land something above the viewport boundary
+    /// that cannot render there, in a sentence the layer panel toasts verbatim.
+    ///
+    /// Only *moves* refuse. A move states an intent about where a node goes, so
+    /// answering "not there" is the honest response; an add or a paste states
+    /// only an intent to have a new layer, and is redirected to the nearest
+    /// legal slot by `Document::link` instead of being failed.
+    fn check_screen_space_move(&self, id: LayerId, target: MoveTarget) -> Result<(), String> {
+        let Some((blocker, reason)) = self.doc.screen_space_move_blocker(id, target) else {
+            return Ok(());
+        };
+        let name = |n: LayerId| {
+            self.doc
+                .find_node(n)
+                .map(|node| node.common().name.clone())
+                .unwrap_or_else(|| "That layer".to_string())
+        };
+        let moving_divider = self
+            .doc
+            .find_node(id)
+            .is_some_and(|n| n.is_screen_space_boundary());
+        if moving_divider {
+            if blocker == id {
+                Err(format!("The viewport boundary {reason}."))
+            } else {
+                Err(format!(
+                    "The viewport boundary can't go below \"{}\": it {reason}.",
+                    name(blocker)
+                ))
+            }
+        } else if blocker == id {
+            Err(format!(
+                "\"{}\" can't go in viewport space: it {reason}.",
+                name(id)
+            ))
+        } else {
+            Err(format!(
+                "\"{}\" can't go in viewport space: it contains \"{}\", which {reason}.",
+                name(id),
+                name(blocker)
+            ))
+        }
     }
 
     /// Move a single layer and return the matching undo action without
@@ -1301,14 +1356,10 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(layer_id) {
             return None;
         }
-        let old_parent = self.doc.parent_of(layer_id);
-        let old_pos = self.doc.position_in_parent(layer_id)?;
+        let old = self.doc.slot_of(layer_id)?;
         self.doc.move_layer(layer_id, target);
-        let new_parent = self.doc.parent_of(layer_id);
-        let new_pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-        Some(Box::new(LayerMoveAction::new(
-            layer_id, old_parent, old_pos, new_parent, new_pos,
-        )))
+        let new = self.doc.slot_of(layer_id).unwrap_or_default();
+        Some(Box::new(LayerMoveAction::new(layer_id, old, new)))
     }
 
     /// Move every id in `ids` to land contiguously at `target`, preserving
@@ -1322,16 +1373,18 @@ impl DarklyEngine {
         if !self.resolve_transform_conflict() {
             return Err("Active transform could not be committed".into());
         }
-        let target_id = match target {
-            MoveTarget::Before(t)
-            | MoveTarget::After(t)
-            | MoveTarget::IntoGroupTop(t)
-            | MoveTarget::IntoGroupBottom(t) => t,
-        };
+        let target_id = target.reference();
         for &id in &ids {
             if id == target_id || self.doc.is_ancestor_of(id, target_id) {
                 return Err("Cannot move a layer into itself".into());
             }
+        }
+        // Checked for the whole batch before anything moves, so a refusal
+        // leaves the document untouched rather than half-applied. Every id
+        // lands in the same region as `target`, so each is asked about `target`
+        // even though the later ones chain off `After(prev)`.
+        for &id in &ids {
+            self.check_screen_space_move(id, target)?;
         }
 
         let mut editable: Vec<LayerId> = Vec::with_capacity(ids.len());
@@ -1534,11 +1587,11 @@ impl DarklyEngine {
             return self.isolated_node;
         }
         self.isolated_node = id;
-        // Mirror to the compositor so the render walk can filter off-path
-        // subtrees, then resync host uniforms: the `isolated` flag on a
-        // host flips depending on whether one of its filters is the new
-        // target.
-        self.compositor.set_isolated_node(id);
+        // Resync host uniforms (the `isolated` flag on a host flips
+        // depending on whether one of its filters is the new target) and
+        // mark dirty so the next frame recomposites: the render walk reads
+        // `engine.isolated_node` per frame, but nothing else tells the
+        // compositor a frame is owed.
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.isolated_node
@@ -1549,13 +1602,8 @@ impl DarklyEngine {
         self.isolated_node
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_compositor_isolated_node(&self) -> Option<LayerId> {
-        self.compositor.test_isolated_node()
-    }
-
-    /// True when the host's `isolated` blend uniform should fire, i.e. the
-    /// current isolation target is one of `host_id`'s filters (the artist
+    /// True when the host's `isolated` blend uniform should fire: i.e. the
+    /// current isolation target is one of `host_id`'s filters (the user
     /// asked to see the mask channel as grayscale on canvas). Isolating the
     /// host itself doesn't trigger this; the host renders normally and the
     /// compose walk hides its siblings instead.
@@ -1729,6 +1777,27 @@ impl DarklyEngine {
             Property::Passthrough(old),
             Property::Passthrough(passthrough),
         )));
+    }
+
+    /// The root's children, top-first, with the viewport divider's position.
+    #[handler]
+    pub fn layer_tree(&self) -> LayerTree {
+        LayerTree {
+            layers: self
+                .doc
+                .children_of(self.doc.root_id())
+                .iter()
+                .rev()
+                .filter_map(|id| {
+                    node_to_layer_info(
+                        &self.doc,
+                        self.compositor.void_registry(),
+                        self.compositor.effect_registry(),
+                        *id,
+                    )
+                })
+                .collect(),
+        }
     }
 }
 

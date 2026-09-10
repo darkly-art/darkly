@@ -9,8 +9,14 @@
 use darkly_macros::handlers;
 
 use super::DarklyEngine;
+use crate::document::TreeSlot;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::BakeSourceSlot;
+
+/// Refusal shared by both merge paths. Phrased in the divider's vocabulary
+/// ("viewport only") rather than the compositor's, so it reads as the same
+/// concept the layer panel labels.
+const VIEWPORT_ONLY_REFUSAL: &str = "Viewport-only effects can't be merged: they aren't part of the image. Drag it below the viewport line first.";
 
 #[handlers]
 impl DarklyEngine {
@@ -39,6 +45,22 @@ impl DarklyEngine {
         if self.doc.is_filter(source_id) {
             return Err("Layer not in tree".into());
         }
+        // A viewport-only effect is not part of the image, so there is nothing
+        // coherent to merge it into. Refused rather than skipped: "merge these
+        // two things" with one of them absent is not a meaningful outcome, and
+        // silently eating the effect would be worse than saying no.
+        if self.doc.renders_in_screen_space(source_id) {
+            return Err(VIEWPORT_ONLY_REFUSAL.into());
+        }
+        // Merge consumes its participants; a kind that cannot be deleted (the
+        // viewport divider) cannot be one.
+        if self
+            .doc
+            .find_node(source_id)
+            .is_some_and(|n| !n.kind().can_delete)
+        {
+            return Err("The viewport boundary cannot be merged".into());
+        }
         let parent = self.doc.parent_of(source_id);
         let pos = self
             .doc
@@ -50,6 +72,13 @@ impl DarklyEngine {
         let parent_id = parent.ok_or("Layer has no parent")?;
         let target_id = self.doc.children_of(parent_id)[pos - 1];
 
+        if self
+            .doc
+            .find_node(target_id)
+            .is_some_and(|n| !n.kind().can_delete)
+        {
+            return Err("Nothing below to merge into".into());
+        }
         if !self.doc.is_node_editable(target_id) {
             return Err("Target layer is locked".into());
         }
@@ -100,7 +129,7 @@ impl DarklyEngine {
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &[target_id, source_id],
             result_id,
         );
@@ -110,16 +139,21 @@ impl DarklyEngine {
         let sources = vec![
             BakeSourceSlot {
                 id: target_id,
-                parent,
-                position: self.doc.position_in_parent(target_id).unwrap_or(0),
+                slot: self.doc.slot_of(target_id).unwrap_or_default(),
             },
             BakeSourceSlot {
                 id: source_id,
-                parent,
-                position: self.doc.position_in_parent(source_id).unwrap_or(0),
+                slot: self.doc.slot_of(source_id).unwrap_or_default(),
             },
         ];
-        self.finish_bake(sources, result_id, parent, target_pos_before);
+        self.finish_bake(
+            sources,
+            result_id,
+            TreeSlot {
+                parent,
+                position: target_pos_before,
+            },
+        );
 
         Ok(result_id)
     }
@@ -158,11 +192,17 @@ impl DarklyEngine {
             return Err("Merge needs at least two layers".into());
         }
         for &id in &unique {
-            if self.doc.find_node(id).is_none() {
+            let Some(node) = self.doc.find_node(id) else {
                 return Err("Layer not in tree".into());
+            };
+            if !node.kind().can_delete {
+                return Err("The viewport boundary cannot be merged".into());
             }
             if !self.doc.is_node_editable(id) {
                 return Err("A selected layer is locked".into());
+            }
+            if self.doc.renders_in_screen_space(id) {
+                return Err(VIEWPORT_ONLY_REFUSAL.into());
             }
         }
 
@@ -190,20 +230,18 @@ impl DarklyEngine {
                 t.blend().blend_mode,
             )
         };
-        let topmost_parent = self.doc.parent_of(topmost_id);
-        let topmost_pos = self
+        let topmost_slot = self
             .doc
-            .position_in_parent(topmost_id)
+            .slot_of(topmost_id)
             .ok_or("Topmost source not in tree")?;
 
-        // Record each source's prior (parent, position) for undo reinsert.
-        // Captured BEFORE any detach so positions reflect the live tree.
+        // Record each source's prior slot for undo reinsert. Captured BEFORE
+        // any detach so positions reflect the live tree.
         let sources: Vec<BakeSourceSlot> = unique
             .iter()
             .map(|&id| BakeSourceSlot {
                 id,
-                parent: self.doc.parent_of(id),
-                position: self.doc.position_in_parent(id).unwrap_or(0),
+                slot: self.doc.slot_of(id).unwrap_or_default(),
             })
             .collect();
 
@@ -232,12 +270,12 @@ impl DarklyEngine {
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &unique,
             result_id,
         );
 
-        self.finish_bake(sources, result_id, topmost_parent, topmost_pos);
+        self.finish_bake(sources, result_id, topmost_slot);
 
         Ok(result_id)
     }

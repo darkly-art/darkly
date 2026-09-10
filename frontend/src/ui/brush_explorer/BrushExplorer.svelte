@@ -368,7 +368,7 @@
 </script>
 
 <Modal bind:open title="Brushes" size="full">
-    {#snippet controls()}
+    {#snippet headerControls()}
         <input
             bind:value={query}
             type="search"

@@ -16,17 +16,14 @@ use std::collections::VecDeque;
 /// Scanline flood fill on flat RGBA pixel data.
 ///
 /// Returns an R8 mask (width × height bytes): 255 where the fill should apply, 0 elsewhere.
-/// The algorithm is the same scanline approach used by the tile-based fill, but
-/// operates on contiguous pixel data from a GPU readback.
+/// Operates on contiguous pixel data from a GPU readback.
 ///
-/// Algorithm notes (per CONTRIBUTING.md "Performance Principle"): the
-/// implementation is Smith/Heckbert scanline fill: `VecDeque<(y, start, end)>` holds whole
-/// horizontal segments, not per-pixel work. Queue depth is bounded by the
-/// number of distinct segments in the fill region (O(perimeter)), not the
-/// pixel count. The `mask` is a flat `Vec<u8>` indexed directly; no HashMap.
-/// The prior "burned by" lesson was per-pixel HashMap dispatch inside a
-/// tile-based fill; this implementation specifically does not have that
-/// shape, so the scanline+VecDeque pair is the right primitive here.
+/// Smith/Heckbert scanline fill: `VecDeque<(y, start, end)>` holds whole
+/// horizontal segments, not per-pixel work, so queue depth is bounded by the
+/// number of distinct segments in the fill region (O(perimeter)) rather than
+/// by the pixel count. The `mask` is a flat `Vec<u8>` indexed directly: the
+/// shape to avoid here is per-pixel HashMap dispatch, which turns the fill
+/// superlinear on large regions.
 pub fn flood_fill_rgba(
     pixels: &[u8],
     width: u32,

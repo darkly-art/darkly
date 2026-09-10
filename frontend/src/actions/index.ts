@@ -7,7 +7,7 @@ import { resizeCanvas } from '../state/resizeCanvas.svelte';
 import { imageRescale } from '../state/imageRescale.svelte';
 import { selectionModify } from '../state/selectionModify.svelte';
 import { filterModal } from '../state/filterModal.svelte';
-import { layerPicker } from '../state/layerPicker.svelte';
+import { addLayerModal } from '../state/addLayerModal.svelte';
 import type { ParamInfo } from '../ui/filters/filterParams';
 import { exportTimelapse } from '../state/exportTimelapse.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
@@ -31,18 +31,6 @@ import { about } from '../state/about.svelte';
 import { commandPalette } from '../state/commandPalette.svelte';
 import { openCheatsheet } from '../ui/cheatsheet';
 import { links, openExternal } from '../links';
-
-/** The commands that add something to the layer stack, in the order the
- *  layer panel's new-layer dropdown lists them. The dropdown renders straight
- *  from these registrations, so a new layer kind needs an action and nothing
- *  else: its label, icon and behaviour come along for free. */
-export const NEW_LAYER_ACTION_IDS = [
-    'newLayer',
-    'newFilterLayer',
-    'newVeil',
-    'newVoid',
-    'newGroup',
-];
 
 /** Walk the layer tree to find a node by id. The layer tree is the
  *  JSON shape produced by `app.refreshLayerTree`, with `children` on
@@ -136,7 +124,6 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // `.darkly` may carry a non-zero `canvas_origin` from a crop.
             await inst.syncCanvasRect();
             await app.refreshLayerTree();
-            await app.refreshVeilList();
             app.requestFrame();
         } catch (e) {
             loadError.show(parseLoadErrorMessage(e));
@@ -578,6 +565,12 @@ export function registerActions() {
 
     // -- Layers --
     actions.register({
+        id: 'addLayer',
+        menuPath: ['Layer:8'],
+        handler: () => { addLayerModal.show(); },
+    });
+
+    actions.register({
         id: 'newLayer',
         menuPath: ['Layer:10'],
         handler: async () => {
@@ -592,19 +585,19 @@ export function registerActions() {
     actions.register({
         id: 'newFilterLayer',
         menuPath: ['Layer:12'],
-        handler: () => { layerPicker.kind = 'filter'; },
+        handler: () => { addLayerModal.show('Filters'); },
     });
 
     actions.register({
         id: 'newVeil',
         menuPath: ['Layer:14'],
-        handler: () => { layerPicker.kind = 'veil'; },
+        handler: () => { addLayerModal.show('Veils'); },
     });
 
     actions.register({
         id: 'newVoid',
         menuPath: ['Layer:16'],
-        handler: () => { layerPicker.kind = 'void'; },
+        handler: () => { addLayerModal.show('Voids'); },
     });
 
     actions.register({
@@ -672,13 +665,6 @@ export function registerActions() {
         handler: async () => {
             const engine = app.engine;
             if (!engine) return;
-            // Veil takes priority: the trash button on the layer panel
-            // doubles as veil-remove when a veil is active, so the
-            // keyboard shortcut should too.
-            if (app.activeVeilIndex !== null) {
-                app.removeVeil(app.activeVeilIndex);
-                return;
-            }
             // Structural rule: operate on the current selection. The
             // right-click handler ensures the clicked row is in the
             // selection BEFORE the menu opens, so reading from
@@ -755,13 +741,13 @@ export function registerActions() {
             app.requestFrame();
         },
     });
-    // Destructive color filters (invert, …) are registered dynamically
-    // from the Rust filter-pipeline registry (the `filters` catalog fetched
-    // during `loadRegistries`), so a new filter in the core surfaces a
-    // Colors-menu entry with no frontend edit. The target is the active *node*
+    // Destructive applies (invert, …) are registered dynamically from the
+    // Rust effect registry (the `effects` catalog fetched during
+    // `loadRegistries`), so a new effect in the core surfaces a Colors-menu
+    // entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const flt of app.entries?.('filters') ?? []) {
+    for (const flt of app.entries?.('effects') ?? []) {
         const filterType = flt.type;
         if (!flt.hotkeyAction) continue;
         // A parametric filter (curves/levels/hsv) can't apply in one click: its
@@ -771,10 +757,10 @@ export function registerActions() {
         const parametric = (flt.params?.length ?? 0) > 0;
         actions.register({
             id: flt.hotkeyAction,
-            // Like tool selection, the documentation is the filter's own and
-            // arrives through the `filters` catalog. What this side composes is
-            // the phrasing: the `…` that marks a filter as opening a dialog,
-            // and the note about what the filter lands on.
+            // Like tool selection, the documentation is the effect's own and
+            // arrives through the `effects` catalog. What this side composes is
+            // the phrasing: the `…` that marks one as opening a dialog, and the
+            // note about what it lands on.
             doc: {
                 displayName: parametric ? `${flt.displayName}…` : flt.displayName,
                 category: 'layers',

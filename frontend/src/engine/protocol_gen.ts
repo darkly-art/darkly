@@ -50,8 +50,6 @@ features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: 
  */
 box?: [number, number] | null, };
 
-export type AddVeilReq = { veil_type: string, params: JsonValue, };
-
 export type AddVoidReq = { void_type: string, params: JsonValue, anchor: number | null, };
 
 export type AlphaToSelectionReq = { id: number, };
@@ -196,11 +194,23 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
+
+export type PortDir = "Input" | "Output";
 
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
-export type PortDir = "Input" | "Output";
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -394,18 +404,6 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
-
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -485,6 +483,14 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
 export type ParamInfo = { kind: string, name: string, 
 /**
  * Display label. `None` → the UI title-cases `name`.
@@ -501,14 +507,6 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, display: ParamDisplay, };
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type CaptureKind = "camera" | "display" | "stream";
 
@@ -607,16 +605,11 @@ export type HitTestVectorObjectReq = { id: number, x: number, y: number, };
 
 export type LayerTransformCapabilityReq = { id: number, };
 
-export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+export type LayerTree = { 
 /**
- * Whether this modifier participates in transforms with its host.
+ * Root children, top-first: panel order.
  */
-linkedToHost: boolean, 
-/**
- * See [`LayerInfo::Raster::editable`]: a modifier is editable when
- * neither it nor its host (nor any ancestor of the host) is locked.
- */
-editable: boolean, };
+layers: Array<LayerInfo>, };
 
 export type LayerInfo = { "type": "raster", id: number, name: string, visible: boolean, locked: boolean, 
 /**
@@ -738,9 +731,33 @@ paintable: boolean, canHaveMask: boolean, canRename: boolean, hasThumbnail: bool
  * answers so the rule (owns its pixels, editable, no mask) lives with
  * the operation instead of being restated by the panel.
  */
-canBecomeSmartObject: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, };
+canBecomeSmartObject: boolean, icon: string, kindName: string, collapsed: boolean, passthrough: boolean, opacity: number, blendMode: string, modifiers: Array<ModifierInfo>, children: Array<LayerInfo>, } | { "type": "divider", id: number, };
+
+export type ModifierInfo = { id: number, kind: string, name: string, visible: boolean, locked: boolean, 
+/**
+ * Whether this modifier participates in transforms with its host.
+ */
+linkedToHost: boolean, 
+/**
+ * See [`LayerInfo::Raster::editable`]: a modifier is editable when
+ * neither it nor its host (nor any ancestor of the host) is locked.
+ */
+editable: boolean, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
+
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
+/**
+ * Member brush ids, in the pack's order. The authority on membership:
+ * nothing on [`BrushInfo`] repeats it.
+ */
+members: Array<string>, 
+/**
+ * What the painter may change, so the UI can grey out affordances it
+ * would otherwise offer. A hint, not the authority: the engine rejects a
+ * forbidden edit regardless of what the UI believed.
+ */
+can_edit_members: boolean, can_edit_identity: boolean, };
 
 export type PackPalette = { 
 /**
@@ -759,19 +776,6 @@ refraction: string,
  */
 surface: string, };
 
-export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
-/**
- * Member brush ids, in the pack's order. The authority on membership:
- * nothing on [`BrushInfo`] repeats it.
- */
-members: Array<string>, 
-/**
- * What the painter may change, so the UI can grey out affordances it
- * would otherwise offer. A hint, not the authority: the engine rejects a
- * forbidden edit regardless of what the UI believed.
- */
-can_edit_members: boolean, can_edit_identity: boolean, };
-
 export type MaskToSelectionReq = { id: number, };
 
 export type MergeDownReq = { source_id: number, };
@@ -783,8 +787,6 @@ export type MoveLayerReq = { id: number, target: MoveTarget, };
 export type MoveTarget = { "target_type": "before", "target_id": number } | { "target_type": "after", "target_id": number } | { "target_type": "into_top", "target_id": number } | { "target_type": "into_bottom", "target_id": number };
 
 export type MoveLayersReq = { ids: Array<number>, target: MoveTarget, };
-
-export type MoveVeilReq = { from: number, to: number, };
 
 export type NodeThumbnailReq = { node_id: number, width: number, height: number, };
 
@@ -833,8 +835,6 @@ export type RemoveLayerReq = { id: number, };
 export type RemoveLayersReq = { ids: Array<number>, };
 
 export type RemoveMaskReq = { id: number, };
-
-export type RemoveVeilReq = { index: number, };
 
 export type RescaleImageReq = { new_width: number, new_height: number, };
 
@@ -915,8 +915,6 @@ export type SetTextStyleReq = { id: number, object: number, font_family?: string
  */
 variations?: { [key in string]: number }, features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: number, line_height?: number, italic?: boolean, align?: string, color?: [number, number, number, number], };
 
-export type SetVeilVisibleReq = { index: number, visible: boolean, };
-
 export type SetViewTransformReq = { pan_x: number, pan_y: number, zoom: number, rotation: number, mirror_h: boolean, screen_w: number, screen_h: number, };
 
 export type SetViewportBgReq = { bg: [number, number, number, number], };
@@ -950,13 +948,9 @@ export type Transform = { "mode": "Basic", "data": [number, number, number, numb
 
 export type UpdateVectorObjectTransformReq = { id: number, object: number, payload: Array<number>, };
 
-export type UpdateVeilReq = { index: number, params: JsonValue, };
-
 export type UpdateVoidTransformReq = { id: number, transform: Transform, };
 
 export type ObjectRefReq = { id: number, object: number, };
-
-export type VeilInfo = { type: string, visible: boolean, index: number, params: Array<ParamInfo>, };
 
 export type VoidTransformInfoReq = { id: number, };
 
@@ -970,7 +964,6 @@ export type RequestKind =
     | 'add_raster'
     | 'add_text'
     | 'add_text_object'
-    | 'add_veil'
     | 'add_void'
     | 'alpha_to_selection'
     | 'antialias_selection'
@@ -1031,7 +1024,6 @@ export type RequestKind =
     | 'clear_overlay_mask'
     | 'clear_selection'
     | 'clear_selection_contents'
-    | 'clear_veils'
     | 'clone_source_anchored'
     | 'commit_filter_preview'
     | 'commit_floating'
@@ -1076,7 +1068,6 @@ export type RequestKind =
     | 'merge_layers'
     | 'move_layer'
     | 'move_layers'
-    | 'move_veil'
     | 'node_thumbnail'
     | 'open_document'
     | 'overlay_hit_test'
@@ -1108,7 +1099,6 @@ export type RequestKind =
     | 'remove_layer'
     | 'remove_layers'
     | 'remove_mask'
-    | 'remove_veil'
     | 'request_histogram'
     | 'request_node_histogram'
     | 'request_recording_capture'
@@ -1144,7 +1134,6 @@ export type RequestKind =
     | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
-    | 'set_veil_visible'
     | 'set_view_transform'
     | 'set_viewport_bg'
     | 'set_void_params'
@@ -1159,10 +1148,8 @@ export type RequestKind =
     | 'undo'
     | 'update_floating_matrix'
     | 'update_vector_object_transform'
-    | 'update_veil'
     | 'update_void_transform'
     | 'vector_object_info'
-    | 'veil_list'
     | 'void_transform_info'
     | 'warm_vector_renderer'
     ;
@@ -1175,7 +1162,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_raster',
     'add_text',
     'add_text_object',
-    'add_veil',
     'add_void',
     'alpha_to_selection',
     'antialias_selection',
@@ -1236,7 +1222,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'clear_overlay_mask',
     'clear_selection',
     'clear_selection_contents',
-    'clear_veils',
     'clone_source_anchored',
     'commit_filter_preview',
     'commit_floating',
@@ -1281,7 +1266,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'merge_layers',
     'move_layer',
     'move_layers',
-    'move_veil',
     'node_thumbnail',
     'open_document',
     'overlay_hit_test',
@@ -1313,7 +1297,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'remove_layer',
     'remove_layers',
     'remove_mask',
-    'remove_veil',
     'request_histogram',
     'request_node_histogram',
     'request_recording_capture',
@@ -1349,7 +1332,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_text_box',
     'set_text_content',
     'set_text_style',
-    'set_veil_visible',
     'set_view_transform',
     'set_viewport_bg',
     'set_void_params',
@@ -1364,10 +1346,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'undo',
     'update_floating_matrix',
     'update_vector_object_transform',
-    'update_veil',
     'update_void_transform',
     'vector_object_info',
-    'veil_list',
     'void_transform_info',
     'warm_vector_renderer',
 ] as const;
@@ -1384,11 +1364,10 @@ export interface EngineApi {
     activeBrushNeedsSource(): Promise<boolean>;
     addFilter(req: AddFilterReq): Promise<number | null>;
     addGroup(req: AddGroupReq): Promise<number>;
-    addMask(req: AddMaskReq): void;
+    addMask(req: AddMaskReq): Promise<null>;
     addRaster(req: AddRasterReq): Promise<number>;
     addText(req: AddTextReq): Promise<{ id: number, object: number }>;
     addTextObject(req: AddTextObjectReq): Promise<{ object: number }>;
-    addVeil(req: AddVeilReq): void;
     addVoid(req: AddVoidReq): Promise<number | null>;
     alphaToSelection(req: AlphaToSelectionReq): void;
     antialiasSelection(): void;
@@ -1449,7 +1428,6 @@ export interface EngineApi {
     clearOverlayMask(): void;
     clearSelection(): void;
     clearSelectionContents(req: ClearSelectionContentsReq): void;
-    clearVeils(): void;
     cloneSourceAnchored(): Promise<boolean>;
     commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
@@ -1485,16 +1463,15 @@ export interface EngineApi {
     isDirty(): Promise<boolean>;
     lastPickedColor(): Promise<{ bytes: Uint8Array }>;
     layerTransformCapability(req: LayerTransformCapabilityReq): Promise<string>;
-    layerTree(): Promise<Array<LayerInfo>>;
+    layerTree(): Promise<LayerTree>;
     libraryList(): Promise<LibrarySnapshot>;
     listFonts(): Promise<{ fonts: string[] }>;
     markDirty(): void;
     maskToSelection(req: MaskToSelectionReq): void;
     mergeDown(req: MergeDownReq): Promise<number>;
     mergeLayers(req: MergeLayersReq): Promise<number>;
-    moveLayer(req: MoveLayerReq): void;
+    moveLayer(req: MoveLayerReq): Promise<null>;
     moveLayers(req: MoveLayersReq): Promise<number>;
-    moveVeil(req: MoveVeilReq): void;
     nodeThumbnail(req: NodeThumbnailReq): Promise<{ bytes: Uint8Array }>;
     openDocument(bytes: Uint8Array): Promise<void>;
     overlayHitTest(req: OverlayHitTestReq): Promise<number | null>;
@@ -1526,7 +1503,6 @@ export interface EngineApi {
     removeLayer(req: RemoveLayerReq): Promise<null>;
     removeLayers(req: RemoveLayersReq): Promise<number>;
     removeMask(req: RemoveMaskReq): void;
-    removeVeil(req: RemoveVeilReq): void;
     requestHistogram(req: HistogramReq): void;
     requestNodeHistogram(req: HistogramReq): void;
     requestRecordingCapture(): void;
@@ -1562,7 +1538,6 @@ export interface EngineApi {
     setTextBox(req: SetTextBoxReq): void;
     setTextContent(req: SetTextContentReq): void;
     setTextStyle(req: SetTextStyleReq): void;
-    setVeilVisible(req: SetVeilVisibleReq): void;
     setViewTransform(req: SetViewTransformReq): void;
     setViewportBg(req: SetViewportBgReq): void;
     setVoidParams(req: SetVoidParamsReq): void;
@@ -1577,10 +1552,8 @@ export interface EngineApi {
     undo(): void;
     updateFloatingMatrix(req: UpdateFloatingMatrixReq): void;
     updateVectorObjectTransform(req: UpdateVectorObjectTransformReq): void;
-    updateVeil(req: UpdateVeilReq): void;
     updateVoidTransform(req: UpdateVoidTransformReq): void;
     vectorObjectInfo(req: ObjectRefReq): Promise<{ ox: number, oy: number, w: number, h: number, mode: number, matrix: number[] } | null>;
-    veilList(): Promise<Array<VeilInfo>>;
     voidTransformInfo(req: VoidTransformInfoReq): Promise<VoidTransformInfoResp | null>;
     warmVectorRenderer(): void;
 }
@@ -1591,11 +1564,10 @@ export function makeApi(t: Transport): EngineApi {
         activeBrushNeedsSource: () => t.request('active_brush_needs_source'),
         addFilter: (req) => t.request('add_filter', req),
         addGroup: (req) => t.request('add_group', req),
-        addMask: (req) => t.postFF('add_mask', req),
+        addMask: (req) => t.request('add_mask', req),
         addRaster: (req) => t.request('add_raster', req),
         addText: (req) => t.request('add_text', req),
         addTextObject: (req) => t.request('add_text_object', req),
-        addVeil: (req) => t.postFF('add_veil', req),
         addVoid: (req) => t.request('add_void', req),
         alphaToSelection: (req) => t.postFF('alpha_to_selection', req),
         antialiasSelection: () => t.postFF('antialias_selection'),
@@ -1656,7 +1628,6 @@ export function makeApi(t: Transport): EngineApi {
         clearOverlayMask: () => t.postFF('clear_overlay_mask'),
         clearSelection: () => t.postFF('clear_selection'),
         clearSelectionContents: (req) => t.postFF('clear_selection_contents', req),
-        clearVeils: () => t.postFF('clear_veils'),
         cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
@@ -1699,9 +1670,8 @@ export function makeApi(t: Transport): EngineApi {
         maskToSelection: (req) => t.postFF('mask_to_selection', req),
         mergeDown: (req) => t.request('merge_down', req),
         mergeLayers: (req) => t.request('merge_layers', req),
-        moveLayer: (req) => t.postFF('move_layer', req),
+        moveLayer: (req) => t.request('move_layer', req),
         moveLayers: (req) => t.request('move_layers', req),
-        moveVeil: (req) => t.postFF('move_veil', req),
         nodeThumbnail: (req) => t.request('node_thumbnail', req),
         openDocument: (bytes) => t.request('open_document', {}, bytes),
         overlayHitTest: (req) => t.request('overlay_hit_test', req),
@@ -1733,7 +1703,6 @@ export function makeApi(t: Transport): EngineApi {
         removeLayer: (req) => t.request('remove_layer', req),
         removeLayers: (req) => t.request('remove_layers', req),
         removeMask: (req) => t.postFF('remove_mask', req),
-        removeVeil: (req) => t.postFF('remove_veil', req),
         requestHistogram: (req) => t.postFF('request_histogram', req),
         requestNodeHistogram: (req) => t.postFF('request_node_histogram', req),
         requestRecordingCapture: () => t.postFF('request_recording_capture'),
@@ -1769,7 +1738,6 @@ export function makeApi(t: Transport): EngineApi {
         setTextBox: (req) => t.postFF('set_text_box', req),
         setTextContent: (req) => t.postFF('set_text_content', req),
         setTextStyle: (req) => t.postFF('set_text_style', req),
-        setVeilVisible: (req) => t.postFF('set_veil_visible', req),
         setViewTransform: (req) => t.postFF('set_view_transform', req),
         setViewportBg: (req) => t.postFF('set_viewport_bg', req),
         setVoidParams: (req) => t.postFF('set_void_params', req),
@@ -1784,10 +1752,8 @@ export function makeApi(t: Transport): EngineApi {
         undo: () => t.postFF('undo'),
         updateFloatingMatrix: (req) => t.postFF('update_floating_matrix', req),
         updateVectorObjectTransform: (req) => t.postFF('update_vector_object_transform', req),
-        updateVeil: (req) => t.postFF('update_veil', req),
         updateVoidTransform: (req) => t.postFF('update_void_transform', req),
         vectorObjectInfo: (req) => t.request('vector_object_info', req),
-        veilList: () => t.request('veil_list'),
         voidTransformInfo: (req) => t.request('void_transform_info', req),
         warmVectorRenderer: () => t.postFF('warm_vector_renderer'),
     };

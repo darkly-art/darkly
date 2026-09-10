@@ -5,6 +5,7 @@
 use darkly_macros::handlers;
 
 use super::DarklyEngine;
+use crate::document::TreeSlot;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::BakeSourceSlot;
 
@@ -15,7 +16,11 @@ impl DarklyEngine {
     #[handler]
     pub fn flatten_image(&mut self) -> Result<LayerId, String> {
         let root_id = self.doc.root_id();
-        let top_level: Vec<LayerId> = self.doc.children_of(root_id).to_vec();
+        // "Flatten the document" means the document's content. The
+        // screen-space run is a viewport treatment that no export contains, so
+        // it is neither baked into the result nor consumed by the flatten,
+        // taking `children_of(root)` here would delete it without baking it.
+        let top_level: Vec<LayerId> = self.doc.canvas_space_children().to_vec();
         if top_level.is_empty() {
             return Err("Document has no layers to flatten".into());
         }
@@ -56,7 +61,7 @@ impl DarklyEngine {
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &visible_ids,
             result_id,
         );
@@ -71,14 +76,23 @@ impl DarklyEngine {
             .filter(|(_, &id)| id != result_id)
             .map(|(idx, &id)| BakeSourceSlot {
                 id,
-                parent: Some(root_id),
-                position: idx,
+                slot: TreeSlot {
+                    parent: Some(root_id),
+                    position: idx,
+                },
             })
             .collect();
 
         // Root position 0 is the bottom of the stack: flatten makes the result
         // the new "Background".
-        self.finish_bake(sources, result_id, Some(root_id), 0);
+        self.finish_bake(
+            sources,
+            result_id,
+            TreeSlot {
+                parent: Some(root_id),
+                position: 0,
+            },
+        );
 
         Ok(result_id)
     }
@@ -152,19 +166,17 @@ impl DarklyEngine {
     fn bake_node_to_raster(&mut self, node_id: LayerId) -> Result<LayerId, String> {
         // Snapshot every property we need before mutation; once we start
         // adding/detaching, the borrows churn.
-        let (name, visible, locked, opacity, blend_mode, parent, position) =
-            match self.doc.find_node(node_id) {
-                Some(node) => (
-                    node.common().name.clone(),
-                    node.common().visible,
-                    node.common().locked,
-                    node.blend().opacity,
-                    node.blend().blend_mode,
-                    self.doc.parent_of(node_id),
-                    self.doc.position_in_parent(node_id).unwrap_or(0),
-                ),
-                None => return Err("Unknown node".into()),
-            };
+        let (name, visible, locked, opacity, blend_mode, slot) = match self.doc.find_node(node_id) {
+            Some(node) => (
+                node.common().name.clone(),
+                node.common().visible,
+                node.common().locked,
+                node.blend().opacity,
+                node.blend().blend_mode,
+                self.doc.slot_of(node_id).unwrap_or_default(),
+            ),
+            None => return Err("Unknown node".into()),
+        };
 
         // Allocate the result raster, canvas-sized, inheriting the source's
         // identity props so it composites into the parent the same way the
@@ -197,13 +209,13 @@ impl DarklyEngine {
 
         // Bake the source as the single child of the transient bake accum. For
         // a group, `compose_children` recursively composes its children into
-        // its composite_cache first; either way the node's own texture is
+        // its own accumulator first; either way the node's own texture is
         // blended into the accum with our Normal/1 uniforms, and its mask, if
         // any, is applied as part of that blend.
         self.compositor.bake_subtree_to_layer(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.doc,
+            &self.doc,
             &[node_id],
             result_id,
         );
@@ -211,16 +223,7 @@ impl DarklyEngine {
         // Restore real uniforms so undo brings the source back in a sane state.
         self.refresh_blend_uniforms(node_id);
 
-        self.finish_bake(
-            vec![BakeSourceSlot {
-                id: node_id,
-                parent,
-                position,
-            }],
-            result_id,
-            parent,
-            position,
-        );
+        self.finish_bake(vec![BakeSourceSlot { id: node_id, slot }], result_id, slot);
 
         Ok(result_id)
     }

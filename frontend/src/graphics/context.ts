@@ -29,8 +29,11 @@ export interface CatalogView {
 }
 
 export interface GraphicContext {
-    /** A catalog from the metadata export. Throws if it is not there. */
-    catalog(id: string): CatalogView;
+    /** A catalog from the metadata export, narrowed to one of its grouping
+     *  labels when `category` is given (the view's `title` is then the category,
+     *  since that is what its entries have in common). Throws if the catalog is
+     *  not there, or if the category selects nothing. */
+    catalog(id: string, category?: string): CatalogView;
     /** One entry's committed still, as a data URI. Throws if it is not on disk. */
     still(catalogId: string, typeId: string): string;
 }

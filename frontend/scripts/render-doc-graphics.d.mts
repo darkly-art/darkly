@@ -20,7 +20,8 @@ export interface Raster {
 export interface LoadedGraphic {
     /** Absolute path of the component. */
     file: string;
-    /** The SSR-compiled module: `default`, `catalog`, `graphicProps`, `size`. */
+    /** The SSR-compiled module: `default`, `catalog`, optional `category`,
+     *  `graphicProps`, `size`. */
     component: Record<string, unknown>;
     /** The component's source text, for compiling its scoped stylesheet. */
     source: string;
@@ -43,6 +44,10 @@ export function renderGraphic(
     ssrRender: (...args: unknown[]) => { body: string },
     ctx: GraphicContext,
 ): string;
+
+/** The file stem of a catalog graphic: the catalog id, plus the category when
+ *  the graphic depicts one. */
+export function graphicName(catalog: string, category?: string): string;
 
 /** An SVG's identity, with the stills and Svelte's scope class normalized. */
 export function normalizedHash(svg: string): string;

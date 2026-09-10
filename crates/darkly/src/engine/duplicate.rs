@@ -67,7 +67,10 @@ impl DarklyEngine {
         &mut self,
         source_id: LayerId,
     ) -> Option<(LayerId, Box<dyn UndoAction>)> {
-        self.doc.find_node(source_id)?;
+        let node = self.doc.find_node(source_id)?;
+        if !node.kind().can_duplicate {
+            return None;
+        }
         let root_new_id = self.clone_subtree(source_id, None, /* is_root: */ true)?;
         // `clone_subtree(..., None, ...)` lands the new node at the top of
         // root via `add_*(None) → IntoGroupTop(root)`. Move it next to the
@@ -82,17 +85,11 @@ impl DarklyEngine {
         // (the `IntoGroupTop` semantic on group anchors).
         self.doc
             .move_layer(root_new_id, MoveTarget::After(source_id));
-        let parent = self.doc.parent_of(root_new_id);
-        let position = self.doc.position_in_parent(root_new_id).unwrap_or(0);
+        let slot = self.doc.slot_of(root_new_id).unwrap_or_default();
         let tombstones = self.collect_pixel_node_ids(root_new_id);
         Some((
             root_new_id,
-            Box::new(DuplicateAction::new(
-                root_new_id,
-                parent,
-                position,
-                tombstones,
-            )),
+            Box::new(DuplicateAction::new(root_new_id, slot, tombstones)),
         ))
     }
 
@@ -116,6 +113,10 @@ impl DarklyEngine {
         let blend_mode_reg = node.blend().blend_mode;
 
         match node {
+            // A kind that cannot be duplicated is filtered at the entry point
+            // (`duplicate_node_inner`); the arm keeps the match total for a
+            // subtree walk that encounters one anyway.
+            LayerNode::Layer(Layer::Divider(_)) => None,
             LayerNode::Layer(Layer::Raster(r)) => {
                 let bounds = r.pixels.bounds;
                 let new_id = self.doc.add_raster_layer(anchor);
@@ -278,7 +279,7 @@ impl DarklyEngine {
                 let params = f.params.clone();
                 let display_label = self
                     .compositor
-                    .filter_pipeline_registry()
+                    .effect_registry()
                     .display_name(&pipeline)
                     .to_string();
                 let new_id = self

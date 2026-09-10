@@ -21,6 +21,7 @@ import {
     collapsedAncestorsOf,
     indexLayerTree,
     nextActiveAfterRemoval,
+    type DropRow,
     type LayerTreeIndex,
 } from './layerTree';
 
@@ -225,9 +226,9 @@ export class DarklyInstance {
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
 
-    /** Every registry the Rust core declares, keyed by catalog id ("filters",
-     *  "veils", "tools", …). Fetched once at startup (see `loadRegistries`).
-     *  Per-instance payloads (LayerInfo, VeilInfo, …) carry only the stable
+    /** Every registry the Rust core declares, keyed by catalog id ("effects",
+     *  "tools", …). Fetched once at startup (see `loadRegistries`).
+     *  Per-instance payloads (LayerInfo, …) carry only the stable
      *  `type_id`; UI code resolves the human-readable label and the icon
      *  through here, so there is no second copy of either. */
     catalogs = $state<Record<string, Catalog>>({});
@@ -297,28 +298,6 @@ export class DarklyInstance {
         this.voidCaptureKind = capKinds;
     }
 
-    /** Add a veil with a partial overrides record. Param names match the
-     *  veil type's registered `name` fields (see each veil's `PARAMS`).
-     *  Missing params fall back to registered defaults via the WASM
-     *  bridge. Pass `visible: false` to hide the veil after add (the
-     *  common starter-veil case). */
-    async addVeil(type: string, options: Record<string, unknown> = {}): Promise<void> {
-        const engine = this.engine;
-        if (!engine) return;
-        const { visible, ...params } = options;
-        engine.api.addVeil({ veil_type: type, params: params as JsonValue });
-        if (visible === false) {
-            // `veil_list` returns highest-index first, so the just-added veil
-            // sits at index 0 of the array. The list send is enqueued after the
-            // add above, so FIFO ordering guarantees it sees the new veil.
-            const list = (await engine.api.veilList()) as Array<{ index: number }>;
-            const added = list[0];
-            if (added) engine.api.setVeilVisible({ index: added.index, visible: false });
-        }
-        await this.refreshVeilList();
-        this.requestFrame();
-    }
-
     // Active layer: the "primary" layer within the selection. Drives the
     // properties panel, paint target, shift-click anchor, and per-row
     // emphasis. Always a member of `selectedLayerIds` when that set is
@@ -335,10 +314,6 @@ export class DarklyInstance {
     // row replaced a deleted one, and reading `layerTree` there would tie the
     // layer panel's `$effect` to the very state the refresh just wrote.
     private treeIndex: LayerTreeIndex = indexLayerTree([]);
-
-    // Active veil. Mutually exclusive with activeLayerId: the right
-    // sidebar's properties pane shows the props of whichever is non-null.
-    activeVeilIndex = $state<number | null>(null);
 
     // Session "isolate this node" flag. When set, the renderer shows only
     // that node's contribution (e.g. a mask renders grayscale on canvas).
@@ -364,11 +339,18 @@ export class DarklyInstance {
         return installed;
     }
 
-    // Layer tree (read from WASM, refreshed after mutations/undo/redo).
+    // Layer tree (read from WASM, refreshed after mutations/undo/redo). The
+    // viewport divider is one of the rows; everything above it is
+    // viewport-only.
     layerTree = $state<any[]>([]);
 
-    // Veil list (read from WASM, refreshed after mutations).
-    veilList = $state<any[]>([]);
+    /** The rows the panel draws, in panel order, with their indent depth: what
+     *  a drag resolves its drop against. Derived from the live tree rather than
+     *  the reconciler's pre-mutation snapshot, because a drag reads the panel as
+     *  it is currently rendered. */
+    get dropRows(): DropRow[] {
+        return indexLayerTree(this.layerTree).rows;
+    }
 
     // View transform (controlled by canvas navigation)
     panX = $state(0);
@@ -460,7 +442,6 @@ export class DarklyInstance {
     private setSoleSelection(id: number | null) {
         this.activeLayerId = id;
         this.selectedLayerIds = id === null ? new Set() : new Set([id]);
-        this.activeVeilIndex = null;
     }
 
     /** The layer-tree node with `id`, searched depth-first through the group
@@ -529,7 +510,6 @@ export class DarklyInstance {
             this.selectedLayerIds = next;
             this.activeLayerId = id;
         }
-        this.activeVeilIndex = null;
     }
 
     /** Shift-click router. Selects the inclusive range from the current
@@ -556,7 +536,6 @@ export class DarklyInstance {
         // Active follows the click so subsequent shift-clicks extend from
         // where the artist is currently pointing (standard Photoshop).
         this.activeLayerId = id;
-        this.activeVeilIndex = null;
     }
 
     /** Replace the multi-selection with `ids`. The last id becomes
@@ -573,7 +552,6 @@ export class DarklyInstance {
         }
         this.selectedLayerIds = new Set(ids);
         this.activeLayerId = ids[ids.length - 1];
-        this.activeVeilIndex = null;
     }
 
     /** True iff `id` is in the multi-selection. */
@@ -646,8 +624,7 @@ export class DarklyInstance {
         if (appeared.length > 0) {
             this.selectedLayerIds = new Set(appeared);
             this.activeLayerId = appeared[0];
-            this.activeVeilIndex = null;
-        } else {
+            } else {
             const active = this.activeLayerId;
             if (active !== null && !next.ids.has(active)) {
                 // Prefer a surviving member of the selection, keeping the rest
@@ -668,16 +645,9 @@ export class DarklyInstance {
         }
     }
 
-    selectVeil(index: number | null) {
-        this.activeVeilIndex = index;
-        this.activeLayerId = null;
-        this.selectedLayerIds = new Set();
-    }
-
     clearSelection() {
         this.activeLayerId = null;
         this.selectedLayerIds = new Set();
-        this.activeVeilIndex = null;
     }
 
     /** Active external-frame void inputs, keyed by the void layer's id. Each
@@ -976,37 +946,6 @@ export class DarklyInstance {
         if (pruned) this.streamSessionStarted = pruned;
     }
 
-    /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
-    removeVeil(index: number) {
-        if (!this.engine) return;
-        this.engine.api.removeVeil({ index });
-        if (this.activeVeilIndex === index) {
-            this.activeVeilIndex = null;
-        } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
-            this.activeVeilIndex--;
-        }
-        this.refreshVeilList();
-        this.requestFrame();
-    }
-
-    /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
-    moveVeil(from: number, to: number) {
-        if (!this.engine || from === to) return;
-        this.engine.api.moveVeil({ from, to });
-        const a = this.activeVeilIndex;
-        if (a !== null) {
-            if (a === from) {
-                this.activeVeilIndex = to;
-            } else if (from < to && a > from && a <= to) {
-                this.activeVeilIndex = a - 1;
-            } else if (from > to && a >= to && a < from) {
-                this.activeVeilIndex = a + 1;
-            }
-        }
-        this.refreshVeilList();
-        this.requestFrame();
-    }
-
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };
@@ -1047,7 +986,7 @@ export class DarklyInstance {
     async refreshLayerTree(opts?: { adoptAppeared?: boolean }): Promise<void> {
         if (!this.engine) return;
         const parsed = await this.engine.api.layerTree();
-        const next: any[] = Array.isArray(parsed) ? parsed : [];
+        const next: any[] = Array.isArray(parsed?.layers) ? parsed.layers : [];
         // Stream-backed voids (camera / screenshare) own a MediaStream +
         // <video>; reconcile the live set against the new tree so deleted /
         // frozen / undone voids tear down (turning off the OS capture
@@ -1064,12 +1003,6 @@ export class DarklyInstance {
         // animation. Without a frame, drain_dirty_thumbnail_readbacks never
         // runs and the layer panel ends up showing pre-mutation thumbnails.
         this.requestFrame();
-    }
-
-    async refreshVeilList(): Promise<void> {
-        if (!this.engine) return;
-        const list = await this.engine.api.veilList();
-        this.veilList = Array.isArray(list) ? list : [];
     }
 
     // --- Async copy result callback ---

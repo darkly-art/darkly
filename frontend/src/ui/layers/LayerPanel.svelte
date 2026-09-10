@@ -3,12 +3,12 @@
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
     import LayerFooter from './LayerFooter.svelte';
-    import VeilFolder from '../veils/VeilFolder.svelte';
+    import SpaceDivider from './SpaceDivider.svelte';
     import { bindingSite } from '../../actions/binding_site';
+    import { layerDropTarget } from './dropTarget.svelte';
 
     function refresh() {
         app.refreshLayerTree();
-        app.refreshVeilList();
         app.requestFrame();
     }
 
@@ -16,13 +16,6 @@
         if (app.engine) refresh();
     });
 
-    function onDragOver(e: DragEvent) {
-        e.preventDefault();
-    }
-
-    function onDrop(e: DragEvent) {
-        e.preventDefault();
-    }
 </script>
 
 <!-- The panel is the binding site for `layerPanel`-scoped hotkeys (e.g.
@@ -38,20 +31,29 @@
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
-        {#if app.veilList.length > 0}
-            <VeilFolder onupdate={refresh} />
-        {/if}
-
-        {#each app.layerTree as node (node.id)}
-            {#if node.type === 'group'}
+    <!-- The list's own drop target is the empty space under the last row: a
+         drop there means "below everything, at root", which is the one place
+         the row gestures cannot reach when the bottom row is nested. Rows stop
+         their own drag events, so this only ever sees the gap beneath them. -->
+    <div
+        class="layer-list"
+        use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
+    >
+        <!-- The divider is a tree node like any other; its slot in the list
+             *is* the boundary, and dragging it is an ordinary layer move. -->
+        {#each app.layerTree as node, i (node.id)}
+            {#if node.type === 'divider'}
+                <SpaceDivider divider={node} empty={i === 0} onupdate={refresh} />
+            {:else if node.type === 'group'}
                 <LayerGroup group={node} onupdate={refresh} />
             {:else}
                 <LayerItem layer={node} onupdate={refresh} />
             {/if}
         {/each}
 
-        {#if app.layerTree.length === 0 && app.veilList.length === 0}
+        <!-- The divider is always in the tree, so "no layers" means no rows
+             besides it. -->
+        {#if app.layerTree.filter((n) => n.type !== 'divider').length === 0}
             <div class="empty-message">No layers</div>
         {/if}
     </div>
@@ -75,6 +77,7 @@
     }
 
     .layer-list {
+        position: relative;
         flex: 1;
         overflow-y: auto;
         min-height: 0;

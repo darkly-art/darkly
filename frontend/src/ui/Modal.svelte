@@ -20,13 +20,16 @@
          *  centered (the default), then follows the drag. */
         draggable?: boolean;
         /** Controls rendered in the header row, between the title and the close
-         *  button, filling whatever space the title leaves.
+         *  button, filling whatever space the title leaves. For chrome that
+         *  belongs to the dialog rather than to its content (a search box, a
+         *  mode toggle).
          *
-         *  A header is a fixed cost every dialog already pays: it is one line
-         *  tall whether it holds a word or a word and a search field. Anything a
-         *  dialog needs *above* its content belongs here rather than in a second
-         *  bar below, which would spend the space twice. */
-        controls?: Snippet;
+         *  Sits outside the drag handle, so interacting with it never starts a
+         *  drag. A header is a fixed cost every dialog already pays: it is one
+         *  line tall whether it holds a word or a word and a search field.
+         *  Anything a dialog needs *above* its content belongs here rather than
+         *  in a second bar below, which would spend the space twice. */
+        headerControls?: Snippet;
         children?: Snippet;
     };
 
@@ -38,7 +41,7 @@
         bare = false,
         dimmed = true,
         draggable = false,
-        controls,
+        headerControls,
         children,
     }: Props = $props();
 
@@ -126,8 +129,8 @@
             {:else if title}
                 <h2>{title}</h2>
             {/if}
-            {#if controls}
-                <div class="header-controls">{@render controls()}</div>
+            {#if headerControls}
+                <div class="header-controls">{@render headerControls()}</div>
             {/if}
             <button type="button" class="close" aria-label="Close" onclick={onClose}>×</button>
         </header>
@@ -225,6 +228,17 @@
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
+        gap: 16px;
+    }
+
+    /* Takes the slack so the title stays left and the close button stays
+       right, whatever the controls are. */
+    .header-controls {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
     }
 
     header h2 {

@@ -193,7 +193,7 @@ fn mask_scales_with_layer() {
     let (w, h) = (32u32, 32u32);
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
-    engine.add_mask(layer);
+    engine.add_mask(layer).expect("add mask");
     let mask = engine.test_mask_id(layer).expect("mask filter present");
 
     assert_eq!(
@@ -696,7 +696,7 @@ fn color_pick_reads_plane_pixel_after_rescale() {
     // Paste a 64×64 layer: red everywhere, green 4×4 at plane (40, 40).
     let mut rgba = vec![0u8; (2 * w * 2 * h * 4) as usize];
     for px in rgba.as_chunks_mut::<4>().0 {
-        px.copy_from_slice(&[200, 0, 0, 255]);
+        *px = [200, 0, 0, 255];
     }
     for y in 40..44 {
         for x in 40..44 {
@@ -730,7 +730,7 @@ fn color_pick_reads_plane_pixel_after_rescale_undo() {
     // Paste a 32×32 layer: red everywhere, green 4×4 at plane (20, 20).
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     for px in rgba.as_chunks_mut::<4>().0 {
-        px.copy_from_slice(&[200, 0, 0, 255]);
+        *px = [200, 0, 0, 255];
     }
     for y in 20..24 {
         for x in 20..24 {

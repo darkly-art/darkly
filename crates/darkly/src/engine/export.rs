@@ -35,8 +35,12 @@ impl DarklyEngine {
         // the readback sees the current document state even when no surface
         // present has happened (e.g. test, headless, or a freshly mutated
         // document that hasn't had a `render()` yet).
-        self.compositor
-            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        self.compositor.render_offscreen(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            self.isolated_node,
+        );
 
         let width = self.compositor.canvas_width();
         let height = self.compositor.canvas_height();

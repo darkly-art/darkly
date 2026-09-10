@@ -24,7 +24,6 @@ pub mod mask;
 pub mod nodegraph;
 pub mod sdf;
 pub mod text;
-pub mod tile;
 pub mod tool;
 pub mod tools;
 pub mod transform;

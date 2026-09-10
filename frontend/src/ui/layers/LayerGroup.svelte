@@ -10,6 +10,7 @@
     import Icon from '../../icons/Icon.svelte';
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
     import MaskChainControl from './MaskChainControl.svelte';
+    import { layerDropTarget } from './dropTarget.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -57,7 +58,6 @@
     );
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
-    let dropPos = $state<'none' | 'above' | 'below' | 'into'>('none');
 
     let maskThumb = $derived(maskModifier !== null && app.engine ? getNodeThumbnail(maskModifier.id) : '');
     let showMaskMenu = $state(false);
@@ -260,73 +260,6 @@
         onupdate();
     }
 
-    function onDragStart(e: DragEvent) {
-        const ids = app.isSelected(group.id)
-            ? [...app.selectedLayerIds]
-            : [group.id];
-        if (!app.isSelected(group.id)) {
-            app.selectLayer(group.id);
-        }
-        e.dataTransfer?.setData(
-            'application/x-darkly-layers',
-            JSON.stringify(ids),
-        );
-        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-    }
-
-    function onDragOver(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.dataTransfer) return;
-        e.dataTransfer.dropEffect = 'move';
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        if (ratio < 0.25) {
-            dropPos = 'above';
-        } else if (ratio > 0.75) {
-            dropPos = 'below';
-        } else {
-            dropPos = 'into';
-        }
-    }
-
-    function onDragLeave(e: DragEvent) {
-        const related = e.relatedTarget as Node | null;
-        if (!related || !(e.currentTarget as HTMLElement).contains(related)) {
-            dropPos = 'none';
-        }
-    }
-
-    async function onDrop(e: DragEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        const pos = dropPos;
-        dropPos = 'none';
-        const payload = e.dataTransfer?.getData('application/x-darkly-layers');
-        const engine = app.engine;
-        if (!payload || !engine) return;
-        let ids: number[];
-        try { ids = JSON.parse(payload) as number[]; } catch { return; }
-        if (!Array.isArray(ids) || ids.length === 0) return;
-        if (ids.includes(group.id)) return;
-
-        const where = pos === 'above' ? 'after'
-            : pos === 'below' ? 'before'
-            : 'into_top';
-
-        try {
-            const skipped = await engine.api.moveLayers({
-                ids, target: { target_type: where, target_id: group.id },
-            });
-            if (skipped > 0) {
-                toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
-            }
-        } catch (e: any) {
-            toast.show('error', e.message ?? String(e));
-        }
-        onupdate();
-    }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -335,20 +268,18 @@
         class="group-header"
         class:active={isActive}
         class:selected={isSelected}
-        class:drop-above={dropPos === 'above'}
-        class:drop-below={dropPos === 'below'}
-        class:drop-into={dropPos === 'into'}
         onclick={onLayerClick}
         ondblclick={startRename}
         oncontextmenu={onLayerContextMenu}
         role="button"
         tabindex="-1"
         draggable={editable ? 'true' : 'false'}
-        ondragstart={onDragStart}
-        ondragover={onDragOver}
-        ondragleave={onDragLeave}
-        ondrop={onDrop}
-        ondragend={() => { dropPos = 'none'; }}
+        use:layerDropTarget={{
+            rowId: group.id,
+            isGroup: true,
+            draggable: editable,
+            onupdate,
+        }}
         style:padding-left="{8 + depth * 16}px"
     >
         <button
@@ -467,32 +398,8 @@
         background: var(--bg-active);
     }
 
-    .group-header.drop-above::before {
-        content: '';
-        position: absolute;
-        top: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
-    .group-header.drop-below::after {
-        content: '';
-        position: absolute;
-        bottom: -1px;
-        left: 8px;
-        right: 4px;
-        height: 2px;
-        background: var(--accent);
-        pointer-events: none;
-    }
 
-    .group-header.drop-into {
-        outline: 1px solid var(--accent);
-        outline-offset: -1px;
-    }
 
     .collapse-btn {
         width: 16px;
