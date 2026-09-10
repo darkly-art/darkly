@@ -115,11 +115,17 @@ jobs:
       # The release object for a tag is produced outside this repo, so this job
       # may run before or after it exists; create-if-missing plus --clobber
       # makes either order work, and makes a re-run idempotent.
+      #
+      # Draft, when this job is the one that creates it. A v* tag is not a
+      # finished release: the desktop bundles are built elsewhere and land on
+      # this same release afterwards, and a release goes public only when a
+      # human publishes it with everything attached. Creating a published
+      # release here would put a bundle-less release in front of users.
       - name: Attach to the release
         if: env.TARGET != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$TARGET" >/dev/null 2>&1 \
-            || gh release create "$TARGET" --generate-notes
+            || gh release create "$TARGET" --draft --prerelease --generate-notes
           gh release upload "$TARGET" "$ARTIFACT" --clobber
