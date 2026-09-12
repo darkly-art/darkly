@@ -10,6 +10,7 @@ import {
 } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
+import { recentTree } from './trees';
 
 const paint = { visual: { kind: 'icon', icon: '' }, palette: NEUTRAL_PALETTE } as const;
 const leaf = (id: string): WheelLeaf =>
@@ -206,21 +207,34 @@ const packTree = (n: number): WheelTree => ({
  *  longer fits the arc it was dealt. */
 const crowding = (n: number) => 2 * Math.PI * 95.5 / n;
 
-/** Open, drop into the Library, and return the engaged state. */
-const intoLibrary = (tree: WheelTree, widths: Map<string, number>) => {
+/** Open, drop into the ring 0 branch at `enter`, and return the engaged
+ *  state. */
+const intoBranch = (tree: WheelTree, widths: Map<string, number>, enter = 0) => {
     const s0 = reduce(CLOSED, down(), tree, widths).state;
-    return reduce(s0, moveAt(0, RING0_MID), tree, widths).state;
+    return reduce(s0, moveAt(enter, RING0_MID), tree, widths).state;
 };
 
-/** Walk the pointer once around ring 1 and report the packs it selected, in
- *  order, collapsing repeats. */
-const sweep = (tree: WheelTree, widths: Map<string, number>, steps = 4000) => {
-    let s = intoLibrary(tree, widths);
+/** The whole of ring 1, entered at theta 0: the Library's fan, which is the
+ *  only kind that occupies its ring entirely. */
+const FULL_TURN = { enter: 0, a0: 0, span: 2 * Math.PI };
+
+/** Walk the pointer once across a ring 1 fan and report the members it
+ *  selected, in order, collapsing repeats.
+ *
+ *  Half-open in `arc`, which is what makes a full turn's wrap back onto its
+ *  first sector not read as a skip, and what keeps a bounded fan's sweep inside
+ *  the fan. */
+const sweep = (
+    tree: WheelTree,
+    widths: Map<string, number>,
+    steps = 4000,
+    arc = FULL_TURN,
+) => {
+    let s = intoBranch(tree, widths, arc.enter);
     const seen: number[] = [];
-    // Half-open: a full turn ends where it started, and the wrap back onto the
-    // first sector is not a skip.
     for (let t = 0; t < steps; t++) {
-        s = reduce(s, moveAt(2 * Math.PI * t / steps, RING1_MID), tree, widths).state;
+        const theta = arc.a0 + arc.span * t / steps;
+        s = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
         const e = engaged(s);
         if (e.highlight.kind !== 'sector' || e.highlight.sector.ring !== 1) continue;
         const i = e.highlight.sector.path[1];
@@ -318,6 +332,25 @@ describe('widened fan stability', () => {
         expect(sweep(tree, widths)).toEqual(packNames(n).map((_, i) => i));
     });
 
+    it('enters every member of a bounded fan, in order, on a slow sweep', () => {
+        // A bounded fan is the kind whose size its names decide: the Library's
+        // packs hold the whole circumference and are dealt the same arc
+        // whatever they are called, so every sweep above this one is a sweep of
+        // the one fan the sizing cannot reach. This is the shape a painter
+        // opens the wheel onto.
+        const names = ['b0', 'b1', 'b2', 'b3', 'b4'];
+        const widths = new Map(names.map(l => [l, 160]));
+        const tree = recentTree(names);
+        const layout = layoutWheel(tree, [0], widths, [0, 0]);
+        const fan = layout.filter(g => g.ring === 1);
+        const arc = {
+            enter: midAngle(layout.find(g => g.ring === 0 && g.path[0] === 0)!),
+            a0: fan[0].a0,
+            span: fan.reduce((a, g) => a + g.span, 0),
+        };
+        expect(sweep(tree, widths, 4000, arc)).toEqual(names.map((_, i) => i));
+    });
+
     it('skips nothing when one pack has a long name and its neighbour a short one', () => {
         // The standing fence against a per-sector widening amount. Widening
         // only the sectors that need it is the obvious economy, and it breaks
@@ -335,7 +368,7 @@ describe('widened fan stability', () => {
         const n = 30;
         const tree = packTree(n);
         const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
-        let s = intoLibrary(tree, widths);
+        let s = intoBranch(tree, widths);
         for (let t = 0; t < 600; t++) {
             const theta = 2 * Math.PI * t / 600;
             s = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
@@ -352,7 +385,7 @@ describe('widened fan stability', () => {
         const n = 40;
         const tree = packTree(n);
         const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
-        let s = intoLibrary(tree, widths);
+        let s = intoBranch(tree, widths);
         s = reduce(s, moveAt(0.05, RING1_MID), tree, widths).state;
         for (const theta of [Math.PI, 1.2, 5.9, 0.3, 3.7]) {
             s = reduce(s, moveAt(theta, RING1_MID), tree, widths).state;
@@ -371,7 +404,7 @@ describe('widened fan stability', () => {
         const n = 30;
         const tree = packTree(n);
         const widths = new Map(packNames(n).map(l => [l, crowding(n)]));
-        let s = intoLibrary(tree, widths);
+        let s = intoBranch(tree, widths);
         s = reduce(s, moveAt(0.05, RING1_MID), tree, widths).state;
         const pack = engaged(s).path;
         expect(pack).toHaveLength(2);
@@ -388,7 +421,7 @@ describe('widened fan stability', () => {
     it('is today’s geometry when nothing has been measured', () => {
         const n = 24;
         const tree = packTree(n);
-        let bare = intoLibrary(tree, new Map());
+        let bare = intoBranch(tree, new Map());
         let old = reduce(CLOSED, down(), tree).state;
         old = reduce(old, moveAt(0, RING0_MID), tree).state;
         for (let t = 0; t <= 200; t++) {
