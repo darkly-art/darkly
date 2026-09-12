@@ -3,7 +3,7 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.10703124850988388
+      size: 0.06953124701976776
       spacing: 0.009999999776482582
   circle:
     type: circle
@@ -44,12 +44,14 @@ nodes:
   noise:
     type: noise
     inputs:
+      roughness: 0.7344781160354614
       scale: 7.0
       space: 1
   noise_2:
     type: noise
     inputs:
-      scale: 2.0
+      roughness: 0.548843264579773
+      scale: 1.0
   paint:
     type: paint
     inputs:
