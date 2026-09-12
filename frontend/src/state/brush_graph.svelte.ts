@@ -492,16 +492,25 @@ export class BrushGraphState {
         );
     }
 
-    /** Overwrite a brush-bar entry's label / description / icon. */
+    /** Overwrite a brush-bar entry's label / description / icon / invert.
+     *  Every field is overwritten, so pass the entry's current values for
+     *  the ones the caller isn't changing. */
     async setExposedPortMeta(
         key: string,
         label: string,
         description: string,
         icon: string,
+        invert: boolean,
     ) {
         if (!app.engine) return;
         await this.applyResult(
-            await app.engine.api.brushGraphSetExposedPortMeta({ key, label, description, icon }),
+            await app.engine.api.brushGraphSetExposedPortMeta({
+                key,
+                label,
+                description,
+                icon,
+                invert,
+            }),
         );
     }
 

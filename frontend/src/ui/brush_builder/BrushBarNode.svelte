@@ -179,7 +179,7 @@
                         <span class="row-label">{port.label}</span>
                         <button
                             class="row-edit"
-                            title="Edit label, description, and icon"
+                            title="Edit label, description, icon, and slider range"
                             onclick={(e) => { e.stopPropagation(); openEditor(port); }}
                             ondragstart={(e) => e.preventDefault()}
                         >

@@ -3,22 +3,26 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.08671875298023224
+      size: 0.10703124850988388
       spacing: 0.009999999776482582
   circle:
     type: circle
     inputs:
       frequency: 1.0
       rotation: 5.75
-      softness: 0.8564339280128479
+      softness: 1.0
   curve:
     type: curve
     inputs:
       curve:
       - - 0.0
         - 0.0
-      - - 0.5640479
-        - 0.35878405
+      - - 0.32604823
+        - 0.0
+      - - 0.6077023
+        - 1.0
+      - - 0.995
+        - 1.0
       - - 1.0
         - 1.0
   curve_2:
@@ -27,8 +31,10 @@ nodes:
       curve:
       - - 0.0
         - 0.07414697
+      - - 0.544431
+        - 0.2798137
       - - 1.0
-        - 0.48648626
+        - 0.5450698
   multiply:
     type: multiply
   multiply_2:
@@ -38,16 +44,16 @@ nodes:
   noise:
     type: noise
     inputs:
-      scale: 8.010828971862793
+      scale: 7.0
       space: 1
   noise_2:
     type: noise
     inputs:
-      scale: 3.0
+      scale: 2.0
   paint:
     type: paint
     inputs:
-      flow: 0.5
+      flow: 0.5003772377967834
   paint_color:
     type: paint_color
   pen_input:
@@ -72,5 +78,8 @@ exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   paint.opacity: {}
-  paint.flow: {}
-  circle.softness: {}
+  paint.flow:
+    label: Hardness
+    description: Stroke-level flow cap (folded into rgba alpha)
+    icon: mdi:pencil
+    invert: true

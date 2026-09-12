@@ -108,13 +108,24 @@ min: number,
 max: number, 
 /**
  * Display-space default: what double-click reset returns to.
- * Sourced from the node-type registration, not the loaded brush.
+ * The loaded brush's shipped value for this port when it has one,
+ * falling back to the node-type registration's.
  */
 default: number, 
 /**
  * Unit type for formatting and conversion.
  */
-unitType: UnitType, } | { "kind": "bool", 
+unitType: UnitType, 
+/**
+ * Whether this control is presented mirrored, for the brush-author
+ * entry editor to seed its checkbox from.
+ *
+ * The bar's *renderers* must not consult it: every number in this
+ * payload is already mirrored, and mirroring again at render time
+ * would cancel it out. Only the authoring modal reads this, and only
+ * so that saving the entry does not silently un-invert it.
+ */
+invert: boolean, } | { "kind": "bool", 
 /**
  * Current value.
  */
@@ -157,7 +168,7 @@ export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
-export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
+export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, invert: boolean, };
 
 export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
@@ -194,23 +205,11 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
-
-export type PortDir = "Input" | "Output";
-
 export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
 
 export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -404,6 +403,18 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
+
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -483,35 +494,6 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
-
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -547,6 +529,35 @@ supportsPreview: boolean,
  * than sources of one.
  */
 source: VoidSource | null, };
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -746,19 +757,6 @@ editable: boolean, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
-export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
-/**
- * Member brush ids, in the pack's order. The authority on membership:
- * nothing on [`BrushInfo`] repeats it.
- */
-members: Array<string>, 
-/**
- * What the painter may change, so the UI can grey out affordances it
- * would otherwise offer. A hint, not the authority: the engine rejects a
- * forbidden edit regardless of what the UI believed.
- */
-can_edit_members: boolean, can_edit_identity: boolean, };
-
 export type PackPalette = { 
 /**
  * The pack's own hue at full vividness: the color you would name it by.
@@ -775,6 +773,19 @@ refraction: string,
  * behind it show through.
  */
 surface: string, };
+
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
+/**
+ * Member brush ids, in the pack's order. The authority on membership:
+ * nothing on [`BrushInfo`] repeats it.
+ */
+members: Array<string>, 
+/**
+ * What the painter may change, so the UI can grey out affordances it
+ * would otherwise offer. A hint, not the authority: the engine rejects a
+ * forbidden edit regardless of what the UI believed.
+ */
+can_edit_members: boolean, can_edit_identity: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 

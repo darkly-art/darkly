@@ -480,6 +480,7 @@ mod tests {
                 "Softness".into(),
                 "Edge falloff".into(),
                 "fa6-solid:circle-half-stroke".into(),
+                false,
             )
             .unwrap();
 
@@ -550,6 +551,46 @@ mod tests {
             .find(|p| p.name == "softness")
             .unwrap();
         assert_eq!((port.min, port.max), (-1.0, 2.5));
+    }
+
+    /// An inverted brush-bar entry survives the yaml round trip, and an
+    /// uninverted one writes no key at all: `invert` elides its default like
+    /// every sibling meta field, so a plain entry still serializes as `{}`.
+    #[test]
+    fn inverted_entry_survives_the_yaml_round_trip() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+        graph.expose_port(&circle, "softness").unwrap();
+        let key = exposed_port_key(&circle, "softness");
+
+        // Uninverted: the key is absent from the emitted yaml.
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(
+            !serde_yaml_ng::to_string(&clean).unwrap().contains("invert"),
+            "an uninverted entry must not serialize an invert key"
+        );
+
+        graph
+            .set_exposed_port_meta(&key, "Hardness".into(), String::new(), String::new(), true)
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert!(
+            restored.exposed_ports[&key].invert,
+            "the mirror is authored brush state and must survive save/load"
+        );
+        assert_eq!(restored.exposed_ports[&key].label, "Hardness");
     }
 
     /// A hand-edited yaml carrying a degenerate or inverted range is

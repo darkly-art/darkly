@@ -638,6 +638,25 @@ pub struct ExposedPortMeta {
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub icon: String,
+    /// Present the brush-bar control mirrored: the number the artist sees
+    /// runs the opposite way from the value the port stores, so a port
+    /// carrying softness can be exposed as a "Hardness" knob without a
+    /// `1 - x` helper node in the graph.
+    ///
+    /// Display-space only, exactly like `PortDef::min`/`max`: the stored
+    /// value and everything downstream of it (shader, wire remapping,
+    /// dab extent, thumbnails) are untouched.
+    ///
+    /// The mirror reflects about the control's own bounds (`min + max`), so
+    /// it equals the complement `1 - x` only when those bounds sum to 1. A
+    /// port narrowed to `0.0..0.5` and labelled "Hardness" reads 0% to 50%,
+    /// not 0% to 100%.
+    ///
+    /// Meaningful only for scalar ports; a toggle or a dropdown has no
+    /// travel to reverse, and the resolver that builds the display mapping
+    /// declines to produce one for them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
 }
 
 /// Format the canonical key for an exposed-port entry. Keys are
@@ -796,19 +815,26 @@ impl<W: WireKind> Graph<W> {
             .contains_key(&exposed_port_key(id, port_name))
     }
 
-    /// Overwrite all three meta fields on a brush-bar entry in one call.
+    /// Overwrite every meta field on a brush-bar entry in one call.
     /// The icon field is restricted to FontAwesome-friendly characters
     /// (`[a-zA-Z0-9- ]*`): keeps the value safe to bind directly into
     /// an HTML `class=` attribute on the frontend without further
     /// sanitization. Out-of-shape icon strings are rejected loudly so
     /// the caller learns about the constraint rather than seeing the
     /// icon silently dropped.
+    ///
+    /// `invert` is stored as given even on a non-scalar port. It is not an
+    /// invariant of the entry the way a safe icon is: the author can swap
+    /// the node or wire the port at any time, so whatever reads the flag
+    /// has to tolerate a stale one regardless, and rejecting it here would
+    /// only add a failure mode without removing that obligation.
     pub fn set_exposed_port_meta(
         &mut self,
         key: &str,
         label: String,
         description: String,
         icon: String,
+        invert: bool,
     ) -> Result<(), GraphError> {
         if !icon.bytes().all(is_safe_icon_byte) {
             return Err(GraphError::InvalidIcon { icon });
@@ -822,6 +848,7 @@ impl<W: WireKind> Graph<W> {
         entry.label = label;
         entry.description = description;
         entry.icon = icon;
+        entry.invert = invert;
         Ok(())
     }
 
@@ -1663,8 +1690,14 @@ mod tests {
         let key = exposed_port_key(&id, "val");
 
         // Safe icon class: accepted.
-        g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
-            .unwrap();
+        g.set_exposed_port_meta(
+            &key,
+            "Label".into(),
+            "Desc".into(),
+            "fa6-solid:sun".into(),
+            false,
+        )
+        .unwrap();
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
 
         // Unsafe icon (contains `<`): rejected; previous value retained.
@@ -1674,11 +1707,32 @@ mod tests {
                 "Label2".into(),
                 "Desc2".into(),
                 "<script>x</script>".into(),
+                false,
             )
             .unwrap_err();
         assert!(matches!(err, GraphError::InvalidIcon { .. }));
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
         assert_eq!(g.exposed_ports[&key].label, "Label");
+    }
+
+    #[test]
+    fn set_exposed_port_meta_carries_invert() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.expose_port(&id, "val").unwrap();
+        let key = exposed_port_key(&id, "val");
+        assert!(!g.exposed_ports[&key].invert, "entries start uninverted");
+
+        g.set_exposed_port_meta(&key, "Label".into(), String::new(), String::new(), true)
+            .unwrap();
+        assert!(g.exposed_ports[&key].invert);
+
+        // Every field is overwritten, invert included: that is what lets the
+        // authoring modal save the whole bundle in one call, and why it has
+        // to seed its checkbox from the current value.
+        g.set_exposed_port_meta(&key, "Label".into(), String::new(), String::new(), false)
+            .unwrap();
+        assert!(!g.exposed_ports[&key].invert);
     }
 
     #[test]

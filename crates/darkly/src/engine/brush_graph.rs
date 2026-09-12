@@ -11,7 +11,9 @@ use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
 use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
-use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
+use crate::nodegraph::{
+    exposed_port_key, ExposedPortMeta, NodeId, PortDef, PortDir, PortRef, UnitType,
+};
 
 /// Panic message used by every `tool_session` BrushState lookup. The
 /// session is seeded with `BrushState::new()` at engine construction;
@@ -1010,11 +1012,7 @@ impl DarklyEngine {
             }
 
             let reg = registry.get(&node.type_id);
-            let reg_port = reg.and_then(|r| {
-                r.ports
-                    .iter()
-                    .find(|rp| rp.name == port.name && rp.dir == port.dir)
-            });
+            let reg_port = registration_port(&node.type_id, port_name);
 
             // Build the type-specific payload. `expose_port` rejects any
             // wire type that isn't user-exposable, so only Scalar/Bool/Enum
@@ -1022,7 +1020,9 @@ impl DarklyEngine {
             // keeps a hand-edited graph from surfacing an un-renderable entry.
             let data = match port.wire_type {
                 BrushWireType::Scalar => {
-                    let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
+                    let Some(display) = scalar_display(port, reg_port, meta) else {
+                        continue;
+                    };
                     let reset_default = brush
                         .defaults
                         .get(&(node_id.clone(), port_name.to_string()))
@@ -1033,11 +1033,12 @@ impl DarklyEngine {
                                 .unwrap_or(port.value.as_f32())
                         });
                     ExposedValue::Scalar {
-                        value: unit_type.to_display(port.value.as_f32()),
-                        min: unit_type.to_display(port.min),
-                        max: unit_type.to_display(port.max),
-                        default: unit_type.to_display(reset_default),
-                        unit_type,
+                        value: display.value_to_display(port.value.as_f32()),
+                        min: display.bound_to_display(port.min),
+                        max: display.bound_to_display(port.max),
+                        default: display.value_to_display(reset_default),
+                        unit_type: display.unit(),
+                        invert: meta.invert,
                     }
                 }
                 BrushWireType::Bool => ExposedValue::Bool {
@@ -1107,34 +1108,43 @@ impl DarklyEngine {
     ) -> Result<String, String> {
         let nid = NodeId(node_id.to_string());
 
-        // Snapshot the node's type_id under a brief read guard so the
-        // registry lookup below doesn't have to re-acquire the lock.
-        // All later mutation happens through a fresh write guard.
-        let type_id = {
+        // Resolve the display mapping and the preview flags under one brief
+        // read guard. The mapping needs the instance port (its bounds carry
+        // the mirror's pivot) and the brush-bar entry alongside the
+        // registration's unit, and the node registry is a static, so one
+        // guard covers the whole lookup. All later mutation happens through a
+        // fresh write guard.
+        //
+        // `preview_value` / `preview_irrelevant_scrub` / `persist_in_thumbnail`
+        // come from the same registration port: they determine whether this
+        // scrub affects the editor preview and/or the dab thumbnail (see
+        // `ChangeKind` docs).
+        let (display, preview_irrelevant, thumbnail_relevant) = {
             let tool = self.tool_session.read();
             let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-            match brush.graph.nodes().get(&nid) {
-                Some(node) => node.type_id.clone(),
-                None => return Err(format!("node {node_id} not found")),
+            let Some(node) = brush.graph.nodes().get(&nid) else {
+                return Err(format!("node {node_id} not found"));
+            };
+            if !node
+                .ports
+                .iter()
+                .any(|p| p.name == port_name && p.dir == PortDir::Input)
+            {
+                return Err(format!("port {port_name} not found on node {node_id}"));
             }
+            let reg_port = registration_port(&node.type_id, port_name);
+            (
+                scalar_display_in(&brush.graph, &nid, port_name),
+                reg_port
+                    .is_some_and(|rp| rp.preview_value.is_some() || rp.preview_irrelevant_scrub),
+                reg_port.is_some_and(|rp| rp.persist_in_thumbnail),
+            )
         };
 
-        // Look up UnitType + preview_value + persist_in_thumbnail from
-        // the registration. One port lookup pays for all three flags;
-        // they determine whether this scrub affects the editor preview
-        // and/or the dab thumbnail (see `ChangeKind` docs).
-        let registry = crate::brush::registry();
-        let port_meta = registry.get(&type_id).and_then(|r| {
-            r.ports
-                .iter()
-                .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
-        });
-        let unit_type = port_meta.map_or(UnitType::default(), |rp| rp.unit_type);
-        let preview_irrelevant =
-            port_meta.is_some_and(|rp| rp.preview_value.is_some() || rp.preview_irrelevant_scrub);
-        let thumbnail_relevant = port_meta.is_some_and(|rp| rp.persist_in_thumbnail);
-
-        let port_value = unit_type.from_display(display_value);
+        // No mapping means the port carries no number to convert (a Bool
+        // toggle arrives here as 0 / 1 from the same bar handler), so the
+        // value is stored as sent.
+        let port_value = display.map_or(display_value, |d| d.value_from_display(display_value));
         let kind = if preview_irrelevant {
             ChangeKind::PreviewIrrelevantScrub
         } else if thumbnail_relevant {
@@ -1212,42 +1222,31 @@ impl DarklyEngine {
         display_max: f32,
     ) -> Result<String, String> {
         let nid = NodeId(node_id.to_string());
-        let unit_type = self.exposed_port_unit_type(&nid, port_name);
+        let display = self.exposed_scalar_display(&nid, port_name);
+        let to_port = |bound: f32| display.map_or(bound, |d| d.bound_from_display(bound));
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .set_port_range(
-                &nid,
-                port_name,
-                unit_type.from_display(display_min),
-                unit_type.from_display(display_max),
-            )
+            .set_port_range(&nid, port_name, to_port(display_min), to_port(display_max))
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
     }
 
-    /// The display unit an input port's numbers are expressed in on the
-    /// wire, preferring the registration's declaration over the instance
-    /// copy; the same precedence [`Self::brush_exposed_ports`] applies when
-    /// it converts values out.
-    fn exposed_port_unit_type(&self, node_id: &NodeId, port_name: &str) -> UnitType {
+    /// [`scalar_display`] for one input port, taking its own read guard.
+    ///
+    /// For callers that need the mapping *before* they take a guard of their
+    /// own. Never call it from inside one: `tool_session` is a
+    /// `std::sync::RwLock` and recursively acquiring a read on a single
+    /// thread is documented as liable to deadlock. Code already holding a
+    /// guard (`brush_exposed_ports`, `brush_set_exposed_port`) calls the free
+    /// function directly with the port it has in hand.
+    fn exposed_scalar_display(&self, node_id: &NodeId, port_name: &str) -> Option<ScalarDisplay> {
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        let Some(node) = brush.graph.nodes().get(node_id) else {
-            return UnitType::default();
-        };
-        crate::brush::registry()
-            .get(&node.type_id)
-            .and_then(|r| {
-                r.ports
-                    .iter()
-                    .find(|p| p.name == port_name && p.dir == PortDir::Input)
-            })
-            .map(|p| p.unit_type)
-            .unwrap_or_default()
+        scalar_display_in(&brush.graph, node_id, port_name)
     }
 
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
@@ -1269,9 +1268,12 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
-    /// Overwrite the meta (label / description / icon) on a brush-bar
-    /// entry: single batched call so the brush-bar modal hits the engine
-    /// once. Icon validation lives in `Graph::set_exposed_port_meta`.
+    /// Overwrite the meta (label / description / icon / invert) on a
+    /// brush-bar entry: single batched call so the brush-bar modal hits the
+    /// engine once. Icon validation lives in `Graph::set_exposed_port_meta`.
+    ///
+    /// Every field is overwritten, so a caller that omits one clears it; the
+    /// modal seeds all of them from `brush_exposed_ports` before saving.
     #[handler(returns = graph)]
     pub fn brush_graph_set_exposed_port_meta(
         &mut self,
@@ -1279,13 +1281,14 @@ impl DarklyEngine {
         label: String,
         description: String,
         icon: String,
+        invert: bool,
     ) -> Result<String, String> {
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .set_exposed_port_meta(key, label, description, icon)
+            .set_exposed_port_meta(key, label, description, icon, invert)
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
@@ -1313,6 +1316,143 @@ impl DarklyEngine {
 
 // ── Exposed port types ──────────────────────────────────────────────
 
+/// The invertible mapping between an exposed scalar's stored value and the
+/// number its brush-bar control shows: the unit conversion, composed with an
+/// optional mirror about the control's own bounds.
+///
+/// Reflecting about `min + max` is an involution and maps `[min, max]` onto
+/// itself, so one pivot serves both directions and the bounds a control
+/// reports are the same mirrored or not. That is why bounds and values get
+/// separate methods here: `value_*` mirrors, `bound_*` does not, and the name
+/// at the call site says which crossing it is. Every port-space to
+/// display-space crossing on the exposed-port paths goes through this type, so
+/// the mirror is applied exactly once by construction rather than by
+/// convention.
+///
+/// The mirror reflects within the control's own range, so it equals the
+/// complement `1 - x` only when `min + max == 1`. A port narrowed to
+/// `0.0..0.5` and labelled "Hardness" reads 0% to 50%, not 0% to 100%.
+///
+/// The brush bar does not quantize (`ExposedValue::Scalar` carries no `step`),
+/// which is the only reason the mirror and `PortDef::step` cannot interact. If
+/// the bar ever gains quantization, it must snap the *stored* value before the
+/// mirror: snapping the displayed value steps in multiples from `max` instead
+/// of `min`, which misaligns for every port where `(max - min)` is not an
+/// integer multiple of `step`.
+#[derive(Clone, Copy, Debug)]
+struct ScalarDisplay {
+    unit: UnitType,
+    /// `min + max` when the control is mirrored, `None` when it is not.
+    pivot: Option<f32>,
+}
+
+impl ScalarDisplay {
+    /// Stored value to the number the control shows.
+    fn value_to_display(self, stored: f32) -> f32 {
+        self.unit.to_display(self.mirror(stored))
+    }
+
+    /// The number the control shows back to the stored value.
+    fn value_from_display(self, display: f32) -> f32 {
+        self.mirror(self.unit.from_display(display))
+    }
+
+    /// A bound crosses unconverted by the mirror: reflecting about
+    /// `min + max` swaps the two bounds, so the interval a control reports is
+    /// the same either way, and an authored bound is authored in the artist's
+    /// own space regardless.
+    fn bound_to_display(self, bound: f32) -> f32 {
+        self.unit.to_display(bound)
+    }
+
+    fn bound_from_display(self, bound: f32) -> f32 {
+        self.unit.from_display(bound)
+    }
+
+    fn unit(self) -> UnitType {
+        self.unit
+    }
+
+    /// The single mirror. Private and its own inverse, so the two `value_*`
+    /// methods cannot disagree about direction and no caller can apply it
+    /// twice.
+    fn mirror(self, v: f32) -> f32 {
+        self.pivot.map_or(v, |p| p - v)
+    }
+}
+
+/// Resolve the display mapping for one exposed input port, or `None` when the
+/// port has no numeric mapping (a toggle or a dropdown has no travel to
+/// convert or reverse).
+///
+/// Returning `Option` is what keeps the wire-type gate in one place: callers
+/// on both the read and the write path ask for a mapping and get nothing for
+/// Bool and Enum, instead of each branching on the wire type themselves. The
+/// brush bar routes Bool toggles through the same value-setting handler as
+/// scalars, so that gate would otherwise have to be repeated there.
+///
+/// Free-standing and borrowing its inputs rather than a `&self` method,
+/// because `brush_exposed_ports` calls it while already holding a
+/// `tool_session` read guard across its whole loop; a resolver that took its
+/// own guard would recursively acquire one `std::sync::RwLock` read on a
+/// single thread, which is documented as liable to deadlock.
+///
+/// Unit precedence is the registration's declaration, falling back to the
+/// instance's copy. Stating it once here is the point: read and write
+/// previously resolved it separately and disagreed on the fallback, so a
+/// `Percent` port whose registration lookup missed would read out scaled by
+/// 100 and be written back unscaled.
+/// The registration's declaration of an input port, by node type id.
+///
+/// The registry is a process-wide static, so the borrow outlives any session
+/// guard: callers can resolve a registration port while holding one, or
+/// without holding one at all.
+fn registration_port(type_id: &str, port_name: &str) -> Option<&'static PortDef<BrushWireType>> {
+    crate::brush::registry().get(type_id).and_then(|r| {
+        r.ports
+            .iter()
+            .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
+    })
+}
+
+/// [`scalar_display`] for a `(node, port)` pair in a graph, resolving the
+/// instance port, its registration, and its brush-bar entry along the way.
+///
+/// Takes the graph by reference so a caller already holding a session guard
+/// can use it (see [`scalar_display`] on why that matters). A port with no
+/// brush-bar entry resolves against default meta, i.e. uninverted.
+fn scalar_display_in(
+    graph: &Graph<BrushWireType>,
+    node_id: &NodeId,
+    port_name: &str,
+) -> Option<ScalarDisplay> {
+    let node = graph.nodes().get(node_id)?;
+    let port = node
+        .ports
+        .iter()
+        .find(|p| p.name == port_name && p.dir == PortDir::Input)?;
+    let unexposed = ExposedPortMeta::default();
+    let meta = graph
+        .exposed_ports
+        .get(&exposed_port_key(node_id, port_name))
+        .unwrap_or(&unexposed);
+    scalar_display(port, registration_port(&node.type_id, port_name), meta)
+}
+
+fn scalar_display(
+    port: &PortDef<BrushWireType>,
+    reg_port: Option<&PortDef<BrushWireType>>,
+    meta: &ExposedPortMeta,
+) -> Option<ScalarDisplay> {
+    if !matches!(port.wire_type, BrushWireType::Scalar) {
+        return None;
+    }
+    Some(ScalarDisplay {
+        unit: reg_port.map_or(port.unit_type, |rp| rp.unit_type),
+        pivot: meta.invert.then_some(port.min + port.max),
+    })
+}
+
 /// Type-specific value data for an exposed port.
 ///
 /// Tagged enum so the frontend can switch on `kind` to render the
@@ -1330,11 +1470,20 @@ pub enum ExposedValue {
         /// Display-space maximum.
         max: f32,
         /// Display-space default: what double-click reset returns to.
-        /// Sourced from the node-type registration, not the loaded brush.
+        /// The loaded brush's shipped value for this port when it has one,
+        /// falling back to the node-type registration's.
         default: f32,
         /// Unit type for formatting and conversion.
         #[serde(rename = "unitType")]
         unit_type: UnitType,
+        /// Whether this control is presented mirrored, for the brush-author
+        /// entry editor to seed its checkbox from.
+        ///
+        /// The bar's *renderers* must not consult it: every number in this
+        /// payload is already mirrored, and mirroring again at render time
+        /// would cancel it out. Only the authoring modal reads this, and only
+        /// so that saving the entry does not silently un-invert it.
+        invert: bool,
     },
     /// Boolean toggle. Currently emitted by the Switch node's `select`
     /// port; any other Bool input port marked `exposed` works too.
@@ -1376,4 +1525,115 @@ pub struct ExposedPortInfo {
     pub description: String,
     pub node_display_name: String,
     pub data: ExposedValue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodegraph::UnitType;
+
+    fn scalar_port(min: f32, max: f32) -> PortDef<BrushWireType> {
+        let mut p = PortDef::input("val", BrushWireType::Scalar);
+        p.min = min;
+        p.max = max;
+        p
+    }
+
+    fn meta(invert: bool) -> ExposedPortMeta {
+        ExposedPortMeta {
+            invert,
+            ..Default::default()
+        }
+    }
+
+    /// One mirror, its own inverse: a value taken out to display space and
+    /// written back lands where it started, for every unit and every range
+    /// shape including asymmetric ones.
+    #[test]
+    fn scalar_display_mirror_is_an_involution() {
+        let units = [
+            UnitType::Normalized,
+            UnitType::Raw,
+            UnitType::Pixels,
+            UnitType::Percent,
+            UnitType::Degrees,
+        ];
+        let ranges = [(0.0, 1.0), (-1.0, 1.0), (0.0, 0.5), (0.25, 3.75)];
+        for unit in units {
+            for (min, max) in ranges {
+                let mut port = scalar_port(min, max);
+                port.unit_type = unit;
+                let display = scalar_display(&port, None, &meta(true)).expect("scalar maps");
+                for v in [min, max, (min + max) / 2.0, min + (max - min) * 0.1] {
+                    let round_tripped = display.value_from_display(display.value_to_display(v));
+                    assert!(
+                        (round_tripped - v).abs() < 1e-4,
+                        "{unit:?} on {min}..{max}: {v} round-tripped to {round_tripped}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Bounds do not mirror: reflecting about `min + max` swaps them onto
+    /// each other, so an inverted control reports the same interval as an
+    /// uninverted one.
+    #[test]
+    fn scalar_display_leaves_bounds_unmirrored() {
+        let port = scalar_port(0.0, 0.5);
+        let plain = scalar_display(&port, None, &meta(false)).expect("scalar maps");
+        let mirrored = scalar_display(&port, None, &meta(true)).expect("scalar maps");
+
+        assert_eq!(
+            (
+                mirrored.bound_to_display(port.min),
+                mirrored.bound_to_display(port.max)
+            ),
+            (
+                plain.bound_to_display(port.min),
+                plain.bound_to_display(port.max)
+            )
+        );
+        // And the values either side of the pivot really do swap, so the
+        // bounds being equal is not because the mirror is inert.
+        assert_eq!(
+            mirrored.value_to_display(port.min),
+            plain.bound_to_display(port.max)
+        );
+    }
+
+    /// The wire-type gate lives here, not at the call sites: a toggle or a
+    /// dropdown has no numeric mapping, so neither path has to ask what it
+    /// is holding.
+    #[test]
+    fn scalar_display_is_none_for_non_scalar_ports() {
+        for wire in [BrushWireType::Bool, BrushWireType::Enum] {
+            let port = PortDef::input("val", wire);
+            assert!(
+                scalar_display(&port, None, &meta(true)).is_none(),
+                "{wire:?} must not produce a display mapping"
+            );
+        }
+    }
+
+    /// Unit precedence is the registration's, falling back to the
+    /// instance's. Stated once so the read and write paths cannot disagree
+    /// about it, which they previously did.
+    #[test]
+    fn scalar_display_prefers_the_registration_unit() {
+        let mut instance = scalar_port(0.0, 1.0);
+        instance.unit_type = UnitType::Percent;
+        let mut registration = scalar_port(0.0, 1.0);
+        registration.unit_type = UnitType::Degrees;
+
+        let from_reg = scalar_display(&instance, Some(&registration), &meta(false)).unwrap();
+        assert_eq!(from_reg.unit(), UnitType::Degrees);
+
+        let no_reg = scalar_display(&instance, None, &meta(false)).unwrap();
+        assert_eq!(
+            no_reg.unit(),
+            UnitType::Percent,
+            "with no registration the instance's own unit stands in"
+        );
+    }
 }

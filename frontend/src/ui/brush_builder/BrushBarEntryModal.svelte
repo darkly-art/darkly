@@ -20,9 +20,12 @@
 
     // Slider bounds, in the same display space the control renders in.
     // Only scalars have them (a toggle or a dropdown has no travel to
-    // re-range), so the whole section is hidden for other kinds.
+    // re-range or reverse), so the whole section is hidden for other kinds.
     let minInput = $state(0);
     let maxInput = $state(1);
+    // Present the control mirrored, so the number rises as the underlying
+    // port value falls.
+    let invertInput = $state(false);
     let advancedOpen = $state(false);
 
     const scalar = $derived(entry?.data.kind === 'scalar' ? entry.data : null);
@@ -44,6 +47,9 @@
             if (entry.data.kind === 'scalar') {
                 minInput = entry.data.min;
                 maxInput = entry.data.max;
+                // Seeding matters: onSave overwrites every meta field, so a
+                // checkbox left at false would silently un-invert the entry.
+                invertInput = entry.data.invert;
             }
             advancedOpen = false;
         }
@@ -56,6 +62,7 @@
             labelInput,
             descriptionInput,
             iconInput,
+            invertInput,
         );
         // Only when actually changed: the range is a per-instance override,
         // and re-sending the current bounds would pin a port to values it
@@ -127,6 +134,13 @@
                             {#if !rangeValid}
                                 <p class="hint error">Min must be less than max.</p>
                             {/if}
+                            <label class="check-row">
+                                <input type="checkbox" bind:checked={invertInput} />
+                                <span class="check-label">Invert</span>
+                            </label>
+                            <p class="hint">
+                                Reverses the control, mirrored within the range above.
+                            </p>
                         </div>
                     {/if}
                 </div>
@@ -204,6 +218,19 @@
     }
     .range-field {
         flex: 1;
+    }
+    .check-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+    }
+    .check-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
     .hint {
         margin: 0;
