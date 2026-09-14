@@ -107,6 +107,43 @@ the preset can still call `set_port_exposed(..., false)` to hide it.
 Presets that don't mark the node-def as exposed can still call
 `set_port_exposed(..., true)` per-instance via `expose_port`.
 
+### Size is a bound: the dab footprint rule
+
+A shape node's silhouette is **bounded by the nominal dab radius**, up to a
+small, declared, bounded perturbation. Two rules follow, and both are load
+bearing far outside the node that breaks them:
+
+- **An anisotropy knob is a contraction, never a stretch.** A knob that
+  squashes a tip into an ellipse inscribes that ellipse in the dab radius
+  (semi-axes `aspect` and `1`), so the nominal size is always the tip's
+  semi-major axis. The area-preserving alternative (`aspect` and `1/aspect`)
+  makes a *shape* knob change the *size*, which is how `circle.aspect` once
+  reached ten times its nominal radius. Clamp the emitted value at **both**
+  ends: a wired input can deliver more than 1.0, and an unclamped high end
+  turns the same expression back into a stretch.
+- **A bounded perturbation declares its bound through the extent protocol.**
+  `r = 1 + A*sin(n*theta)` swings `+A` out and `-A` in, so it may return
+  `ExtentContribution::Multiply(1 + A_max)` where `A_max` comes from the
+  port's own declared range. The requirement is that a bound exists and is
+  declared; the specific figure is whatever the range implies. A polar radius
+  with no bound (the Gielis superformula as `n1 -> 0`) satisfies neither rule
+  and needs its parameters constrained at compile time instead.
+
+Why it matters beyond the shape: the declared extent sizes the rasterized
+quad, the CPU dab bbox, the shader's write footprint, the save-point restore
+region, and every preview render canvas. A node that can grow its own
+footprint forces *every* one of those to reserve its worst case, whether or
+not the artist's brush uses the knob.
+
+Prior art agrees, and is worth reading before proposing an exception. Krita's
+autobrush ratio sets `height() = diameter * ratio`
+(`libs/image/kis_base_mask_generator.cpp:201-227`) and its image brushes
+`scaleY() = scale * ratio` (`libs/brush/kis_dab_shape.h:35-38`); GIMP's
+`gimp_brush_transform_get_scale` (`app/core/gimpbrush-transform.cc:732-748`)
+pins one axis at exactly `scale` and multiplies the other by a factor in
+`[0, 1]`. Neither preserves dab area, and in neither can the ratio control
+make a dab larger than its size.
+
 ### Param vs port
 
 A **port** carries per-dab data (can change each dab: pressure, position).

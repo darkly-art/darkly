@@ -3,7 +3,7 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.06953124701976776
+      size: 0.12781250476837158
       spacing: 0.009999999776482582
   circle:
     type: circle
@@ -75,6 +75,7 @@ connections:
 - paint_color.color -> stamp.color
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve_2.input
+- pen_input.y_tilt -> circle.softness
 - stamp.dab -> paint.rgba
 exposed_ports:
   brush_settings.stabilize: {}

@@ -6,20 +6,21 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      spacing: 0.046481613
+      spacing: 0.018592645
       stabilize: 0.6
-      size: 0.05
+      size: 0.125
   paint_color:
     type: paint_color
   circle:
     type: circle
     inputs:
-      softness: 0.15
+      softness: 0.06
       # Plain disc (sine, amplitude 0 ⇒ r ≡ 1) squashed by `aspect` into the
-      # elliptical broad-nib tip. `aspect` is area-preserving, so the nib is
-      # ~6:1 here (1/0.4²). `rotation` is exposed to tilt the nib to taste
-      # (e.g. the classic ~45° angle).
-      aspect: 0.4
+      # elliptical broad-nib tip. `aspect` inscribes the ellipse in the dab
+      # radius, so `size` is the nib's long axis and `aspect` is the nib ratio
+      # directly: 0.16 ⇒ a 6.25:1 nib. `rotation` is exposed to tilt it to
+      # taste (e.g. the classic ~45° angle).
+      aspect: 0.16
       rotation: 0.7853982
   stamp:
     type: stamp
