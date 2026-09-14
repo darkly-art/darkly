@@ -24,6 +24,7 @@ pub mod split_color;
 pub mod stamp;
 pub mod subtract;
 pub mod switch;
+pub mod user_input;
 pub mod watercolor;
 
 use crate::brush::BrushNodeRegistration;
@@ -53,6 +54,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         stamp::register(),
         subtract::register(),
         switch::register(),
+        user_input::register(),
         watercolor::register(),
     ]
 }
