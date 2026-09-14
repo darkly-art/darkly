@@ -70,6 +70,16 @@ pub struct NodeWgsl {
     /// the cursor-preview skeleton has no accumulators to write and
     /// keeps the single-output signature.
     pub terminal_outputs: Vec<String>,
+    /// The blend state the terminal's per-dab pipeline writes the stroke
+    /// scratch with. Only a terminal sets this; every other node leaves it
+    /// `None`, and `None` means [`crate::brush::node::PREMULTIPLIED_SOURCE_OVER`].
+    ///
+    /// It lives on the compile output rather than on the node registration
+    /// because it is a *per-brush* choice (one graph's `paint` accumulates,
+    /// another's takes the ceiling), and a registration carries one value
+    /// per node *type*. Same reasoning as `terminal_outputs`: the pipeline
+    /// build must match what the compile walk decided.
+    pub dab_blend: Option<wgpu::BlendState>,
 }
 
 // ── Input binding ───────────────────────────────────────────────────────

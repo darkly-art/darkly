@@ -290,18 +290,7 @@ impl PerBrushPipeline {
         // colour is resolved before the dab goes down (see `compile_wgsl`),
         // so the only thing varying across the footprint is coverage, and
         // the ROP composites the stamp onto whatever is already there.
-        let composite_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
+        let composite_blend = crate::brush::node::PREMULTIPLIED_SOURCE_OVER;
 
         let composite_pipeline =
             ctx.device

@@ -139,6 +139,11 @@ pub struct CompiledBrush {
     /// their producing node published this flush. Deduplicated by the
     /// compiler so two nodes requesting the same source share one binding.
     pub graph_sources: Vec<crate::brush::texture_source::ResolvedSource>,
+    /// Blend state the per-dab pipeline writes the stroke scratch with,
+    /// chosen by the terminal at compile time. See
+    /// [`crate::brush::node::PREMULTIPLIED_SOURCE_OVER`] and
+    /// [`crate::brush::node::COVERAGE_CEILING`].
+    pub dab_blend: wgpu::BlendState,
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -240,6 +245,7 @@ pub fn compile_brush_to_wgsl(
     // these: the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
     let mut terminal_outputs: Vec<String> = Vec::new();
+    let mut dab_blend = crate::brush::node::PREMULTIPLIED_SOURCE_OVER;
 
     // `@group(3)` slots contributed by `image` / `noise` / live-texture
     // nodes, in the order each distinct source was first requested. Each
@@ -450,6 +456,9 @@ pub fn compile_brush_to_wgsl(
             terminal_bindings.push_str(&result.terminal_bindings);
         }
         terminal_outputs.extend(result.terminal_outputs);
+        if let Some(blend) = result.dab_blend {
+            dab_blend = blend;
+        }
 
         // Register this node's outputs so downstream nodes can resolve
         // their wires.
@@ -542,6 +551,7 @@ pub fn compile_brush_to_wgsl(
         compose_brush_extent(graph, plan, evaluators);
 
     Ok(CompiledBrush {
+        dab_blend,
         stroke_wgsl,
         cursor_preview_wgsl,
         dab_layout: dab_fields,

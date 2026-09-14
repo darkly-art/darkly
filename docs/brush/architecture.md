@@ -118,6 +118,76 @@ Three independent reasons every stroke needs this pair:
 For a deeper trace look at
 [`engine/painting.rs::brush_stroke_to`](../../crates/darkly/src/engine/painting.rs).
 
+## How dabs accumulate in the scratch
+
+The scratch is written by one instanced draw per flush, so the law that
+combines overlapping dabs is a *blend state*, not shader code. The `paint`
+terminal's `buildup` port picks between two, and the choice is baked into
+the per-brush pipeline at compile time and carried there on
+[`CompiledBrush::dab_blend`](../../crates/darkly/src/brush/wgsl/mod.rs).
+Both constants live in
+[`brush/node.rs`](../../crates/darkly/src/brush/node.rs).
+
+**`Build-up`** (`PREMULTIPLIED_SOURCE_OVER`, the registration default, and
+what every brush but the Pencil uses) composites each dab over the last.
+Coverage accumulates as `1 - prod(1 - a_i)`, so a pixel's density rises
+with however many dabs the spacing happened to stack on it. Its density is
+therefore a function of `spacing`, not only of pressure: the shipped Pencil
+measured 0.714 peak alpha at `spacing: 0.10` and 0.984 at `spacing: 0.01`,
+same path, same pressure.
+
+**`Wash`** (`COVERAGE_CEILING`) uses `BlendOperation::Max` instead, so a
+pixel takes its strongest dab rather than the sum of its dabs. A stroke
+cannot darken itself by crossing back over its own path, density stops
+depending on spacing (identical to the byte across a 30x spacing spread),
+and pressure becomes the only thing setting it.
+
+The choice is two options rather than a slider, and not for want of
+trying. Fixed-function blending offers one equation per attachment with no
+interpolation between `Add` and `Max`, and WebGPU has no framebuffer
+fetch, so a continuous law would need one draw call per dab and would cost
+the instanced single-pass design that makes 1px spacing affordable. The
+binary shape is also the honest one: within a stroke the overlap count is
+a function of `spacing`, not of artist intent, so a partial accumulation
+would leave stroke density depending on spacing, which is the defect
+`Wash` exists to fix.
+
+### What `Wash` requires, and what it changes
+
+**One chroma per stroke.** `Max` runs per channel. For a brush whose
+`stamp.color` comes from the stroke-constant `paint_color` uniform, all
+four channels scale by the same per-dab factor, and since rounding to 8
+bits is monotone, all four take their maximum from the *same* dab, which
+is the property this relies on. A graph that varies dab colour per dab
+(via `random`, `split_color`, or an `image` tip) would take per-channel
+maxima from different dabs and would fringe; such brushes must stay on
+`Build-up`. This is not checked automatically.
+
+**Canvas-space fields survive; dab-space fields do not.** Anything fixed
+per canvas pixel factors straight out of the max (`max_i(g(x) * k_i) =
+g(x) * max_i k_i` for `g >= 0`), so canvas-space noise and the selection
+mask modulate the finished mark instead of being saturated through. That
+is an improvement for selection in particular: under source-over a
+50%-selected region still converges toward 1 as dabs accumulate, where
+under `Max` it converges to `0.5 * max a_i`, so feathering is properly
+respected. The converse is the trap: a *dab*-space field draws an
+independent sample per dab, and with 17 to 35 samples the max saturates it
+to near 1 across the whole dab interior. Dab-space grain goes inert under
+`Wash`. The Pencil's paper grain is authored in canvas space for exactly
+this reason.
+
+**Erase inherits the law.** Erase reads the same scratch
+(`composite.wgsl`'s `destination_out` branch takes `fg_a` from it), so a
+`Wash` brush used as an eraser stops punching further through where its
+own dabs overlap. That is the same promise in both directions and is
+deliberate.
+
+**`Wash` says nothing about previous strokes.** The ceiling is over one
+stroke's own dabs. A second stroke still composites over the first at
+commit. A cross-stroke ceiling is a different feature with different
+costs; see `docs/plans/pencil-deposit-saturation.md` for the analysis and
+the two problems it would have to solve first.
+
 ## Terminal nodes
 
 The graph is free-form, but a stroke only produces visible output if at

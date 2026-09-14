@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
+use crate::brush::input_value::InputValue;
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
@@ -60,13 +61,15 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 /// Per-brush resources built on the first `flush_dabs` call for a
 /// brush with a given `topology_hash`. Cached on [`PaintPipeline`].
 struct PerBrushPipeline {
-    /// Per-dab pipeline. Always premultiplied source-over: the scratch
-    /// is a coverage accumulator and only paints alpha *up*. Engine-level
-    /// paint-vs-erase is a stroke decision applied at commit by
-    /// `commit_brush_dab`, not here. (Branching the per-dab pass on
-    /// `blend_mode` to a destination-out blend was a regression: the
-    /// scratch starts at (0,0,0,0), so `dst*(1-src.a)` stays zero and
-    /// the commit's `destination_out` then sees zero alpha and no-ops.)
+    /// Per-dab pipeline. The scratch is a coverage accumulator and only
+    /// paints alpha *up*; which law it accumulates under is the brush's
+    /// `buildup` choice, baked in here at build time from
+    /// [`CompiledBrush::dab_blend`]. Engine-level paint-vs-erase is a
+    /// stroke decision applied at commit by `commit_brush_dab`, not here.
+    /// (Branching the per-dab pass on `blend_mode` to a destination-out
+    /// blend was a regression: the scratch starts at (0,0,0,0), so
+    /// `dst*(1-src.a)` stays zero and the commit's `destination_out` then
+    /// sees zero alpha and no-ops.)
     paint_pipeline: wgpu::RenderPipeline,
     uniform_ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
@@ -158,21 +161,10 @@ impl PerBrushPipeline {
                 }),
         };
 
-        // Premultiplied source-over: scratch accumulates coverage. See
-        // the `paint_pipeline` field doc above for why there's no erase
-        // variant at this stage.
-        let paint_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
+        // The brush's accumulation law, chosen at compile time by the
+        // terminal. See the `paint_pipeline` field doc above for why
+        // there's no erase variant at this stage.
+        let paint_blend = compiled.dab_blend;
 
         let paint_pipeline = ctx
             .device
@@ -394,6 +386,26 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:fill-drip")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
+                // Two options, not a slider, and not for want of trying:
+                // fixed-function blending offers one equation per
+                // attachment with no interpolation between `Add` and
+                // `Max`, and WebGPU has no framebuffer fetch, so a
+                // continuous law would need one draw call per dab and
+                // would cost the instanced single-pass design that makes
+                // 1px spacing affordable. The binary shape is also the
+                // honest one: within a stroke the overlap count is a
+                // function of `spacing`, not of artist intent, so a
+                // partial accumulation would leave stroke density
+                // depending on spacing, which is the defect this fixes.
+                PortDef::input("buildup", BrushWireType::Enum)
+                    .with_enum_options(["Build-up", "Wash"])
+                    .with_value(InputValue::Int(0))
+                    .with_label("Accumulation")
+                    .with_icon("fa6-solid:layer-group")
+                    .exposed()
+                    .with_description(
+                        "How a stroke's own overlapping dabs combine. Build-up composites every dab over the last, so a slow stroke or a scrub darkens toward opaque and the result depends on spacing. Wash takes the greatest coverage instead, so the stroke's density is set by pressure alone and passing back over your own stroke does not darken it. Wash does not look across strokes: a second stroke still composites over the first.",
+                    ),
                 // Typed as `Texture` to match the upstream `stamp.dab`
                 // output's wire type; the wire-type label is shared
                 // with the per-dab dispatch model where it'd be a
@@ -581,9 +593,10 @@ impl BrushNodeEvaluator for PaintEvaluator {
             gpu.queue
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
-            // Always source-over at per-dab. Paint-vs-erase routes through
-            // `gpu.blend_mode` in `commit_brush_dab`; see `paint_pipeline`'s
-            // doc on `PerBrushPipeline`.
+            // The accumulation law is baked into this pipeline at build
+            // time. Paint-vs-erase routes through `gpu.blend_mode` in
+            // `commit_brush_dab`; see `paint_pipeline`'s doc on
+            // `PerBrushPipeline`.
             let pipeline = &per_brush.paint_pipeline;
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("paint-flush"),
@@ -691,6 +704,13 @@ impl BrushNodeEvaluator for PaintEvaluator {
              \x20   let flow = clamp({flow_expr}, 0.0, 1.0);\n\
              \x20   return rgba * flow * sel;\n"
         );
+        // Index 1 = Wash. The port is `Enum`, which is non-wirable by
+        // type (`BrushWireType::is_wirable`), so this is always a literal.
+        wgsl.dab_blend = Some(if cctx.input("buildup").enum_index() == 1 {
+            crate::brush::node::COVERAGE_CEILING
+        } else {
+            crate::brush::node::PREMULTIPLIED_SOURCE_OVER
+        });
         Ok(wgsl)
     }
 }

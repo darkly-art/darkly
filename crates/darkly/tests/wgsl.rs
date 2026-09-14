@@ -1783,3 +1783,86 @@ fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
         compiled.brush_extent_factor,
     );
 }
+
+/// The `paint` terminal's accumulation law reaches the pipeline builder
+/// through `CompiledBrush::dab_blend`. These pin the selection without a
+/// GPU, and pin that the default is the law every brush painted under
+/// before the port existed.
+#[test]
+fn paint_terminal_selects_its_dab_blend_from_the_buildup_port() {
+    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
+    let graph = &mut brush.metadata.graph;
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+
+    let compile_it = |graph: &Graph<BrushWireType>| {
+        let plan = compile(graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+    };
+
+    // Rough Ink never mentions `buildup`, so it is on the registration
+    // default. That must be the pre-existing law, bit for bit.
+    assert_eq!(
+        compile_it(graph).dab_blend,
+        PREMULTIPLIED_SOURCE_OVER,
+        "a graph that never mentions `buildup` must keep painting as it always did"
+    );
+
+    graph
+        .set_port_value(&paint_id, "buildup", InputValue::Int(1))
+        .expect("paint buildup port");
+    assert_eq!(compile_it(graph).dab_blend, COVERAGE_CEILING);
+
+    graph
+        .set_port_value(&paint_id, "buildup", InputValue::Int(0))
+        .expect("paint buildup port");
+    assert_eq!(compile_it(graph).dab_blend, PREMULTIPLIED_SOURCE_OVER);
+}
+
+/// The law is baked into the render pipeline, so no per-dab wire may
+/// drive it. `Enum` enforces that by type rather than by a flag, which
+/// is the whole reason the port is typed this way.
+#[test]
+fn the_buildup_port_cannot_be_wired() {
+    use darkly::nodegraph::WireKind;
+
+    let paint = registry()
+        .as_map()
+        .get("paint")
+        .expect("paint registered")
+        .ports
+        .iter()
+        .find(|p| p.name == "buildup")
+        .expect("paint declares a `buildup` port")
+        .clone();
+
+    assert_eq!(paint.wire_type, BrushWireType::Enum);
+    assert!(
+        !BrushWireType::is_wirable(paint.wire_type),
+        "`buildup` selects a compile-time blend state; a per-dab wire cannot drive it"
+    );
+    assert_eq!(paint.enum_options, vec!["Build-up", "Wash"]);
+}
+
+/// The shipped Pencil is the brush this law was added for.
+#[test]
+fn the_pencil_builtin_ships_on_wash() {
+    let pencil = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Pencil")
+        .expect("Pencil brush registered");
+    let plan = compile(&pencil.metadata.graph, registry().as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(&pencil.metadata.graph, &plan, &evals()).expect("compiles");
+    assert_eq!(compiled.dab_blend, darkly::brush::node::COVERAGE_CEILING);
+}
