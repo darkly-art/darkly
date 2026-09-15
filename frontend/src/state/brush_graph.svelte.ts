@@ -83,6 +83,10 @@ export interface NodeInstance {
     id: string;
     type_id: string;
     ports: PortDef[];   // the node's single, unified input/output list
+    /** Author-chosen display name, shown in place of the node type's own
+     *  name. Optional: Rust elides it when empty, so the JSON snapshot omits
+     *  it for unnamed nodes and the UI falls back to the type's name. */
+    name?: string;
     /** Free-form author annotation. Optional: Rust elides it when empty, so
      *  the JSON snapshot omits it for un-annotated nodes. */
     comment?: string;
@@ -720,6 +724,20 @@ export class BrushGraphState {
     async setInput(nodeId: string, inputName: string, kind: string, value: InputValue) {
         if (!app.engine) return;
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
+    }
+
+    /** Update a node's display name locally (for responsive typing). */
+    setNodeNameLocal(nodeId: string, name: string) {
+        if (!this.graph) return;
+        const node = this.graph.nodes[nodeId];
+        if (node) node.name = name;
+    }
+
+    /** Commit a node's display name via Rust. Bumps no version: the name is
+     *  a label, inert w.r.t. render output and preset identity. */
+    async setNodeName(nodeId: string, name: string) {
+        if (!app.engine) return;
+        await this.applyResult(await app.engine.api.brushGraphSetNodeName({ node_id: nodeId, name }));
     }
 
     /** Update a node's author comment locally (for responsive typing). */

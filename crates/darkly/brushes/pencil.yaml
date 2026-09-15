@@ -2,19 +2,24 @@ name: Pencil
 nodes:
   add:
     type: add
+    name: Add pen pressure + tilt
+    comment: Combine a little pen pressure with tilt to get the brush size
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.04062499850988388
+      size: 0.07395873963832855
       spacing: 0.009999999776482582
   circle:
     type: circle
+    name: Brush tip circle
     inputs:
       frequency: 1.0
       rotation: 5.75
       softness: 1.0
   curve:
     type: curve
+    name: Contrast pen tip
+    comment: Crank up the contrast on the pencil tip for a rougher look
     inputs:
       curve:
       - - 0.0
@@ -27,6 +32,7 @@ nodes:
         - 1.0
   curve_2:
     type: curve
+    name: Squash pen pressure
     comment: factor a little pen pressure into the size
     inputs:
       curve:
@@ -36,6 +42,7 @@ nodes:
         - 0.41776323
   curve_3:
     type: curve
+    name: Select only high tilt
     comment: on high tilt, increase the size of the brush to mimic pencil shading
     inputs:
       curve:
@@ -47,6 +54,7 @@ nodes:
         - 1.0
   curve_4:
     type: curve
+    name: High pen pressure on grain
     comment: lessen the grain effect during high pen pressure
     inputs:
       curve:
@@ -56,11 +64,10 @@ nodes:
         - 0.8797826
       - - 1.0
         - 0.25908843
-  curve_5:
-    type: curve
   curve_6:
     type: curve
-    comment: pressure -> flow
+    name: Curve pen pressure for flow
+    comment: makes pencil a little lighter to the touch
     inputs:
       curve:
       - - 0.0
@@ -71,15 +78,21 @@ nodes:
         - 1.0
   levels:
     type: levels
+    name: Grain intensity
+    comment: Pen tilt determines intensity of the paper grain texture
     inputs:
       in_high: 0.40818285942077637
   multiply:
     type: multiply
+    name: Combine grain with tip
+    comment: Multiply paper grain texture (canvas space) with pencil tip texture (dab space)
   multiply_2:
     type: multiply
-    comment: create tip texture from circle + noise
+    name: Pen tip - noise x circle
+    comment: create tip texture from circle x noise
   noise:
     type: noise
+    name: Brush tip texture
     comment: tip texture
     inputs:
       roughness: 0.7344781160354614
@@ -87,6 +100,7 @@ nodes:
       space: 1
   noise_2:
     type: noise
+    name: Paper grain texture
     comment: paper grain
     inputs:
       roughness: 0.548843264579773

@@ -1178,6 +1178,25 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
+    /// Set (or clear, with an empty string) a node's author-chosen display
+    /// name. Bumps no version for the same reason a comment does not: the
+    /// name is a label, inert w.r.t. render output and preset identity.
+    #[handler(returns = graph)]
+    pub fn brush_graph_set_node_name(
+        &mut self,
+        node_id: &str,
+        name: String,
+    ) -> Result<String, String> {
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .set_node_name(&NodeId(node_id.to_string()), name)
+            .map_err(|e| format!("{e}"))?;
+        Ok(self.active_graph_json())
+    }
+
     /// Set (or clear, with an empty string) a node's author comment.
     /// Deliberately bumps no version: a comment is inert w.r.t. render
     /// output and preset identity, so it must not clear the active preset

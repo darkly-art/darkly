@@ -472,6 +472,17 @@ pub struct NodeInstance<W: WireKind> {
     /// node's single, unified input/output list: the per-instance authored
     /// value of every input lives on its [`PortDef::value`].
     pub ports: Vec<PortDef<W>>,
+    /// Author-chosen display name for this node instance, shown in place of
+    /// the registration's display name ("Add pressure and tilt" rather than
+    /// "Add"). Empty means none, and the UI falls back to the type's own
+    /// name. Purely a label: [`id`](Self::id) remains the node's identity,
+    /// because ids are emitted verbatim as WGSL symbols (see
+    /// `brush::wgsl::context::CompileWgslCtx::ident`) where an arbitrary
+    /// author string is neither a valid identifier nor guaranteed unique.
+    /// Inert w.r.t. compilation and render output. Serializable graph state
+    /// (survives save/load through both the portable YAML and the bundle).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     /// Free-form author annotation on this node instance. Empty means none.
     /// Inert w.r.t. compilation and render output; carried purely so a brush
     /// author can leave explanatory notes on a node. Serializable graph state
@@ -726,6 +737,7 @@ impl<W: WireKind> Graph<W> {
                 id: id.clone(),
                 type_id,
                 ports,
+                name: String::new(),
                 comment: String::new(),
             },
         );
@@ -1001,6 +1013,18 @@ impl<W: WireKind> Graph<W> {
                 port: port_name.to_string(),
             })?;
         port.value = value;
+        Ok(())
+    }
+
+    /// Set (or clear, with an empty string) a node's author-chosen display
+    /// name. Names are labels, not identity: they are neither unique-checked
+    /// nor referenced by connections, so any string is acceptable.
+    pub fn set_node_name(&mut self, id: &NodeId, name: String) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        node.name = name;
         Ok(())
     }
 
@@ -1479,6 +1503,72 @@ mod tests {
         let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.nodes.len(), 2);
         assert_eq!(g2.connections.len(), 1);
+    }
+
+    #[test]
+    fn set_node_name_sets_and_clears_without_touching_identity() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        assert_eq!(g.nodes[&a].name, "");
+
+        g.set_node_name(&a, "roughness source".into()).unwrap();
+        assert_eq!(g.nodes[&a].name, "roughness source");
+        // The name is a label: the id it is keyed by is untouched, which is
+        // what keeps connections and the emitted WGSL symbols valid.
+        assert_eq!(g.nodes[&a].id, a);
+        assert!(g.nodes.contains_key(&a));
+
+        g.set_node_name(&a, String::new()).unwrap();
+        assert_eq!(g.nodes[&a].name, "");
+    }
+
+    /// Names are labels, not identity, so two nodes may share one and an
+    /// arbitrary author string is acceptable. Neither is rejected.
+    #[test]
+    fn node_names_need_not_be_unique_or_identifier_shaped() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("source", vec![scalar_out("out")]);
+        assert_ne!(a, b);
+
+        g.set_node_name(&a, "Add pressure and tilt".into()).unwrap();
+        g.set_node_name(&b, "Add pressure and tilt".into()).unwrap();
+        assert_eq!(g.nodes[&a].name, g.nodes[&b].name);
+        assert_ne!(g.nodes[&a].id, g.nodes[&b].id);
+    }
+
+    #[test]
+    fn set_node_name_unknown_node_errors() {
+        let mut g = Graph::<TestWireKind>::new();
+        let err = g
+            .set_node_name(&NodeId("ghost".into()), "hi".into())
+            .unwrap_err();
+        assert_eq!(err, GraphError::NodeNotFound(NodeId("ghost".into())));
+    }
+
+    /// A name is inert but must survive the raw-`Graph` serde that backs the
+    /// `.darkly-brush` bundle. Empty names are elided from the JSON.
+    #[test]
+    fn name_survives_serde_and_elides_when_empty() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+        g.set_node_name(&a, "keep me".into()).unwrap();
+
+        let json = serde_json::to_string(&g).unwrap();
+        // Inspect the node objects rather than counting `"name"` in the whole
+        // document: every `PortDef` carries a `name` of its own.
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let node_obj = |id: &NodeId| doc["nodes"][&id.0].as_object().unwrap().clone();
+        assert_eq!(node_obj(&a)["name"], "keep me");
+        assert!(
+            !node_obj(&b).contains_key("name"),
+            "an unnamed node must elide the key entirely"
+        );
+
+        let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(g2.nodes[&a].name, "keep me");
+        assert_eq!(g2.nodes[&b].name, "");
     }
 
     #[test]
