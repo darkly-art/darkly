@@ -22,7 +22,8 @@ struct CompositeUniforms {
     fg_premultiplied: u32, // 1 = dab is premultiplied, 0 = straight alpha
     stroke_opacity: f32, // per-stroke opacity cap (1.0 = no cap). Scales fg alpha before blend.
     apply_selection: u32, // 1 = modulate fg by selection, 0 = ignore selection
-    coverage_ceiling: u32, // 1 = cap written alpha at max(bg.a, fg_a); colour unaffected
+    coverage_ceiling: u32, // 1 = deposit only what the pixel can still take
+    layering: f32,       // 0 = full ceiling, 1 = plain source-over
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -143,6 +144,12 @@ fn chebyshev(a: vec3f, b: vec3f) -> f32 {
     if d <= 0.0 {
         return bg;
     }
-    let t = max(0.0, 1.0 - (1.0 - fg_a) * reach / d);
+    let ceiling_t = max(0.0, 1.0 - (1.0 - fg_a) * reach / d);
+    // `layering` relaxes the refusal: how readily fresh pigment sits on top of
+    // pigment already there, which is the difference between a hard grade that
+    // burnishes and a soft one that keeps building. `ceiling_t <= fg_a` always
+    // holds (see the max-norm note), so this only ever interpolates between
+    // depositing less and depositing exactly what the pass carries.
+    let t = mix(ceiling_t, fg_a, clamp(u.layering, 0.0, 1.0));
     return source_over(pigment * t, t, bg);
 }

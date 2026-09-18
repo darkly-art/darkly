@@ -1154,6 +1154,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             // watercolor never takes the coverage ceiling.
             /* coverage_ceiling */
             false,
+            /* layering */
+            1.0,
         );
     }
 
