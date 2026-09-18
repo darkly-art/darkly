@@ -93,7 +93,6 @@ nodes:
   noise:
     type: noise
     name: Brush tip texture
-    comment: tip texture
     inputs:
       roughness: 0.7344781160354614
       scale: 10.0
@@ -101,7 +100,6 @@ nodes:
   noise_2:
     type: noise
     name: Paper grain texture
-    comment: paper grain
     inputs:
       roughness: 0.548843264579773
       scale: 2.5
