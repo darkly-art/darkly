@@ -137,6 +137,7 @@ exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   paint.opacity: {}
+  paint.buildup: {}
   paint.flow:
     label: Hardness
     description: Stroke-level flow cap (folded into rgba alpha)

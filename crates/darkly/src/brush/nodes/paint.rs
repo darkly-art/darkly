@@ -56,6 +56,13 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// Maximum uniform buffer size we'll allocate per brush pipeline.
 const MAX_UNIFORM_BYTES: usize = 1024;
 
+/// `buildup` enum index selecting the coverage ceiling (the `Wash` option).
+/// Read at compile time to pick the per-dab blend state, and again at commit
+/// to pick the cross-stroke alpha law; both reads see the same authored port
+/// value, since one `compile_graph` call produces the `CompiledBrush` and the
+/// runner's port defs together.
+const CEILING: i32 = 1;
+
 // ── Per-brush pipeline ──────────────────────────────────────────────────
 
 /// Per-brush resources built on the first `flush_dabs` call for a
@@ -404,7 +411,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa6-solid:layer-group")
                     .exposed()
                     .with_description(
-                        "How a stroke's own overlapping dabs combine. Build-up composites every dab over the last, so a slow stroke or a scrub darkens toward opaque and the result depends on spacing. Wash takes the greatest coverage instead, so the stroke's density is set by pressure alone and passing back over your own stroke does not darken it. Wash does not look across strokes: a second stroke still composites over the first.",
+                        "How overlapping deposit accumulates, within a stroke and across strokes. Build-up composites every pass over the last, so scrubbing or a second stroke darkens toward opaque. Wash caps coverage instead: no pixel goes past what a single pass over it would have deposited, so going back over a mark at the same pressure does not change it, while pressing harder still darkens it. Colour is not capped, so a stroke can recolour what is under it without making it more opaque. Note that Wash reads layer alpha, which is coverage and not pigment: it cannot tell this brush's marks from a colour wash, another brush's marks, a pasted image or a feathered eraser edge, and on a fully opaque layer there is no coverage to cap, so it does nothing there.",
                     ),
                 // Typed as `Texture` to match the upstream `stamp.dab`
                 // output's wire type; the wire-type label is shared
@@ -654,6 +661,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
             opacity,
             gpu.blend_mode,
             /* fg_premultiplied */ true,
+            ctx.input("buildup").as_f32() as i32 == CEILING,
         );
     }
 
@@ -706,7 +714,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
         );
         // Index 1 = Wash. The port is `Enum`, which is non-wirable by
         // type (`BrushWireType::is_wirable`), so this is always a literal.
-        wgsl.dab_blend = Some(if cctx.input("buildup").enum_index() == 1 {
+        wgsl.dab_blend = Some(if cctx.input("buildup").enum_index() == CEILING {
             crate::brush::node::COVERAGE_CEILING
         } else {
             crate::brush::node::PREMULTIPLIED_SOURCE_OVER

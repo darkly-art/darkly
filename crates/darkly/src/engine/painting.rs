@@ -1201,8 +1201,9 @@ impl DarklyEngine {
                         canvas_height: canvas_h,
                         canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                         // blend_mode applies at commit (paint vs. erase).
-                        // Per-dab passes hard-code source-over: the
-                        // scratch is a coverage accumulator, and only the
+                        // The per-dab pass never branches on it: the scratch
+                        // is a coverage accumulator (under whichever law the
+                        // brush's `buildup` port selected), and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
                         view_rotation: self.view_params.rotation,

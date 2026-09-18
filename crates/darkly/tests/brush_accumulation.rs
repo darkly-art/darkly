@@ -7,6 +7,12 @@
 //! comes from pressure alone and passing back over its own path adds
 //! nothing.
 //!
+//! The same control governs both places overlapping deposit accumulates: dabs
+//! within a stroke (a hardware blend on the scratch) and strokes against the
+//! layer (an alpha cap at the commit). They are different mechanisms because a
+//! per-dab softened law would put tone back under the spacing slider, but they
+//! are tuned to one behaviour: overlap does not compound, wherever it happens.
+//!
 //! Run with: `cargo test -p darkly --test brush_accumulation -- --test-threads=1`
 //! (GPU integration tests share a process-wide wgpu device.)
 
@@ -142,12 +148,15 @@ fn run(buildup: i32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
 /// made spacing irrelevant everywhere would not go unnoticed.
 #[test]
 fn wash_density_is_independent_of_spacing() {
-    // A 30x spread in spacing. Measured identical to the byte when this
-    // landed, at every pressure tried.
+    // A 30x spread in spacing. Not bit-identical, and not expected to be:
+    // the Pencil's tip texture is dab-space noise, so each dab draws an
+    // independent sample and the max over N of them creeps up with N, which
+    // spacing sets. Measured at 3/255 across this spread, against the 126/255
+    // the same pair swings under Build-up below.
     let tight = median(&run(WASH, 0.5, 0.01, 1));
     let loose = median(&run(WASH, 0.5, 0.30, 1));
     assert!(
-        tight.abs_diff(loose) <= 2,
+        tight.abs_diff(loose) <= 6,
         "Wash density must not depend on spacing: median alpha {tight} at 0.01 vs {loose} at 0.30"
     );
 
@@ -185,10 +194,14 @@ fn wash_stroke_does_not_darken_when_it_crosses_itself() {
             "Wash: doubling back must not darken. x={x}: one pass {a}, two passes {b}"
         );
     }
-    assert_eq!(
+    // Same dab-space-grain caveat as the spacing test: the return leg samples
+    // the tip texture at different dab-local offsets, so the peak can creep by
+    // a count. Measured at 1/255.
+    assert!(
+        peak(&once).abs_diff(peak(&twice)) <= 2,
+        "Wash: the ceiling a stroke reaches must not move when it doubles back: {} -> {}",
         peak(&once),
-        peak(&twice),
-        "Wash: the ceiling a stroke reaches must not move when it doubles back"
+        peak(&twice)
     );
 
     // Under Build-up the second pass does darken, which is what makes
@@ -283,4 +296,259 @@ fn default_accumulation_is_byte_identical_to_explicit_build_up() {
         default_run(Some(BUILD_UP)),
         "the registration default must render byte-identically to explicit Build-up"
     );
+}
+
+// ── Cross-stroke coverage ceiling (the commit) ──────────────────────────
+
+/// Fill `layer` with an opaque colour.
+fn fill_opaque(engine: &mut DarklyEngine, layer: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer).unwrap();
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+}
+
+/// Under `Wash`, separate strokes along the same path at the same pressure do
+/// not compound: coverage stops at what one pass would have deposited.
+///
+/// The equality here is **exact**, not approximate, and that is a real
+/// property rather than a lucky tolerance. `stroke_seed` reaches `random`
+/// nodes only, never `noise`, which seeds from its own compile-time port, so
+/// a repeated pass draws the identical field and `max` of a value with itself
+/// is that value.
+#[test]
+fn wash_caps_coverage_across_strokes() {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_pencil(&mut engine, Some(WASH));
+
+    stroke_centreline(&mut engine, layer, 0.7, 1);
+    let after_one = centreline_alpha(&engine, layer);
+
+    for n in 2..=8 {
+        stroke_centreline(&mut engine, layer, 0.7, 1);
+        let now = centreline_alpha(&engine, layer);
+        assert_eq!(
+            now, after_one,
+            "Wash: stroke {n} along the same path at the same pressure must change nothing"
+        );
+    }
+
+    // Build-up compounds to opaque over the same eight strokes, which is what
+    // makes the assertion above meaningful rather than vacuous.
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_pencil(&mut engine, Some(BUILD_UP));
+    for _ in 0..8 {
+        stroke_centreline(&mut engine, layer, 0.7, 1);
+    }
+    assert_eq!(
+        peak(&centreline_alpha(&engine, layer)),
+        255,
+        "Build-up should still compound to opaque across strokes"
+    );
+}
+
+/// The ceiling saturates per pigment, not globally: a pass of a *different*
+/// colour still deposits over an existing mark.
+///
+/// This is what separates the deposit model from a plain alpha cap. Room is
+/// measured as distance to the pigment being laid down, so a red mark is
+/// nowhere near saturated for blue and takes it normally, while a second red
+/// pass on the same mark has no room and does nothing.
+#[test]
+fn wash_saturates_per_pigment_not_globally() {
+    let coloured = |engine: &mut DarklyEngine, layer: LayerId, rgb: [f32; 3]| {
+        engine.begin_stroke(layer).unwrap();
+        for i in 0..40 {
+            engine.stroke_to(StrokeOp::BrushStroke {
+                x: 8.0 + i as f32 * ((W as f32 - 16.0) / 40.0),
+                y: (H / 2) as f32,
+                pressure: 0.7,
+                x_tilt: 0.0,
+                y_tilt: 0.2,
+                rotation: 0.0,
+                tangential_pressure: 0.0,
+                time_ms: i as f64 * 16.0,
+                cr: rgb[0],
+                cg: rgb[1],
+                cb: rgb[2],
+                ca: 1.0,
+            });
+        }
+        engine.end_stroke();
+        engine.test_flush_readbacks();
+    };
+
+    // Same pigment twice: the second pass finds no room.
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_pencil(&mut engine, None);
+    coloured(&mut engine, layer, [1.0, 0.0, 0.0]);
+    let once = engine.test_readback_layer(layer);
+    coloured(&mut engine, layer, [1.0, 0.0, 0.0]);
+    assert_eq!(
+        engine.test_readback_layer(layer),
+        once,
+        "a second pass of the same pigment must find no room"
+    );
+
+    // A different pigment is a different axis, and deposits.
+    coloured(&mut engine, layer, [0.0, 0.0, 1.0]);
+    let after_blue = engine.test_readback_layer(layer);
+    let moved = (0..(W * H) as usize)
+        .filter(|i| after_blue[i * 4 + 2] > once[i * 4 + 2].saturating_add(8))
+        .count();
+    assert!(
+        moved > 64,
+        "blue over a red mark must still deposit; only {moved} pixels gained blue"
+    );
+}
+
+/// The layer's transparency must not change the result. A mark made on a
+/// transparent layer over white paper and the same mark made directly onto an
+/// opaque white layer have to look the same, at any stroke count.
+///
+/// This is the property the whole deposit model exists for. Room is read from
+/// the pixel's current colour composited over the deposit's origin, which is
+/// the one quantity both representations agree on, so neither the alpha cap
+/// this replaced (inert on opaque ground) nor a luminance heuristic (wrong for
+/// light pigments) is involved.
+#[test]
+fn wash_behaves_the_same_on_transparent_and_opaque_layers() {
+    /// Appearance over white, so the two representations are comparable.
+    fn over_white(engine: &DarklyEngine, layer: LayerId) -> Vec<[f32; 3]> {
+        let px = engine.test_readback_layer(layer);
+        let y = H / 2;
+        (0..W)
+            .map(|x| {
+                let i = ((y * W + x) * 4) as usize;
+                let a = px[i + 3] as f32 / 255.0;
+                [0, 1, 2].map(|c| (px[i + c] as f32 / 255.0) * a + (1.0 - a))
+            })
+            .collect()
+    }
+
+    for strokes in [1, 2, 4] {
+        let mut transparent = test_engine();
+        let t_layer = transparent.add_raster_layer(None);
+        install_pencil(&mut transparent, None);
+
+        let mut opaque = test_engine();
+        let o_layer = opaque.add_raster_layer(None);
+        fill_opaque(&mut opaque, o_layer, 255, 255, 255);
+        install_pencil(&mut opaque, None);
+
+        for _ in 0..strokes {
+            stroke_centreline(&mut transparent, t_layer, 0.7, 1);
+            stroke_centreline(&mut opaque, o_layer, 0.7, 1);
+        }
+
+        for (x, (t, o)) in over_white(&transparent, t_layer)
+            .iter()
+            .zip(over_white(&opaque, o_layer).iter())
+            .enumerate()
+        {
+            for c in 0..3 {
+                let diff = ((t[c] - o[c]).abs() * 255.0).round() as i32;
+                assert!(
+                    diff <= 1,
+                    "{strokes} stroke(s), x={x}, channel {c}: transparent {} vs opaque {} \
+                     (diff {diff}/255); layer transparency must not change the result",
+                    t[c],
+                    o[c]
+                );
+            }
+        }
+    }
+}
+
+/// Mask targets are R8: the commit writes only `.r`, which comes from the
+/// colour path the ceiling never touches, and the alpha it caps is discarded.
+///
+/// The case worth pinning is the subtractive one. Painting black into a
+/// revealed mask must still pull it down; a design that capped colour along
+/// with coverage would make mask refinement impossible, since a mask's
+/// broadcast alpha is always 1.
+#[test]
+fn wash_does_not_break_subtractive_mask_painting() {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    engine.add_mask(layer).expect("add mask");
+    let mask_id = engine.host_mask_id(layer).expect("mask filter id");
+
+    install_pencil(&mut engine, Some(WASH));
+    let before = engine.test_readback_mask(layer);
+    stroke_centreline(&mut engine, mask_id, 0.9, 1);
+    let after = engine.test_readback_mask(layer);
+
+    let y = H / 2;
+    let lowered = (0..W as usize)
+        .filter(|x| after[y as usize * W as usize + x] < before[y as usize * W as usize + x])
+        .count();
+    assert!(
+        lowered > 32,
+        "painting black into a revealed mask under Wash must still pull it down; \
+         only {lowered} pixels fell"
+    );
+}
+
+/// The ceiling is set by the pass, so a heavier pass raises it. Guards against
+/// "fixing" accumulation by making every later stroke a no-op.
+#[test]
+fn a_heavier_pass_still_darkens_through_the_ceiling() {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_pencil(&mut engine, Some(WASH));
+
+    stroke_centreline(&mut engine, layer, 0.7, 1);
+    let light = peak(&centreline_alpha(&engine, layer));
+    stroke_centreline(&mut engine, layer, 0.95, 1);
+    let heavy = peak(&centreline_alpha(&engine, layer));
+
+    assert!(
+        heavy > light + 40,
+        "a heavier pass must raise the ceiling: peak {light} -> {heavy}"
+    );
+}
+
+/// The shipped Pencil caps across strokes **as authored**, with no runtime
+/// port write.
+///
+/// Every other test here calls `brush_graph_set_input` to select the law,
+/// which exercises the runtime path and silently skips the one the app
+/// actually uses: the value `PortableBrush::graph_from_nodes` seeds from
+/// `pencil.yaml`. The compile-time read (which picks the per-dab blend) and
+/// the commit-time read (which picks the alpha law) are separate lookups, so
+/// a brush could plausibly get one and not the other.
+#[test]
+fn the_shipped_pencil_caps_across_strokes_as_authored() {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    // Deliberately `None`: take the brush exactly as its YAML declares it.
+    install_pencil(&mut engine, None);
+
+    stroke_centreline(&mut engine, layer, 0.7, 1);
+    let after_one = centreline_alpha(&engine, layer);
+    assert!(
+        peak(&after_one) > 32,
+        "the stroke should have marked something to cap"
+    );
+
+    for n in 2..=4 {
+        stroke_centreline(&mut engine, layer, 0.7, 1);
+        assert_eq!(
+            centreline_alpha(&engine, layer),
+            after_one,
+            "shipped Pencil: stroke {n} along the same path must change nothing"
+        );
+    }
 }

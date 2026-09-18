@@ -182,11 +182,95 @@ this reason.
 own dabs overlap. That is the same promise in both directions and is
 deliberate.
 
-**`Wash` says nothing about previous strokes.** The ceiling is over one
-stroke's own dabs. A second stroke still composites over the first at
-commit. A cross-stroke ceiling is a different feature with different
-costs; see `docs/plans/pencil-deposit-saturation.md` for the analysis and
-the two problems it would have to solve first.
+### The ceiling also applies across strokes
+
+`Wash` caps overlapping deposit at both places it accumulates. The per-dab
+blend above handles one stroke's own dabs; the commit
+(`shaders/brush/composite.wgsl`) caps a stroke against what the layer already
+holds. One invariant covers both: **a pixel never takes more deposit than a
+single pass over it would have laid down.**
+
+The two are different mechanisms and have to be. The commit could take a
+continuous rate, but the per-dab pass cannot: applied once per dab it composes
+to `1 - (1 - s*k)^n` with `n = diameter/spacing`, so any partial rate puts tone
+back under the spacing slider, which is the defect the ceiling exists to
+remove. Only a full ceiling is spacing-invariant, and it is also the only
+setting at which the two sites behave alike, so crossing your own stroke and
+crossing an earlier one give the same result. That parity is why the ceiling is
+hard rather than softened.
+
+**How the commit decides.** A pass carrying pigment `C` at coverage `s` lands,
+starting from blank, a fixed fraction of the way to `C`. Everything past that
+is refused. So rather than asking what the pass would add, the shader asks how
+much room is left between where the pixel already sits and where this pass
+saturates, and deposits exactly that:
+
+```
+origin = gamut corner opposite C        // the deposit scale's zero
+reach  = chebyshev(origin, C)           // a full-strength deposit's span
+ground = bg.rgb * bg.a + origin * (1 - bg.a)
+d      = chebyshev(ground, C)           // how far this pixel still is from C
+t      = max(0, 1 - (1 - s) * reach / d)
+out    = source_over(C * t, t, bg)
+```
+
+It stays ordinary source-over, with an effective coverage computed from how
+close the pixel already is to the pigment. On untouched ground `d == reach` and
+`t == s`, the full deposit. At saturation `t == 0`. A heavier pass shrinks the
+saturation distance and reopens room, so pressure still works.
+
+Three properties fall out of that shape, and each was a bug in an earlier
+version of this code:
+
+- **Layer transparency does not change the result.** Room is read from the
+  pixel's colour composited over the deposit's origin, which is the one
+  quantity a transparent layer and an opaque one holding the same visible mark
+  agree on. An earlier version capped `max(bg.a, fg_a)` instead and was
+  therefore completely inert on an opaque layer, which is what Darkly's own
+  fresh document hands the artist.
+- **No assumption that pigment is dark.** `origin` is derived from `C`, so a
+  white pencil on black ground behaves exactly like a black one on white. An
+  earlier attempt measured room along a luminance axis and only worked for dark
+  pigments.
+- **Saturation is per pigment, not global.** Room is distance to the colour
+  being laid down, so a red mark is nowhere near saturated for blue and takes
+  it normally. A design that capped alpha alone could not express this.
+
+**The max-norm is load-bearing.** Under it `d <= reach` holds for every colour
+in the cube, so a pass can only ever be reduced, never amplified, and `t`
+collapses to exactly `s` on any untouched ground. Under a Euclidean norm that
+is false: white is not red's antipode, so a red pencil on white paper would
+saturate at a weaker mark than graphite does at the same pressure. This is also
+where a move to OKLab would land, since distance there is Euclidean and
+perceptually uniform, which is what this actually wants; it needs a different
+reference than the cube corner to keep the `d <= reach` guarantee, so it
+belongs with the colour-system rewrite rather than before it.
+
+**What it costs.** Crosshatch intersections do not darken, abutting hatch
+strokes leave a light seam at the join, and tone cannot be built by layering
+passes at one pressure. Pressure is the only tonal control. That is the
+opposite of how graphite behaves, and it is a deliberate trade.
+
+**What it still cannot know is history.** The layer stores appearance, not what
+made it. A pixel already close to the pigment reads as saturated whether this
+brush put it there, another brush did, or it came in with a pasted image. That
+is a real limitation, but it is a smaller one than the alpha cap's: it is
+scoped to the pigment being laid down and it behaves the same everywhere,
+rather than silently doing nothing on opaque ground.
+
+**Erase is deliberately not capped.** `destination_out` returns before the
+ceiling, so removal stays fully accumulative across strokes and an eraser can
+always reach zero. Within a stroke the scratch's `Max` still applies, so a soft
+eraser stops punching further through on self-overlap. Deposit saturates;
+removal does not.
+
+Prior art informs the shape but not the default. Krita's `KoCompositeOpGreater`
+(Nicholas Guttenberg) is a destination-aware ceiling, though it back-solves an
+effective source alpha and so cancels colour along with coverage; Krita's
+`KoCompositeOpAlphaDarken` and `KoCompositeOpMarker` run separate colour and
+alpha laws, as does GIMP's `GimpLayerCompositeMode`. But every
+cross-destination ceiling in either codebase is a user-selectable blend mode,
+never a paintop default: both editors cap only within a stroke.
 
 ## Terminal nodes
 
@@ -199,7 +283,7 @@ overriding `begin_stroke` / `commit` in addition to per-dab `evaluate_gpu`.
 Non-terminal nodes (`stamp`, `circle`, `user_input`, …) don't override the
 lifecycle hooks; their default impls are no-ops.
 
-### `color_output` (paint terminal)
+### `paint` (paint terminal)
 
 - `begin_stroke`: clears `stroke_scratch_view` to transparent.
 - `evaluate_gpu` (per dab):

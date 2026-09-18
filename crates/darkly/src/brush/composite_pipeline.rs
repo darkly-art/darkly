@@ -47,6 +47,9 @@ pub struct CompositeUniforms {
     pub fg_premultiplied: u32,
     pub stroke_opacity: f32,
     pub apply_selection: u32,
+    /// 1 = cap written alpha at `max(bg.a, fg_a)` instead of letting
+    /// source-over's coverage compound. Colour is unaffected either way.
+    pub coverage_ceiling: u32,
 }
 
 pub struct CompositePipeline {

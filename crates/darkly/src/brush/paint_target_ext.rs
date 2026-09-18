@@ -39,6 +39,11 @@ pub trait BrushPaintTargetExt {
     ///     (background; group 3).
     ///   - `opacity`: stroke-level opacity cap (0..1).
     ///   - `blend_mode`: 0 = source-over (paint), 1 = destination-out (erase).
+    ///   - `coverage_ceiling`: cap the written alpha at `max(bg.a, fg_a)`
+    ///     instead of letting source-over's coverage compound across strokes.
+    ///     Colour is unaffected, which is what keeps the cap inert (rather
+    ///     than destructive) on an opaque destination or an R8 mask. Ignored
+    ///     under erase: removal must be able to reach zero.
     ///   - `fg_premultiplied`: `true` if the scratch contains
     ///     premultiplied-alpha pixels (e.g. the `paint` terminal renders
     ///     this way to use hardware source-over blend). `false` for
@@ -60,6 +65,7 @@ pub trait BrushPaintTargetExt {
         opacity: f32,
         blend_mode: u32,
         fg_premultiplied: bool,
+        coverage_ceiling: bool,
     );
 
     /// Populate an RGBA8 pre-stroke snapshot from this paint target.
@@ -104,6 +110,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         opacity: f32,
         blend_mode: u32,
         fg_premultiplied: bool,
+        coverage_ceiling: bool,
     ) {
         let canvas_ext = self.canvas_extent();
         let layer_w = canvas_ext.width as f32;
@@ -126,6 +133,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             fg_premultiplied: u32::from(fg_premultiplied),
             stroke_opacity: opacity,
             apply_selection: 0,
+            coverage_ceiling: u32::from(coverage_ceiling),
         };
         let composite = brush_pipelines.get::<CompositePipeline>("composite");
         let offset = composite.write_uniforms(queue, &uniforms);

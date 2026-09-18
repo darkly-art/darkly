@@ -22,6 +22,7 @@ struct CompositeUniforms {
     fg_premultiplied: u32, // 1 = dab is premultiplied, 0 = straight alpha
     stroke_opacity: f32, // per-stroke opacity cap (1.0 = no cap). Scales fg alpha before blend.
     apply_selection: u32, // 1 = modulate fg by selection, 0 = ignore selection
+    coverage_ceiling: u32, // 1 = cap written alpha at max(bg.a, fg_a); colour unaffected
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -64,6 +65,13 @@ struct VertexOutput {
     return out;
 }
 
+/// Max-norm distance. See the coverage-ceiling block in `fs_main` for why the
+/// norm choice matters there.
+fn chebyshev(a: vec3f, b: vec3f) -> f32 {
+    let v = abs(a - b);
+    return max(v.x, max(v.y, v.z));
+}
+
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Sample foreground (premultiplied or straight, see fg_premultiplied).
     let dab = textureSample(t_dab, s_dab, in.dab_uv);
@@ -91,5 +99,50 @@ struct VertexOutput {
     if u.blend_mode == 1u {
         return destination_out(fg_a, bg);
     }
-    return source_over(fg_rgb_pre, fg_a, bg);
+    if u.coverage_ceiling == 0u {
+        return source_over(fg_rgb_pre, fg_a, bg);
+    }
+
+    // Coverage ceiling: deposit only what the pixel can still take.
+    //
+    // A pass carrying pigment `C` at coverage `s` lands, starting from blank,
+    // a fixed fraction of the way to `C`. Everything past that is refused. So
+    // instead of asking what this pass would add, ask how much room is left
+    // between where the pixel already sits and where this pass saturates, and
+    // deposit exactly that. A pixel already at the saturation level takes
+    // nothing; one that has never been touched takes the full `s`; a heavier
+    // pass moves the saturation level and reopens room. No history is read:
+    // the room is a property of the pixel's current colour, so a transparent
+    // layer and an opaque one holding the same visible mark answer alike.
+    //
+    // `O` is the origin of the deposit scale, the gamut corner opposite `C`,
+    // which is what the distances are measured against. Deriving it from the
+    // pigment rather than assuming white is what lets a white pencil on black
+    // ground behave exactly like a black one on white.
+    if fg_a <= 0.0 {
+        return bg;
+    }
+    let pigment = fg_rgb_pre / fg_a;
+    let origin = select(vec3f(0.0), vec3f(1.0), pigment < vec3f(0.5));
+
+    // The max-norm is load-bearing, not a cheap stand-in for a Euclidean one.
+    // Under it, `d <= reach` holds for every colour in the cube, so a pass can
+    // only ever be reduced, never amplified, and `t` collapses to exactly `s`
+    // on any untouched ground. Under a Euclidean norm that is false: white is
+    // not red's antipode, so a red pencil on white paper would saturate at a
+    // weaker mark than graphite does at the same pressure.
+    //
+    // This is also where a move to OKLab would land. Distance there is
+    // Euclidean and perceptually uniform, which is the property this actually
+    // wants, but it needs a different reference than the cube corner to keep
+    // the `d <= reach` guarantee. Worth revisiting with the colour-system
+    // rewrite, not before.
+    let reach = chebyshev(origin, pigment);
+    let ground = bg.rgb * bg.a + origin * (1.0 - bg.a);
+    let d = chebyshev(ground, pigment);
+    if d <= 0.0 {
+        return bg;
+    }
+    let t = max(0.0, 1.0 - (1.0 - fg_a) * reach / d);
+    return source_over(pigment * t, t, bg);
 }

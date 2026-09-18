@@ -1150,6 +1150,10 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             opacity,
             gpu.blend_mode,
             /* fg_premultiplied */ true,
+            // Wet media glazes: layered washes are meant to compound, so
+            // watercolor never takes the coverage ceiling.
+            /* coverage_ceiling */
+            false,
         );
     }
 
