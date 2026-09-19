@@ -1,4 +1,5 @@
 name: Pencil
+description: "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure does not darken it, pressing harder does."
 nodes:
   add:
     type: add
@@ -138,7 +139,6 @@ exposed_ports:
   brush_settings.size: {}
   paint.opacity: {}
   paint.buildup: {}
-  paint.layering: {}
   paint.flow:
     label: Hardness
     description: Stroke-level flow cap (folded into rgba alpha)

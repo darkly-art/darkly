@@ -14,19 +14,22 @@ use darkly::brush::wire::ScalarValue;
 use darkly::brush::DAB_REFERENCE_SIZE;
 use darkly::nodegraph::{Graph, PortRef};
 
-/// Expected base size per builtin after the migration. The four non-default
-/// brushes are the ones whose base didn't come from the registration default
-/// (0.1): liquify/blur via terminal registration defaults, charcoal/calligraphy
-/// via a terminal `inputs.size` that had to be relocated. A wrong value here
-/// means a brush silently changed size.
+/// Expected base size per builtin. The non-default brushes are the ones whose
+/// base didn't come from the registration default (0.1): liquify/blur via
+/// terminal registration defaults, charcoal/calligraphy via a terminal
+/// `inputs.size` that had to be relocated, and the rest via an authored
+/// `brush_settings.size`. A wrong value here means a brush silently changed
+/// size.
 fn expected_base(name: &str) -> f32 {
     match name {
         "Liquify" => 0.3,
         "Blur" => 0.2,
         "Charcoal" => 0.25,
-        "Calligraphy" => 0.05,
+        "Calligraphy" => 0.125,
         "Hair" => 0.2,
         "Sponge" => 0.2,
+        "Pencil" => 0.073_958_74,
+        "Build-up Pencil" => 0.127_812_5,
         _ => 0.1,
     }
 }
@@ -34,7 +37,7 @@ fn expected_base(name: &str) -> f32 {
 #[test]
 fn builtins_own_base_size_on_brush_settings_and_preserve_its_value() {
     let brushes = builtin_brushes::all();
-    assert_eq!(brushes.len(), 13, "expected all 13 builtins");
+    assert_eq!(brushes.len(), 15, "expected all 15 builtins");
 
     for brush in brushes {
         let name = brush.metadata.name.clone();

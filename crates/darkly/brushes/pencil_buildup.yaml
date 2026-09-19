@@ -1,0 +1,90 @@
+name: Build-up Pencil
+description: A graphite tip whose marks stack. Every dab lands on top of the last, so retracing a line, scrubbing, and repeated strokes all darken toward opaque.
+nodes:
+  brush_settings:
+    type: brush_settings
+    inputs:
+      size: 0.12781250476837158
+      spacing: 0.009999999776482582
+  circle:
+    type: circle
+    inputs:
+      frequency: 1.0
+      rotation: 5.75
+      softness: 1.0
+  curve:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.32604823
+        - 0.0
+      - - 0.6077023
+        - 1.0
+      - - 0.995
+        - 1.0
+      - - 1.0
+        - 1.0
+  curve_2:
+    type: curve
+    inputs:
+      curve:
+      - - 0.0
+        - 0.07414697
+      - - 0.544431
+        - 0.2798137
+      - - 1.0
+        - 0.5450698
+  multiply:
+    type: multiply
+  multiply_2:
+    type: multiply
+  multiply_3:
+    type: multiply
+  noise:
+    type: noise
+    inputs:
+      roughness: 0.7344781160354614
+      scale: 7.0
+      space: 1
+  noise_2:
+    type: noise
+    inputs:
+      roughness: 0.548843264579773
+      scale: 1.0
+  paint:
+    type: paint
+    inputs:
+      buildup: 0
+      flow: 0.5003772377967834
+  paint_color:
+    type: paint_color
+  pen_input:
+    type: pen_input
+  stamp:
+    type: stamp
+connections:
+- circle.mask -> multiply_2.b
+- curve.output -> multiply_3.a
+- curve_2.output -> multiply_3.b
+- curve_2.output -> paint.size
+- multiply.result -> stamp.tip
+- multiply_2.result -> curve.input
+- multiply_3.result -> multiply.b
+- noise.value -> multiply_2.a
+- noise_2.value -> multiply.a
+- paint_color.color -> stamp.color
+- pen_input.position -> paint.position
+- pen_input.pressure -> curve_2.input
+- pen_input.y_tilt -> circle.softness
+- stamp.dab -> paint.rgba
+exposed_ports:
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  paint.opacity: {}
+  paint.flow:
+    label: Hardness
+    description: Stroke-level flow cap (folded into rgba alpha)
+    icon: mdi:pencil
+    invert: true

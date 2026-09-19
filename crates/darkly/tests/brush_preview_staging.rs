@@ -215,7 +215,7 @@ fn the_preview_pin_is_what_makes_blur_read() {
 }
 
 /// Every brush that deposits pigment keeps the flat clear, so nothing about its
-/// preview changes. Nine of the thirteen shipped brushes.
+/// preview changes. Eleven of the fifteen shipped brushes.
 #[test]
 fn depositing_brushes_stage_nothing() {
     let staged: Vec<&str> = STAGED.iter().map(|(n, _)| *n).collect();
@@ -238,7 +238,7 @@ fn depositing_brushes_stage_nothing() {
             flat += 1;
         }
     }
-    assert_eq!(flat, 9, "nine shipped brushes deposit pigment");
+    assert_eq!(flat, 11, "eleven shipped brushes deposit pigment");
 }
 
 /// A `Flat` backdrop is the theme background at every position, which is what

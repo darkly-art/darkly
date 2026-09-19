@@ -5,4 +5,4 @@ palette:
   chroma: "#c2521f"
   refraction: "#e0912b"
   surface: "#b4491a1a"
-members: [pencil, charcoal, hair, sponge]
+members: [pencil, pencil_buildup, charcoal, hair, sponge]

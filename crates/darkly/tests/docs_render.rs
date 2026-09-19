@@ -300,11 +300,11 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Fourteen effects, one void, sixteen blend modes and thirteen brushes:
-/// counted **per catalog**. A bare total of forty-four would not notice a whole
+/// Fourteen effects, one void, sixteen blend modes and fifteen brushes:
+/// counted **per catalog**. A bare total of forty-six would not notice a whole
 /// catalog dropping out and another gaining entries.
 #[test]
-fn all_forty_four_assets_land() {
+fn all_forty_six_assets_land() {
     let (_, manifest) = assets();
     let counts: BTreeMap<&str, usize> = manifest
         .assets
@@ -317,10 +317,10 @@ fn all_forty_four_assets_land() {
             ("effects", 14),
             ("voids", 1),
             ("blendModes", 16),
-            ("brushes", 13),
+            ("brushes", 15),
         ])
     );
-    assert_eq!(counts.values().sum::<usize>(), 44);
+    assert_eq!(counts.values().sum::<usize>(), 46);
 }
 
 /// The set of directories **found by walking the output** equals the previewable
@@ -392,7 +392,7 @@ fn every_frame_is_the_size_its_entry_declares() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 44);
+    assert_eq!(checked, 46);
 }
 
 /// For every asset the PNG count equals the frame count the declaration says
@@ -752,12 +752,12 @@ fn parse_args_rejects_a_catalog_without_stills() {
     assert!(docs_render::parse_args(["--stills".to_string()].into_iter()).is_err());
 }
 
-/// **Every** brush renders the same bytes twice: all thirteen, not a sample.
+/// **Every** brush renders the same bytes twice: all fifteen, not a sample.
 ///
 /// Unlike the other catalogs the failure mode here *is* per-entry: `rough_ink`,
 /// `rough_watercolor` and `smooth_watercolor` contain `random`/`noise` nodes and
 /// are the only entries in the artifact that can fail this, so a test naming one
-/// of the other ten would go green while the property was false for three.
+/// of the other twelve would go green while the property was false for three.
 /// A documentation artifact that rewrites bytes with no change of meaning churns
 /// on every rebuild, which is what the preview stroke seed being a constant
 /// rather than a clock read prevents.
@@ -776,7 +776,7 @@ fn every_brush_renders_the_same_bytes_twice() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 13, "the shipped brush set");
+    assert_eq!(checked, 15, "the shipped brush set");
 }
 
 /// Every brush asset is one frame, and that frame shows a stroke.
@@ -788,7 +788,7 @@ fn every_brush_renders_the_same_bytes_twice() {
 fn every_brush_asset_shows_a_stroke() {
     let (dir, manifest) = assets();
     let entries = &manifest.assets[darkly::brush::builtin_brushes::CATALOG_ID];
-    assert_eq!(entries.len(), 13);
+    assert_eq!(entries.len(), 15);
 
     for (type_id, asset) in entries {
         assert_eq!(asset.frames, 1, "`{type_id}` is a still");

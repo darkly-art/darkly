@@ -129,7 +129,8 @@ Both constants live in
 [`brush/node.rs`](../../crates/darkly/src/brush/node.rs).
 
 **`Build-up`** (`PREMULTIPLIED_SOURCE_OVER`, the registration default, and
-what every brush but the Pencil uses) composites each dab over the last.
+what every brush but the Pencil uses, the Build-up Pencil included)
+composites each dab over the last.
 Coverage accumulates as `1 - prod(1 - a_i)`, so a pixel's density rises
 with however many dabs the spacing happened to stack on it. Its density is
 therefore a function of `spacing`, not only of pressure: the shipped Pencil

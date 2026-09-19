@@ -48,17 +48,23 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> String {
         .clone()
 }
 
+/// Install a builtin brush by name, exactly as its YAML declares it, through
+/// the JSON path the app uses.
+fn install_builtin(engine: &mut DarklyEngine, name: &str) {
+    let brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == name)
+        .unwrap_or_else(|| panic!("{name} builtin registered"));
+    let json = serde_json::to_string(&brush.metadata.graph).expect("serialize brush graph");
+    engine
+        .set_brush_graph(&json)
+        .unwrap_or_else(|e| panic!("{name} graph compiles: {e:?}"));
+}
+
 /// Install the builtin Pencil and set its accumulation law. `buildup`
 /// of `None` leaves whatever the brush ships with.
 fn install_pencil(engine: &mut DarklyEngine, buildup: Option<i32>) {
-    let brush = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Pencil")
-        .expect("Pencil builtin registered");
-    let json = serde_json::to_string(&brush.metadata.graph).expect("serialize pencil graph");
-    engine
-        .set_brush_graph(&json)
-        .expect("pencil graph compiles");
+    install_builtin(engine, "Pencil");
     if let Some(mode) = buildup {
         let term = find_node_id(engine, "paint");
         engine
@@ -126,14 +132,32 @@ fn median(alphas: &[u8]) -> u8 {
     marked.get(marked.len() / 2).copied().unwrap_or(0)
 }
 
-/// One Pencil stroke along the centreline, as centreline alpha.
-fn run(buildup: i32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
+/// One stroke of a builtin brush along the centreline, as centreline alpha.
+/// `buildup` of `None` takes the brush's law as authored.
+fn run_brush(
+    name: &str,
+    buildup: Option<i32>,
+    pressure: f32,
+    spacing: f32,
+    passes: u32,
+) -> Vec<u8> {
     let mut engine = test_engine();
     let layer = engine.add_raster_layer(None);
-    install_pencil(&mut engine, Some(buildup));
+    install_builtin(&mut engine, name);
+    if let Some(mode) = buildup {
+        let term = find_node_id(&engine, "paint");
+        engine
+            .brush_graph_set_input(&term, "buildup", InputValue::Int(mode))
+            .expect("paint buildup port");
+    }
     set_spacing(&mut engine, spacing);
     stroke_centreline(&mut engine, layer, pressure, passes);
     centreline_alpha(&engine, layer)
+}
+
+/// One Pencil stroke along the centreline under an explicit law.
+fn run(buildup: i32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
+    run_brush("Pencil", Some(buildup), pressure, spacing, passes)
 }
 
 /// The defect this feature exists to fix: under `Build-up`, stroke
@@ -551,6 +575,66 @@ fn the_shipped_pencil_caps_across_strokes_as_authored() {
             "shipped Pencil: stroke {n} along the same path must change nothing"
         );
     }
+
+    // And within a stroke, as authored: doubling back deposits nothing extra
+    // over the path interior (same grain caveat as the explicit-law test).
+    const INTERIOR: std::ops::Range<usize> = 20..236;
+    let once = run_brush("Pencil", None, 0.5, 0.01, 1);
+    let twice = run_brush("Pencil", None, 0.5, 0.01, 2);
+    for x in INTERIOR {
+        let (a, b) = (once[x], twice[x]);
+        assert!(
+            b.abs_diff(a) <= 2,
+            "shipped Pencil: doubling back must not darken. x={x}: one pass {a}, two passes {b}"
+        );
+    }
+}
+
+/// The shipped Build-up Pencil stacks **as authored**: the original
+/// terminal's law, where the dabs of one pass compound on each other and
+/// each stroke builds on the last. It is the Wash Pencil's counterpart, a
+/// separate brush so the two can be tuned independently, and this pins that
+/// its YAML selects the law it is named for.
+#[test]
+fn the_shipped_buildup_pencil_stacks_within_a_stroke_and_across_strokes() {
+    // Within a stroke: doubling back darkens the path. Measured 127 -> 190
+    // at pressure 0.5.
+    let once = median(&run_brush("Build-up Pencil", None, 0.5, 0.01, 1));
+    let twice = median(&run_brush("Build-up Pencil", None, 0.5, 0.01, 2));
+    assert!(
+        twice > once + 8,
+        "Build-up Pencil: doubling back must darken: median alpha {once} -> {twice}"
+    );
+
+    // Across strokes: each stroke builds on the last, monotonically, and
+    // eight of them reach opaque.
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_builtin(&mut engine, "Build-up Pencil");
+    stroke_centreline(&mut engine, layer, 0.7, 1);
+    let mut previous = centreline_alpha(&engine, layer);
+    assert!(
+        peak(&previous) > 32,
+        "the first stroke should have marked something"
+    );
+    for n in 2..=8 {
+        stroke_centreline(&mut engine, layer, 0.7, 1);
+        let now = centreline_alpha(&engine, layer);
+        for x in 20..236 {
+            assert!(
+                now[x] >= previous[x],
+                "Build-up Pencil: stroke {n} must not lighten x={x}: {} -> {}",
+                previous[x],
+                now[x]
+            );
+        }
+        previous = now;
+    }
+    assert_eq!(
+        peak(&previous),
+        255,
+        "Build-up Pencil: eight strokes along the same path should compound to opaque"
+    );
 }
 
 // ── The Layering dial ───────────────────────────────────────────────────

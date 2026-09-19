@@ -1,4 +1,5 @@
 name: Charcoal
+description: A soft stick that crumbles onto the tooth of the paper, for broad, smoky marks.
 nodes:
   brush_settings:
     type: brush_settings

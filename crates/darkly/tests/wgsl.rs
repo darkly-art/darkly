@@ -1854,15 +1854,24 @@ fn the_buildup_port_cannot_be_wired() {
     assert_eq!(paint.enum_options, vec!["Build-up", "Wash"]);
 }
 
-/// The shipped Pencil is the brush this law was added for.
+/// The two shipped Pencils are the same tip under the two laws, one brush
+/// each, so each can be tuned on its own. A stray `buildup` edit in either
+/// YAML fails here, without a GPU.
 #[test]
-fn the_pencil_builtin_ships_on_wash() {
-    let pencil = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Pencil")
-        .expect("Pencil brush registered");
-    let plan = compile(&pencil.metadata.graph, registry().as_map()).unwrap();
-    let compiled =
-        compile_brush_to_wgsl(&pencil.metadata.graph, &plan, &evals()).expect("compiles");
-    assert_eq!(compiled.dab_blend, darkly::brush::node::COVERAGE_CEILING);
+fn each_pencil_ships_on_its_own_law() {
+    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+
+    for (name, law) in [
+        ("Pencil", COVERAGE_CEILING),
+        ("Build-up Pencil", PREMULTIPLIED_SOURCE_OVER),
+    ] {
+        let brush = darkly::brush::builtin_brushes::all()
+            .into_iter()
+            .find(|b| b.metadata.name == name)
+            .unwrap_or_else(|| panic!("{name} brush registered"));
+        let plan = compile(&brush.metadata.graph, registry().as_map()).unwrap();
+        let compiled =
+            compile_brush_to_wgsl(&brush.metadata.graph, &plan, &evals()).expect("compiles");
+        assert_eq!(compiled.dab_blend, law, "{name} ships on the wrong law");
+    }
 }
