@@ -8,7 +8,7 @@ nodes:
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.07395873963832855
+      size: 0.07364623993635178
       spacing: 0.009999999776482582
   circle:
     type: circle
@@ -65,7 +65,7 @@ nodes:
         - 0.8797826
       - - 1.0
         - 0.25908843
-  curve_6:
+  curve_5:
     type: curve
     name: Curve pen pressure for flow
     comment: makes pencil a little lighter to the touch
@@ -107,7 +107,8 @@ nodes:
   paint:
     type: paint
     inputs:
-      buildup: 0.0
+      build_flow: 0.4
+      buildup: 0.1
   paint_color:
     type: paint_color
   pen_input:
@@ -121,7 +122,7 @@ connections:
 - curve_2.output -> add.a
 - curve_3.output -> add.b
 - curve_4.output -> levels.in_high
-- curve_6.output -> paint.wash_flow
+- curve_5.output -> paint.wash_flow
 - levels.output -> multiply.a
 - multiply.result -> stamp.tip
 - multiply_2.result -> curve.input
@@ -131,14 +132,18 @@ connections:
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve_2.input
 - pen_input.pressure -> curve_4.input
-- pen_input.pressure -> curve_6.input
+- pen_input.pressure -> curve_5.input
 - pen_input.tilt_magnitude -> curve_3.input
 - stamp.dab -> paint.rgba
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   paint.opacity: {}
-  paint.buildup: {}
+  paint.buildup:
+    label: Hardness
+    description: 'How much repeated passes build: 0% = a mark never darkens, 100% = toward opaque.'
+    icon: fa6-solid:pen
+    invert: true
   paint.wash_flow:
     label: Hardness
     icon: mdi:pencil
