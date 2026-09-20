@@ -123,6 +123,7 @@ For a feature to count, it must be:
 - [x] Crop to selection
 - [x] Canvas resize
 - [x] Image rescale
+- [x] Document resolution (DPI)
 - [x] Select All / Deselect / Invert
 - [x] Command palette
 - [x] Application menu

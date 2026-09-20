@@ -112,6 +112,29 @@ impl Entity {
     }
 }
 
+/// Resolution a fresh document starts at, and the reference
+/// [`Document::dpi`] divides by to produce the `document_settings` node's
+/// `dpi_scale`, so a default document reports a scale of exactly 1.0 and no
+/// brush changes appearance until the artist changes the DPI.
+///
+/// Because a brush file can wire `dpi_scale`, this constant is part of the
+/// brush format's contract: moving it silently rescales every brush that
+/// reads it. 300 matches GIMP (`app/core/gimptemplate.c` DEFAULT_RESOLUTION)
+/// and Krita (`libs/ui/kis_config.cc` defImageResolution), so there is no
+/// reason to move it.
+pub const DEFAULT_DPI: f32 = 300.0;
+
+/// Lower bound on [`Document::dpi`]. Both reference editors reject rather
+/// than clamp an out-of-band resolution (`gimp_image_set_resolution` returns
+/// early, `KisImage::setResolution` warns and ignores), and so does
+/// `set_document_dpi`. Our band is narrower than GIMP's `5e-3 .. 1048576`
+/// because GIMP has a unit system in which sub-1 resolutions are meaningful
+/// and Darkly does not.
+pub const MIN_DPI: f32 = 1.0;
+
+/// Upper bound on [`Document::dpi`]. See [`MIN_DPI`].
+pub const MAX_DPI: f32 = 10_000.0;
+
 pub struct Document {
     /// Artist-visible document name. Sourced by the tab strip, used as the
     /// default filename in the Save As picker, and serialized at the top
@@ -133,6 +156,21 @@ pub struct Document {
     /// this and `width`/`height` while content stays put in the plane.
     /// Serialized beside `width`/`height`; undoable via `CanvasResizeAction`.
     pub canvas_origin: CanvasPoint,
+
+    /// Canvas resolution in pixels per inch: how many pixels of this
+    /// document make up one physical inch. Describes the document's intended
+    /// physical size; it never resamples pixels and nothing in the
+    /// compositor mirrors it. Serialized beside `width`/`height`; undoable
+    /// through the shared [`CanvasGeometryAction`], alongside dims and
+    /// origin, and carried by image rescale so resampling preserves the
+    /// document's physical extent.
+    ///
+    /// Read by the brush graph through the `document_settings` node, so a
+    /// brush can size grain, spacing or a stamp in physical terms and have
+    /// it hold across canvas resolutions.
+    ///
+    /// [`CanvasGeometryAction`]: crate::undo::CanvasGeometryAction
+    pub dpi: f32,
 
     /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
     /// chokepoint: any new undoable mutation flips it true. Cleared
@@ -207,6 +245,7 @@ impl Document {
             width,
             height,
             canvas_origin: CanvasPoint::new(0, 0),
+            dpi: DEFAULT_DPI,
             dirty: false,
             revision: 0,
             entities,

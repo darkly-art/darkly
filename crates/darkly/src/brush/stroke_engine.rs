@@ -109,7 +109,11 @@ impl StrokeEngine {
     /// caps how fast the stamp pivots to follow the stroke, in radians per
     /// brush diameter of travel.  `stroke_seed` drives every `random`/`noise`
     /// node in the graph: a real stroke passes [`Self::random_seed`], a render
-    /// that has to be reproducible passes a constant.
+    /// that has to be reproducible passes a constant.  `dpi` is the owning
+    /// document's resolution, which the `document_settings` node reads; a
+    /// render with no document behind it passes
+    /// [`crate::document::DEFAULT_DPI`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mut runner: BrushGraphRunner,
         color: [f32; 4],
@@ -119,6 +123,7 @@ impl StrokeEngine {
         clone_source_anchor: Option<[f32; 2]>,
         stroke_seed: u32,
         stamp_angle_rate: f32,
+        dpi: f32,
     ) -> Self {
         // Base brush size is stroke-constant, read out-of-band from
         // `pen_input.size` at stroke start. Injected as ambient state so every
@@ -135,6 +140,11 @@ impl StrokeEngine {
         let diameter = base_size * DAB_REFERENCE_SIZE as f32;
         let step = spacing.distance(diameter);
         runner.set_dabs_per_pass((diameter / step).max(1.0));
+
+        // The document's resolution is stroke-constant too. Seeded here beside
+        // the other two so a stroke engine that forgot to publish it is
+        // unrepresentable.
+        runner.set_dpi(dpi);
 
         let d = Self::default_diameter();
         Self {

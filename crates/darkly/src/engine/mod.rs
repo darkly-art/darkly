@@ -808,6 +808,13 @@ impl DarklyEngine {
             recorder: ProcessRecorder::new(),
         };
 
+        // Seed the document's resolution from the artist's configured default
+        // before anything reads it (the cursor preview below included).
+        // `Document::new`'s `DEFAULT_DPI` stays the structural default a bare
+        // document carries for the non-editor construction sites; the editor
+        // overrides it here, exactly as `display.pixelFilter` is pushed below.
+        engine.doc.dpi = crate::config::get_f64("canvas.dpi") as f32;
+
         // Snapshot the default graph's port defaults so reset-to-default
         // works even before the artist loads a brush.
         engine.snapshot_brush_defaults();

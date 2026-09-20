@@ -14,6 +14,7 @@ use darkly_macros::handlers;
 use super::canvas_resize::MAX_CANVAS_DIM;
 use super::DarklyEngine;
 use crate::coord::CanvasRect;
+use crate::document::{MAX_DPI, MIN_DPI};
 use crate::gpu::compositor::scaled_extent_about;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
@@ -22,7 +23,9 @@ use crate::undo::CanvasGeometryAction;
 #[handlers]
 impl DarklyEngine {
     /// Resample all layer + mask pixels to `(new_width, new_height)`, scaling
-    /// content about the canvas origin (which stays fixed). Lossy + undoable.
+    /// content about the canvas origin (which stays fixed). The document's
+    /// resolution scales with the resample factor, so the artwork keeps its
+    /// physical size and only its pixel density changes. Lossy + undoable.
     /// No-ops on a zero/over-limit target, a no-op size, or if any node would
     /// exceed the max texture dimension after scaling. Clears the active
     /// selection (folded into the same undo step).
@@ -41,6 +44,17 @@ impl DarklyEngine {
         let sx = new_width as f32 / old_w as f32;
         let sy = new_height as f32 / old_h as f32;
         let origin = self.doc.canvas_origin;
+        // Resampling changes how many pixels cover the artwork, not how big
+        // the artwork is, so resolution rides the scale factor and the
+        // document's physical extent is preserved: a 1K/300 document taken to
+        // 4K is 4K/1200, still 3.41 inches wide, and a brush quantity wired
+        // through `document_settings.dpi_scale` grows with it. The vertical
+        // factor is the one taken for a non-uniform rescale, matching the
+        // aspect the artist sees. Clamped rather than rejected: this value is
+        // engine-computed, so an out-of-band result is a degenerate target,
+        // not a caller error.
+        let old_dpi = self.doc.dpi;
+        let new_dpi = (old_dpi * sy).clamp(MIN_DPI, MAX_DPI);
 
         // Enumerate pixel-bearing nodes by capability: raster layers + mask
         // filters. Void layers answer `pixels() == None` and are skipped
@@ -109,11 +123,14 @@ impl DarklyEngine {
         // 5. Update canvas dimensions (origin fixed) + push the undo step.
         self.doc.width = new_width;
         self.doc.height = new_height;
+        self.doc.dpi = new_dpi;
         self.push_undo(Box::new(CanvasGeometryAction::new(
             (old_w, old_h),
             (new_width, new_height),
             origin,
             origin,
+            old_dpi,
+            new_dpi,
             bounds,
             regions,
             selection,

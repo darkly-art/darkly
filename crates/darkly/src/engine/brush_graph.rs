@@ -268,6 +268,11 @@ impl DarklyEngine {
             }
         };
 
+        // The hover cursor preview is document-scoped (unlike the brush
+        // editor's preview), so it renders at this document's resolution and
+        // the cursor matches what the stroke will actually do.
+        runner.set_dpi(self.doc.dpi);
+
         // Always dispatch `render_preview`: individual terminals decide
         // whether they produce output this frame. A graph with no
         // compiled-terminal hook fires nothing and `brush_cursor_preview_info`

@@ -213,6 +213,13 @@ impl BrushStrokePreviewRenderer {
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),
+            // Previews show brush identity, not momentary document state, so
+            // they render at the reference resolution whatever the focused
+            // document's DPI is. Same reasoning that pins `view_rotation` to
+            // 0.0 below, and it keeps the global brush library's thumbnail
+            // cache independent of which tab is focused. Krita's
+            // `KisImageResolutionProxy::identity()` exists for this.
+            crate::document::DEFAULT_DPI,
         );
         if clone_source_anchor.is_some() {
             // The snapshot being sampled is the pre-stroke, which covers the

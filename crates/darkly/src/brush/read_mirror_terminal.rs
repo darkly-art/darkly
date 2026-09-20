@@ -730,6 +730,7 @@ mod tests {
             dab_index: 0,
             base_size,
             dabs_per_pass: 1.0,
+            dpi: crate::document::DEFAULT_DPI,
             node_id: TEST_NODE_ID.get_or_init(|| NodeId("test".into())),
         }
     }

@@ -16,6 +16,20 @@ const PREFS: &[Pref] = &[
         widget: WidgetHint::NumberInput,
     },
     Pref {
+        key: "canvas.dpi",
+        display_name: "Default resolution (DPI)",
+        description: Some(
+            "Pixels per inch for new documents: how big the canvas is meant to be in print. \
+             Brushes read it through the Document Settings node, so grain and texture keep \
+             their physical size across resolutions.",
+        ),
+        kind: PrefKind::Float {
+            min: 1.0,
+            max: 10000.0,
+        },
+        widget: WidgetHint::NumberInput,
+    },
+    Pref {
         key: "canvas.backgroundColor",
         display_name: "Background color",
         description: Some("Fill color used for new documents."),
@@ -28,7 +42,7 @@ pub fn register() -> SchemaSection {
     SchemaSection {
         id: "canvas",
         display_name: "Canvas",
-        description: Some("Default dimensions and background for new documents."),
+        description: Some("Default dimensions, resolution and background for new documents."),
         icon: Some("fa6-solid:vector-square"),
         order: 10,
         prefs: PREFS,

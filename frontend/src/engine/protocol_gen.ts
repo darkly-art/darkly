@@ -194,24 +194,6 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
-export type PreviewStaging = { 
-/**
- * Iconify glyph shown in the dab slot, where a single stationary sample
- * has no motion to make the effect visible at all.
- */
-icon: string, 
-/**
- * Field painted under the stroke preview, giving the node something to
- * transport.
- */
-backdrop: PreviewBackdrop, };
-
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -404,6 +386,24 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
+export type PreviewStaging = { 
+/**
+ * Iconify glyph shown in the dab slot, where a single stationary sample
+ * has no motion to make the effect visible at all.
+ */
+icon: string, 
+/**
+ * Field painted under the stroke preview, giving the node something to
+ * transport.
+ */
+backdrop: PreviewBackdrop, };
+
 export type NodeRegistration = { 
 /**
  * Unique identifier (e.g. "pen_input", "multiply").
@@ -483,6 +483,10 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
+export type CaptureKind = "camera" | "display" | "stream";
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
 export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
@@ -507,10 +511,6 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
 options: JsonValue | null, display: ParamDisplay, };
-
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
 
 export type CatalogEntry = { type: string, displayName: string, 
 /**
@@ -746,19 +746,6 @@ editable: boolean, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
-export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
-/**
- * Member brush ids, in the pack's order. The authority on membership:
- * nothing on [`BrushInfo`] repeats it.
- */
-members: Array<string>, 
-/**
- * What the painter may change, so the UI can grey out affordances it
- * would otherwise offer. A hint, not the authority: the engine rejects a
- * forbidden edit regardless of what the UI believed.
- */
-can_edit_members: boolean, can_edit_identity: boolean, };
-
 export type PackPalette = { 
 /**
  * The pack's own hue at full vividness: the color you would name it by.
@@ -775,6 +762,19 @@ refraction: string,
  * behind it show through.
  */
 surface: string, };
+
+export type BrushPackInfo = { id: string, name: string, description: string, icon: string, palette: PackPalette, 
+/**
+ * Member brush ids, in the pack's order. The authority on membership:
+ * nothing on [`BrushInfo`] repeats it.
+ */
+members: Array<string>, 
+/**
+ * What the painter may change, so the UI can grey out affordances it
+ * would otherwise offer. A hint, not the authority: the engine rejects a
+ * forbidden edit regardless of what the UI believed.
+ */
+can_edit_members: boolean, can_edit_identity: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -867,6 +867,8 @@ export type SetOverlayReq = { primitives: Array<PrimIn>, };
 export type PrimIn = { kind: number, flags: number, p0: [number, number], p1: [number, number], color: [number, number, number, number], thickness: number, dashLen: number, dashOffset: number, cornerRadius: number, modeParam: number, rotation: number, };
 
 export type SetCloneSourceReq = { x: number, y: number, layer: number | null, };
+
+export type SetDocumentDpiReq = { dpi: number, };
 
 export type SetDocumentNameReq = { name: string, };
 
@@ -1033,6 +1035,7 @@ export type RequestKind =
     | 'copy_layer_rich'
     | 'crop_to_selection'
     | 'cut'
+    | 'document_dpi'
     | 'document_name'
     | 'duplicate_node'
     | 'duplicate_nodes'
@@ -1116,6 +1119,7 @@ export type RequestKind =
     | 'set_brush_blend_mode'
     | 'set_clone_overlay'
     | 'set_clone_source'
+    | 'set_document_dpi'
     | 'set_document_name'
     | 'set_filter_params'
     | 'set_group_collapsed'
@@ -1231,6 +1235,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'copy_layer_rich',
     'crop_to_selection',
     'cut',
+    'document_dpi',
     'document_name',
     'duplicate_node',
     'duplicate_nodes',
@@ -1314,6 +1319,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_brush_blend_mode',
     'set_clone_overlay',
     'set_clone_source',
+    'set_document_dpi',
     'set_document_name',
     'set_filter_params',
     'set_group_collapsed',
@@ -1437,6 +1443,7 @@ export interface EngineApi {
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
     cut(req: CutReq): Promise<ClipboardExport | null>;
+    documentDpi(): Promise<number>;
     documentName(): Promise<string>;
     duplicateNode(req: DuplicateNodeReq): Promise<number | null>;
     duplicateNodes(req: DuplicateNodesReq): Promise<Array<number>>;
@@ -1520,6 +1527,7 @@ export interface EngineApi {
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
     setCloneOverlay(req: SetOverlayReq): void;
     setCloneSource(req: SetCloneSourceReq): void;
+    setDocumentDpi(req: SetDocumentDpiReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
@@ -1637,6 +1645,7 @@ export function makeApi(t: Transport): EngineApi {
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),
         cut: (req) => t.request('cut', req),
+        documentDpi: () => t.request('document_dpi'),
         documentName: () => t.request('document_name'),
         duplicateNode: (req) => t.request('duplicate_node', req),
         duplicateNodes: (req) => t.request('duplicate_nodes', req),
@@ -1720,6 +1729,7 @@ export function makeApi(t: Transport): EngineApi {
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
         setCloneOverlay: (req) => t.postFF('set_clone_overlay', req),
         setCloneSource: (req) => t.postFF('set_clone_source', req),
+        setDocumentDpi: (req) => t.postFF('set_document_dpi', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),

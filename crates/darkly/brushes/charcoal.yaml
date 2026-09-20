@@ -40,10 +40,11 @@ nodes:
         - 0.53
       - - 1.0
         - 1.0
+  document_settings:
+    type: document_settings
   image:
     type: image
     inputs:
-      scale: 500
       space: 0
       texture_name: paper
   levels:
@@ -52,6 +53,10 @@ nodes:
       in_low: 0.72
   multiply:
     type: multiply
+  multiply_2:
+    type: multiply
+    inputs:
+      a: 500.0
   paint:
     type: paint
     inputs:
@@ -73,9 +78,11 @@ connections:
 - curve.output -> levels.in_low
 - curve_2.output -> paint.flow
 - curve_3.output -> multiply.a
+- document_settings.dpi_scale -> multiply_2.b
 - image.color -> split_color.color
 - levels.output -> stamp.tip
 - multiply.result -> levels.input
+- multiply_2.result -> image.scale
 - paint_color.color -> stamp.color
 - pen_input.drawing_angle -> switch.in_0_scalar
 - pen_input.position -> paint.position

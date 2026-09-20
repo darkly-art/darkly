@@ -4,13 +4,13 @@ use darkly_macros::handlers;
 
 use super::types::{node_to_layer_info, LayerTree};
 use super::DarklyEngine;
-use crate::document::{MoveTarget, TreeSlot};
+use crate::document::{MoveTarget, TreeSlot, MAX_DPI, MIN_DPI};
 use crate::engine::protocol::{params_from_json, RawParams};
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{
-    CompoundAction, EntityAddAction, EntityRemoveAction, LayerMoveAction, PropertyAction,
-    UndoAction,
+    CanvasGeometryAction, CompoundAction, EntityAddAction, EntityRemoveAction, LayerMoveAction,
+    PropertyAction, UndoAction,
 };
 
 /// Convert Darkly's row-major `[a, b, tx, c, d, ty]` affine (point map
@@ -1668,6 +1668,47 @@ impl DarklyEngine {
     #[handler]
     pub fn set_document_name(&mut self, name: String) {
         self.doc.name = name;
+    }
+
+    /// The document's resolution in pixels per inch. Describes the intended
+    /// physical size of the canvas; brushes read it through the
+    /// `document_settings` node.
+    #[handler]
+    pub fn document_dpi(&self) -> f32 {
+        self.doc.dpi
+    }
+
+    /// Set the document's resolution. Out-of-range or non-finite input is
+    /// rejected outright rather than clamped, so a bad caller leaves the
+    /// document untouched instead of silently installing a degenerate value
+    /// (`f32::clamp` would also propagate a NaN). Both reference editors
+    /// reject the same way. Undoable through the shared
+    /// [`CanvasGeometryAction`], with the canvas geometry unchanged.
+    #[handler]
+    pub fn set_document_dpi(&mut self, dpi: f32) {
+        if !dpi.is_finite() || !(MIN_DPI..=MAX_DPI).contains(&dpi) {
+            return;
+        }
+        let old = self.doc.dpi;
+        // GIMP's own no-op guard is an epsilon on the change, not machine
+        // epsilon, which at DPI magnitudes is never reached.
+        if (dpi - old).abs() < 1e-5 {
+            return;
+        }
+        self.doc.dpi = dpi;
+        let dims = (self.doc.width, self.doc.height);
+        let origin = self.doc.canvas_origin;
+        self.push_undo(Box::new(CanvasGeometryAction::new(
+            dims,
+            dims,
+            origin,
+            origin,
+            old,
+            dpi,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )));
     }
 
     #[handler]

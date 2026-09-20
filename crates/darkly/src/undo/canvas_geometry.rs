@@ -1,6 +1,10 @@
 //! Undo action for canvas-geometry edits that resample or permute every
 //! pixel-bearing node: **image rescale** (Photoshop "Image Size") and **canvas
-//! flip / rotate**.
+//! flip / rotate**. It also carries the document's resolution, which rides the
+//! rescale factor and is swapped in the same step, so a resolution change is
+//! never a second undo entry: both reference editors bundle the two the same
+//! way (Krita applies `KisImageSetResolutionCommand` inside `scaleImage`'s
+//! applicator; GIMP's Scale Image opens one undo group around both).
 //!
 //! Both swap the canvas dimensions (and, for rotate-90, the `canvas_origin`)
 //! plus every node's `PixelBuffer.bounds`, and carry per-node GPU pixel
@@ -41,6 +45,12 @@ pub struct CanvasGeometryAction {
     /// (which keep the window put); recentred by rotate-90 (GIMP offset rule).
     old_origin: CanvasPoint,
     new_origin: CanvasPoint,
+    /// Document resolution in pixels per inch. Equal old/new for flips and
+    /// rotates (which change no physical extent) and for a bare
+    /// `set_document_dpi` (which changes nothing else); scaled by the
+    /// resample factor for image rescale.
+    old_dpi: f32,
+    new_dpi: f32,
     /// Per pixel-bearing node: `(id, old_extent, new_extent)`. The bounds swap
     /// drives `apply_undo`'s per-node texture-extent reconcile so the region
     /// restores land at the correct layer-local coords either way.
@@ -58,6 +68,8 @@ impl CanvasGeometryAction {
         new_dims: (u32, u32),
         old_origin: CanvasPoint,
         new_origin: CanvasPoint,
+        old_dpi: f32,
+        new_dpi: f32,
         bounds: Vec<(LayerId, CanvasRect, CanvasRect)>,
         regions: Vec<UndoRegionEntry>,
         selection: Option<(bool, UndoRegionEntry)>,
@@ -69,6 +81,8 @@ impl CanvasGeometryAction {
             new_h: new_dims.1,
             old_origin,
             new_origin,
+            old_dpi,
+            new_dpi,
             bounds,
             regions,
             selection: selection.map(|(was_active, entry)| SelectionPart { was_active, entry }),
@@ -81,6 +95,7 @@ impl UndoAction for CanvasGeometryAction {
         doc.width = self.old_w;
         doc.height = self.old_h;
         doc.canvas_origin = self.old_origin;
+        doc.dpi = self.old_dpi;
         for (id, old_extent, _) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *old_extent);
         }
@@ -93,6 +108,7 @@ impl UndoAction for CanvasGeometryAction {
         doc.width = self.new_w;
         doc.height = self.new_h;
         doc.canvas_origin = self.new_origin;
+        doc.dpi = self.new_dpi;
         for (id, _, new_extent) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *new_extent);
         }

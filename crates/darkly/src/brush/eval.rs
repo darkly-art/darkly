@@ -58,6 +58,11 @@ pub struct EvalContext<'a> {
     /// per *pass* rather than per dab; see
     /// [`super::wgsl::IntrinsicUniforms::dabs_per_pass`].
     pub dabs_per_pass: f32,
+    /// The document's resolution in pixels per inch, so a brush can size
+    /// itself against the document's physical extent rather than the pixel
+    /// grid. Stroke-constant, seeded from `Document::dpi` by
+    /// [`BrushGraphRunner::set_dpi`]; read by the `document_settings` node.
+    pub dpi: f32,
     /// This node instance's ID (used to salt PRNG for independence).
     pub node_id: &'a NodeId,
 }
@@ -96,6 +101,11 @@ impl EvalContext<'_> {
     /// Never below 1.0, so dividing a rate by it is always well-defined.
     pub fn dabs_per_pass(&self) -> f32 {
         self.dabs_per_pass.max(1.0)
+    }
+
+    /// The document's resolution in pixels per inch (see the field).
+    pub fn dpi(&self) -> f32 {
+        self.dpi
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -527,6 +537,13 @@ pub struct BrushGraphRunner {
     /// by [`Self::set_dabs_per_pass`]. Threaded into every `EvalContext`;
     /// terminals read it via [`EvalContext::dabs_per_pass`].
     dabs_per_pass: f32,
+    /// The document's resolution in pixels per inch, set once per stroke by
+    /// [`Self::set_dpi`]. Threaded into every `EvalContext`, where the
+    /// `document_settings` node divides it by
+    /// [`crate::document::DEFAULT_DPI`] to publish `dpi_scale`. Defaults to
+    /// that same constant, so a runner built outside a document (the brush
+    /// editor preview, tests) renders at a scale of exactly 1.0.
+    dpi: f32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
     /// the graph terminates in `paint`. `None` for per-dab
     /// dispatch brushes. The runner copies this into the
@@ -550,6 +567,7 @@ fn build_eval_ctx<'a>(
     dab_index: u32,
     base_size: f32,
     dabs_per_pass: f32,
+    dpi: f32,
 ) -> EvalContext<'a> {
     let node = node_data.get(&step.node_id);
     EvalContext {
@@ -561,6 +579,7 @@ fn build_eval_ctx<'a>(
         dab_index,
         base_size,
         dabs_per_pass,
+        dpi,
         node_id: &step.node_id,
     }
 }
@@ -694,6 +713,7 @@ impl BrushGraphRunner {
             // per stroke via `set_base_size`.
             base_size: brush_settings::base_size(graph),
             dabs_per_pass: 1.0,
+            dpi: crate::document::DEFAULT_DPI,
             compiled: None,
         })
     }
@@ -713,6 +733,15 @@ impl BrushGraphRunner {
     /// [`EvalContext::dabs_per_pass`].
     pub fn set_dabs_per_pass(&mut self, dabs_per_pass: f32) {
         self.dabs_per_pass = dabs_per_pass;
+    }
+
+    /// Publish the document's resolution in pixels per inch. Call once before
+    /// the first dab; the `document_settings` node divides it by
+    /// [`crate::document::DEFAULT_DPI`] to publish `dpi_scale`. Left at that
+    /// constant when nobody calls it, so a runner with no document behind it
+    /// (the brush editor preview, tests) renders at a scale of 1.0.
+    pub fn set_dpi(&mut self, dpi: f32) {
+        self.dpi = dpi;
     }
 
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
@@ -924,6 +953,7 @@ impl BrushGraphRunner {
                 self.dab_index,
                 self.base_size,
                 self.dabs_per_pass,
+                self.dpi,
             );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -1038,6 +1068,7 @@ impl BrushGraphRunner {
                 self.dab_index,
                 self.base_size,
                 self.dabs_per_pass,
+                self.dpi,
             );
 
             // Pure-math nodes promoted to the GPU phase (because an input
@@ -1167,6 +1198,7 @@ impl BrushGraphRunner {
                 self.dab_index,
                 self.base_size,
                 self.dabs_per_pass,
+                self.dpi,
             );
             f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }

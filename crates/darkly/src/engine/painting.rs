@@ -982,6 +982,7 @@ impl DarklyEngine {
                 clone_source_anchor,
                 StrokeEngine::random_seed(),
                 self.active_stamp_angle_rate(),
+                self.doc.dpi,
             ));
 
             // Merged clone freezes the root composite, so make sure it's

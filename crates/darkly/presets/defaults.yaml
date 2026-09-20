@@ -116,6 +116,7 @@ settings:
   # Canvas defaults.
   canvas.width: 1920
   canvas.height: 1080
+  canvas.dpi: 300.0
   canvas.backgroundColor: "#000000"
   # Autosave / crash recovery. Darkly-original (no reference-editor analog).
   autosave.enabled: true
