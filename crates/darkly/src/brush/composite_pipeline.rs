@@ -50,10 +50,6 @@ pub struct CompositeUniforms {
     /// 1 = cap written alpha at `max(bg.a, fg_a)` instead of letting
     /// source-over's coverage compound. Colour is unaffected either way.
     pub coverage_ceiling: u32,
-    /// How far the ceiling relaxes back toward plain source-over: 0 refuses
-    /// everything past the saturation level, 1 is ordinary compounding.
-    /// Meaningless unless `coverage_ceiling` is 1.
-    pub layering: f32,
 }
 
 pub struct CompositePipeline {

@@ -404,16 +404,6 @@ pub fn register() -> BrushNodeRegistration {
                 // function of `spacing`, not of artist intent, so a
                 // partial accumulation would leave stroke density
                 // depending on spacing, which is the defect this fixes.
-                PortDef::input("layering", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_label("Layering")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:layer-group")
-                    .exposed()
-                    .with_description(
-                        "Under Wash, how readily fresh pigment sits on pigment already there. At 0 a pass refuses everything past what one pass would deposit, so going back over a mark changes nothing and pressure is the only tonal control. Turn it up and repeated strokes build again, the way a soft grade keeps layering where a hard one burnishes. At 100% it is ordinary compounding. Note this governs separate strokes only: a stroke crossing its own path is one continuous deposit and stays capped whatever this is set to.",
-                    ),
                 PortDef::input("buildup", BrushWireType::Enum)
                     .with_enum_options(["Build-up", "Wash"])
                     .with_value(InputValue::Int(0))
@@ -672,7 +662,6 @@ impl BrushNodeEvaluator for PaintEvaluator {
             gpu.blend_mode,
             /* fg_premultiplied */ true,
             ctx.input("buildup").as_f32() as i32 == CEILING,
-            ctx.input_f32("layering").clamp(0.0, 1.0),
         );
     }
 

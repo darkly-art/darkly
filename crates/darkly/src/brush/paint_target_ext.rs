@@ -44,9 +44,6 @@ pub trait BrushPaintTargetExt {
     ///     Colour is unaffected, which is what keeps the cap inert (rather
     ///     than destructive) on an opaque destination or an R8 mask. Ignored
     ///     under erase: removal must be able to reach zero.
-    ///   - `layering`: how far that cap relaxes back toward plain source-over,
-    ///     0 refusing everything past the saturation level and 1 compounding
-    ///     as before. Ignored unless `coverage_ceiling` is set.
     ///   - `fg_premultiplied`: `true` if the scratch contains
     ///     premultiplied-alpha pixels (e.g. the `paint` terminal renders
     ///     this way to use hardware source-over blend). `false` for
@@ -69,7 +66,6 @@ pub trait BrushPaintTargetExt {
         blend_mode: u32,
         fg_premultiplied: bool,
         coverage_ceiling: bool,
-        layering: f32,
     );
 
     /// Populate an RGBA8 pre-stroke snapshot from this paint target.
@@ -115,7 +111,6 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         blend_mode: u32,
         fg_premultiplied: bool,
         coverage_ceiling: bool,
-        layering: f32,
     ) {
         let canvas_ext = self.canvas_extent();
         let layer_w = canvas_ext.width as f32;
@@ -139,7 +134,6 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             stroke_opacity: opacity,
             apply_selection: 0,
             coverage_ceiling: u32::from(coverage_ceiling),
-            layering,
         };
         let composite = brush_pipelines.get::<CompositePipeline>("composite");
         let offset = composite.write_uniforms(queue, &uniforms);

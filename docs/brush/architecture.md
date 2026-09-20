@@ -247,24 +247,21 @@ perceptually uniform, which is what this actually wants; it needs a different
 reference than the cube corner to keep the `d <= reach` guarantee, so it
 belongs with the colour-system rewrite rather than before it.
 
-**The `layering` port relaxes the refusal.** `t` above is the full-ceiling
-answer; the shader mixes it toward `s` by `layering`, so 0 refuses everything
-past the saturation level and 1 is ordinary compounding. It governs *separate
-strokes only*: the per-dab pass is a fixed-function blend that cannot
-interpolate, so a stroke crossing its own path stays fully capped at any
-setting. That asymmetry is defensible rather than merely forced, since the dabs
-inside one stroke are samples of a single continuous deposit while a second
-stroke is a second deposit, but it does mean the two sites behave alike only at
-0. Measured on the Pencil, darkest pixel over white after 1/2/4/8 separate
-strokes: `0` gives 149/149/149/149, `0.5` gives 149/118/74/29, `1` gives
-149/87/30/3. The first mark never depends on the dial, because there is nothing
-under it to relax against.
+**The refusal is absolute.** `t` is the whole answer: a pixel at the saturation
+level takes nothing, at any pressure, from any number of later strokes. There
+is no partial setting. A commit-side dial that relaxed the cap used to exist
+and was removed: it could only soften the *commit*, so a stroke crossing its
+own path stayed fully capped while separate strokes built, and the two sites
+agreed only at its zero. That made it a second, weaker copy of `Build-up`,
+which compounds at both sites because it is a blend state as well as a commit
+law. One law per brush, chosen by `buildup`, is the whole model.
 
-**What a full ceiling costs.** At `layering = 0`, crosshatch intersections do
-not darken, abutting hatch strokes leave a light seam at the join, and tone
-cannot be built by layering passes at one pressure; pressure is the only tonal
-control. That is the opposite of how graphite behaves, which is what the dial
-is for.
+**What the ceiling costs.** Crosshatch intersections do not darken, abutting
+hatch strokes leave a light seam at the join, and tone cannot be built by
+layering passes at one pressure; pressure is the only tonal control. That is
+the opposite of how graphite behaves, and it is the trade the law exists to
+make. A brush that should build takes `Build-up` instead: the two shipped
+Pencils are the same tip under the two laws, one brush each.
 
 **What it still cannot know is history.** The layer stores appearance, not what
 made it. A pixel already close to the pigment reads as saturated whether this
