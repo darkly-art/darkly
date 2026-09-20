@@ -121,37 +121,63 @@ For a deeper trace look at
 ## How dabs accumulate in the scratch
 
 The scratch is written by one instanced draw per flush, so the law that
-combines overlapping dabs is a *blend state*, not shader code. The `paint`
-terminal's `buildup` port picks between two, and the choice is baked into
-the per-brush pipeline at compile time and carried there on
-[`CompiledBrush::dab_blend`](../../crates/darkly/src/brush/wgsl/mod.rs).
-Both constants live in
-[`brush/node.rs`](../../crates/darkly/src/brush/node.rs).
+combines overlapping dabs is a *blend state*, not shader code. Two exist,
+both in [`brush/node.rs`](../../crates/darkly/src/brush/node.rs).
 
-**`Build-up`** (`PREMULTIPLIED_SOURCE_OVER`, the registration default, and
-what every brush but the Pencil uses, the Build-up Pencil included)
-composites each dab over the last.
+**`PREMULTIPLIED_SOURCE_OVER`** composites each dab over the last.
 Coverage accumulates as `1 - prod(1 - a_i)`, so a pixel's density rises
 with however many dabs the spacing happened to stack on it. Its density is
-therefore a function of `spacing`, not only of pressure: the shipped Pencil
+therefore a function of `spacing`, not only of pressure: the Pencil
 measured 0.714 peak alpha at `spacing: 0.10` and 0.984 at `spacing: 0.01`,
 same path, same pressure.
 
-**`Wash`** (`COVERAGE_CEILING`) uses `BlendOperation::Max` instead, so a
-pixel takes its strongest dab rather than the sum of its dabs. A stroke
-cannot darken itself by crossing back over its own path, density stops
-depending on spacing (identical to the byte across a 30x spacing spread),
-and pressure becomes the only thing setting it.
+**`COVERAGE_CEILING`** uses `BlendOperation::Max` instead, so a pixel takes
+its strongest dab rather than the sum of its dabs. A stroke cannot darken
+itself by crossing back over its own path, density stops depending on
+spacing (identical to the byte across a 30x spacing spread), and pressure
+becomes the only thing setting it.
 
-The choice is two options rather than a slider, and not for want of
-trying. Fixed-function blending offers one equation per attachment with no
-interpolation between `Add` and `Max`, and WebGPU has no framebuffer
-fetch, so a continuous law would need one draw call per dab and would cost
-the instanced single-pass design that makes 1px spacing affordable. The
-binary shape is also the honest one: within a stroke the overlap count is
-a function of `spacing`, not of artist intent, so a partial accumulation
-would leave stroke density depending on spacing, which is the defect
-`Wash` exists to fix.
+### The accumulation dial
+
+A blend state cannot be interpolated: fixed-function blending offers one
+equation per attachment with no midpoint between `Add` and `Max`, and
+WebGPU has no framebuffer fetch, so no single attachment can be made to
+accumulate part-way between the two. What *is* continuous is the input.
+
+The `paint` terminal's `buildup` port is a scalar in `[0, 1]`, and the
+share it names splits every dab between two accumulations that each run
+one law untouched:
+
+| `buildup` | the scratch | second accumulation | the dab |
+| --- | --- | --- | --- |
+| `0` | `COVERAGE_CEILING` | none | all of it washes |
+| `1` | `PREMULTIPLIED_SOURCE_OVER` | none | all of it stacks |
+| between | `COVERAGE_CEILING` | `build` (`Rgba8Unorm`, source-over) | `1 - b` washes, `b` stacks |
+
+Both halves ride the one instanced draw as two colour attachments, so 1px
+spacing stays as affordable as it was, and a brush at either end declares
+no channel and pays nothing. The port is stroke-constant: its value picks
+blend states and colour targets when the brush compiles, so no per-dab wire
+can drive it, and `PortDef::stroke_constant` is what says so.
+
+Each half has its own per-dab intensity, `wash_flow` ("Flow (Wash)") and
+`build_flow` ("Flow (Build-up)"), so an author can scale one without the
+other. They matter because the two ends deposit different amounts on
+untouched ground: `Max` takes one dab where source-over stacks every dab
+that lands, which at 1px spacing is tens of them. A pass on fresh ground
+therefore darkens as the dial rises (measured on the Pencil at pressure
+0.7, darkest over white: 149 / 74 / 30 / 9 / 1 across the dial), and
+lowering `build_flow` against `wash_flow` is how a brush holds it level.
+The terminal does not correct it automatically: the only correction that
+would is a per-dab normalisation by the overlap count, and that removes
+the per-dab stacking the top of the dial exists to provide.
+
+What the dial buys is that the two places overlap can happen agree.
+Retracing a path inside one stroke and drawing a second stroke over it
+build the same amount at every setting (measured surcharge, median alpha
+at spacing 0.30: 2 / 25 / 43 / 54 / 62 within a stroke, 0 / 24 / 44 / 56 /
+63 across strokes). The wash half refuses at both sites, the stacking half
+compounds at both, and the commit is what keeps them in step.
 
 ### What `Wash` requires, and what it changes
 
@@ -191,14 +217,25 @@ blend above handles one stroke's own dabs; the commit
 holds. One invariant covers both: **a pixel never takes more deposit than a
 single pass over it would have laid down.**
 
-The two are different mechanisms and have to be. The commit could take a
-continuous rate, but the per-dab pass cannot: applied once per dab it composes
-to `1 - (1 - s*k)^n` with `n = diameter/spacing`, so any partial rate puts tone
-back under the spacing slider, which is the defect the ceiling exists to
-remove. Only a full ceiling is spacing-invariant, and it is also the only
-setting at which the two sites behave alike, so crossing your own stroke and
-crossing an earlier one give the same result. That parity is why the ceiling is
-hard rather than softened.
+The two are different mechanisms and have to be, and the ceiling is hard at
+both. Softening it per dab would compose to `1 - (1 - s*k)^n` with
+`n = diameter/spacing`, putting tone back under the spacing slider, which is
+the defect it exists to remove; softening it only at the commit would let
+separate strokes build while a stroke crossing its own path stayed capped.
+Keeping it hard at both sites is what makes crossing your own stroke and
+crossing an earlier one give the same result. The dial changes how much of
+each dab this law receives, never how strictly it then applies, which is why
+that parity survives at every setting.
+
+**The commit takes two foregrounds**, one per law, each with its own stroke
+opacity where zero means the slot is absent. The wash slot goes through the
+ceiling below; the build slot is then composited on top with plain
+source-over. The order is load-bearing: the ceiling reads the ground to find
+room, so a build half laid underneath would let a stroke's own build-up shrink
+its own wash. Under erase each slot removes its own coverage and neither
+consults the ceiling, because removal must be able to reach zero. Which
+accumulation fills which slot is the terminal's knowledge; the shader knows
+two slots and two laws, and watercolor fills the build slot alone.
 
 **How the commit decides.** A pass carrying pigment `C` at coverage `s` lands,
 starting from blank, a fixed fraction of the way to `C`. Everything past that
@@ -247,21 +284,22 @@ perceptually uniform, which is what this actually wants; it needs a different
 reference than the cube corner to keep the `d <= reach` guarantee, so it
 belongs with the colour-system rewrite rather than before it.
 
-**The refusal is absolute.** `t` is the whole answer: a pixel at the saturation
-level takes nothing, at any pressure, from any number of later strokes. There
-is no partial setting. A commit-side dial that relaxed the cap used to exist
-and was removed: it could only soften the *commit*, so a stroke crossing its
-own path stayed fully capped while separate strokes built, and the two sites
-agreed only at its zero. That made it a second, weaker copy of `Build-up`,
-which compounds at both sites because it is a blend state as well as a commit
-law. One law per brush, chosen by `buildup`, is the whole model.
+**The refusal is absolute, within its half.** `t` is the whole answer: a pixel
+at the saturation level takes nothing more of the washing half, at any
+pressure, from any number of later strokes. There is no partial ceiling. A
+commit-side dial that relaxed it used to exist and was removed: it could only
+soften the *commit*, so a stroke crossing its own path stayed fully capped
+while separate strokes built, and the two sites agreed only at its zero. That
+made it a second, weaker copy of source-over accumulation. What varies with
+`buildup` is how much of each dab is handed to this law at all, not how
+strictly the law then applies.
 
-**What the ceiling costs.** Crosshatch intersections do not darken, abutting
-hatch strokes leave a light seam at the join, and tone cannot be built by
-layering passes at one pressure; pressure is the only tonal control. That is
-the opposite of how graphite behaves, and it is the trade the law exists to
-make. A brush that should build takes `Build-up` instead: the two shipped
-Pencils are the same tip under the two laws, one brush each.
+**What the ceiling costs.** At the bottom of the dial, crosshatch
+intersections do not build, abutting hatch strokes leave a seam at the join,
+and tone cannot be built by repeated passes at one pressure; pressure is the
+only tonal control. That is the opposite of how graphite behaves, and it is
+the trade the law makes. Raising `buildup` is how a brush buys some of that
+back, and the two shipped Pencils sit at the two ends.
 
 **What it still cannot know is history.** The layer stores appearance, not what
 made it. A pixel already close to the pigment reads as saturated whether this

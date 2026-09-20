@@ -26,10 +26,13 @@ use darkly::layer::LayerId;
 const W: u32 = 256;
 const H: u32 = 128;
 
-/// `Wash`, as the shipped Pencil selects it.
-const WASH: i32 = 1;
-/// `Build-up`, the registration default and every other brush's law.
-const BUILD_UP: i32 = 0;
+/// Wash: the bottom of the accumulation dial, as the shipped Pencil
+/// authors it. A pixel takes its strongest dab and the commit refuses
+/// anything past what one pass would deposit.
+const WASH: f32 = 0.0;
+/// Build-up: the top of the dial, the registration default, and every
+/// other shipped brush's law. Every dab composites over the last.
+const BUILD_UP: f32 = 1.0;
 
 fn test_engine() -> DarklyEngine {
     let (device, queue) = test_device();
@@ -63,14 +66,19 @@ fn install_builtin(engine: &mut DarklyEngine, name: &str) {
 
 /// Install the builtin Pencil and set its accumulation law. `buildup`
 /// of `None` leaves whatever the brush ships with.
-fn install_pencil(engine: &mut DarklyEngine, buildup: Option<i32>) {
+fn install_pencil(engine: &mut DarklyEngine, buildup: Option<f32>) {
     install_builtin(engine, "Pencil");
-    if let Some(mode) = buildup {
-        let term = find_node_id(engine, "paint");
-        engine
-            .brush_graph_set_input(&term, "buildup", InputValue::Int(mode))
-            .expect("paint buildup port");
+    if let Some(dial) = buildup {
+        set_buildup(engine, dial);
     }
+}
+
+/// Set the accumulation dial on the active graph's `paint` terminal.
+fn set_buildup(engine: &mut DarklyEngine, dial: f32) {
+    let term = find_node_id(engine, "paint");
+    engine
+        .brush_graph_set_input(&term, "buildup", InputValue::Scalar(dial))
+        .expect("paint buildup port");
 }
 
 fn set_spacing(engine: &mut DarklyEngine, spacing: f32) {
@@ -136,7 +144,7 @@ fn median(alphas: &[u8]) -> u8 {
 /// `buildup` of `None` takes the brush's law as authored.
 fn run_brush(
     name: &str,
-    buildup: Option<i32>,
+    buildup: Option<f32>,
     pressure: f32,
     spacing: f32,
     passes: u32,
@@ -144,11 +152,8 @@ fn run_brush(
     let mut engine = test_engine();
     let layer = engine.add_raster_layer(None);
     install_builtin(&mut engine, name);
-    if let Some(mode) = buildup {
-        let term = find_node_id(&engine, "paint");
-        engine
-            .brush_graph_set_input(&term, "buildup", InputValue::Int(mode))
-            .expect("paint buildup port");
+    if let Some(dial) = buildup {
+        set_buildup(&mut engine, dial);
     }
     set_spacing(&mut engine, spacing);
     stroke_centreline(&mut engine, layer, pressure, passes);
@@ -156,8 +161,110 @@ fn run_brush(
 }
 
 /// One Pencil stroke along the centreline under an explicit law.
-fn run(buildup: i32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
+fn run(buildup: f32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
     run_brush("Pencil", Some(buildup), pressure, spacing, passes)
+}
+
+// ── Byte-identity pins ──────────────────────────────────────────────────
+
+/// Adapter the rows below were captured on. The two Pencils' tips are fbm
+/// noise evaluated in the fragment shader, so their bytes are only promised
+/// on the driver they were measured against; the Ink Pen's dab is analytic
+/// and matches everywhere. Measured identical on this machine's Intel ANV
+/// and Mesa GL stacks, but lavapipe (what CI runs) was not available to
+/// check, so the Pencil rows are asserted only when the name matches and
+/// skipped with a note otherwise.
+const PIN_ADAPTER: &str = "Intel(R) Graphics (RPL-U)";
+
+const PENCIL_PIN: [u8; 256] = [
+    0, 0, 0, 0, 0, 21, 37, 61, 47, 44, 48, 48, 75, 70, 77, 78, 65, 56, 57, 60, 71, 61, 59, 61, 61,
+    56, 50, 48, 61, 52, 54, 92, 88, 81, 61, 66, 72, 72, 56, 50, 45, 75, 82, 80, 47, 55, 49, 56, 57,
+    49, 56, 48, 49, 61, 73, 90, 80, 63, 65, 67, 71, 74, 76, 52, 61, 67, 53, 60, 79, 78, 68, 61, 55,
+    49, 46, 41, 42, 40, 59, 50, 51, 48, 51, 54, 72, 86, 97, 90, 70, 45, 41, 53, 70, 59, 47, 46, 50,
+    52, 61, 59, 50, 52, 59, 62, 36, 33, 56, 63, 60, 55, 53, 57, 47, 61, 81, 90, 93, 102, 78, 79,
+    82, 60, 48, 51, 62, 77, 72, 84, 99, 77, 67, 71, 68, 69, 74, 60, 70, 88, 81, 60, 62, 68, 57, 57,
+    46, 57, 66, 65, 66, 81, 74, 58, 60, 78, 61, 71, 86, 88, 98, 93, 95, 97, 104, 81, 44, 53, 73,
+    89, 85, 72, 69, 76, 67, 64, 65, 74, 72, 64, 71, 62, 66, 76, 85, 51, 59, 64, 44, 34, 48, 60, 57,
+    52, 56, 49, 37, 42, 51, 56, 49, 44, 47, 54, 68, 75, 64, 61, 70, 58, 75, 66, 62, 58, 58, 47, 41,
+    68, 89, 83, 72, 58, 48, 61, 97, 85, 37, 48, 99, 105, 88, 60, 63, 55, 53, 79, 71, 63, 89, 80,
+    75, 87, 91, 66, 43, 28, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+const BUILDUP_PENCIL_PIN: [u8; 256] = [
+    16, 47, 66, 75, 95, 131, 107, 166, 180, 146, 177, 147, 159, 181, 189, 161, 142, 159, 198, 191,
+    201, 195, 212, 201, 221, 177, 188, 198, 169, 169, 159, 195, 220, 209, 188, 195, 205, 212, 169,
+    184, 141, 159, 191, 195, 166, 184, 205, 179, 159, 212, 179, 179, 184, 191, 191, 188, 169, 184,
+    195, 195, 195, 154, 195, 209, 184, 179, 159, 179, 195, 212, 176, 166, 179, 198, 212, 209, 184,
+    167, 188, 170, 179, 159, 119, 126, 177, 202, 179, 205, 212, 179, 185, 179, 181, 212, 184, 177,
+    184, 188, 209, 167, 177, 191, 198, 179, 170, 159, 205, 212, 212, 198, 188, 191, 188, 184, 167,
+    142, 179, 147, 167, 198, 181, 184, 188, 191, 202, 215, 205, 167, 147, 177, 179, 170, 179, 201,
+    166, 212, 215, 177, 195, 159, 165, 179, 188, 159, 142, 159, 198, 191, 201, 195, 212, 201, 221,
+    177, 188, 198, 169, 169, 159, 195, 220, 209, 188, 195, 205, 212, 169, 184, 141, 159, 191, 195,
+    166, 184, 205, 179, 159, 212, 179, 179, 184, 191, 191, 188, 169, 184, 195, 195, 195, 154, 195,
+    209, 184, 179, 159, 179, 195, 212, 176, 166, 179, 198, 212, 209, 184, 167, 188, 170, 179, 159,
+    119, 126, 177, 202, 179, 205, 212, 179, 185, 179, 181, 212, 184, 177, 184, 188, 209, 167, 177,
+    191, 198, 179, 170, 159, 202, 203, 196, 174, 153, 146, 132, 116, 89, 59, 69, 38, 31, 22, 5, 0,
+    0, 0, 0, 0, 0, 0,
+];
+
+const INK_PEN_PIN: [u8; 256] = [
+    253, 253, 254, 254, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 254, 254,
+    253, 253, 253, 252, 248, 248, 248, 238, 232,
+];
+
+/// One stroke of a builtin exactly as its YAML declares it, as centreline
+/// alpha: the shape every pin below compares.
+fn authored_centreline(name: &str) -> Vec<u8> {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_builtin(&mut engine, name);
+    stroke_centreline(&mut engine, layer, 0.7, 1);
+    centreline_alpha(&engine, layer)
+}
+
+/// The shipped brushes render exactly as they did before the accumulation
+/// dial replaced the `buildup` enum.
+///
+/// These are the regression pins for both ends of the dial and for the
+/// registration default: the Pencil is Wash, the Build-up Pencil is
+/// Build-up, and the Ink Pen never mentions the port at all. Captured on
+/// the unchanged tree before any of the dial work, so they compare against
+/// a known-good render rather than against the new code's own output.
+#[test]
+fn shipped_brushes_render_byte_identically_to_their_pins() {
+    assert_eq!(
+        authored_centreline("Ink Pen"),
+        INK_PEN_PIN,
+        "Ink Pen: a brush that never mentions the accumulation port must not move"
+    );
+
+    let adapter = darkly::gpu::test_utils::test_adapter_name();
+    if adapter != PIN_ADAPTER {
+        eprintln!("skipping the Pencil pins: captured on {PIN_ADAPTER}, running on {adapter}");
+        return;
+    }
+    assert_eq!(
+        authored_centreline("Pencil"),
+        PENCIL_PIN,
+        "Pencil: the Wash end of the dial must render as it did before"
+    );
+    assert_eq!(
+        authored_centreline("Build-up Pencil"),
+        BUILDUP_PENCIL_PIN,
+        "Build-up Pencil: the Build-up end of the dial must render as it did before"
+    );
 }
 
 /// The defect this feature exists to fix: under `Build-up`, stroke
@@ -262,7 +369,7 @@ fn wash_still_responds_to_pressure() {
 /// eraser scrubbed back over its own path stops punching further through.
 #[test]
 fn wash_erase_does_not_compound_on_self_overlap() {
-    let erase_run = |buildup: i32| {
+    let erase_run = |buildup: f32| {
         let mut engine = test_engine();
         let layer = engine.add_raster_layer(None);
 
@@ -300,24 +407,21 @@ fn wash_erase_does_not_compound_on_self_overlap() {
 /// unit tests.
 #[test]
 fn default_accumulation_is_byte_identical_to_explicit_build_up() {
-    let default_run = |buildup: Option<i32>| {
+    let run = |buildup: Option<f32>| {
         let mut engine = test_engine();
         let layer = engine.add_raster_layer(None);
-        install_pencil(&mut engine, buildup);
-        // The shipped Pencil selects Wash, so drive the default through
-        // a port reset rather than through the brush's own authored value.
-        let term = find_node_id(&engine, "paint");
-        if buildup.is_none() {
-            engine
-                .brush_graph_set_input(&term, "buildup", InputValue::Int(BUILD_UP))
-                .expect("paint buildup port");
+        // The Ink Pen never mentions the port, so its "as authored" render
+        // is the registration default itself, not a value the test wrote.
+        install_builtin(&mut engine, "Ink Pen");
+        if let Some(dial) = buildup {
+            set_buildup(&mut engine, dial);
         }
         stroke_centreline(&mut engine, layer, 0.7, 1);
         engine.test_readback_layer(layer)
     };
     assert_eq!(
-        default_run(None),
-        default_run(Some(BUILD_UP)),
+        run(None),
+        run(Some(BUILD_UP)),
         "the registration default must render byte-identically to explicit Build-up"
     );
 }
@@ -634,5 +738,270 @@ fn the_shipped_buildup_pencil_stacks_within_a_stroke_and_across_strokes() {
         peak(&previous),
         255,
         "Build-up Pencil: eight strokes along the same path should compound to opaque"
+    );
+}
+
+// ── The accumulation dial ───────────────────────────────────────────────
+
+/// Darkest centreline pixel composited over white. Lower is darker. Works
+/// for transparent and opaque destinations alike, which is the point.
+fn darkest_over_white(engine: &DarklyEngine, layer: LayerId) -> i32 {
+    let px = engine.test_readback_layer(layer);
+    let y = H / 2;
+    (0..W)
+        .map(|x| {
+            let i = ((y * W + x) * 4) as usize;
+            let a = px[i + 3] as f32 / 255.0;
+            (((px[i] as f32 / 255.0) * a + (1.0 - a)) * 255.0) as i32
+        })
+        .min()
+        .unwrap()
+}
+
+/// The ladder every dial test walks.
+const DIAL: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+/// What retracing a path inside one stroke adds, at `dial`.
+fn within_stroke_surcharge(dial: f32) -> i32 {
+    let once = median(&run(dial, 0.5, 0.30, 1)) as i32;
+    let twice = median(&run(dial, 0.5, 0.30, 2)) as i32;
+    twice - once
+}
+
+/// What a second, separate stroke over the same path adds, at `dial`.
+fn across_stroke_surcharge(dial: f32) -> i32 {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_pencil(&mut engine, Some(dial));
+    set_spacing(&mut engine, 0.30);
+    stroke_centreline(&mut engine, layer, 0.5, 1);
+    let once = median(&centreline_alpha(&engine, layer)) as i32;
+    stroke_centreline(&mut engine, layer, 0.5, 1);
+    let twice = median(&centreline_alpha(&engine, layer)) as i32;
+    twice - once
+}
+
+/// Retracing a path inside one stroke builds more as the dial rises, and
+/// nothing at all at the bottom.
+///
+/// Measured surcharge in median alpha at spacing 0.30, pressure 0.5:
+/// 2 / 25 / 43 / 54 / 62 across the ladder. The loose spacing is
+/// deliberate: at tight spacing the stacking half saturates early and the
+/// ladder flattens, which would make the test pass for the wrong reason.
+#[test]
+fn within_stroke_overlap_builds_more_as_the_dial_rises() {
+    let ladder: Vec<i32> = DIAL.iter().map(|d| within_stroke_surcharge(*d)).collect();
+    assert!(
+        ladder[0] <= 2,
+        "at Wash a retrace must add nothing: {ladder:?}"
+    );
+    for pair in ladder.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "each step of the dial must build more than the one below: {ladder:?}"
+        );
+    }
+    assert!(
+        ladder[4] >= 8,
+        "at Build-up a retrace must visibly darken: {ladder:?}"
+    );
+}
+
+/// A second, separate stroke builds the same way a retrace does, at every
+/// setting. This is the property the dial is for: the two places overlap
+/// can happen agree, rather than one compounding while the other refuses.
+///
+/// Measured gap between the two sites: 2 / 1 / 1 / 2 / 1 counts. The
+/// tolerance is the dab-space grain the file already allows per site (two
+/// counts each, as in the spacing and self-overlap tests), not a number
+/// read off the measurement.
+#[test]
+fn both_overlap_sites_build_alike_at_every_dial_setting() {
+    const SITE_PARITY_TOL: i32 = 4;
+    for dial in DIAL {
+        let within = within_stroke_surcharge(dial);
+        let across = across_stroke_surcharge(dial);
+        assert!(
+            (within - across).abs() <= SITE_PARITY_TOL,
+            "dial {dial}: a retrace added {within} but a second stroke added {across};              the two sites must build alike"
+        );
+    }
+}
+
+/// A pass on fresh ground gets darker or stays as the dial rises, never
+/// lighter, and the dial's whole range is reachable.
+///
+/// This is the honest statement of what the dial costs: the two ends
+/// deposit different amounts on untouched ground (Wash takes one dab,
+/// Build-up stacks every dab that lands), so a mix of them lands between.
+/// Measured darkest-over-white after one stroke at pressure 0.7:
+/// 149 / 74 / 30 / 9 / 1. A brush author holds it level by lowering
+/// `build_flow` against `wash_flow`; the terminal does not do it for them,
+/// because the only correction that would is a per-dab normalisation, and
+/// that is what removes per-dab stacking.
+#[test]
+fn a_fresh_pass_never_lightens_as_the_dial_rises() {
+    let darkest: Vec<i32> = DIAL
+        .iter()
+        .map(|dial| {
+            let mut engine = test_engine();
+            let layer = engine.add_raster_layer(None);
+            install_pencil(&mut engine, Some(*dial));
+            stroke_centreline(&mut engine, layer, 0.7, 1);
+            darkest_over_white(&engine, layer)
+        })
+        .collect();
+    for pair in darkest.windows(2) {
+        assert!(
+            pair[1] <= pair[0],
+            "a fresh pass must get darker or stay, never lighter: {darkest:?}"
+        );
+    }
+    assert!(
+        darkest[0] - darkest[4] > 32,
+        "the dial must actually reach from one law to the other: {darkest:?}"
+    );
+}
+
+/// The layer's transparency must not change the result at any dial
+/// setting: the mid-dial commit lays one accumulation over another, and
+/// neither step may reintroduce the dependence the deposit model removes.
+///
+/// Tolerance of 2 rather than the single-law test's 1: the mid-dial commit
+/// runs one more straight-alpha composite, and its rounding lands in the
+/// last bit.
+#[test]
+fn transparent_and_opaque_layers_agree_at_every_dial_setting() {
+    for dial in [0.0, 0.5, 1.0] {
+        let run_on = |opaque: bool| {
+            let mut engine = test_engine();
+            let layer = engine.add_raster_layer(None);
+            if opaque {
+                fill_opaque(&mut engine, layer, 255, 255, 255);
+            }
+            install_pencil(&mut engine, Some(dial));
+            for _ in 0..3 {
+                stroke_centreline(&mut engine, layer, 0.7, 1);
+            }
+            darkest_over_white(&engine, layer)
+        };
+        let (transparent, opaque) = (run_on(false), run_on(true));
+        assert!(
+            (transparent - opaque).abs() <= 2,
+            "dial {dial}: transparent reached {transparent}, opaque {opaque}; \
+             layer transparency must not change the result"
+        );
+    }
+}
+
+/// An eraser scrubbing its own path removes more as the dial rises, for
+/// the same reason a brush deposits more: each half removes its own
+/// coverage, and the stacking half compounds where the washing half caps.
+#[test]
+fn erase_removes_more_as_the_dial_rises() {
+    let remaining: Vec<u8> = DIAL
+        .iter()
+        .map(|dial| {
+            let mut engine = test_engine();
+            let layer = engine.add_raster_layer(None);
+            fill_opaque(&mut engine, layer, 0, 0, 0);
+            install_pencil(&mut engine, Some(*dial));
+            engine.set_brush_blend_mode(1);
+            stroke_centreline(&mut engine, layer, 0.6, 4);
+            *centreline_alpha(&engine, layer).iter().min().unwrap()
+        })
+        .collect();
+    for pair in remaining.windows(2) {
+        assert!(
+            pair[1] <= pair[0],
+            "a scrubbing eraser must remove at least as much as the setting below: {remaining:?}"
+        );
+    }
+    assert!(
+        remaining[0] > remaining[4],
+        "the dial must change how an eraser compounds: {remaining:?}"
+    );
+}
+
+/// The two laws, stated as arithmetic rather than as one brush's look.
+///
+/// At the bottom of the dial a pixel reads one dab however many landed on
+/// it (`Max` of equal dabs); at the top it reads them composited over each
+/// other, `1 - (1 - a)^k`. So the ratio of `ln(1 - b)` to `ln(1 - a)` is
+/// the number of dabs that landed, a whole number of at least two for a
+/// stroke short enough to sit inside one dab.
+///
+/// The dab count is measured, never assumed: the segment walk starts at
+/// zero distance travelled, so a two-event stroke places three dabs, not
+/// two. This test is what a per-dab normalisation would break, whatever it
+/// did to any particular brush's tuning.
+#[test]
+fn the_top_of_the_dial_stacks_dabs_by_source_over() {
+    let centre_alpha = |dial: f32| {
+        let mut engine = test_engine();
+        let layer = engine.add_raster_layer(None);
+        // Calligraphy wires neither flow, so both halves take the value
+        // this test authors and the arithmetic is about the law alone.
+        install_builtin(&mut engine, "Calligraphy");
+        set_buildup(&mut engine, dial);
+        let term = find_node_id(&engine, "paint");
+        for port in ["wash_flow", "build_flow"] {
+            engine
+                .brush_graph_set_input(&term, port, InputValue::Scalar(0.25))
+                .expect("paint flow port");
+        }
+        // A hard-edged round disc wide enough that a short stroke stays
+        // inside every dab it places, so the centre pixel sees them all at
+        // full strength and the falloff never enters the arithmetic.
+        let circle = find_node_id(&engine, "circle");
+        for (port, value) in [("softness", 0.0), ("aspect", 1.0)] {
+            engine
+                .brush_graph_set_input(&circle, port, InputValue::Scalar(value))
+                .expect("circle port");
+        }
+        let bs = find_node_id(&engine, "brush_settings");
+        engine
+            .brush_graph_set_input(&bs, "size", InputValue::Scalar(0.5))
+            .expect("brush_settings size port");
+        engine
+            .brush_graph_set_input(&bs, "stabilize", InputValue::Scalar(0.0))
+            .expect("brush_settings stabilize port");
+
+        engine.begin_stroke(layer).unwrap();
+        for i in 0..2 {
+            engine.stroke_to(StrokeOp::BrushStroke {
+                x: (W / 2) as f32 + i as f32 * 2.0,
+                y: (H / 2) as f32,
+                pressure: 1.0,
+                x_tilt: 0.0,
+                y_tilt: 0.0,
+                rotation: 0.0,
+                tangential_pressure: 0.0,
+                time_ms: i as f64 * 16.0,
+                cr: 0.0,
+                cg: 0.0,
+                cb: 0.0,
+                ca: 1.0,
+            });
+        }
+        engine.end_stroke();
+        engine.test_flush_readbacks();
+        let px = engine.test_readback_layer(layer);
+        let i = (((H / 2) * W + W / 2) * 4) as usize;
+        px[i + 3] as f32 / 255.0
+    };
+
+    let a = centre_alpha(0.0);
+    assert!(
+        (a - 0.25).abs() < 0.02,
+        "one dab should land at the authored flow, 0.25; read {a}"
+    );
+
+    let b = centre_alpha(1.0);
+    let k = (1.0 - b).ln() / (1.0 - a).ln();
+    assert!(
+        (k - k.round()).abs() < 0.1 && k.round() >= 2.0,
+        "the same dabs composited over each other must read as a whole \
+         number of them, at least two: one dab {a}, the stroke {b}, ratio {k}"
     );
 }

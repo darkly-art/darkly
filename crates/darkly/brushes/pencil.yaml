@@ -107,7 +107,7 @@ nodes:
   paint:
     type: paint
     inputs:
-      buildup: 1
+      buildup: 0.0
   paint_color:
     type: paint_color
   pen_input:
@@ -121,7 +121,7 @@ connections:
 - curve_2.output -> add.a
 - curve_3.output -> add.b
 - curve_4.output -> levels.in_high
-- curve_6.output -> paint.flow
+- curve_6.output -> paint.wash_flow
 - levels.output -> multiply.a
 - multiply.result -> stamp.tip
 - multiply_2.result -> curve.input
@@ -139,8 +139,7 @@ exposed_ports:
   brush_settings.size: {}
   paint.opacity: {}
   paint.buildup: {}
-  paint.flow:
+  paint.wash_flow:
     label: Hardness
-    description: Stroke-level flow cap (folded into rgba alpha)
     icon: mdi:pencil
     invert: true

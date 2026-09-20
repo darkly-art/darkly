@@ -291,6 +291,11 @@ impl PerBrushPipeline {
         // so the only thing varying across the footprint is coverage, and
         // the ROP composites the stamp onto whatever is already there.
         let composite_blend = crate::brush::node::PREMULTIPLIED_SOURCE_OVER;
+        let composite_targets = CompiledBrush {
+            dab_blend: composite_blend,
+            ..compiled.clone()
+        }
+        .color_targets(wgpu::TextureFormat::Rgba8Unorm);
 
         let composite_pipeline =
             ctx.device
@@ -306,21 +311,10 @@ impl PerBrushPipeline {
                     fragment: Some(wgpu::FragmentState {
                         module: &composite_shader,
                         entry_point: Some("fs_main"),
-                        // Two targets, in the order the generated `FsOut`
-                        // declares them: the scratch at `@location(0)`,
-                        // the deposit channel at `@location(1)`.
-                        targets: &[
-                            Some(wgpu::ColorTargetState {
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                blend: Some(composite_blend),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            }),
-                            Some(wgpu::ColorTargetState {
-                                format: DEPOSIT_CHANNEL.format,
-                                blend: Some(DEPOSIT_CHANNEL.blend),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            }),
-                        ],
+                        // The scratch at `@location(0)` then each declared
+                        // channel, derived from the same declaration the
+                        // generated `FsOut` and the attachments come from.
+                        targets: &composite_targets,
                         compilation_options: Default::default(),
                     }),
                     primitive: wgpu::PrimitiveState {
@@ -917,19 +911,6 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
 
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
-        // Allocate the deposit channel, idempotently. A fragment cannot
-        // sample the attachment it blends into, so what a dab reads is a
-        // mirror, refreshed inside the composite loop below.
-        {
-            let device = gpu.device;
-            let Some(stroke) = gpu.stroke.as_mut() else {
-                return;
-            };
-            stroke
-                .scratch
-                .ensure_channels(device, &mut gpu.encoder, &[DEPOSIT_CHANNEL]);
-        }
-
         let stroke = gpu
             .stroke
             .as_ref()
@@ -1034,41 +1015,10 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             });
             // The pickup reads the deposit channel directly: this pass
             // targets the atlas, so there is no read/write alias.
-            let channel_views = scratch.channel_views();
-            let deposit_read_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("watercolor-pickup-deposit-bg"),
-                layout: gpu.pipelines.canvas_copy_bind_group_layout(),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&channel_views[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&per_brush.canvas_copy_sampler),
-                    },
-                ],
-            });
-            let attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: scratch.write_view(),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &channel_views[0],
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-            ];
+            let deposit_read_bg = scratch
+                .channel_bind_group(DEPOSIT_CHANNEL.name)
+                .expect("watercolor declares its deposit channel");
+            let attachments = scratch.color_attachments(wgpu::LoadOp::Load);
             let pickup_attachments = [
                 Some(wgpu::RenderPassColorAttachment {
                     view: &per_brush.atlas_attachment_view,
@@ -1102,7 +1052,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                     pass.set_bind_group(0, &per_brush.pickup_uniform_bind_group, &[pickup_offset]);
                     pass.set_bind_group(1, &per_brush.dabs_bind_group_pickup, &[]);
                     pass.set_bind_group(2, pre_stroke_bg, &[]);
-                    pass.set_bind_group(3, &deposit_read_bg, &[]);
+                    pass.set_bind_group(3, deposit_read_bg, &[]);
                     pass.draw(0..6, i..i + 1);
                 }
 
@@ -1144,16 +1094,14 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             &mut gpu.encoder,
             gpu.pipelines,
             gpu.queue,
-            stroke.scratch.write_bind_group(),
-            gpu.selection_bind_group,
+            // Wet media glazes: layered washes are meant to compound, so
+            // watercolor takes the source-over slot and never the ceiling.
+            /* wash */
+            None,
+            /* build */ Some(stroke.scratch.write_bind_group()),
             stroke.pre_stroke_bind_group,
             opacity,
             gpu.blend_mode,
-            /* fg_premultiplied */ true,
-            // Wet media glazes: layered washes are meant to compound, so
-            // watercolor never takes the coverage ceiling.
-            /* coverage_ceiling */
-            false,
         );
     }
 
@@ -1190,7 +1138,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let deposit_expr = cctx.input("deposit").as_f32();
         let wetness_expr = cctx.input("wetness").as_f32();
 
-        wgsl.terminal_outputs = vec![DEPOSIT_CHANNEL.name.to_string()];
+        wgsl.channels = vec![DEPOSIT_CHANNEL];
         wgsl.terminal_bindings = "@group(3) @binding(0) var atlas_tex: texture_2d<f32>;\n\
              @group(3) @binding(1) var atlas_smp: sampler;\n\
              @group(3) @binding(2) var deposit_tex: texture_2d<f32>;\n"

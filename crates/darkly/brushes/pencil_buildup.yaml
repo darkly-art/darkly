@@ -56,8 +56,8 @@ nodes:
   paint:
     type: paint
     inputs:
-      buildup: 0
-      flow: 0.5003772377967834
+      buildup: 1.0
+      build_flow: 0.5003772377967834
   paint_color:
     type: paint_color
   pen_input:
@@ -83,8 +83,7 @@ exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   paint.opacity: {}
-  paint.flow:
+  paint.build_flow:
     label: Hardness
-    description: Stroke-level flow cap (folded into rgba alpha)
     icon: mdi:pencil
     invert: true

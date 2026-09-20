@@ -90,12 +90,14 @@ pub struct PortDef<W: WireKind> {
     /// random's `mode`). Empty for every other input kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enum_options: Vec<String>,
-    /// Whether an upstream wire may drive this input per-dab. Computed from
-    /// `wire_type.is_wirable()` at construction and carried as data so the
-    /// frontend reads it directly rather than re-deriving the rule; the
-    /// single source of truth is [`WireKind::is_wirable`]. Every port built
-    /// from a registration (`PortDef::input`/`output`, and the clones in
-    /// `add_node` / portable import) sets it correctly; serde round-trips it.
+    /// Whether an upstream wire may drive this input per-dab. Seeded from
+    /// `wire_type.is_wirable()` at construction, and cleared by
+    /// [`PortDef::stroke_constant`] for an otherwise-wirable type whose value
+    /// is read before any dab exists. Carried as data so `connect` and the
+    /// frontend read the port's own answer rather than re-deriving a rule
+    /// from the type. Every port built from a registration
+    /// (`PortDef::input`/`output`, and the clones in `add_node` / portable
+    /// import) sets it correctly; serde round-trips it.
     #[serde(default)]
     pub wirable: bool,
     /// Whether an artist may *expose* this input as a brush-bar control.
@@ -397,6 +399,19 @@ impl<W: WireKind> PortDef<W> {
     /// Mark this port as exposed in the brush properties panel by default.
     pub fn exposed(mut self) -> Self {
         self.exposed = true;
+        self
+    }
+
+    /// Mark this input as stroke-constant: its value is read once when the
+    /// brush compiles, so a per-dab wire could not drive it even if one were
+    /// allowed. Clears [`PortDef::wirable`], which is what `connect` and the
+    /// node editor's wire dot both read.
+    ///
+    /// Use it for a scalar whose value selects shader text, a blend state or
+    /// a pipeline. A type that is never wirable (enum, string, curve) already
+    /// says so through its wire type and needs no call.
+    pub fn stroke_constant(mut self) -> Self {
+        self.wirable = false;
         self
     }
 
@@ -881,22 +896,28 @@ impl<W: WireKind> Graph<W> {
 
     /// Connect an output port to an input port, checking types and cycles.
     pub fn connect(&mut self, from: PortRef, to: PortRef) -> Result<(), GraphError> {
-        // Resolve port defs.
-        let from_def = self.find_port(&from, PortDir::Output)?;
-        let to_def = self.find_port(&to, PortDir::Input)?;
+        // Resolve port defs. Copied out of the borrow so the connection
+        // list below can be mutated.
+        let (from_type, to_type, to_wirable) = {
+            let from_def = self.find_port(&from, PortDir::Output)?;
+            let to_def = self.find_port(&to, PortDir::Input)?;
+            (from_def.wire_type, to_def.wire_type, to_def.wirable)
+        };
 
         // Type check.
-        if !W::compatible(from_def, to_def) {
+        if !W::compatible(from_type, to_type) {
             return Err(GraphError::TypeMismatch {
-                from_type: format!("{:?}", from_def),
-                to_type: format!("{:?}", to_def),
+                from_type: format!("{:?}", from_type),
+                to_type: format!("{:?}", to_type),
             });
         }
 
-        // Wirability check: a compile-time input (enum, string, curve) can
-        // never accept a per-dab wire. Type-owned: asks the wire type, not
-        // a consumer-side classifier.
-        if !to_def.is_wirable() {
+        // Wirability check: an input whose value is read before any dab
+        // exists can never accept a per-dab wire, whether because its type
+        // is never wirable (enum, string, curve) or because it is declared
+        // stroke-constant. The port carries the answer; this asks it rather
+        // than classifying by type.
+        if !to_wirable {
             return Err(GraphError::InputNotWirable {
                 node: to.node.clone(),
                 port: to.port.clone(),
@@ -1135,7 +1156,7 @@ impl<W: WireKind> Graph<W> {
     /// names the *role* the endpoint plays on a wire: `Output` = the source
     /// end (resolved by [`PortDef::is_source`], so settable-source inputs
     /// qualify), `Input` = the sink end.
-    fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<W, GraphError> {
+    fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<&PortDef<W>, GraphError> {
         let node = self
             .nodes
             .get(&pr.node)
@@ -1147,15 +1168,13 @@ impl<W: WireKind> Graph<W> {
                     PortDir::Input => p.dir == PortDir::Input,
                 }
         };
-        let def = node
-            .ports
+        node.ports
             .iter()
             .find(matches)
             .ok_or_else(|| GraphError::PortNotFound {
                 node: pr.node.clone(),
                 port: pr.port.clone(),
-            })?;
-        Ok(def.wire_type)
+            })
     }
 
     /// DFS reachability: can we get from `start` to `target` following
@@ -1387,6 +1406,48 @@ mod tests {
             .unwrap_err();
 
         matches!(err, GraphError::TypeMismatch { .. });
+    }
+
+    /// A stroke-constant input refuses a wire even though its type is
+    /// wirable, and the refusal reads the port's flag rather than its type,
+    /// so a plain scalar beside it still accepts one.
+    #[test]
+    fn connect_rejects_a_stroke_constant_input() {
+        let mut g = Graph::<TestWireKind>::new();
+        let src = g.add_node("src", vec![scalar_out("out")]);
+        let sink = g.add_node(
+            "sink",
+            vec![
+                PortDef::input("fixed", TestWireKind::Scalar).stroke_constant(),
+                scalar_in("driven"),
+            ],
+        );
+
+        let err = g
+            .connect(
+                PortRef {
+                    node: src.clone(),
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: sink.clone(),
+                    port: "fixed".into(),
+                },
+            )
+            .expect_err("a stroke-constant input must refuse a wire");
+        assert!(matches!(err, GraphError::InputNotWirable { .. }), "{err:?}");
+
+        g.connect(
+            PortRef {
+                node: src,
+                port: "out".into(),
+            },
+            PortRef {
+                node: sink,
+                port: "driven".into(),
+            },
+        )
+        .expect("a plain scalar input beside it still accepts one");
     }
 
     #[test]

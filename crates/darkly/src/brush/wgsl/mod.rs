@@ -144,6 +144,38 @@ pub struct CompiledBrush {
     /// [`crate::brush::node::PREMULTIPLIED_SOURCE_OVER`] and
     /// [`crate::brush::node::COVERAGE_CEILING`].
     pub dab_blend: wgpu::BlendState,
+    /// Extra per-texel accumulators this brush's terminal writes beside
+    /// the stroke scratch, in the order the generated `FsOut` declares
+    /// them. Empty for the brushes that need only the scratch.
+    pub channels: Vec<crate::brush::scratch::StrokeChannel>,
+}
+
+impl CompiledBrush {
+    /// Colour targets for the per-dab pipeline: the stroke scratch under
+    /// `scratch_format` and `self.dab_blend`, then one per declared
+    /// channel under its own format and blend.
+    ///
+    /// The single source for what a per-dab pass writes. A terminal that
+    /// declares a channel gets the target, the attachment
+    /// ([`Scratch::color_attachments`](crate::brush::scratch::Scratch::color_attachments))
+    /// and the `FsOut` field from that one declaration.
+    pub fn color_targets(
+        &self,
+        scratch_format: wgpu::TextureFormat,
+    ) -> Vec<Option<wgpu::ColorTargetState>> {
+        std::iter::once(wgpu::ColorTargetState {
+            format: scratch_format,
+            blend: Some(self.dab_blend),
+            write_mask: wgpu::ColorWrites::ALL,
+        })
+        .chain(self.channels.iter().map(|c| wgpu::ColorTargetState {
+            format: c.format,
+            blend: Some(c.blend),
+            write_mask: wgpu::ColorWrites::ALL,
+        }))
+        .map(Some)
+        .collect()
+    }
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -244,7 +276,7 @@ pub fn compile_brush_to_wgsl(
     // (e.g. `watercolor`'s pickup atlas). Preview mode omits
     // these: the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
-    let mut terminal_outputs: Vec<String> = Vec::new();
+    let mut channels: Vec<crate::brush::scratch::StrokeChannel> = Vec::new();
     let mut dab_blend = crate::brush::node::PREMULTIPLIED_SOURCE_OVER;
 
     // `@group(3)` slots contributed by `image` / `noise` / live-texture
@@ -455,7 +487,7 @@ pub fn compile_brush_to_wgsl(
             }
             terminal_bindings.push_str(&result.terminal_bindings);
         }
-        terminal_outputs.extend(result.terminal_outputs);
+        channels.extend(result.channels);
         if let Some(blend) = result.dab_blend {
             dab_blend = blend;
         }
@@ -526,7 +558,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &stroke_body,
         &terminal_bindings,
-        &terminal_outputs,
+        &channels,
         &graph_sources,
     );
     // The preview skeleton writes no accumulators (it renders a cursor
@@ -552,6 +584,7 @@ pub fn compile_brush_to_wgsl(
 
     Ok(CompiledBrush {
         dab_blend,
+        channels,
         stroke_wgsl,
         cursor_preview_wgsl,
         dab_layout: dab_fields,
@@ -855,7 +888,7 @@ fn assemble_shader(
     node_decls: &str,
     fs_body: &str,
     terminal_bindings: &str,
-    terminal_outputs: &[String],
+    channels: &[crate::brush::scratch::StrokeChannel],
     graph_sources: &[crate::brush::texture_source::ResolvedSource],
 ) -> String {
     let mut out = String::new();
@@ -969,14 +1002,18 @@ fn assemble_shader(
     // same draw, so `fs_main` returns a struct instead of a bare vec4.
     // The terminal's pipeline declares one colour target per output, in
     // the same order, each with its own blend law.
-    if terminal_outputs.is_empty() {
+    if channels.is_empty() {
         out.push_str("@fragment\n");
         out.push_str("fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n");
     } else {
         out.push_str("struct FsOut {\n");
         out.push_str("    @location(0) color: vec4<f32>,\n");
-        for (i, name) in terminal_outputs.iter().enumerate() {
-            out.push_str(&format!("    @location({}) {}: vec4<f32>,\n", i + 1, name));
+        for (i, channel) in channels.iter().enumerate() {
+            out.push_str(&format!(
+                "    @location({}) {}: vec4<f32>,\n",
+                i + 1,
+                channel.name
+            ));
         }
         out.push_str("};\n\n");
         out.push_str("@fragment\n");

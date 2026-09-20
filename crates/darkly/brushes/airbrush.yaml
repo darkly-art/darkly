@@ -27,7 +27,7 @@ nodes:
     type: stamp
 connections:
 - circle.mask -> stamp.tip
-- curve.output -> paint.flow
+- curve.output -> paint.build_flow
 - paint_color.color -> stamp.color
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve.input
@@ -36,5 +36,5 @@ exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   circle.softness: {}
-  paint.flow: {}
+  paint.build_flow: {}
   paint.opacity: {}

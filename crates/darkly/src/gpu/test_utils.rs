@@ -3,18 +3,31 @@
 //! Provides a `(Device, Queue)` pair without a window surface, plus helpers
 //! for creating textures with known data and reading them back for assertions.
 
+/// The adapter every test device is built on. Selection is wgpu's, from the
+/// backends the machine exposes; nothing here steers it.
+fn test_adapter() -> wgpu::Adapter {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter available for tests")
+}
+
+/// Name of the adapter tests run on, for assertions that only hold on the
+/// adapter they were captured against (stored pixel rows of a noise-textured
+/// brush, whose fragment-shader arithmetic can differ between drivers).
+pub fn test_adapter_name() -> String {
+    test_adapter().get_info().name
+}
+
 /// Create a headless wgpu device + queue for testing.
 ///
 /// Uses wgpu's automatic backend selection: Vulkan, Metal, DX12, or software
 /// fallback depending on the platform. No window surface required.
 pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .expect("no GPU adapter available for tests");
+    let adapter = test_adapter();
 
     block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("test-device"),

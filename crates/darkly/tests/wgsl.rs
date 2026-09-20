@@ -686,7 +686,7 @@ fn noise_static_value_bakes_grayscale() {
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
         (paint_color.clone(), "color", term.clone(), "rgba"),
-        (noise.clone(), "value", term.clone(), "flow"),
+        (noise.clone(), "value", term.clone(), "build_flow"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -744,7 +744,7 @@ fn noise_both_outputs_share_one_coord() {
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
         (noise.clone(), "color", term.clone(), "rgba"),
-        (noise.clone(), "value", term.clone(), "flow"),
+        (noise.clone(), "value", term.clone(), "build_flow"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -1784,12 +1784,16 @@ fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
     );
 }
 
-/// The `paint` terminal's accumulation law reaches the pipeline builder
-/// through `CompiledBrush::dab_blend`. These pin the selection without a
-/// GPU, and pin that the default is the law every brush painted under
-/// before the port existed.
+/// What the accumulation dial compiles to, end to end and without a GPU:
+/// the scratch's blend state, whether a second accumulation is declared,
+/// and what the fragment body returns.
+///
+/// At either end one share is zero, so the pass is a single target under
+/// that end's law and the body returns a bare vec4, exactly as it did
+/// before the dial existed. Between, both halves exist: the scratch keeps
+/// the ceiling and the `build` channel carries the source-over half.
 #[test]
-fn paint_terminal_selects_its_dab_blend_from_the_buildup_port() {
+fn paint_terminal_compiles_the_accumulation_dial_to_targets_and_a_body() {
     use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
 
     let mut brush = darkly::brush::builtin_brushes::all()
@@ -1812,30 +1816,127 @@ fn paint_terminal_selects_its_dab_blend_from_the_buildup_port() {
 
     // Rough Ink never mentions `buildup`, so it is on the registration
     // default. That must be the pre-existing law, bit for bit.
+    let default = compile_it(graph);
     assert_eq!(
-        compile_it(graph).dab_blend,
-        PREMULTIPLIED_SOURCE_OVER,
+        default.dab_blend, PREMULTIPLIED_SOURCE_OVER,
         "a graph that never mentions `buildup` must keep painting as it always did"
     );
+    assert!(default.channels.is_empty());
+    assert!(default
+        .stroke_wgsl
+        .contains("return rgba * build_flow * sel;"));
+    assert!(!default.stroke_wgsl.contains("FsOut"));
 
-    graph
-        .set_port_value(&paint_id, "buildup", InputValue::Int(1))
-        .expect("paint buildup port");
-    assert_eq!(compile_it(graph).dab_blend, COVERAGE_CEILING);
+    let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
+        graph
+            .set_port_value(&paint_id, "buildup", InputValue::Scalar(dial))
+            .expect("paint buildup port");
+    };
 
-    graph
-        .set_port_value(&paint_id, "buildup", InputValue::Int(0))
-        .expect("paint buildup port");
-    assert_eq!(compile_it(graph).dab_blend, PREMULTIPLIED_SOURCE_OVER);
+    set(graph, 1.0);
+    assert_eq!(
+        compile_it(graph).stroke_wgsl,
+        default.stroke_wgsl,
+        "writing the default explicitly must compile to the same shader"
+    );
+
+    set(graph, 0.0);
+    let wash = compile_it(graph);
+    assert_eq!(wash.dab_blend, COVERAGE_CEILING);
+    assert!(wash.channels.is_empty());
+    assert!(wash.stroke_wgsl.contains("return rgba * wash_flow * sel;"));
+    assert!(!wash.stroke_wgsl.contains("build_flow"));
+    assert!(!wash.stroke_wgsl.contains("FsOut"));
+
+    set(graph, 0.5);
+    let mid = compile_it(graph);
+    assert_eq!(
+        mid.dab_blend, COVERAGE_CEILING,
+        "the scratch stays the washing half inside the dial"
+    );
+    assert_eq!(mid.channels.len(), 1);
+    assert_eq!(mid.channels[0].name, "build");
+    assert_eq!(mid.channels[0].format, wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(mid.channels[0].blend, PREMULTIPLIED_SOURCE_OVER);
+    assert!(mid.stroke_wgsl.contains(
+        "return FsOut(rgba * wash_flow * sel * 0.500000, rgba * build_flow * sel * 0.500000);"
+    ));
+    // The preview skeleton is single-output, so the preview body must not
+    // carry the two-accumulation return.
+    assert!(!mid.cursor_preview_wgsl.contains("FsOut"));
+    assert!(mid
+        .cursor_preview_wgsl
+        .contains("mix(wash_flow, build_flow, 0.500000)"));
+
+    set(graph, 0.25);
+    assert!(compile_it(graph).stroke_wgsl.contains(
+        "return FsOut(rgba * wash_flow * sel * 0.750000, rgba * build_flow * sel * 0.250000);"
+    ));
 }
 
-/// The law is baked into the render pipeline, so no per-dab wire may
-/// drive it. `Enum` enforces that by type rather than by a flag, which
-/// is the whole reason the port is typed this way.
+/// Each flow drives its own half, and neither is emitted where its half
+/// does not exist.
+#[test]
+fn each_flow_scales_its_own_half() {
+    // Calligraphy wires neither flow, so the authored literals are what
+    // the body carries.
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Calligraphy")
+        .expect("Calligraphy brush registered");
+    let graph = &mut brush.metadata.graph;
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+    graph
+        .set_port_value(&paint_id, "build_flow", InputValue::Scalar(0.3))
+        .expect("paint build_flow port");
+    let compile_it = |graph: &Graph<BrushWireType>| {
+        let plan = compile(graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+    };
+    let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
+        graph
+            .set_port_value(&paint_id, "buildup", InputValue::Scalar(dial))
+            .expect("paint buildup port");
+    };
+
+    set(graph, 1.0);
+    let build_only = compile_it(graph);
+    assert!(build_only
+        .stroke_wgsl
+        .contains("let build_flow = clamp(0.300000, 0.0, 1.0);"));
+    assert!(
+        !build_only.stroke_wgsl.contains("let wash_flow"),
+        "no washing half at the top of the dial, so no wash flow"
+    );
+
+    set(graph, 0.0);
+    let wash_only = compile_it(graph);
+    assert!(wash_only.stroke_wgsl.contains("let wash_flow = clamp("));
+    assert!(
+        !wash_only.stroke_wgsl.contains("let build_flow"),
+        "no stacking half at the bottom of the dial, so no build flow"
+    );
+
+    set(graph, 0.5);
+    let both = compile_it(graph);
+    assert!(both.stroke_wgsl.contains("let wash_flow = clamp("));
+    assert!(both
+        .stroke_wgsl
+        .contains("let build_flow = clamp(0.300000, 0.0, 1.0);"));
+}
+
+/// The dial picks blend states and colour targets when the brush compiles,
+/// before any dab exists, so no per-dab wire may drive it. The port carries
+/// that as a flag rather than leaning on a non-wirable wire type, which is
+/// what lets it be an ordinary scalar on the brush bar.
 #[test]
 fn the_buildup_port_cannot_be_wired() {
-    use darkly::nodegraph::WireKind;
-
     let paint = registry()
         .as_map()
         .get("paint")
@@ -1846,12 +1947,60 @@ fn the_buildup_port_cannot_be_wired() {
         .expect("paint declares a `buildup` port")
         .clone();
 
-    assert_eq!(paint.wire_type, BrushWireType::Enum);
+    assert_eq!(paint.wire_type, BrushWireType::Scalar);
     assert!(
-        !BrushWireType::is_wirable(paint.wire_type),
-        "`buildup` selects a compile-time blend state; a per-dab wire cannot drive it"
+        !paint.wirable,
+        "`buildup` selects compile-time blend states; a per-dab wire cannot drive it"
     );
-    assert_eq!(paint.enum_options, vec!["Build-up", "Wash"]);
+
+    // And the refusal is real on a graph, not just a flag on a registration.
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
+    let graph = &mut brush.metadata.graph;
+    let pen = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "pen_input")
+        .expect("pen_input node")
+        .id
+        .clone();
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+    let err = graph
+        .connect(
+            PortRef {
+                node: pen.clone(),
+                port: "pressure".into(),
+            },
+            PortRef {
+                node: paint_id.clone(),
+                port: "buildup".into(),
+            },
+        )
+        .expect_err("the dial must refuse a per-dab wire");
+    assert!(
+        matches!(err, darkly::nodegraph::GraphError::InputNotWirable { .. }),
+        "{err:?}"
+    );
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "pressure".into(),
+            },
+            PortRef {
+                node: paint_id,
+                port: "wash_flow".into(),
+            },
+        )
+        .expect("a wirable scalar beside it still takes one");
 }
 
 /// The two shipped Pencils are the same tip under the two laws, one brush

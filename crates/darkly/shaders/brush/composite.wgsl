@@ -1,41 +1,43 @@
-// Compositing: positions a textured quad on the canvas and composites the
-// foreground onto the background with Porter-Duff source-over in the shader.
+// The stroke commit: lays a stroke's finished accumulations onto the layer.
 //
-// Used in two contexts:
-//   1. Per-dab:        fg = dab texture (premultiplied), bg = canvas copy (straight)
-//   2. Stroke→layer:   fg = stroke buffer (straight),    bg = pre-stroke (straight)
-// The fg_premultiplied uniform tells the shader which convention fg uses.
+// Two foreground slots, each with a fixed law and its own opacity, where an
+// opacity of zero means the slot is absent:
+//   wash:  committed through the per-pigment deposit ceiling
+//   build: composited on top with plain Porter-Duff source-over
+//
+// A terminal maps its accumulations onto the slots; the shader knows nothing
+// about brushes. One accumulation under one law is the common case (a brush
+// at either end of `paint.buildup`, or watercolor), and a brush inside the
+// dial fills both. Both foregrounds are premultiplied, which is how every
+// terminal's scratch and channels accumulate; the background (the pre-stroke
+// snapshot) is straight alpha, and so is the output.
 //
 // Outputs straight alpha with REPLACE blend (no hardware alpha blending).
-// See docs/lessons-learned/compositing-lessons-learned.md #4 (why REPLACE) and #6 (why the flag).
+// See docs/lessons-learned/compositing-lessons-learned.md #4 (why REPLACE).
 
 struct CompositeUniforms {
     origin: vec2f,       // quad top-left in canvas pixels
-    size: vec2f,         // quad size in canvas pixels (= dab diameter)
+    size: vec2f,         // quad size in canvas pixels
     target_offset: vec2f, // canvas-space offset of render target's (0,0) pixel
     target_size: vec2f,   // render target pixel dimensions (vertex NDC)
-    canvas_size: vec2f,   // document canvas dimensions (fragment selection UV)
-    canvas_origin: vec2f, // plane offset of the canvas window (selection-mask anchor)
-    uv_min: vec2f,       // min UV in dab texture (nonzero when clipped at top/left)
-    uv_max: vec2f,       // max UV in dab texture
+    uv_min: vec2f,       // min UV in the foreground textures
+    uv_max: vec2f,       // max UV in the foreground textures
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
-    fg_premultiplied: u32, // 1 = dab is premultiplied, 0 = straight alpha
-    stroke_opacity: f32, // per-stroke opacity cap (1.0 = no cap). Scales fg alpha before blend.
-    apply_selection: u32, // 1 = modulate fg by selection, 0 = ignore selection
-    coverage_ceiling: u32, // 1 = deposit only what the pixel can still take
+    wash_opacity: f32,   // stroke opacity of the wash slot; 0 = absent
+    build_opacity: f32,  // stroke opacity of the build slot; 0 = absent
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
-@group(1) @binding(0) var t_dab: texture_2d<f32>;
-@group(1) @binding(1) var s_dab: sampler;
-@group(2) @binding(0) var t_selection: texture_2d<f32>;
-@group(2) @binding(1) var s_selection: sampler;
-@group(3) @binding(0) var t_scratch_mirror: texture_2d<f32>;
-@group(3) @binding(1) var s_scratch_mirror: sampler;
+@group(1) @binding(0) var t_wash: texture_2d<f32>;
+@group(1) @binding(1) var s_wash: sampler;
+@group(2) @binding(0) var t_build: texture_2d<f32>;
+@group(2) @binding(1) var s_build: sampler;
+@group(3) @binding(0) var t_bg: texture_2d<f32>;
+@group(3) @binding(1) var s_bg: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
-    @location(0) dab_uv: vec2f,
+    @location(0) fg_uv: vec2f,
     @location(1) canvas_pos: vec2f,
 }
 
@@ -60,69 +62,40 @@ struct VertexOutput {
 
     var out: VertexOutput;
     out.position = vec4f(ndc, 0.0, 1.0);
-    out.dab_uv = u.uv_min + unit * (u.uv_max - u.uv_min);
+    out.fg_uv = u.uv_min + unit * (u.uv_max - u.uv_min);
     out.canvas_pos = canvas_pos;
     return out;
 }
 
-/// Max-norm distance. See the coverage-ceiling block in `fs_main` for why the
-/// norm choice matters there.
+/// Max-norm distance. See `deposit_through_ceiling` for why the norm choice
+/// matters there.
 fn chebyshev(a: vec3f, b: vec3f) -> f32 {
     let v = abs(a - b);
     return max(v.x, max(v.y, v.z));
 }
 
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Sample foreground (premultiplied or straight, see fg_premultiplied).
-    let dab = textureSample(t_dab, s_dab, in.dab_uv);
-
-    // Selection masking: modulate dab by selection coverage. Applied per-dab
-    // only: the stroke→layer commit passes `apply_selection = 0` because
-    // selection has already been baked into the scratch by prior dabs.
-    let sel_uv = plane_to_selection_uv(in.canvas_pos, u.canvas_origin, u.canvas_size);
-    let sel_raw = textureSample(t_selection, s_selection, sel_uv).r;
-    let sel = select(1.0, sel_raw, u.apply_selection == 1u);
-
-    // Stroke-level opacity cap: scales the foreground alpha (and premultiplied
-    // rgb) before the Porter-Duff blend. Per-dab compositing passes 1.0.
-    let fg_a = dab.a * sel * u.stroke_opacity;
-    // When fg_premultiplied == 0, the dab is straight alpha; premultiply now.
-    let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel * u.stroke_opacity;
-
-    // Background: read canvas copy (straight alpha).
-    // The copy_texture_to_texture origin is floor(u.origin), integer pixel coords.
-    // Use floored origin so the UV maps each fragment to the correct canvas texel.
-    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_scratch_mirror));
-    let bg = textureSample(t_scratch_mirror, s_scratch_mirror, copy_uv);
-
-    // Composite: source-over (paint) or destination-out (erase).
-    if u.blend_mode == 1u {
-        return destination_out(fg_a, bg);
-    }
-    if u.coverage_ceiling == 0u {
-        return source_over(fg_rgb_pre, fg_a, bg);
-    }
-
-    // Coverage ceiling: deposit only what the pixel can still take.
-    //
-    // A pass carrying pigment `C` at coverage `s` lands, starting from blank,
-    // a fixed fraction of the way to `C`. Everything past that is refused. So
-    // instead of asking what this pass would add, ask how much room is left
-    // between where the pixel already sits and where this pass saturates, and
-    // deposit exactly that. A pixel already at the saturation level takes
-    // nothing; one that has never been touched takes the full `s`; a heavier
-    // pass moves the saturation level and reopens room. No history is read:
-    // the room is a property of the pixel's current colour, so a transparent
-    // layer and an opaque one holding the same visible mark answer alike.
-    //
-    // `O` is the origin of the deposit scale, the gamut corner opposite `C`,
-    // which is what the distances are measured against. Deriving it from the
-    // pigment rather than assuming white is what lets a white pencil on black
-    // ground behave exactly like a black one on white.
-    if fg_a <= 0.0 {
+// The deposit ceiling: lay `fg` (premultiplied) onto `bg`, depositing only
+// what the pixel can still take.
+//
+// A pass carrying pigment `C` at coverage `s` lands, starting from blank, a
+// fixed fraction of the way to `C`. Everything past that is refused. So
+// instead of asking what this pass would add, ask how much room is left
+// between where the pixel already sits and where this pass saturates, and
+// deposit exactly that. A pixel already at the saturation level takes
+// nothing; one that has never been touched takes the full `s`; a heavier
+// pass moves the saturation level and reopens room. No history is read: the
+// room is a property of the pixel's current colour, so a transparent layer
+// and an opaque one holding the same visible mark answer alike.
+//
+// `O` is the origin of the deposit scale, the gamut corner opposite `C`,
+// which is what the distances are measured against. Deriving it from the
+// pigment rather than assuming white is what lets a white pencil on black
+// ground behave exactly like a black one on white.
+fn deposit_through_ceiling(fg: vec4f, bg: vec4f) -> vec4f {
+    if fg.a <= 0.0 {
         return bg;
     }
-    let pigment = fg_rgb_pre / fg_a;
+    let pigment = fg.rgb / fg.a;
     let origin = select(vec3f(0.0), vec3f(1.0), pigment < vec3f(0.5));
 
     // The max-norm is load-bearing, not a cheap stand-in for a Euclidean one.
@@ -143,8 +116,43 @@ fn chebyshev(a: vec3f, b: vec3f) -> f32 {
     if d <= 0.0 {
         return bg;
     }
-    // `t <= fg_a` always holds (see the max-norm note), so the ceiling can
+    // `t <= fg.a` always holds (see the max-norm note), so the ceiling can
     // only ever reduce what the pass carries, never amplify it.
-    let t = max(0.0, 1.0 - (1.0 - fg_a) * reach / d);
+    let t = max(0.0, 1.0 - (1.0 - fg.a) * reach / d);
     return source_over(pigment * t, t, bg);
+}
+
+@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    // Background: the pre-stroke snapshot, straight alpha. The
+    // copy_texture_to_texture origin is floor(u.origin), integer pixel
+    // coords, so the floored origin maps each fragment to its own texel.
+    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_bg));
+    let bg = textureSample(t_bg, s_bg, copy_uv);
+
+    // Each slot scaled by its own stroke opacity. Premultiplied, so one
+    // multiply covers rgb and alpha together.
+    let wash = textureSample(t_wash, s_wash, in.fg_uv) * u.wash_opacity;
+    let build = textureSample(t_build, s_build, in.fg_uv) * u.build_opacity;
+
+    if u.blend_mode == 1u {
+        // Erase: each slot removes its own coverage, composing to a removal
+        // of `1 - (1 - wash.a) * (1 - build.a)`. Removal never goes through
+        // the ceiling, so an eraser can always reach zero. No gate needed:
+        // `destination_out(0, x)` is exactly `x`.
+        return destination_out(build.a, destination_out(wash.a, bg));
+    }
+
+    // The wash slot first: the ceiling reads the ground to find room, and a
+    // build slot laid under it would let a stroke's own build-up shrink its
+    // own wash. An absent slot is skipped rather than composited at zero
+    // alpha, because `source_over` at zero alpha is not an exact identity
+    // (it divides `bg.a * bg.rgb` by `bg.a`, and zeroes rgb under 0.001).
+    var out = bg;
+    if u.wash_opacity > 0.0 {
+        out = deposit_through_ceiling(wash, out);
+    }
+    if u.build_opacity > 0.0 {
+        out = source_over(build.rgb, build.a, out);
+    }
+    return out;
 }

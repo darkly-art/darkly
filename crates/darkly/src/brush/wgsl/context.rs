@@ -64,12 +64,13 @@ pub struct NodeWgsl {
     /// the terminal's `body` must then return `FsOut(...)`.
     ///
     /// These are the per-texel accumulators a terminal writes alongside
-    /// the stroke scratch in one instanced draw; the blend unit
-    /// accumulates each under its own law, and the terminal's pipeline
-    /// declares a matching colour target per name. Stroke mode only:
-    /// the cursor-preview skeleton has no accumulators to write and
-    /// keeps the single-output signature.
-    pub terminal_outputs: Vec<String>,
+    /// the stroke scratch in one instanced draw. One declaration carries
+    /// the name, the format and the blend law, so the generated `FsOut`
+    /// field, the pipeline's colour target, the allocated texture and the
+    /// pass attachment all derive from it instead of agreeing by hand.
+    /// Stroke mode only: the cursor-preview skeleton has no accumulators
+    /// to write and keeps the single-output signature.
+    pub channels: Vec<crate::brush::scratch::StrokeChannel>,
     /// The blend state the terminal's per-dab pipeline writes the stroke
     /// scratch with. Only a terminal sets this; every other node leaves it
     /// `None`, and `None` means [`crate::brush::node::PREMULTIPLIED_SOURCE_OVER`].
@@ -77,7 +78,7 @@ pub struct NodeWgsl {
     /// It lives on the compile output rather than on the node registration
     /// because it is a *per-brush* choice (one graph's `paint` accumulates,
     /// another's takes the ceiling), and a registration carries one value
-    /// per node *type*. Same reasoning as `terminal_outputs`: the pipeline
+    /// per node *type*. Same reasoning as `channels`: the pipeline
     /// build must match what the compile walk decided.
     pub dab_blend: Option<wgpu::BlendState>,
 }

@@ -38,18 +38,15 @@ pub struct CompositeUniforms {
     pub size: [f32; 2],
     pub target_offset: [f32; 2],
     pub target_size: [f32; 2],
-    pub canvas_size: [f32; 2],
-    /// Plane-space offset of the canvas window (selection-mask anchor).
-    pub canvas_origin: [f32; 2],
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
     pub blend_mode: u32,
-    pub fg_premultiplied: u32,
-    pub stroke_opacity: f32,
-    pub apply_selection: u32,
-    /// 1 = cap written alpha at `max(bg.a, fg_a)` instead of letting
-    /// source-over's coverage compound. Colour is unaffected either way.
-    pub coverage_ceiling: u32,
+    /// Stroke opacity of the foreground committed through the deposit
+    /// ceiling. `0.0` means that slot is absent and is not read.
+    pub wash_opacity: f32,
+    /// Stroke opacity of the foreground composited source-over on top.
+    /// `0.0` means that slot is absent and is not read.
+    pub build_opacity: f32,
 }
 
 pub struct CompositePipeline {
@@ -65,12 +62,15 @@ impl CompositePipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("brush-composite"),
+                // No canvas lib: the commit samples no selection, so
+                // `plane_to_selection_uv` (the only symbol it supplies)
+                // has no caller here.
                 source: wgpu::ShaderSource::Wgsl(
-                    crate::gpu::canvas_lib::with_canvas_lib(concat!(
+                    concat!(
                         include_str!("../../shaders/source_over.wgsl"),
                         "\n",
                         include_str!("../../shaders/brush/composite.wgsl"),
-                    ))
+                    )
                     .into(),
                 ),
             });
@@ -78,14 +78,15 @@ impl CompositePipeline {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("brush-composite-layout"),
-                // group(1) is the scratch foreground; the scratch's
-                // write bind group is rebuilt against `canvas_copy_bgl`
-                // after the dab_pool removal, the shape is identical
-                // (`texture_2d<f32> + sampler`).
+                // group(1) and group(2) are the two foreground slots,
+                // group(3) the pre-stroke background: all three are a
+                // `texture_2d<f32> + sampler` over the canvas-copy layout,
+                // so a scratch's write side and any of its channels can
+                // each fill either slot.
                 bind_group_layouts: &[
                     Some(ctx.uniform_bgl),
                     Some(ctx.canvas_copy_bgl),
-                    Some(ctx.selection_bgl),
+                    Some(ctx.canvas_copy_bgl),
                     Some(ctx.canvas_copy_bgl),
                 ],
                 immediate_size: 0,

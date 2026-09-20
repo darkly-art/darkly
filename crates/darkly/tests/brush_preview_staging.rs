@@ -378,3 +378,79 @@ fn previews_are_reproducible() {
         assert_eq!(first, second, "'{name}' renders differently every bake");
     }
 }
+
+/// A brush's accumulation channels must not outlive the brush that
+/// declared them.
+///
+/// The preview renderer keeps one scratch and reuses it across brushes, so
+/// a channel left behind by the last brush would still be allocated when
+/// the next one's stroke commits. Reading it by position would then bind
+/// whatever survived: watercolor's deposit is `R8Unorm`, and an R8 texture
+/// sampled as `texture_2d<f32>` reads `(r, 0, 0, 1)`, so a foreground slot
+/// pointed at it would composite a solid quad over the preview.
+///
+/// Channels are therefore allocated from the compiled brush's declaration
+/// at stroke begin (which also frees an undeclared one), and the commit
+/// looks its channel up by name. This drives the sequence that would break
+/// under either half of that alone.
+#[test]
+fn channels_do_not_outlive_the_brush_that_declared_them() {
+    let mut engine = fresh_engine();
+
+    // Watercolor declares a deposit channel, the Ink Pen declares none:
+    // the second must free the first's rather than inherit it.
+    for name in [
+        "Smooth Watercolor",
+        "Pencil",
+        "Ink Pen",
+        "Smooth Watercolor",
+    ] {
+        let (pixels, _, _) = stroke_thumbnail(&mut engine, name);
+        assert!(
+            luminance_sd(&pixels) > 0.0,
+            "'{name}' rendered a flat preview after the brush before it"
+        );
+    }
+
+    // And the mismatched-channel case, which needs a brush inside the
+    // accumulation dial: watercolor's channel is `deposit` at `R8Unorm`,
+    // a mid-dial paint brush's is `build` at `Rgba8Unorm`. Reading either
+    // by position would bind the wrong one here.
+    let watercolor = builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Smooth Watercolor")
+        .expect("Smooth Watercolor registered");
+    let mut pencil = builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Pencil")
+        .expect("Pencil registered");
+    let paint_id = pencil
+        .metadata
+        .graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+    pencil
+        .metadata
+        .graph
+        .set_port_value(
+            &paint_id,
+            "buildup",
+            darkly::brush::input_value::InputValue::Scalar(0.5),
+        )
+        .expect("paint buildup port");
+
+    for brush in [&watercolor, &pencil, &watercolor] {
+        let json = serde_json::to_string(&brush.metadata.graph).expect("serialize graph");
+        engine.set_brush_graph(&json).expect("graph compiles");
+        let (pixels, _, _) = engine.test_render_stroke_preview_canvas();
+        assert!(
+            luminance_sd(&pixels) > 0.0,
+            "'{}' rendered a flat preview on a scratch the brush before it used",
+            brush.metadata.name
+        );
+    }
+}

@@ -36,5 +36,5 @@ exposed_ports:
   brush_settings.size: {}
   circle.rotation: {}
   circle.aspect: {}
-  paint.flow: {}
+  paint.build_flow: {}
   paint.opacity: {}
