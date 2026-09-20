@@ -31,7 +31,11 @@
 
     // Node type info for display name.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
-    let displayName = $derived(typeInfo?.display_name ?? node.type_id);
+    /** The node type's own name ("Add"), the fallback when the author has
+     *  not named this instance, and the tooltip either way so the underlying
+     *  type stays discoverable once a name replaces it in the header. */
+    let typeName = $derived(typeInfo?.display_name ?? node.type_id);
+    let displayName = $derived(node.name || typeName);
 
     /** The scalar math nodes (add/subtract/multiply/divide) offer an editor
      *  toggle that unlocks their numeric-input sliders from `0-1` to the
@@ -58,11 +62,20 @@
     // Updates `brushGraph.nodePositions` directly: positions are
     // UI-only state and never round-trip to Rust.
     let dragging = false;
+    /** Pressed on the card but not yet past the drag threshold. Capture is
+     *  deliberately deferred until then: an active pointer capture retargets
+     *  the compatibility mouse events at the capturing element, so capturing
+     *  on pointerdown would swallow `dblclick` on the title (the rename
+     *  affordance) and deliver it to the card instead. */
+    let pendingDrag = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let nodeStartX = 0;
     let nodeStartY = 0;
     let nodeEl: HTMLDivElement;
+    /** Movement in CSS px before a press becomes a drag. Large enough to
+     *  absorb the jitter of a click, small enough to feel immediate. */
+    const DRAG_THRESHOLD_PX = 3;
 
     /** Returns true if the event target is an interactive child that should
      *  handle its own pointer events (port dots, sliders, buttons, the
@@ -70,6 +83,52 @@
     function isInteractiveTarget(e: PointerEvent): boolean {
         const t = e.target as HTMLElement;
         return !!t.closest('.port-dot, .port-slider, .curve-editor, input, button, select, textarea');
+    }
+
+    // --- Author name (inline rename in the header) ---
+    let editingName = $state(false);
+    let nameDraft = $state('');
+    let nameOriginal = '';
+
+    function startEditName(e: MouseEvent) {
+        e.stopPropagation();
+        nameOriginal = node.name ?? '';
+        nameDraft = nameOriginal;
+        editingName = true;
+    }
+
+    /** Live local feedback while typing: no engine round-trip per keystroke. */
+    function onNameInput() {
+        brushGraph.setNodeNameLocal(node.id, nameDraft);
+    }
+
+    /** Commit on blur. Trims, reflects locally, and only hits the engine when
+     *  the value actually changed since editing began. An emptied name is a
+     *  valid commit: it restores the type's own name in the header. */
+    function commitName() {
+        if (!editingName) return;
+        editingName = false;
+        const next = nameDraft.trim();
+        brushGraph.setNodeNameLocal(node.id, next);
+        if (next !== nameOriginal) brushGraph.setNodeName(node.id, next);
+    }
+
+    /** Enter commits, Escape abandons the edit and restores the prior name. */
+    function onNameKey(e: KeyboardEvent) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            (e.currentTarget as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            editingName = false;
+            brushGraph.setNodeNameLocal(node.id, nameOriginal);
+        }
+    }
+
+    /** Focus the input as soon as it mounts (avoids the autofocus lint). */
+    function focusNameOnMount(el: HTMLInputElement) {
+        el.focus();
+        el.select();
     }
 
     // --- Author comment (inline note beneath the header) ---
@@ -107,22 +166,29 @@
         if (isInteractiveTarget(e)) return;
         e.stopPropagation();
         brushGraph.selectedNode = node.id;
-        dragging = true;
+        pendingDrag = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
         nodeStartX = position[0];
         nodeStartY = position[1];
-        nodeEl.setPointerCapture(e.pointerId);
-        app.beginInteraction();
     }
 
     function onNodeMove(e: PointerEvent) {
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        if (pendingDrag && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+            pendingDrag = false;
+            dragging = true;
+            nodeEl.setPointerCapture(e.pointerId);
+            app.beginInteraction();
+        }
         if (!dragging) return;
-        const d = coords.clientDeltaToGraph(e.clientX - dragStartX, e.clientY - dragStartY);
+        const d = coords.clientDeltaToGraph(dx, dy);
         brushGraph.moveNode(node.id, nodeStartX + d.x, nodeStartY + d.y);
     }
 
     function onNodeUp(e: PointerEvent) {
+        pendingDrag = false;
         if (!dragging) return;
         dragging = false;
         nodeEl.releasePointerCapture(e.pointerId);
@@ -153,7 +219,25 @@
     onlostpointercapture={onNodeLostCapture}
 >
     <div class="node-header">
-        <span class="node-title">{displayName}</span>
+        {#if editingName}
+            <input
+                class="node-title-edit"
+                bind:value={nameDraft}
+                oninput={onNameInput}
+                onblur={commitName}
+                onkeydown={onNameKey}
+                use:focusNameOnMount
+                placeholder={typeName}
+                maxlength={60}
+            />
+        {:else}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <span
+                class="node-title"
+                ondblclick={startEditName}
+                title={node.name ? `${typeName} (double-click to rename)` : 'Double-click to rename'}
+            >{displayName}</span>
+        {/if}
         <button class="remove-btn" onclick={onRemove} title="Remove node">&times;</button>
     </div>
 
@@ -234,10 +318,28 @@
         background: var(--bg);
         border-radius: 5px 5px 0 0;
     }
-    .node-title {
+    /* `flex: 1 1 0` with `min-width: 0` keeps the title from contributing to
+       the card's intrinsic width, so a long author name ellipsises instead of
+       widening the node. That matters beyond tidiness: `portOffsets` in
+       `NodeCanvas` is measured once per layout generation, so a card that
+       resized on rename would strand every attached wire at the old anchor. */
+    .node-title,
+    .node-title-edit {
+        flex: 1 1 0;
+        min-width: 0;
         font-weight: 600;
         color: var(--text);
         font-size: 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .node-title-edit {
+        background: var(--bg-alt, var(--bg));
+        border: 1px solid var(--accent);
+        border-radius: 3px;
+        padding: 0 2px;
+        font-family: inherit;
     }
     .remove-btn {
         background: none;

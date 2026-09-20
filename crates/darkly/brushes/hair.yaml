@@ -88,7 +88,7 @@ exposed_ports:
     label: Twirl
     description: Twirliness factor
     icon: tabler:galaxy
-  paint.flow: {}
+  paint.build_flow: {}
   paint.opacity: {}
   multiply_3.b:
     label: Hair Thickness

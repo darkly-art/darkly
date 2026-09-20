@@ -20,6 +20,7 @@ import {
     type Hit,
 } from '../wheel_geometry';
 import type { WheelBranch, WheelLeaf, WheelNode, WheelTree } from '../model';
+import { brushLeaf, recentTree } from './trees';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';
 
 const paint = { visual: { kind: 'icon', icon: '' }, palette: NEUTRAL_PALETTE } as const;
@@ -423,6 +424,7 @@ const packTree = (names: string[]): WheelTree => ({
 /** `n` packs named `p0 … p(n-1)`. */
 const packs = (n: number) => packTree(Array.from({ length: n }, (_, i) => `p${i}`));
 
+
 /** Every label measuring `px`, which is what makes a fan crowded or not. */
 const widthsOf = (labels: string[], px: number) =>
     new Map(labels.map(l => [l, px]));
@@ -508,14 +510,7 @@ describe('brush names', () => {
             a0: 0,
             span: 2 * Math.PI,
             nodes: [{
-                ...branch('library', [branch('pack', names.map(n => ({
-                    kind: 'leaf' as const,
-                    id: n,
-                    label: n,
-                    visual: { kind: 'brush' as const, name: n, icon: null },
-                    palette: NEUTRAL_PALETTE,
-                    select: () => {},
-                })))]),
+                ...branch('library', [branch('pack', names.map(brushLeaf))]),
                 spread: 'full' as const,
             }],
         }],
@@ -719,5 +714,80 @@ describe('layoutWheel widening', () => {
             expect(labelArcLen(s) + 1e-9)
                 .toBeGreaterThanOrEqual(labelDemand(markWidth(s.node), px));
         }
+    });
+});
+
+describe('fan demand', () => {
+    const names = ['b0', 'b1', 'b2', 'b3', 'b4'];
+
+    it('buys a small fan enough arc for the longest name it holds', () => {
+        // Five brushes across the Recent branch's two thirds of ring 0 is the
+        // shipped shape (RECENT_COUNT). A fan whose total is settled by its
+        // member count and its parent alone caps the name it can draw at
+        // whatever those two happen to allow, which for this fan is 118 px,
+        // and drops every longer name in silence.
+        const px = 160;
+        const fan = ringOf(
+            layoutWheel(recentTree(names), [0], widthsOf(names, px), [0, 3]), 1);
+        // The arc carries the claim. `showsName` is the more readable
+        // assertion and the weaker one: it asks whether the name was drawn,
+        // where this asks whether the room to draw it was ever bought.
+        expect(labelDemand(CHIP_ARC, px))
+            .toBeLessThanOrEqual(labelArcLen(fan[3]) + 1e-6);
+        expect(fan[3].showsName).toBe(true);
+    });
+
+    it('deals the same fan whichever member the pen is on', () => {
+        // The wheel's stability rests on this. A fan's total is what the next
+        // frame hit-tests, so a total that moved with the selection would
+        // carry sectors out from under a pointer that had just entered them.
+        const px = 160;
+        const fans = [0, 2, 4].map(i =>
+            ringOf(layoutWheel(recentTree(names), [0], widthsOf(names, px), [0, i]), 1));
+        for (const fan of fans.slice(1)) {
+            expect(total(fan)).toBeCloseTo(total(fans[0]), 12);
+            expect(fan[0].a0).toBeCloseTo(fans[0][0].a0, 12);
+        }
+        for (const [k, i] of [0, 2, 4].entries()) {
+            expect(fans[k][i].span).toBeCloseTo(fans[0][0].span, 12);
+            expect(fans[k][i].showsName).toBe(true);
+        }
+    });
+
+    it('leaves a fan at its own size when the name is unreachable anyway', () => {
+        // A fit is all or nothing, so arc bought short of what the run needs
+        // buys nothing at all: the name is as undrawn at a half turn as it was
+        // at a quarter, and the fan has swallowed its ring for it.
+        const two = ['b0', 'b1'];
+        const fan = ringOf(
+            layoutWheel(recentTree(two), [0], widthsOf(two, 600), [0, 1]), 1);
+        // The total, not the division: the widening still moves the room a
+        // fan already has around inside it, and still cannot make the name fit.
+        expect(total(fan)).toBeCloseTo(total(ringOf(layoutWheel(recentTree(two), [0]), 1)), 12);
+        expect(fan.some(s => s.showsName)).toBe(false);
+    });
+
+    it('is exactly the even layout when a bounded fan has no measured name', () => {
+        const tree = recentTree(names);
+        expect(layoutWheel(tree, [0], new Map(), [0, 2])).toEqual(layoutWheel(tree, [0]));
+    });
+
+    it('does not grow a fan whose names already fit', () => {
+        const tree = recentTree(names);
+        expect(placement(layoutWheel(tree, [0], widthsOf(names, 5), [0, 2])))
+            .toEqual(placement(layoutWheel(tree, [0], new Map(), [0, 2])));
+    });
+
+    it('holds a section to its registered arc however long its names', () => {
+        // Ring 0's arcs are a spatial contract: colours below, brushes across
+        // the top. A section that grew would move its neighbour around the
+        // wheel and steal the arc to do it.
+        const tree = recentTree(names);
+        const wide = ringOf(layoutWheel(tree, [0], widthsOf(['recent', 'library'], 900)), 0);
+        expect(total(wide)).toBeCloseTo((4 * Math.PI) / 3, 12);
+    });
+
+    it('hit-tests a demand-sized fan back to itself', () => {
+        landsOnItself(layoutWheel(recentTree(names), [0], widthsOf(names, 160), [0, 3]));
     });
 });

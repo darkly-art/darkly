@@ -355,6 +355,39 @@ fn size_scrub_does_not_change_active_dab_pixels() {
 }
 
 #[test]
+fn set_node_name_does_not_advance_topology_version() {
+    // An author-chosen node name is a label: inert w.r.t. render output and
+    // preset identity, so naming a node must NOT advance
+    // `brush_topology_version` and flip the brush bar's active preset to
+    // "Custom". The name must still land on the graph, and the node must
+    // still be addressable by the id it was named under.
+    let mut engine = fresh_engine();
+
+    let target = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .next()
+        .expect("default brush exposes at least one port");
+
+    let topo_before = engine.brush_topology_version();
+    engine
+        .brush_graph_set_node_name(&target.node_id, "Add pressure and tilt".to_string())
+        .expect("set name");
+    assert_eq!(
+        engine.brush_topology_version(),
+        topo_before,
+        "naming a node must not advance the topology version"
+    );
+
+    let graph = engine.active_brush_graph();
+    let node = graph
+        .nodes()
+        .get(&darkly::nodegraph::NodeId(target.node_id.clone()))
+        .expect("the node is still keyed by its id, not by its new name");
+    assert_eq!(node.name, "Add pressure and tilt");
+}
+
+#[test]
 fn set_node_comment_does_not_advance_topology_version() {
     // A node comment is inert w.r.t. render output and preset identity, so
     // setting one must NOT advance `brush_topology_version`; otherwise the

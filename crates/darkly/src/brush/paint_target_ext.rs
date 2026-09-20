@@ -28,38 +28,37 @@ use crate::brush::pipeline::BrushPipelines;
 use crate::gpu::paint_target::GpuPaintTarget;
 
 pub trait BrushPaintTargetExt {
-    /// Commit one stroke event onto the paint target.
+    /// Commit a stroke's finished accumulations onto the paint target.
     ///
-    /// Inputs:
-    ///   - `scratch_bg`: bind group for the brush's RGBA8 stroke scratch
-    ///     (foreground; group 1 of the composite shader).
-    ///   - `selection_bg`: selection mask bind group (group 2). The brush
-    ///     passes its default 1×1-white when no selection is active.
-    ///   - `pre_stroke_bg`: bind group for the RGBA8 pre-stroke snapshot
-    ///     (background; group 3).
-    ///   - `opacity`: stroke-level opacity cap (0..1).
-    ///   - `blend_mode`: 0 = source-over (paint), 1 = destination-out (erase).
-    ///   - `fg_premultiplied`: `true` if the scratch contains
-    ///     premultiplied-alpha pixels (e.g. the `paint` terminal renders
-    ///     this way to use hardware source-over blend). `false` for
-    ///     straight-alpha producers (`color_output`, watercolor commit).
-    ///     Per `docs/lessons-learned/compositing-lessons-learned.md` §4, the shader needs to
-    ///     know the convention to compute correct Porter-Duff on the
-    ///     straight-alpha layer destination.
+    /// Two foreground slots, each with a fixed law. `wash` is laid down
+    /// through the per-pigment deposit ceiling, which refuses anything past
+    /// what one pass over the pixel would deposit; `build` is then
+    /// composited on top with plain Porter-Duff source-over. `None` is an
+    /// absent slot, which the shader never reads. Both foregrounds must be
+    /// premultiplied, which is how every terminal accumulates.
     ///
-    /// Selection has already been baked into the scratch via per-dab
-    /// composites, so this commit passes `apply_selection: 0` to the shader.
+    /// Which accumulation goes in which slot is the terminal's knowledge:
+    /// a brush under `Wash` fills the first, one under `Build-up` (and
+    /// watercolor) fills the second, and a brush inside the accumulation
+    /// dial fills both, its `Max` scratch and its source-over channel.
+    ///
+    /// `opacity` is the stroke-level cap, applied to every present slot.
+    /// `blend_mode` is 0 for paint and 1 for erase, where each slot removes
+    /// its own coverage and the ceiling is not consulted: removal must be
+    /// able to reach zero.
+    ///
+    /// Selection is already baked into the scratch by the per-dab
+    /// composites, so the commit never samples it.
     fn commit_brush_dab(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         brush_pipelines: &BrushPipelines,
         queue: &wgpu::Queue,
-        scratch_bg: &wgpu::BindGroup,
-        selection_bg: &wgpu::BindGroup,
+        wash: Option<&wgpu::BindGroup>,
+        build: Option<&wgpu::BindGroup>,
         pre_stroke_bg: &wgpu::BindGroup,
         opacity: f32,
         blend_mode: u32,
-        fg_premultiplied: bool,
     );
 
     /// Populate an RGBA8 pre-stroke snapshot from this paint target.
@@ -98,34 +97,34 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         encoder: &mut wgpu::CommandEncoder,
         brush_pipelines: &BrushPipelines,
         queue: &wgpu::Queue,
-        scratch_bg: &wgpu::BindGroup,
-        selection_bg: &wgpu::BindGroup,
+        wash: Option<&wgpu::BindGroup>,
+        build: Option<&wgpu::BindGroup>,
         pre_stroke_bg: &wgpu::BindGroup,
         opacity: f32,
         blend_mode: u32,
-        fg_premultiplied: bool,
     ) {
+        // An absent slot still needs something bound to satisfy the
+        // pipeline layout, so it borrows the present one and is switched
+        // off by its opacity. With neither there is nothing to commit.
+        let (Some(wash_bg), Some(build_bg)) = (wash.or(build), build.or(wash)) else {
+            return;
+        };
+
         let canvas_ext = self.canvas_extent();
         let layer_w = canvas_ext.width as f32;
         let layer_h = canvas_ext.height as f32;
         let layer_off_x = canvas_ext.x0() as f32;
         let layer_off_y = canvas_ext.y0() as f32;
-        let (cw, ch) = self.canvas_size();
-        let (cox, coy) = self.canvas_origin();
-
         let uniforms = CompositeUniforms {
             origin: [layer_off_x, layer_off_y],
             size: [layer_w, layer_h],
             target_offset: [layer_off_x, layer_off_y],
             target_size: [layer_w, layer_h],
-            canvas_size: [cw as f32, ch as f32],
-            canvas_origin: [cox as f32, coy as f32],
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode,
-            fg_premultiplied: u32::from(fg_premultiplied),
-            stroke_opacity: opacity,
-            apply_selection: 0,
+            wash_opacity: if wash.is_some() { opacity } else { 0.0 },
+            build_opacity: if build.is_some() { opacity } else { 0.0 },
         };
         let composite = brush_pipelines.get::<CompositePipeline>("composite");
         let offset = composite.write_uniforms(queue, &uniforms);
@@ -146,8 +145,8 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         pass.set_viewport(0.0, 0.0, layer_w, layer_h, 0.0, 1.0);
         pass.set_pipeline(composite.pipeline(self.format()));
         pass.set_bind_group(0, composite.uniform_bind_group(), &[offset]);
-        pass.set_bind_group(1, scratch_bg, &[]);
-        pass.set_bind_group(2, selection_bg, &[]);
+        pass.set_bind_group(1, wash_bg, &[]);
+        pass.set_bind_group(2, build_bg, &[]);
         pass.set_bind_group(3, pre_stroke_bg, &[]);
         pass.draw(0..6, 0..1);
     }

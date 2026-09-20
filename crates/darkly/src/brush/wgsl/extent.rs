@@ -36,7 +36,16 @@ pub enum ExtentContribution {
     Identity,
     /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
     /// sine/perlin (or the superformula's `r_max`) so the bbox covers
-    /// the silhouette's worst-case rasterized footprint.
+    /// the silhouette's worst-case rasterized footprint. Values *below* 1 are
+    /// equally legitimate and mean the silhouette is tighter than the disc:
+    /// `polygon` reports the support of its rounded, squeezed outline, which
+    /// a contraction always keeps at or under 1.
+    ///
+    /// A node may only declare a multiplier for a *bounded* perturbation of
+    /// the disc, one whose bound follows from a port's declared range. An
+    /// anisotropy knob is not that: it must contract rather than stretch, so
+    /// that the nominal size stays the tip's semi-major axis. See
+    /// `docs/brush/node-system.md`.
     Multiply(f32),
     /// Additive canvas-pixel padding on top of upstream. Future
     /// displacement / warp nodes use this (e.g. warp by ±strength px).
@@ -93,25 +102,6 @@ impl ExtentCtx<'_> {
             .find(|p| p.name == port_name && p.dir == PortDir::Input)
             .map(|p| p.value.as_enum_index())
             .unwrap_or(0)
-    }
-
-    /// Minimum value the named input port can take, given the wire graph:
-    /// the mirror of [`Self::port_max_value`]. Needed when *smaller* port
-    /// values grow the extent (e.g. `circle`'s `aspect`, where a thinner nib
-    /// has a longer perpendicular axis). Unknown ports return `0.0`.
-    pub fn port_min_value(&self, port_name: &str) -> f32 {
-        let Some(port) = self
-            .port_defs
-            .iter()
-            .find(|p| p.name == port_name && p.dir == PortDir::Input)
-        else {
-            return 0.0;
-        };
-        if self.wired_inputs.contains(port_name) {
-            port.natural_range.map(|(min, _)| min).unwrap_or(port.min)
-        } else {
-            port.value.as_f32()
-        }
     }
 }
 

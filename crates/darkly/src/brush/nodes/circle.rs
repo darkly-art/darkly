@@ -115,10 +115,11 @@ pub fn register() -> BrushNodeRegistration {
                     "Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.",
                 ),
             // Anisotropy is universal across every algorithm: it squashes the
-            // whole silhouette into an ellipse, the basis of a calligraphic nib.
+            // whole silhouette into an ellipse inscribed in the dab radius,
+            // the basis of a calligraphic nib.
             PortDef::input("aspect", BrushWireType::Scalar)
-                .with_range(0.1, 1.0, 1.0)
-                .with_natural_range(0.1, 1.0)
+                .with_range(0.01, 1.0, 1.0)
+                .with_natural_range(0.01, 1.0)
                 .with_label("Aspect")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa6-solid:pen-nib")
@@ -128,6 +129,10 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description(
                     "Squash the tip into an ellipse: 100% = round, lower = thinner. Rotates with the shape; set Rotation for a fixed-angle calligraphy nib.",
                 ),
+            // The squash is a contraction, so a thinner nib never reaches
+            // further than a round one: `size` stays the tip's semi-major
+            // axis. 1% matches Krita's ratio slider minimum and the shader's
+            // own floor, and costs nothing in footprint.
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
@@ -263,7 +268,7 @@ impl BrushNodeEvaluator for ShapeEvaluator {
              \x20       max(({n1}), 0.05),\n\
              \x20       max(({n2}), 0.05),\n\
              \x20       max(({n3}), 0.05),\n\
-             \x20       max(({aspect}), 0.01),\n\
+             \x20       clamp(({aspect}), 0.01, 1.0),\n\
              \x20   );\n\
              \x20   let {circle_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
              \x20   let {circle_ident}: f32 = shape_coverage({params_ident}, theta, local_dist, {circle_ident}_band);\n",
@@ -307,14 +312,11 @@ impl BrushNodeEvaluator for ShapeEvaluator {
             }
             _ => 1.0,
         };
-        // Anisotropy is a multiplicative ellipse factor in `shape_r_theta`
-        // peaking at `max(1/aspect, aspect)` (the long semi-axis). The dab
-        // bbox is a circle, so the silhouette's worst-case radius grows by
-        // that peak. Smaller `aspect` ⇒ a longer nib ⇒ a bigger bbox, so the
-        // worst case uses the *minimum* aspect a wire can deliver.
-        let aspect_min = ctx.port_min_value("aspect").max(0.01);
-        let aspect_max = ctx.port_max_value("aspect").max(0.01);
-        let aniso_max = (1.0 / aspect_min).max(aspect_max).max(1.0);
-        ExtentContribution::Multiply(base * aniso_max)
+        // Anisotropy contributes nothing: `shape_r_theta` inscribes the
+        // ellipse in the disc (semi-axes `aspect` and 1) and the emitted
+        // expression clamps `aspect` into `0.01..=1.0`, so the squash can only
+        // pull the silhouette inward. Only the bounded radial perturbation
+        // above can push it out.
+        ExtentContribution::Multiply(base)
     }
 }

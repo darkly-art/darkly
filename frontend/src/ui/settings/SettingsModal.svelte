@@ -9,8 +9,25 @@
     import type { ParamInfo } from '../../engine/protocol_gen';
     import { sectionPrefs } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
+    import { tick } from 'svelte';
 
     let search = $state('');
+    let searchEl = $state<HTMLInputElement | null>(null);
+
+    // Opening Settings to hunt for one pref shouldn't cost a click, so the
+    // search box takes focus. The focus waits a tick for the same reason the
+    // command palette's does: `Modal` promotes the dialog to the top layer
+    // from its own effect, and an element inside a dialog that is still
+    // `display: none` cannot take focus. Selecting rather than clearing keeps
+    // the previous query visible (it is still filtering the list) while
+    // letting the first keystroke replace it.
+    $effect(() => {
+        if (!settings.open) return;
+        void tick().then(() => {
+            searchEl?.focus();
+            searchEl?.select();
+        });
+    });
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
     /** Reveal per-trigger Scope dropdowns in the Hotkeys tab. When off,
      *  non-global scopes are still surfaced as a read-only chip beside
@@ -99,6 +116,7 @@
                 <Icon name="fa6-solid:magnifying-glass" />
                 <input
                     type="search"
+                    bind:this={searchEl}
                     bind:value={search}
                     placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
                 />

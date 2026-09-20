@@ -283,7 +283,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let terminal = graph.add_node("paint", registry.get("paint").unwrap().ports.clone());
 
     let wires = [
-        (pen.clone(), "pressure", terminal.clone(), "flow"),
+        (pen.clone(), "pressure", terminal.clone(), "build_flow"),
         (paint_color, "color", stamp.clone(), "color"),
         (circle, "mask", stamp.clone(), "tip"),
         (stamp, "dab", terminal.clone(), "rgba"),
