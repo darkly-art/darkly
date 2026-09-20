@@ -238,7 +238,7 @@ fn depositing_brushes_stage_nothing() {
             flat += 1;
         }
     }
-    assert_eq!(flat, 11, "eleven shipped brushes deposit pigment");
+    assert_eq!(flat, 10, "ten shipped brushes deposit pigment");
 }
 
 /// A `Flat` backdrop is the theme background at every position, which is what

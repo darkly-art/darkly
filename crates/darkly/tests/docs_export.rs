@@ -344,8 +344,8 @@ fn export_is_a_faithful_projection() {
         }
     }
     assert_eq!(
-        previewable, 46,
-        "14 effects + 1 void + 16 blend modes + 15 brushes declare a preview \
+        previewable, 45,
+        "14 effects + 1 void + 16 blend modes + 14 brushes declare a preview \
          recipe"
     );
 

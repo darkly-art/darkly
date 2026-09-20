@@ -26,12 +26,12 @@ use darkly::layer::LayerId;
 const W: u32 = 256;
 const H: u32 = 128;
 
-/// Wash: the bottom of the accumulation dial, as the shipped Pencil
-/// authors it. A pixel takes its strongest dab and the commit refuses
-/// anything past what one pass would deposit.
+/// Wash: the bottom of the accumulation dial. A pixel takes its strongest
+/// dab and the commit refuses anything past what one pass would deposit.
 const WASH: f32 = 0.0;
-/// Build-up: the top of the dial, the registration default, and every
-/// other shipped brush's law. Every dab composites over the last.
+/// Build-up: the top of the dial, the registration default, and the law
+/// every shipped brush but the Pencil paints under. Every dab composites
+/// over the last.
 const BUILD_UP: f32 = 1.0;
 
 fn test_engine() -> DarklyEngine {
@@ -167,46 +167,6 @@ fn run(buildup: f32, pressure: f32, spacing: f32, passes: u32) -> Vec<u8> {
 
 // ── Byte-identity pins ──────────────────────────────────────────────────
 
-/// Adapter the rows below were captured on. The two Pencils' tips are fbm
-/// noise evaluated in the fragment shader, so their bytes are only promised
-/// on the driver they were measured against; the Ink Pen's dab is analytic
-/// and matches everywhere. Measured identical on this machine's Intel ANV
-/// and Mesa GL stacks, but lavapipe (what CI runs) was not available to
-/// check, so the Pencil rows are asserted only when the name matches and
-/// skipped with a note otherwise.
-const PIN_ADAPTER: &str = "Intel(R) Graphics (RPL-U)";
-
-const PENCIL_PIN: [u8; 256] = [
-    0, 0, 0, 0, 0, 21, 37, 61, 47, 44, 48, 48, 75, 70, 77, 78, 65, 56, 57, 60, 71, 61, 59, 61, 61,
-    56, 50, 48, 61, 52, 54, 92, 88, 81, 61, 66, 72, 72, 56, 50, 45, 75, 82, 80, 47, 55, 49, 56, 57,
-    49, 56, 48, 49, 61, 73, 90, 80, 63, 65, 67, 71, 74, 76, 52, 61, 67, 53, 60, 79, 78, 68, 61, 55,
-    49, 46, 41, 42, 40, 59, 50, 51, 48, 51, 54, 72, 86, 97, 90, 70, 45, 41, 53, 70, 59, 47, 46, 50,
-    52, 61, 59, 50, 52, 59, 62, 36, 33, 56, 63, 60, 55, 53, 57, 47, 61, 81, 90, 93, 102, 78, 79,
-    82, 60, 48, 51, 62, 77, 72, 84, 99, 77, 67, 71, 68, 69, 74, 60, 70, 88, 81, 60, 62, 68, 57, 57,
-    46, 57, 66, 65, 66, 81, 74, 58, 60, 78, 61, 71, 86, 88, 98, 93, 95, 97, 104, 81, 44, 53, 73,
-    89, 85, 72, 69, 76, 67, 64, 65, 74, 72, 64, 71, 62, 66, 76, 85, 51, 59, 64, 44, 34, 48, 60, 57,
-    52, 56, 49, 37, 42, 51, 56, 49, 44, 47, 54, 68, 75, 64, 61, 70, 58, 75, 66, 62, 58, 58, 47, 41,
-    68, 89, 83, 72, 58, 48, 61, 97, 85, 37, 48, 99, 105, 88, 60, 63, 55, 53, 79, 71, 63, 89, 80,
-    75, 87, 91, 66, 43, 28, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-];
-
-const BUILDUP_PENCIL_PIN: [u8; 256] = [
-    16, 47, 66, 75, 95, 131, 107, 166, 180, 146, 177, 147, 159, 181, 189, 161, 142, 159, 198, 191,
-    201, 195, 212, 201, 221, 177, 188, 198, 169, 169, 159, 195, 220, 209, 188, 195, 205, 212, 169,
-    184, 141, 159, 191, 195, 166, 184, 205, 179, 159, 212, 179, 179, 184, 191, 191, 188, 169, 184,
-    195, 195, 195, 154, 195, 209, 184, 179, 159, 179, 195, 212, 176, 166, 179, 198, 212, 209, 184,
-    167, 188, 170, 179, 159, 119, 126, 177, 202, 179, 205, 212, 179, 185, 179, 181, 212, 184, 177,
-    184, 188, 209, 167, 177, 191, 198, 179, 170, 159, 205, 212, 212, 198, 188, 191, 188, 184, 167,
-    142, 179, 147, 167, 198, 181, 184, 188, 191, 202, 215, 205, 167, 147, 177, 179, 170, 179, 201,
-    166, 212, 215, 177, 195, 159, 165, 179, 188, 159, 142, 159, 198, 191, 201, 195, 212, 201, 221,
-    177, 188, 198, 169, 169, 159, 195, 220, 209, 188, 195, 205, 212, 169, 184, 141, 159, 191, 195,
-    166, 184, 205, 179, 159, 212, 179, 179, 184, 191, 191, 188, 169, 184, 195, 195, 195, 154, 195,
-    209, 184, 179, 159, 179, 195, 212, 176, 166, 179, 198, 212, 209, 184, 167, 188, 170, 179, 159,
-    119, 126, 177, 202, 179, 205, 212, 179, 185, 179, 181, 212, 184, 177, 184, 188, 209, 167, 177,
-    191, 198, 179, 170, 159, 202, 203, 196, 174, 153, 146, 132, 116, 89, 59, 69, 38, 31, 22, 5, 0,
-    0, 0, 0, 0, 0, 0,
-];
-
 const INK_PEN_PIN: [u8; 256] = [
     253, 253, 254, 254, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -234,36 +194,24 @@ fn authored_centreline(name: &str) -> Vec<u8> {
     centreline_alpha(&engine, layer)
 }
 
-/// The shipped brushes render exactly as they did before the accumulation
-/// dial replaced the `buildup` enum.
+/// The Ink Pen renders byte-identically to a row captured on the unchanged
+/// tree, before any of the dial work.
 ///
-/// These are the regression pins for both ends of the dial and for the
-/// registration default: the Pencil is Wash, the Build-up Pencil is
-/// Build-up, and the Ink Pen never mentions the port at all. Captured on
-/// the unchanged tree before any of the dial work, so they compare against
-/// a known-good render rather than against the new code's own output.
+/// It is the brush that never mentions `buildup`, so it is the one the dial
+/// owes exact preservation: graph, per-dab blend and commit all have to come
+/// out where they were. Its dab is analytic rather than noise-textured, so
+/// the row holds on every adapter.
+///
+/// The Pencil carries no such pin. It is the brush the dial was built for
+/// and is tuned as a design choice rather than held fixed, so a byte row
+/// would pin the tuning rather than guard a behaviour. What the Pencil owes
+/// is stated as behaviour instead, throughout this file.
 #[test]
-fn shipped_brushes_render_byte_identically_to_their_pins() {
+fn ink_pen_renders_byte_identically_to_its_pin() {
     assert_eq!(
         authored_centreline("Ink Pen"),
         INK_PEN_PIN,
-        "Ink Pen: a brush that never mentions the accumulation port must not move"
-    );
-
-    let adapter = darkly::gpu::test_utils::test_adapter_name();
-    if adapter != PIN_ADAPTER {
-        eprintln!("skipping the Pencil pins: captured on {PIN_ADAPTER}, running on {adapter}");
-        return;
-    }
-    assert_eq!(
-        authored_centreline("Pencil"),
-        PENCIL_PIN,
-        "Pencil: the Wash end of the dial must render as it did before"
-    );
-    assert_eq!(
-        authored_centreline("Build-up Pencil"),
-        BUILDUP_PENCIL_PIN,
-        "Build-up Pencil: the Build-up end of the dial must render as it did before"
+        "a brush that never mentions the accumulation port must not move"
     );
 }
 
@@ -519,7 +467,7 @@ fn wash_saturates_per_pigment_not_globally() {
     // Same pigment twice: the second pass finds no room.
     let mut engine = test_engine();
     let layer = engine.add_raster_layer(None);
-    install_pencil(&mut engine, None);
+    install_pencil(&mut engine, Some(WASH));
     coloured(&mut engine, layer, [1.0, 0.0, 0.0]);
     let once = engine.test_readback_layer(layer);
     coloured(&mut engine, layer, [1.0, 0.0, 0.0]);
@@ -568,12 +516,12 @@ fn wash_behaves_the_same_on_transparent_and_opaque_layers() {
     for strokes in [1, 2, 4] {
         let mut transparent = test_engine();
         let t_layer = transparent.add_raster_layer(None);
-        install_pencil(&mut transparent, None);
+        install_pencil(&mut transparent, Some(WASH));
 
         let mut opaque = test_engine();
         let o_layer = opaque.add_raster_layer(None);
         fill_opaque(&mut opaque, o_layer, 255, 255, 255);
-        install_pencil(&mut opaque, None);
+        install_pencil(&mut opaque, Some(WASH));
 
         for _ in 0..strokes {
             stroke_centreline(&mut transparent, t_layer, 0.7, 1);
@@ -648,99 +596,6 @@ fn a_heavier_pass_still_darkens_through_the_ceiling() {
     );
 }
 
-/// The shipped Pencil caps across strokes **as authored**, with no runtime
-/// port write.
-///
-/// Every other test here calls `brush_graph_set_input` to select the law,
-/// which exercises the runtime path and silently skips the one the app
-/// actually uses: the value `PortableBrush::graph_from_nodes` seeds from
-/// `pencil.yaml`. The compile-time read (which picks the per-dab blend) and
-/// the commit-time read (which picks the alpha law) are separate lookups, so
-/// a brush could plausibly get one and not the other.
-#[test]
-fn the_shipped_pencil_caps_across_strokes_as_authored() {
-    let mut engine = test_engine();
-    let layer = engine.add_raster_layer(None);
-    // Deliberately `None`: take the brush exactly as its YAML declares it.
-    install_pencil(&mut engine, None);
-
-    stroke_centreline(&mut engine, layer, 0.7, 1);
-    let after_one = centreline_alpha(&engine, layer);
-    assert!(
-        peak(&after_one) > 32,
-        "the stroke should have marked something to cap"
-    );
-
-    for n in 2..=4 {
-        stroke_centreline(&mut engine, layer, 0.7, 1);
-        assert_eq!(
-            centreline_alpha(&engine, layer),
-            after_one,
-            "shipped Pencil: stroke {n} along the same path must change nothing"
-        );
-    }
-
-    // And within a stroke, as authored: doubling back deposits nothing extra
-    // over the path interior (same grain caveat as the explicit-law test).
-    const INTERIOR: std::ops::Range<usize> = 20..236;
-    let once = run_brush("Pencil", None, 0.5, 0.01, 1);
-    let twice = run_brush("Pencil", None, 0.5, 0.01, 2);
-    for x in INTERIOR {
-        let (a, b) = (once[x], twice[x]);
-        assert!(
-            b.abs_diff(a) <= 2,
-            "shipped Pencil: doubling back must not darken. x={x}: one pass {a}, two passes {b}"
-        );
-    }
-}
-
-/// The shipped Build-up Pencil stacks **as authored**: the original
-/// terminal's law, where the dabs of one pass compound on each other and
-/// each stroke builds on the last. It is the Wash Pencil's counterpart, a
-/// separate brush so the two can be tuned independently, and this pins that
-/// its YAML selects the law it is named for.
-#[test]
-fn the_shipped_buildup_pencil_stacks_within_a_stroke_and_across_strokes() {
-    // Within a stroke: doubling back darkens the path. Measured 127 -> 190
-    // at pressure 0.5.
-    let once = median(&run_brush("Build-up Pencil", None, 0.5, 0.01, 1));
-    let twice = median(&run_brush("Build-up Pencil", None, 0.5, 0.01, 2));
-    assert!(
-        twice > once + 8,
-        "Build-up Pencil: doubling back must darken: median alpha {once} -> {twice}"
-    );
-
-    // Across strokes: each stroke builds on the last, monotonically, and
-    // eight of them reach opaque.
-    let mut engine = test_engine();
-    let layer = engine.add_raster_layer(None);
-    install_builtin(&mut engine, "Build-up Pencil");
-    stroke_centreline(&mut engine, layer, 0.7, 1);
-    let mut previous = centreline_alpha(&engine, layer);
-    assert!(
-        peak(&previous) > 32,
-        "the first stroke should have marked something"
-    );
-    for n in 2..=8 {
-        stroke_centreline(&mut engine, layer, 0.7, 1);
-        let now = centreline_alpha(&engine, layer);
-        for x in 20..236 {
-            assert!(
-                now[x] >= previous[x],
-                "Build-up Pencil: stroke {n} must not lighten x={x}: {} -> {}",
-                previous[x],
-                now[x]
-            );
-        }
-        previous = now;
-    }
-    assert_eq!(
-        peak(&previous),
-        255,
-        "Build-up Pencil: eight strokes along the same path should compound to opaque"
-    );
-}
-
 // ── The accumulation dial ───────────────────────────────────────────────
 
 /// Darkest centreline pixel composited over white. Lower is darker. Works
@@ -761,19 +616,36 @@ fn darkest_over_white(engine: &DarklyEngine, layer: LayerId) -> i32 {
 /// The ladder every dial test walks.
 const DIAL: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
-/// What retracing a path inside one stroke adds, at `dial`.
-fn within_stroke_surcharge(dial: f32) -> i32 {
-    let once = median(&run(dial, 0.5, 0.30, 1)) as i32;
-    let twice = median(&run(dial, 0.5, 0.30, 2)) as i32;
+/// How far the two overlap sites may drift apart before they count as
+/// disagreeing: the dab-space grain the file already allows per site (two
+/// counts each, as in the spacing and self-overlap tests), not a number read
+/// off a measurement.
+const SITE_PARITY_TOL: i32 = 4;
+
+/// Spacing the dial ladders walk at. Deliberately looser than any brush
+/// ships with: at tight spacing the stacking half saturates early and the
+/// ladder flattens, which would make a monotonicity test pass for the wrong
+/// reason.
+const LADDER_SPACING: f32 = 0.30;
+
+/// Spacing the shipped Pencil authors, near enough. A claim about the brush
+/// a painter is handed is measured where that brush works.
+const PENCIL_SPACING: f32 = 0.01;
+
+/// What retracing a path inside one stroke adds, at `dial`. `None` takes the
+/// brush's law as authored.
+fn within_stroke_surcharge(dial: Option<f32>, spacing: f32) -> i32 {
+    let once = median(&run_brush("Pencil", dial, 0.5, spacing, 1)) as i32;
+    let twice = median(&run_brush("Pencil", dial, 0.5, spacing, 2)) as i32;
     twice - once
 }
 
 /// What a second, separate stroke over the same path adds, at `dial`.
-fn across_stroke_surcharge(dial: f32) -> i32 {
+fn across_stroke_surcharge(dial: Option<f32>, spacing: f32) -> i32 {
     let mut engine = test_engine();
     let layer = engine.add_raster_layer(None);
-    install_pencil(&mut engine, Some(dial));
-    set_spacing(&mut engine, 0.30);
+    install_pencil(&mut engine, dial);
+    set_spacing(&mut engine, spacing);
     stroke_centreline(&mut engine, layer, 0.5, 1);
     let once = median(&centreline_alpha(&engine, layer)) as i32;
     stroke_centreline(&mut engine, layer, 0.5, 1);
@@ -784,13 +656,14 @@ fn across_stroke_surcharge(dial: f32) -> i32 {
 /// Retracing a path inside one stroke builds more as the dial rises, and
 /// nothing at all at the bottom.
 ///
-/// Measured surcharge in median alpha at spacing 0.30, pressure 0.5:
-/// 2 / 25 / 43 / 54 / 62 across the ladder. The loose spacing is
-/// deliberate: at tight spacing the stacking half saturates early and the
-/// ladder flattens, which would make the test pass for the wrong reason.
+/// Measured surcharge in median alpha at [`LADDER_SPACING`], pressure 0.5:
+/// 2 / 25 / 43 / 54 / 62 across the ladder.
 #[test]
 fn within_stroke_overlap_builds_more_as_the_dial_rises() {
-    let ladder: Vec<i32> = DIAL.iter().map(|d| within_stroke_surcharge(*d)).collect();
+    let ladder: Vec<i32> = DIAL
+        .iter()
+        .map(|d| within_stroke_surcharge(Some(*d), LADDER_SPACING))
+        .collect();
     assert!(
         ladder[0] <= 2,
         "at Wash a retrace must add nothing: {ladder:?}"
@@ -811,16 +684,13 @@ fn within_stroke_overlap_builds_more_as_the_dial_rises() {
 /// setting. This is the property the dial is for: the two places overlap
 /// can happen agree, rather than one compounding while the other refuses.
 ///
-/// Measured gap between the two sites: 2 / 1 / 1 / 2 / 1 counts. The
-/// tolerance is the dab-space grain the file already allows per site (two
-/// counts each, as in the spacing and self-overlap tests), not a number
-/// read off the measurement.
+/// Measured gap between the two sites: 2 / 1 / 1 / 2 / 1 counts, against
+/// the [`SITE_PARITY_TOL`] the file allows.
 #[test]
 fn both_overlap_sites_build_alike_at_every_dial_setting() {
-    const SITE_PARITY_TOL: i32 = 4;
     for dial in DIAL {
-        let within = within_stroke_surcharge(dial);
-        let across = across_stroke_surcharge(dial);
+        let within = within_stroke_surcharge(Some(dial), LADDER_SPACING);
+        let across = across_stroke_surcharge(Some(dial), LADDER_SPACING);
         assert!(
             (within - across).abs() <= SITE_PARITY_TOL,
             "dial {dial}: a retrace added {within} but a second stroke added {across};              the two sites must build alike"
@@ -1003,5 +873,59 @@ fn the_top_of_the_dial_stacks_dabs_by_source_over() {
         (k - k.round()).abs() < 0.1 && k.round() >= 2.0,
         "the same dabs composited over each other must read as a whole \
          number of them, at least two: one dab {a}, the stroke {b}, ratio {k}"
+    );
+}
+
+/// The dial the shipped Pencil authors in YAML reaches *both* reads.
+///
+/// Every other test here calls `brush_graph_set_input` to select the law,
+/// which exercises the runtime path and silently skips the one the app
+/// actually uses: the value `PortableBrush::graph_from_nodes` seeds from
+/// `pencil.yaml`. The compile-time read (which picks the per-dab blend and
+/// whether a second accumulation exists at all) and the commit-time read
+/// (which picks the two slots' opacities) are separate lookups, so a brush
+/// could plausibly get one and not the other.
+///
+/// Two things have to hold, and between them they close that gap. The
+/// authored brush sits strictly inside the dial at both overlap sites,
+/// measured against the same brush driven to each end through the runtime
+/// path, which is what keeps this a statement about the YAML rather than
+/// about the Pencil's current tuning. And the two sites agree with each
+/// other: a compile read that took the authored value while the commit read
+/// fell back to the registration default would show up here as a retrace
+/// building a little while a second stroke compounded.
+///
+/// Measured surcharge in median alpha at [`PENCIL_SPACING`], pressure 0.5:
+/// 0 / 13 / 62 within a stroke, 0 / 13 / 64 across two.
+#[test]
+fn the_shipped_pencils_authored_dial_reaches_both_reads() {
+    /// Clear of the per-site grain by enough that the ordering is the
+    /// measurement and not the noise.
+    const INSIDE_MARGIN: i32 = 6;
+
+    let ladder = |site: fn(Option<f32>, f32) -> i32| {
+        [
+            site(Some(WASH), PENCIL_SPACING),
+            site(None, PENCIL_SPACING),
+            site(Some(BUILD_UP), PENCIL_SPACING),
+        ]
+    };
+    let within = ladder(within_stroke_surcharge);
+    let across = ladder(across_stroke_surcharge);
+
+    for (site, rungs) in [("a retrace", within), ("a second stroke", across)] {
+        assert!(
+            rungs[0] + INSIDE_MARGIN < rungs[1] && rungs[1] + INSIDE_MARGIN < rungs[2],
+            "{site}: the Pencil as authored must build more than Wash and less \
+             than Build-up: {rungs:?}"
+        );
+    }
+
+    assert!(
+        (within[1] - across[1]).abs() <= SITE_PARITY_TOL,
+        "as authored, a retrace added {} but a second stroke added {}; the \
+         compile-time and commit-time reads of `buildup` must agree",
+        within[1],
+        across[1]
     );
 }

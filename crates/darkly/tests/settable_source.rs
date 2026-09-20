@@ -28,8 +28,7 @@ fn expected_base(name: &str) -> f32 {
         "Calligraphy" => 0.125,
         "Hair" => 0.2,
         "Sponge" => 0.2,
-        "Pencil" => 0.073_958_74,
-        "Build-up Pencil" => 0.127_812_5,
+        "Pencil" => 0.073_646_24,
         _ => 0.1,
     }
 }
@@ -37,7 +36,7 @@ fn expected_base(name: &str) -> f32 {
 #[test]
 fn builtins_own_base_size_on_brush_settings_and_preserve_its_value() {
     let brushes = builtin_brushes::all();
-    assert_eq!(brushes.len(), 15, "expected all 15 builtins");
+    assert_eq!(brushes.len(), 14, "expected all 14 builtins");
 
     for brush in brushes {
         let name = brush.metadata.name.clone();

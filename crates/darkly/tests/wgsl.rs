@@ -2003,24 +2003,46 @@ fn the_buildup_port_cannot_be_wired() {
         .expect("a wirable scalar beside it still takes one");
 }
 
-/// The two shipped Pencils are the same tip under the two laws, one brush
-/// each, so each can be tuned on its own. A stray `buildup` edit in either
-/// YAML fails here, without a GPU.
+/// The shipped Pencil authors a `buildup` strictly inside the dial, so it
+/// compiles to the two-accumulation shape: a `Max` scratch for the washing
+/// half and a declared source-over channel for the stacking one. A stray
+/// `buildup` edit in its YAML collapses that to one accumulation and fails
+/// here, without a GPU.
+///
+/// The Ink Pen is the other side of the same guard. It never mentions the
+/// port, so it must keep the registration default and stay on the law every
+/// brush had before the dial existed.
 #[test]
-fn each_pencil_ships_on_its_own_law() {
+fn shipped_brushes_compile_on_the_law_their_yaml_authors() {
     use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
 
-    for (name, law) in [
-        ("Pencil", COVERAGE_CEILING),
-        ("Build-up Pencil", PREMULTIPLIED_SOURCE_OVER),
-    ] {
+    let compiled_builtin = |name: &str| {
         let brush = darkly::brush::builtin_brushes::all()
             .into_iter()
             .find(|b| b.metadata.name == name)
             .unwrap_or_else(|| panic!("{name} brush registered"));
         let plan = compile(&brush.metadata.graph, registry().as_map()).unwrap();
-        let compiled =
-            compile_brush_to_wgsl(&brush.metadata.graph, &plan, &evals()).expect("compiles");
-        assert_eq!(compiled.dab_blend, law, "{name} ships on the wrong law");
-    }
+        compile_brush_to_wgsl(&brush.metadata.graph, &plan, &evals()).expect("compiles")
+    };
+
+    let pencil = compiled_builtin("Pencil");
+    assert_eq!(
+        pencil.dab_blend, COVERAGE_CEILING,
+        "inside the dial the scratch carries the washing half"
+    );
+    assert_eq!(
+        pencil.channels.iter().map(|c| c.name).collect::<Vec<_>>(),
+        ["build"],
+        "inside the dial the stacking half needs its own accumulation"
+    );
+
+    let ink_pen = compiled_builtin("Ink Pen");
+    assert_eq!(
+        ink_pen.dab_blend, PREMULTIPLIED_SOURCE_OVER,
+        "a brush that never mentions the port keeps the original law"
+    );
+    assert!(
+        ink_pen.channels.is_empty(),
+        "at the top of the dial the scratch is the only accumulation"
+    );
 }
