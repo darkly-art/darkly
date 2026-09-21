@@ -1,5 +1,6 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
+    import { pointerDrag } from '../lib/pointerDrag';
     import LinkToggle from './LinkToggle.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
@@ -119,48 +120,38 @@
     const highlight = $derived(matchedAnchor(oldW, oldH, rect));
 
     // --- Drag interaction -----------------------------------------------
-    function beginDrag(e: PointerEvent, handle: Handle) {
-        e.preventDefault();
-        const el = e.currentTarget as HTMLElement;
-        el.setPointerCapture(e.pointerId);
-        const startRect = { ...rect };
-        const startFit = fit; // held for the duration of the drag
-        const startX = e.clientX;
-        const startY = e.clientY;
+    // Held for the duration of one drag: the rect it started from and the
+    // content-to-preview scale, so a refit mid-gesture cannot change the
+    // mapping under the pointer.
+    let dragStart: { rect: Rect; fit: Fit; handle: Handle } | null = null;
+
+    function beginDrag(handle: Handle) {
+        dragStart = { rect: { ...rect }, fit, handle };
         dragging = true;
-        const onMove = (ev: PointerEvent) => {
-            const dx = (ev.clientX - startX) / startFit.scale;
-            const dy = (ev.clientY - startY) / startFit.scale;
-            rect = applyDrag(startRect, handle, dx, dy, ev.shiftKey);
-            width = rect.w;
-            height = rect.h;
-            // Keep the numeric-distribution anchor consistent when the rect
-            // happens to sit on an anchor.
-            const m = matchedAnchor(oldW, oldH, rect);
-            if (m.ax !== null) anchorX = m.ax;
-            if (m.ay !== null) anchorY = m.ay;
-        };
-        // `lostpointercapture` as well as `pointerup`: capture can end without
-        // a pointerup on the handle (the pointer is removed, another element
-        // takes capture), and without this the move listener survives the
-        // gesture and a later hover keeps resizing the rect.
-        const detach = () => {
-            el.removeEventListener('pointermove', onMove);
-            el.removeEventListener('pointerup', onUp);
-            el.removeEventListener('lostpointercapture', onEnd);
-        };
-        const onEnd = () => {
-            dragging = false;
-            detach();
-            refit();
-        };
-        const onUp = (ev: PointerEvent) => {
-            el.releasePointerCapture?.(ev.pointerId);
-            onEnd();
-        };
-        el.addEventListener('pointermove', onMove);
-        el.addEventListener('pointerup', onUp);
-        el.addEventListener('lostpointercapture', onEnd);
+    }
+
+    function onDragMove(dx: number, dy: number, e: PointerEvent) {
+        if (!dragStart) return;
+        rect = applyDrag(
+            dragStart.rect,
+            dragStart.handle,
+            dx / dragStart.fit.scale,
+            dy / dragStart.fit.scale,
+            e.shiftKey,
+        );
+        width = rect.w;
+        height = rect.h;
+        // Keep the numeric-distribution anchor consistent when the rect
+        // happens to sit on an anchor.
+        const m = matchedAnchor(oldW, oldH, rect);
+        if (m.ax !== null) anchorX = m.ax;
+        if (m.ay !== null) anchorY = m.ay;
+    }
+
+    function endDrag() {
+        dragging = false;
+        dragStart = null;
+        refit();
     }
 
     // Frame rect in preview (CSS) pixels.
@@ -311,7 +302,11 @@
                     width={Math.max(0, frame.w)}
                     height={Math.max(0, frame.h)}
                     style={`cursor:${CURSORS.body}`}
-                    onpointerdown={(e) => beginDrag(e, 'body')}
+                    use:pointerDrag={{
+                        onStart: () => beginDrag('body'),
+                        onMove: onDragMove,
+                        onEnd: endDrag,
+                    }}
                     role="presentation"
                 />
                 <rect
@@ -331,7 +326,11 @@
                         height="12"
                         style={`cursor:${CURSORS[h]}`}
                         aria-label={`Resize ${h}`}
-                        onpointerdown={(e) => beginDrag(e, h)}
+                        use:pointerDrag={{
+                            onStart: () => beginDrag(h),
+                            onMove: onDragMove,
+                            onEnd: endDrag,
+                        }}
                         role="presentation"
                     />
                 {/each}

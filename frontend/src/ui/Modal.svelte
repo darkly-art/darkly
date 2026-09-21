@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Snippet } from 'svelte';
     import { backdropDismiss } from '../lib/backdropDismiss';
-    import { pointerDrag } from './workspace/pointerDrag';
+    import { pointerDrag } from '../lib/pointerDrag';
 
     type Props = {
         open: boolean;

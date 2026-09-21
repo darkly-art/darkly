@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 //
-// Regression: a drag whose pointer capture is lost must detach its listeners.
+// Regression: a drag whose pointer capture is lost must stop.
 //
-// Both of these components attach `pointermove` / `pointerup` to the captured
-// element inside `pointerdown` and detach them in the `pointerup` handler.
-// Pointer capture is not guaranteed to end with a `pointerup` on that element:
-// the browser fires `lostpointercapture` on its own when the pointer is
-// removed, when the element leaves the document, or when another element takes
-// capture. Without a handler for it the pair stays attached, so a later plain
-// `pointermove` over the control keeps resizing with no button held, and every
-// subsequent drag adds another pair.
+// Both of these components used to attach `pointermove` / `pointerup` to the
+// captured element inside `pointerdown` and detach them only in the
+// `pointerup` handler. Pointer capture is not guaranteed to end with a
+// `pointerup` on that element: the browser fires `lostpointercapture` on its
+// own when the pointer is removed, when the element leaves the document, or
+// when another element takes capture. The pair therefore stayed attached, and
+// a later plain `pointermove` kept resizing with no button held.
+//
+// The assertions are on the observable behaviour (does a post-capture move
+// still resize?) rather than on listener bookkeeping, so they hold across the
+// move to the shared `lib/pointerDrag` action, which binds once at mount
+// instead of once per gesture.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
@@ -66,46 +70,35 @@ function pointer(type: string, init: Partial<PointerEvent> = {}) {
 }
 
 describe('BrushBuilderPanel resize handle', () => {
-    it('detaches its drag listeners when pointer capture is lost', () => {
+    it('stops resizing when pointer capture is lost', () => {
         const target = document.createElement('div');
         document.body.append(target);
         mounted.push(mount(BrushBuilderPanel, { target }) as Record<string, unknown>);
         flushSync();
 
         const handle = target.querySelector('.resize-handle') as HTMLElement;
+        const panel = target.querySelector('.builder-panel') as HTMLElement;
         handle.setPointerCapture = vi.fn();
         handle.releasePointerCapture = vi.fn();
 
-        // Count what the drag attaches, so the assertion is about the listeners
-        // themselves rather than about a height value that may legitimately
-        // settle anywhere.
-        const added: string[] = [];
-        const removed: string[] = [];
-        const realAdd = handle.addEventListener.bind(handle);
-        const realRemove = handle.removeEventListener.bind(handle);
-        handle.addEventListener = (type: string, ...rest: unknown[]) => {
-            added.push(type);
-            return realAdd(type, ...(rest as [EventListenerOrEventListenerObject]));
-        };
-        handle.removeEventListener = (type: string, ...rest: unknown[]) => {
-            removed.push(type);
-            return realRemove(type, ...(rest as [EventListenerOrEventListenerObject]));
-        };
-
-        handle.dispatchEvent(pointer('pointerdown'));
+        handle.dispatchEvent(pointer('pointerdown', { clientY: 400 }));
+        handle.dispatchEvent(pointer('pointermove', { clientY: 300 }));
         flushSync();
-        expect(added).toContain('pointermove');
+        const afterDrag = panel.style.height;
+        expect(afterDrag).not.toBe('');
 
         handle.dispatchEvent(pointer('lostpointercapture'));
         flushSync();
 
-        expect(removed).toContain('pointermove');
-        expect(removed).toContain('pointerup');
+        // A plain move with no button held must not move the panel.
+        handle.dispatchEvent(pointer('pointermove', { clientY: 100 }));
+        flushSync();
+        expect(panel.style.height).toBe(afterDrag);
     });
 });
 
 describe('ResizeCanvasModal drag handle', () => {
-    it('detaches its drag listeners when pointer capture is lost', () => {
+    it('stops resizing when pointer capture is lost', () => {
         resizeCanvas.open = true;
         const target = document.createElement('div');
         document.body.append(target);
@@ -117,28 +110,19 @@ describe('ResizeCanvasModal drag handle', () => {
         handle.setPointerCapture = vi.fn();
         handle.releasePointerCapture = vi.fn();
 
-        const added: string[] = [];
-        const removed: string[] = [];
-        const realAdd = handle.addEventListener.bind(handle);
-        const realRemove = handle.removeEventListener.bind(handle);
-        handle.addEventListener = (type: string, ...rest: unknown[]) => {
-            added.push(type);
-            return realAdd(type, ...(rest as [EventListenerOrEventListenerObject]));
-        };
-        handle.removeEventListener = (type: string, ...rest: unknown[]) => {
-            removed.push(type);
-            return realRemove(type, ...(rest as [EventListenerOrEventListenerObject]));
-        };
+        const readout = () => document.querySelector('.dims-readout')!.textContent;
 
-        handle.dispatchEvent(pointer('pointerdown'));
+        handle.dispatchEvent(pointer('pointerdown', { clientX: 0, clientY: 0 }));
+        handle.dispatchEvent(pointer('pointermove', { clientX: 30, clientY: 30 }));
         flushSync();
-        expect(added).toContain('pointermove');
+        const afterDrag = readout();
 
         handle.dispatchEvent(pointer('lostpointercapture'));
         flushSync();
 
-        expect(removed).toContain('pointermove');
-        expect(removed).toContain('pointerup');
+        handle.dispatchEvent(pointer('pointermove', { clientX: 90, clientY: 90 }));
+        flushSync();
+        expect(readout()).toBe(afterDrag);
 
         resizeCanvas.open = false;
     });

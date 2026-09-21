@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Subdivision } from './tree';
     import { MIN_PANEL_PX } from './tree';
-    import { pointerDrag } from './pointerDrag';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import { workspaces } from './workspaces.svelte';
     import PanelGroupView from './PanelGroupView.svelte';
     import Self from './Subdivision.svelte';

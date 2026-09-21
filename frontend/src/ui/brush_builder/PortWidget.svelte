@@ -2,6 +2,7 @@
     import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
     import { unitFor } from '../../lib/units';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import { beginScrubDrag, type ScrubDrag } from '../../lib/scrubDrag';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
@@ -252,12 +253,10 @@
         brushGraph.setInput(nodeId, port.name, sliderKind, committed);
     }
 
-    function onSliderDown(e: PointerEvent) {
-        if (!sliderEl) return;
+    function onSliderDown(e: PointerEvent): boolean | void {
+        if (!sliderEl) return false;
         // Stop propagation so the node doesn't start dragging.
         e.stopPropagation();
-        e.preventDefault();
-        sliderEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
         sliderDrag = beginScrubDrag({
             toValue: (clientX, clientY) => valueFromFraction(sliderFraction(clientX, clientY)),
@@ -273,14 +272,10 @@
         sliderDrag.move(e.clientX, e.clientY);
     }
 
-    function onSliderMove(e: PointerEvent) {
-        sliderDrag?.move(e.clientX, e.clientY);
-    }
-
-    /** Wired to both `pointerup` and `lostpointercapture`; `end` is idempotent.
-     *  A lost capture commits rather than discarding: the previewed value is
-     *  already on screen, so dropping it would leave the widget showing a value
-     *  the engine never received. */
+    /** `end` is idempotent, and `pointerDrag` routes every termination path
+     *  here. A lost capture commits rather than discarding: the previewed value
+     *  is already on screen, so dropping it would leave the widget showing a
+     *  value the engine never received. */
     function onSliderEnd() {
         sliderDrag?.end();
     }
@@ -410,10 +405,11 @@
             <div
                 class="port-slider"
                 bind:this={sliderEl}
-                onpointerdown={onSliderDown}
-                onpointermove={onSliderMove}
-                onpointerup={onSliderEnd}
-                onlostpointercapture={onSliderEnd}
+                use:pointerDrag={{
+                    onStart: onSliderDown,
+                    onMove: (_dx, _dy, e) => sliderDrag?.move(e.clientX, e.clientY),
+                    onEnd: onSliderEnd,
+                }}
                 ondblclick={onSliderDblClick}
             >
                 <div

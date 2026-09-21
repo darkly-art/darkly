@@ -1,5 +1,6 @@
 <script lang="ts">
     import { padPointToOffset, offsetToPadPoint, offsetPolar } from '../../../lib/offsetPad';
+    import { pointerDrag } from '../../../lib/pointerDrag';
 
     // A square pad with a crosshair center and a draggable diamond handle. The
     // handle's direction from center is the offset direction; its distance is the
@@ -27,22 +28,11 @@
         return padPointToOffset(px, py, size, max);
     }
 
-    function startDrag(e: PointerEvent) {
-        e.preventDefault();
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        dragging = true;
-        oninput?.(offsetFromEvent(e));
-    }
-    function moveDrag(e: PointerEvent) {
-        if (!dragging) return;
-        oninput?.(offsetFromEvent(e));
-    }
-    function endDrag(e: PointerEvent) {
-        if (!dragging) return;
-        dragging = false;
-        (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-        onchange?.(offsetFromEvent(e));
-    }
+    // The last offset under the pointer, committed when the drag ends. Capture
+    // can be lost without a final position, so the value is remembered rather
+    // than read off the terminating event.
+    let previewed: [number, number] | null = null;
+
     function reset() {
         onchange?.([0, 0]);
     }
@@ -61,10 +51,22 @@
         aria-valuemin={0}
         aria-valuemax={max}
         aria-valuenow={polar.distance}
-        onpointerdown={startDrag}
-        onpointermove={moveDrag}
-        onpointerup={endDrag}
-        onpointercancel={endDrag}
+        use:pointerDrag={{
+            onStart: (e) => {
+                dragging = true;
+                previewed = offsetFromEvent(e);
+                oninput?.(previewed);
+            },
+            onMove: (_dx, _dy, e) => {
+                previewed = offsetFromEvent(e);
+                oninput?.(previewed);
+            },
+            onEnd: () => {
+                dragging = false;
+                if (previewed) onchange?.(previewed);
+                previewed = null;
+            },
+        }}
         ondblclick={reset}
     >
         <div class="cross-h"></div>

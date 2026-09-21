@@ -10,6 +10,7 @@
      * `live` / `commit` split the settings widgets use.
      */
     import { untrack } from 'svelte';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import type { Color } from '../../state/app.svelte';
     import { hsvToRgb, type Hsv } from '../../lib/color';
     import {
@@ -121,25 +122,19 @@
         oninput(hsvToRgb(hsv, value.a));
     }
 
-    function onPointerDown(e: PointerEvent) {
-        if (e.button !== 0) return;
+    /** A press outside the ring and the triangle is not a drag: the veto keeps
+     *  it an ordinary click on the surrounding box. */
+    function onPointerDown(e: PointerEvent): boolean | void {
         const { x, y } = local(e);
         const region = regionAt(geometry, hsv.h, x, y);
-        if (!region) return;
-        e.preventDefault();
+        if (!region) return false;
         dragging = region;
-        wheel.setPointerCapture(e.pointerId);
         steer(region, e);
     }
 
-    function onPointerMove(e: PointerEvent) {
-        if (dragging) steer(dragging, e);
-    }
-
-    function release(e: PointerEvent) {
+    function release() {
         if (!dragging) return;
         dragging = null;
-        if (wheel.hasPointerCapture(e.pointerId)) wheel.releasePointerCapture(e.pointerId);
         onchange(hsvToRgb(hsv, value.a));
     }
 </script>
@@ -152,10 +147,11 @@
     style:width="{size}px"
     style:height="{size}px"
     style:--ring="{geometry.ringWidth}px"
-    onpointerdown={onPointerDown}
-    onpointermove={onPointerMove}
-    onpointerup={release}
-    onpointercancel={release}
+    use:pointerDrag={{
+        onStart: onPointerDown,
+        onMove: (_dx, _dy, e) => { if (dragging) steer(dragging, e); },
+        onEnd: release,
+    }}
     role="slider"
     aria-label="Color wheel"
     aria-valuenow={Math.round(hsv.h)}

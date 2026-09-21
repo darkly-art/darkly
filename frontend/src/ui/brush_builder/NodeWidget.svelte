@@ -1,6 +1,7 @@
 <script lang="ts">
     import { getContext } from 'svelte';
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import NodePreview from './NodePreview.svelte';
@@ -67,9 +68,6 @@
      *  the compatibility mouse events at the capturing element, so capturing
      *  on pointerdown would swallow `dblclick` on the title (the rename
      *  affordance) and deliver it to the card instead. */
-    let pendingDrag = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
     let nodeStartX = 0;
     let nodeStartY = 0;
     let nodeEl: HTMLDivElement;
@@ -162,40 +160,29 @@
         el.focus();
     }
 
-    function onNodeDown(e: PointerEvent) {
-        if (isInteractiveTarget(e)) return;
+    /** Selecting happens on the press; dragging waits for the threshold. A
+     *  browser retargets the compatibility mouse events at the capturing card,
+     *  so capturing on the press would put `dblclick` on the card instead of on
+     *  the title and make rename unreachable by its only affordance. */
+    function onNodeDown(e: PointerEvent): boolean | void {
+        if (isInteractiveTarget(e)) return false;
         e.stopPropagation();
         brushGraph.selectedNode = node.id;
-        pendingDrag = true;
-        dragStartX = e.clientX;
-        dragStartY = e.clientY;
         nodeStartX = position[0];
         nodeStartY = position[1];
     }
 
-    function onNodeMove(e: PointerEvent) {
-        const dx = e.clientX - dragStartX;
-        const dy = e.clientY - dragStartY;
-        if (pendingDrag && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
-            pendingDrag = false;
-            dragging = true;
-            nodeEl.setPointerCapture(e.pointerId);
-            app.beginInteraction();
-        }
-        if (!dragging) return;
+    function onNodeCapture() {
+        dragging = true;
+        app.beginInteraction();
+    }
+
+    function onNodeMove(dx: number, dy: number) {
         const d = coords.clientDeltaToGraph(dx, dy);
         brushGraph.moveNode(node.id, nodeStartX + d.x, nodeStartY + d.y);
     }
 
-    function onNodeUp(e: PointerEvent) {
-        pendingDrag = false;
-        if (!dragging) return;
-        dragging = false;
-        nodeEl.releasePointerCapture(e.pointerId);
-    }
-
-    /** Guaranteed cleanup: fires when capture ends for any reason. */
-    function onNodeLostCapture() {
+    function onNodeEnd() {
         dragging = false;
         app.endInteraction();
     }
@@ -213,10 +200,13 @@
     style="transform: translate({position[0]}px, {position[1]}px);"
     data-node-id={node.id}
     bind:this={nodeEl}
-    onpointerdown={onNodeDown}
-    onpointermove={onNodeMove}
-    onpointerup={onNodeUp}
-    onlostpointercapture={onNodeLostCapture}
+    use:pointerDrag={{
+        threshold: DRAG_THRESHOLD_PX,
+        onStart: onNodeDown,
+        onCapture: onNodeCapture,
+        onMove: onNodeMove,
+        onEnd: onNodeEnd,
+    }}
 >
     <div class="node-header">
         {#if editingName}
