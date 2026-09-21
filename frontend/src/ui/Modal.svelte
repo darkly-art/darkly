@@ -210,7 +210,7 @@
     /* Tall, for a view whose whole point is room to browse, but capped
      * horizontally: past about this width the browse grid just stretches its
      * columns instead of showing more of them. */
-    dialog.modal.size-full { width: min(92vw, 1180px); height: 88vh; max-height: 88vh; }
+    dialog.modal.size-full { width: min(92vw, 960px); height: 88vh; max-height: 88vh; }
 
     /* Anchored below the top edge rather than centered. The margin replaces
      * the centering `auto` on the top side only, so it stays horizontally
