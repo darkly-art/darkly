@@ -107,9 +107,12 @@ impl StrokeEngine {
     /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
     /// `stabilizer` is the stroke stabilization algorithm.  `stamp_angle_rate`
     /// caps how fast the stamp pivots to follow the stroke, in radians per
-    /// brush diameter of travel.  `stroke_seed` drives every `random`/`noise`
-    /// node in the graph: a real stroke passes [`Self::random_seed`], a render
-    /// that has to be reproducible passes a constant.
+    /// brush diameter of travel.  `stroke_seed` drives every `random` node in
+    /// the graph, reaching them through [`EvalContext::prng_at`]: a real
+    /// stroke passes [`Self::random_seed`], a render that has to be
+    /// reproducible passes a constant. It does **not** reach `noise`, which
+    /// seeds from its own compile-time `seed` port and so is identical from
+    /// stroke to stroke.
     pub fn new(
         mut runner: BrushGraphRunner,
         color: [f32; 4],

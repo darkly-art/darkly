@@ -70,11 +70,18 @@ export const CHIP_ARC = 20;
  *
  *  A fraction rather than a floor in pixels, deliberately: an absolute floor
  *  would forbid expansion at exactly the counts that need it most, since by
- *  then a sector is already narrower than the mark. */
+ *  then a sector is already narrower than the mark.
+ *
+ *  It sets how far a member can reach and therefore, inverted through
+ *  `reachSpans`, how much arc a fan must hold for a name to be reachable at
+ *  all. Both directions of one relation: raising it makes fans narrower and
+ *  their names shorter, lowering it the other way about. */
 const MIN_SHRINK = 0.5;
 
-/** The most a widened sector may take: a half turn, the same bound a fan is
- *  already held to above. */
+/** The most a widened sector may take: a half turn, the same bound `fanSpan`
+ *  holds a fan itself to. Slack wherever a fan was sized for its own longest
+ *  name, since that total is reached at exactly the span the name needs and a
+ *  fan is never dealt more than a half turn to begin with. */
 const MAX_SELECTED_SPAN = Math.PI;
 
 const NO_WIDTHS: ReadonlyMap<string, number> = new Map();
@@ -146,20 +153,12 @@ export function hitKey(hit: Hit): string {
  */
 function fanWidening(
     fan: SectorGeom[],
-    widths: ReadonlyMap<string, number>,
+    reach: number,
 ): { crowded: boolean; extra: number } {
     const n = fan.length;
-    let wanted = 0;
-    for (const s of fan) {
-        const nameLen = measuredName(s, widths);
-        // Not yet measured: contributes nothing, rather than a guess that the
-        // next frame would have to walk back.
-        if (nameLen === undefined) continue;
-        wanted = Math.max(
-            wanted,
-            labelDemand(markWidth(s.node), nameLen) / labelRadius(s) - s.span,
-        );
-    }
+    // Spans are uniform across a fan, so any member's is the fan's.
+    const w = fan[0].span;
+    const wanted = reach - w;
     // Crowded is asked of the *uncapped* need, so a fan too small to pay for
     // the room it needs still knows it is crowded. Reading it off the capped
     // amount would call such a fan comfortable and let it draw names that
@@ -168,19 +167,84 @@ function fanWidening(
     // `extra / (n - 1)` has no meaning for a lone sector, and a lone sector has
     // nobody to take the room from.
     if (!crowded || n < 2) return { crowded, extra: 0 };
-    // Spans are uniform across a fan, so any member's is the fan's.
-    const w = fan[0].span;
-    const extra = Math.min(wanted, (n - 1) * w * (1 - MIN_SHRINK), MAX_SELECTED_SPAN - w);
+    const extra = Math.min(wanted, w * (reachSpans(n) - 1), MAX_SELECTED_SPAN - w);
     return { crowded, extra: Math.max(0, extra) };
 }
 
-/** A sector's name width, or undefined if it shows no name or has not been
+/**
+ * The longest label run a fan holds, in radians at its ring's label radius.
+ *
+ * One measurement per fan, read in both directions: `fanSpan` asks how much
+ * total arc the fan must hold for this run to be reachable, and `fanWidening`
+ * asks how much more than its rest span the sector carrying it needs. Taking
+ * the maximum twice, once for each question, is how the size of a fan and the
+ * division of it would come to disagree about the same names.
+ *
+ * A name not yet measured contributes nothing, rather than a guess the next
+ * frame would have to walk back.
+ */
+function fanReach(
+    nodes: readonly WheelNode[],
+    r: number,
+    widths: ReadonlyMap<string, number>,
+): number {
+    let reach = 0;
+    for (const node of nodes) {
+        const nameLen = measuredName(node, widths);
+        if (nameLen === undefined) continue;
+        reach = Math.max(reach, labelDemand(markWidth(node), nameLen) / r);
+    }
+    return reach;
+}
+
+/**
+ * How far one member of an `n` member fan can be widened, as a multiple of the
+ * fan's uniform rest span: its own, plus everything `MIN_SHRINK` lets the other
+ * `n - 1` give up.
+ *
+ * The borrowing relation, named once and read both ways. `fanWidening` reads it
+ * forward, for how much a sector may take; `fanSpan` inverts it, for how much
+ * total a fan must hold before that much is there to be taken.
+ */
+function reachSpans(n: number): number {
+    return 1 + (n - 1) * (1 - MIN_SHRINK);
+}
+
+/**
+ * The arc a child fan is dealt: wide enough to land in, never narrower than the
+ * parent, never more than a half turn, and never too narrow for the longest
+ * name it holds to be reached by the member carrying it.
+ *
+ * The name term is `reach * n / reachSpans(n)`, the inverse of the widening: at
+ * that total the selected member's span comes out at exactly `reach`. It is a
+ * maximum over the fan's members against a radius fixed by the ring, so no
+ * member's identity survives into it and the fan is dealt the same way whoever
+ * the pen is on. That is what the wheel's stability rests on: a total that
+ * moved with the selection would carry sectors out from under a pointer that
+ * had just entered them.
+ *
+ * A fan asks for room only when the room would buy it the name. The fit is all
+ * or nothing, so arc short of what the run needs buys nothing at all: a fan
+ * clamped at a half turn with its name still unreachable has swallowed its ring
+ * for a name it draws no more of than it did at a quarter. The test is exact
+ * rather than cautious, the name fitting at the demanded total and at no
+ * smaller one.
+ */
+function fanSpan(n: number, parentSpan: number, reach: number): number {
+    const demand = reach * n / reachSpans(n);
+    return Math.min(
+        Math.PI,
+        Math.max(n * CHILD_STEP, parentSpan, demand <= Math.PI ? demand : 0),
+    );
+}
+
+/** A node's name width, or undefined if it shows no name or has not been
  *  measured yet. */
 function measuredName(
-    s: SectorGeom,
+    node: WheelNode,
     widths: ReadonlyMap<string, number>,
 ): number | undefined {
-    const label = wheelLabel(s.node);
+    const label = wheelLabel(node);
     return label === null ? undefined : widths.get(label);
 }
 
@@ -198,7 +262,7 @@ function markNames(
     selected: number,
 ): void {
     fan.forEach((s, i) => {
-        const nameLen = measuredName(s, widths);
+        const nameLen = measuredName(s.node, widths);
         s.showsName = nameLen !== undefined
             && (!crowded || i === selected)
             && labelDemand(markWidth(s.node), nameLen) <= labelArcLen(s) + FIT_EPS;
@@ -230,16 +294,19 @@ function expandFan(fan: SectorGeom[], selected: number, extra: number): void {
  *
  * Ring 0 splits each section's arc evenly among its nodes (Krita's
  * `angleSlice = 360 / slotCount`, per arc). Ring k+1 fans the children of
- * `path[k]` about the parent sector's mid-angle with span
- * `min(π, max(n · CHILD_STEP, parentSpan))`: wide enough to land in, never
- * narrower than the parent, never more than a half turn. A parent with
- * `spread: 'full'` instead hands its children the entire circumference.
+ * `path[k]` about the parent sector's mid-angle at `fanSpan`: wide enough to
+ * land in, never narrower than the parent, never more than a half turn, and
+ * never too narrow for the longest name it holds. A parent with
+ * `spread: 'full'` instead hands its children the entire circumference, which
+ * no name could improve on.
  *
- * `widths` carries each label's rendered length, by label string. Where a fan
- * holds a name too long for the arc it was dealt, the fan's selected member
- * widens to fit it and its siblings give up the room uniformly. Passing no
- * widths (or widths that all fit) yields exactly the even layout above, which
- * is both the pre-measurement frame and every uncrowded wheel.
+ * `widths` carries each label's rendered length, by label string. A fan is
+ * measured once against them and spends the answer twice: on the arc it is
+ * dealt, and on how much of that arc the member under the pen takes from its
+ * siblings. Only a child fan spends it the first way; a section's arc is fixed
+ * at registration. Passing no widths (or widths that all fit) yields exactly
+ * the even layout above, which is both the pre-measurement frame and every
+ * uncrowded wheel.
  *
  * The widening is applied to each ring as it is built, before the ring below
  * is laid out, so a fan is dealt about its parent's *widened* midpoint and at
@@ -269,12 +336,13 @@ export function layoutWheel(
         const n = sec.nodes.length;
         if (n === 0) continue;
         const span = sec.span / n;
+        const r1 = HUB_R + RING_T;
         const fan: SectorGeom[] = sec.nodes.map((node, i) => ({
             ring: 0,
             a0: sec.a0 + i * span,
             span,
             r0: HUB_R,
-            r1: HUB_R + RING_T,
+            r1,
             unbounded: path.length === 0,
             path: [base + i],
             node,
@@ -283,9 +351,15 @@ export function layoutWheel(
         // A section is a fan: it owns an arc and divides it, so it is the
         // group that pays for one of its own widening, and the group that
         // decides together whether its names are drawn.
+        //
+        // Divides it and no more. A section's arc is a spatial contract, the
+        // colours below and the brushes across the top, so a long name buys a
+        // section nothing: it is spent inside the arc the section already has,
+        // where a child fan's would have been spent on the size of the fan.
         const rootSel = selection.length > 0 ? selection[0] - base : -1;
         const selected = rootSel >= 0 && rootSel < n ? rootSel : -1;
-        const { crowded, extra } = fanWidening(fan, widths);
+        const { crowded, extra } = fanWidening(
+            fan, fanReach(sec.nodes, labelRadiusOf(HUB_R, r1), widths));
         if (selected >= 0) expandFan(fan, selected, extra);
         markNames(fan, widths, crowded, selected);
         out.push(...fan);
@@ -298,17 +372,22 @@ export function layoutWheel(
         if (!parentSector || parent?.kind !== 'branch' || parent.children.length === 0) break;
         const ring = k + 1;
         const n = parent.children.length;
+        const r0 = HUB_R + ring * RING_T;
+        const r1 = HUB_R + (ring + 1) * RING_T;
+        // Measured once for the fan, then spent twice: on how much arc the fan
+        // is dealt, and on how much of it the member under the pen takes.
+        const reach = fanReach(parent.children, labelRadiusOf(r0, r1), widths);
         const span = parent.spread === 'full'
             ? 2 * Math.PI
-            : Math.min(Math.PI, Math.max(n * CHILD_STEP, parentSector.span));
+            : fanSpan(n, parentSector.span, reach);
         const child = span / n;
         const a0 = parentSector.a0 + parentSector.span / 2 - span / 2;
         const fan: SectorGeom[] = parent.children.map((node, i) => ({
             ring,
             a0: a0 + i * child,
             span: child,
-            r0: HUB_R + ring * RING_T,
-            r1: HUB_R + (ring + 1) * RING_T,
+            r0,
+            r1,
             unbounded: ring === path.length,
             path: [...parentSector!.path, i],
             node,
@@ -317,7 +396,7 @@ export function layoutWheel(
         const childSel = selection[k + 1];
         const selected = childSel !== undefined && childSel >= 0 && childSel < n
             ? childSel : -1;
-        const { crowded, extra } = fanWidening(fan, widths);
+        const { crowded, extra } = fanWidening(fan, reach);
         if (selected >= 0) expandFan(fan, selected, extra);
         markNames(fan, widths, crowded, selected);
         out.push(...fan);
@@ -385,7 +464,14 @@ export function labelArc(s: SectorGeom): { a0: number; a1: number; r: number } {
  *  name still too long, which is the one outcome the widening exists to
  *  prevent. */
 export function labelRadius(s: SectorGeom): number {
-    return (s.r0 + s.r1) / 2 - LABEL_CAP / 2;
+    return labelRadiusOf(s.r0, s.r1);
+}
+
+/** The same radius, for a ring rather than for a sector of one. A fan is sized
+ *  against its longest name before any of its sectors exist, and both edges of
+ *  a ring are known by then. */
+function labelRadiusOf(r0: number, r1: number): number {
+    return (r0 + r1) / 2 - LABEL_CAP / 2;
 }
 
 /** Space between a sector's mark and its name, px along the arc. The card's

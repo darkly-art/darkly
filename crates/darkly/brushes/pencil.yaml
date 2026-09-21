@@ -1,0 +1,150 @@
+name: Pencil
+description: "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure does not darken it, pressing harder does."
+nodes:
+  add:
+    type: add
+    name: Add pen pressure + tilt
+    comment: Combine a little pen pressure with tilt to get the brush size
+  brush_settings:
+    type: brush_settings
+    inputs:
+      size: 0.07364623993635178
+      spacing: 0.009999999776482582
+  circle:
+    type: circle
+    name: Brush tip circle
+    inputs:
+      frequency: 1.0
+      rotation: 5.75
+      softness: 1.0
+  curve:
+    type: curve
+    name: Contrast pen tip
+    comment: Crank up the contrast on the pencil tip for a rougher look
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.26743346
+        - 0.0
+      - - 0.76097316
+        - 1.0
+      - - 1.0
+        - 1.0
+  curve_2:
+    type: curve
+    name: Squash pen pressure
+    comment: factor a little pen pressure into the size
+    inputs:
+      curve:
+      - - 0.0
+        - 0.12476328
+      - - 1.0
+        - 0.41776323
+  curve_3:
+    type: curve
+    name: Select only high tilt
+    comment: on high tilt, increase the size of the brush to mimic pencil shading
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.53058755
+        - 0.0
+      - - 1.0
+        - 1.0
+  curve_4:
+    type: curve
+    name: High pen pressure on grain
+    comment: lessen the grain effect during high pen pressure
+    inputs:
+      curve:
+      - - 0.0
+        - 1.0
+      - - 0.79033375
+        - 0.8797826
+      - - 1.0
+        - 0.25908843
+  curve_5:
+    type: curve
+    name: Curve pen pressure for flow
+    comment: makes pencil a little lighter to the touch
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.56401765
+        - 0.42231566
+      - - 1.0
+        - 1.0
+  levels:
+    type: levels
+    name: Grain intensity
+    comment: Pen tilt determines intensity of the paper grain texture
+    inputs:
+      in_high: 0.40818285942077637
+  multiply:
+    type: multiply
+    name: Combine grain with tip
+    comment: Multiply paper grain texture (canvas space) with pencil tip texture (dab space)
+  multiply_2:
+    type: multiply
+    name: Pen tip - noise x circle
+    comment: create tip texture from circle x noise
+  noise:
+    type: noise
+    name: Brush tip texture
+    inputs:
+      roughness: 0.7344781160354614
+      scale: 10.0
+      space: 1
+  noise_2:
+    type: noise
+    name: Paper grain texture
+    inputs:
+      roughness: 0.548843264579773
+      scale: 2.5
+  paint:
+    type: paint
+    inputs:
+      build_flow: 0.4
+      buildup: 0.1
+  paint_color:
+    type: paint_color
+  pen_input:
+    type: pen_input
+  stamp:
+    type: stamp
+connections:
+- add.result -> paint.size
+- circle.mask -> multiply_2.b
+- curve.output -> multiply.b
+- curve_2.output -> add.a
+- curve_3.output -> add.b
+- curve_4.output -> levels.in_high
+- curve_5.output -> paint.wash_flow
+- levels.output -> multiply.a
+- multiply.result -> stamp.tip
+- multiply_2.result -> curve.input
+- noise.value -> multiply_2.a
+- noise_2.value -> levels.input
+- paint_color.color -> stamp.color
+- pen_input.position -> paint.position
+- pen_input.pressure -> curve_2.input
+- pen_input.pressure -> curve_4.input
+- pen_input.pressure -> curve_5.input
+- pen_input.tilt_magnitude -> curve_3.input
+- stamp.dab -> paint.rgba
+exposed_ports:
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  paint.opacity: {}
+  paint.buildup:
+    label: Hardness
+    description: 'How much repeated passes build: 0% = a mark never darkens, 100% = toward opaque.'
+    icon: fa6-solid:pen
+    invert: true
+  paint.wash_flow:
+    label: Hardness
+    icon: mdi:pencil
+    invert: true

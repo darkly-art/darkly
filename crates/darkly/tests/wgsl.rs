@@ -276,15 +276,19 @@ fn extent_protocol_composes_along_chain() {
     );
 }
 
+/// Anisotropy must not touch the dab's extent, in either direction.
+///
+/// `aspect` inscribes the tip's ellipse in the dab radius, so it can only pull
+/// the silhouette inward and the bbox stays at the radius `size` asked for.
+/// Asserted *differentially* as well as absolutely: the same graph with and
+/// without a wire on `aspect` must budget identically, which stays true if a
+/// legitimate bounded allowance (amplitude) is added later, where a bare
+/// `== 1.0` would not.
+///
+/// Before the contraction fix this reported `1 / aspect_min = 10`, and the
+/// shader drew a nib ten times the nominal radius to match.
 #[test]
-fn extent_grows_with_shape_aspect_anisotropy() {
-    // The `aspect` knob squashes the tip into an ellipse; a thinner nib
-    // (smaller aspect) has a longer perpendicular axis, so the dab bbox must
-    // grow by the worst-case anisotropy factor `1 / aspect_min`. Build
-    // pen + circle(sine, amplitude unwired ⇒ base radius 1) + stamp + paint
-    // with a wire on `aspect` so its natural-range minimum (0.1) counts:
-    // factor must reach 1/0.1 = 10. Without folding `aspect` into the extent,
-    // the tall nib would be clipped to the round bbox on save-point rewind.
+fn extent_is_unchanged_by_aspect_anisotropy() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
@@ -316,16 +320,44 @@ fn extent_grows_with_shape_aspect_anisotropy() {
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
-    // base = 1 (sine, amplitude 0); aniso_max = 1/aspect_min = 1/0.1 = 10.
+    // base = 1 (sine, amplitude 0), and anisotropy contributes nothing.
     assert!(
-        (compiled.brush_extent_factor - 10.0).abs() < 1e-3,
-        "wired aspect (min 0.1) must inflate the bbox ×10, got {}",
+        (compiled.brush_extent_factor - 1.0).abs() < 1e-3,
+        "wired aspect must leave the bbox at the nominal radius, got {}",
         compiled.brush_extent_factor,
     );
-    // The compiled silhouette must carry the aspect argument into ShapeParams.
+
+    // The same graph with the aspect wire removed must budget identically.
+    let mut unwired = graph.clone();
+    unwired.disconnect(
+        &PortRef {
+            node: rand_aspect.clone(),
+            port: "value".into(),
+        },
+        &PortRef {
+            node: shape.clone(),
+            port: "aspect".into(),
+        },
+    );
+    let plan = compile(&unwired, reg.as_map()).unwrap();
+    let bare = compile_brush_to_wgsl(&unwired, &plan, &evals()).unwrap();
+    assert!(
+        (compiled.brush_extent_factor - bare.brush_extent_factor).abs() < 1e-4,
+        "wiring `aspect` changed the extent: {} wired vs {} unwired",
+        compiled.brush_extent_factor,
+        bare.brush_extent_factor,
+    );
+
+    // The compiled silhouette must carry the aspect argument into ShapeParams,
+    // and clamp it at both ends: an unclamped high end turns the contraction
+    // back into a stretch when a wire delivers more than 1.
     assert!(
         compiled.stroke_wgsl.contains("ShapeParams"),
         "shape brush must emit a ShapeParams constructor",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("0.01, 1.0)"),
+        "the aspect argument must be clamped into 0.01..=1.0, not just floored",
     );
 }
 
@@ -654,7 +686,7 @@ fn noise_static_value_bakes_grayscale() {
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
         (paint_color.clone(), "color", term.clone(), "rgba"),
-        (noise.clone(), "value", term.clone(), "flow"),
+        (noise.clone(), "value", term.clone(), "build_flow"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -712,7 +744,7 @@ fn noise_both_outputs_share_one_coord() {
     let wires = [
         (pen.clone(), "position", term.clone(), "position"),
         (noise.clone(), "color", term.clone(), "rgba"),
-        (noise.clone(), "value", term.clone(), "flow"),
+        (noise.clone(), "value", term.clone(), "build_flow"),
     ];
     for (fnode, fport, tnode, tport) in wires {
         graph
@@ -920,11 +952,16 @@ fn polygon_node_previewable() {
     );
 }
 
-/// The polygon node folds `squeeze` into its footprint: a wired `squeeze`
-/// (natural-range max 1.0 ⇒ semi-axis 0.1) must inflate the dab bbox ×10 so a
-/// thin nib isn't clipped on save-point rewind.
+/// A wired `squeeze` must not inflate the dab bbox at all: the squeeze
+/// transform is a contraction, so the tightest bound the node can honestly
+/// report for an unknown squeeze is exactly 1, the round disc.
+///
+/// The equality matters in both directions. Above 1 would be the footprint bug
+/// (a shape knob growing the dab); below 1 would clip a tip the shader is
+/// still willing to draw, since a vertex can land on the unsqueezed axis at
+/// full radius.
 #[test]
-fn polygon_extent_grows_with_squeeze() {
+fn polygon_extent_is_unchanged_by_a_wired_squeeze() {
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
@@ -946,8 +983,8 @@ fn polygon_extent_grows_with_squeeze() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
     assert!(
-        (compiled.brush_extent_factor - 10.0).abs() < 1e-3,
-        "wired squeeze (max 1.0) must inflate the bbox ×10, got {}",
+        (compiled.brush_extent_factor - 1.0).abs() < 1e-3,
+        "wired squeeze must leave the bbox at the disc (1.0), got {}",
         compiled.brush_extent_factor,
     );
 }
@@ -999,12 +1036,18 @@ fn polygon_is_view_rotation_invariant() {
 // ---------------------------------------------------------------------------
 
 /// Map a base circumradius-`r` vertex from the polygon's own frame into screen
-/// space: `screen = R(β−φ)·diag(a,1/a)·R(−β)·p`, the inverse of the node's
+/// space: `screen = R(β−φ)·diag(a,1)·R(−β)·p`, the inverse of the node's
 /// forward squeeze transform.
+///
+/// A hand-maintained mirror of the emitted transform, which the SDF tests below
+/// need in order to predict geometry independently of the node. It must be
+/// updated in lockstep with the `{ident}_tinv` matrix in `polygon.rs`; the
+/// extent side of the same transform is shared properly through
+/// `polygon::silhouette_support`.
 fn poly_to_screen(p: [f32; 2], a: f32, phi: f32, beta: f32) -> [f32; 2] {
     let (cb, sb) = (beta.cos(), beta.sin());
     let r1 = [p[0] * cb + p[1] * sb, -p[0] * sb + p[1] * cb]; // R(−β)·p
-    let d = [r1[0] * a, r1[1] / a]; // diag(a, 1/a)
+    let d = [r1[0] * a, r1[1]]; // diag(a, 1)
     let ang = beta - phi;
     let (c, s) = (ang.cos(), ang.sin());
     [d[0] * c - d[1] * s, d[0] * s + d[1] * c] // R(β−φ)
@@ -1689,18 +1732,20 @@ fn polygon_extent_is_the_rounded_silhouette_support() {
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
-    // a = 1 − 0.9·0.5 = 0.55, cr = ρ = 0.5. The vertex at base angle 0 maps to
-    // magnitude 1.3492, so the support is 0.5·1.3492 + 0.5.
+    // a = 1 − 0.9·0.5 = 0.55, cr = ρ = 0.5. Under the contraction `diag(a, 1)`
+    // the worst mapped vertex magnitude is 0.80933, so the support is
+    // 0.5·0.80933 + 0.5. Below 1: the squeezed silhouette is tighter than the
+    // disc, so the value tightens the dab bbox instead of inflating it.
     assert!(
-        (compiled.brush_extent_factor - 1.1746).abs() < 1e-3,
-        "expected the rounded-silhouette support 1.1746, got {}",
+        (compiled.brush_extent_factor - 0.90467).abs() < 1e-3,
+        "expected the rounded-silhouette support 0.90467, got {}",
         compiled.brush_extent_factor,
     );
 }
 
 /// When the squeeze *axis* is wired its value is unknown at compile time, so
 /// the bound must fall back to the orientation-agnostic worst case (a vertex
-/// landing on the stretched axis) rather than guessing an axis.
+/// landing on the unsqueezed axis) rather than guessing an axis.
 #[test]
 fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
     let reg = registry();
@@ -1728,10 +1773,276 @@ fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
-    // cr/a + ρ = 0.5/0.55 + 0.5.
+    // cr·1 + ρ = 0.5 + 0.5. Tight rather than conservative: `diag(a, 1)`
+    // contracts unit base vertices, so the largest magnitude any unknown axis
+    // can produce is exactly 1, attained when a vertex lands on the unsqueezed
+    // axis.
     assert!(
-        (compiled.brush_extent_factor - 1.4091).abs() < 1e-3,
-        "wired squeeze_angle must fall back to cr/a + ρ = 1.4091, got {}",
+        (compiled.brush_extent_factor - 1.0).abs() < 1e-3,
+        "wired squeeze_angle must fall back to cr + ρ = 1.0, got {}",
         compiled.brush_extent_factor,
+    );
+}
+
+/// What the accumulation dial compiles to, end to end and without a GPU:
+/// the scratch's blend state, whether a second accumulation is declared,
+/// and what the fragment body returns.
+///
+/// At either end one share is zero, so the pass is a single target under
+/// that end's law and the body returns a bare vec4, exactly as it did
+/// before the dial existed. Between, both halves exist: the scratch keeps
+/// the ceiling and the `build` channel carries the source-over half.
+#[test]
+fn paint_terminal_compiles_the_accumulation_dial_to_targets_and_a_body() {
+    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
+    let graph = &mut brush.metadata.graph;
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+
+    let compile_it = |graph: &Graph<BrushWireType>| {
+        let plan = compile(graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+    };
+
+    // Rough Ink never mentions `buildup`, so it is on the registration
+    // default. That must be the pre-existing law, bit for bit.
+    let default = compile_it(graph);
+    assert_eq!(
+        default.dab_blend, PREMULTIPLIED_SOURCE_OVER,
+        "a graph that never mentions `buildup` must keep painting as it always did"
+    );
+    assert!(default.channels.is_empty());
+    assert!(default
+        .stroke_wgsl
+        .contains("return rgba * build_flow * sel;"));
+    assert!(!default.stroke_wgsl.contains("FsOut"));
+
+    let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
+        graph
+            .set_port_value(&paint_id, "buildup", InputValue::Scalar(dial))
+            .expect("paint buildup port");
+    };
+
+    set(graph, 1.0);
+    assert_eq!(
+        compile_it(graph).stroke_wgsl,
+        default.stroke_wgsl,
+        "writing the default explicitly must compile to the same shader"
+    );
+
+    set(graph, 0.0);
+    let wash = compile_it(graph);
+    assert_eq!(wash.dab_blend, COVERAGE_CEILING);
+    assert!(wash.channels.is_empty());
+    assert!(wash.stroke_wgsl.contains("return rgba * wash_flow * sel;"));
+    assert!(!wash.stroke_wgsl.contains("build_flow"));
+    assert!(!wash.stroke_wgsl.contains("FsOut"));
+
+    set(graph, 0.5);
+    let mid = compile_it(graph);
+    assert_eq!(
+        mid.dab_blend, COVERAGE_CEILING,
+        "the scratch stays the washing half inside the dial"
+    );
+    assert_eq!(mid.channels.len(), 1);
+    assert_eq!(mid.channels[0].name, "build");
+    assert_eq!(mid.channels[0].format, wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(mid.channels[0].blend, PREMULTIPLIED_SOURCE_OVER);
+    assert!(mid.stroke_wgsl.contains(
+        "return FsOut(rgba * wash_flow * sel * 0.500000, rgba * build_flow * sel * 0.500000);"
+    ));
+    // The preview skeleton is single-output, so the preview body must not
+    // carry the two-accumulation return.
+    assert!(!mid.cursor_preview_wgsl.contains("FsOut"));
+    assert!(mid
+        .cursor_preview_wgsl
+        .contains("mix(wash_flow, build_flow, 0.500000)"));
+
+    set(graph, 0.25);
+    assert!(compile_it(graph).stroke_wgsl.contains(
+        "return FsOut(rgba * wash_flow * sel * 0.750000, rgba * build_flow * sel * 0.250000);"
+    ));
+}
+
+/// Each flow drives its own half, and neither is emitted where its half
+/// does not exist.
+#[test]
+fn each_flow_scales_its_own_half() {
+    // Calligraphy wires neither flow, so the authored literals are what
+    // the body carries.
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Calligraphy")
+        .expect("Calligraphy brush registered");
+    let graph = &mut brush.metadata.graph;
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+    graph
+        .set_port_value(&paint_id, "build_flow", InputValue::Scalar(0.3))
+        .expect("paint build_flow port");
+    let compile_it = |graph: &Graph<BrushWireType>| {
+        let plan = compile(graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+    };
+    let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
+        graph
+            .set_port_value(&paint_id, "buildup", InputValue::Scalar(dial))
+            .expect("paint buildup port");
+    };
+
+    set(graph, 1.0);
+    let build_only = compile_it(graph);
+    assert!(build_only
+        .stroke_wgsl
+        .contains("let build_flow = clamp(0.300000, 0.0, 1.0);"));
+    assert!(
+        !build_only.stroke_wgsl.contains("let wash_flow"),
+        "no washing half at the top of the dial, so no wash flow"
+    );
+
+    set(graph, 0.0);
+    let wash_only = compile_it(graph);
+    assert!(wash_only.stroke_wgsl.contains("let wash_flow = clamp("));
+    assert!(
+        !wash_only.stroke_wgsl.contains("let build_flow"),
+        "no stacking half at the bottom of the dial, so no build flow"
+    );
+
+    set(graph, 0.5);
+    let both = compile_it(graph);
+    assert!(both.stroke_wgsl.contains("let wash_flow = clamp("));
+    assert!(both
+        .stroke_wgsl
+        .contains("let build_flow = clamp(0.300000, 0.0, 1.0);"));
+}
+
+/// The dial picks blend states and colour targets when the brush compiles,
+/// before any dab exists, so no per-dab wire may drive it. The port carries
+/// that as a flag rather than leaning on a non-wirable wire type, which is
+/// what lets it be an ordinary scalar on the brush bar.
+#[test]
+fn the_buildup_port_cannot_be_wired() {
+    let paint = registry()
+        .as_map()
+        .get("paint")
+        .expect("paint registered")
+        .ports
+        .iter()
+        .find(|p| p.name == "buildup")
+        .expect("paint declares a `buildup` port")
+        .clone();
+
+    assert_eq!(paint.wire_type, BrushWireType::Scalar);
+    assert!(
+        !paint.wirable,
+        "`buildup` selects compile-time blend states; a per-dab wire cannot drive it"
+    );
+
+    // And the refusal is real on a graph, not just a flag on a registration.
+    let mut brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
+    let graph = &mut brush.metadata.graph;
+    let pen = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "pen_input")
+        .expect("pen_input node")
+        .id
+        .clone();
+    let paint_id = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "paint")
+        .expect("paint terminal")
+        .id
+        .clone();
+    let err = graph
+        .connect(
+            PortRef {
+                node: pen.clone(),
+                port: "pressure".into(),
+            },
+            PortRef {
+                node: paint_id.clone(),
+                port: "buildup".into(),
+            },
+        )
+        .expect_err("the dial must refuse a per-dab wire");
+    assert!(
+        matches!(err, darkly::nodegraph::GraphError::InputNotWirable { .. }),
+        "{err:?}"
+    );
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "pressure".into(),
+            },
+            PortRef {
+                node: paint_id,
+                port: "wash_flow".into(),
+            },
+        )
+        .expect("a wirable scalar beside it still takes one");
+}
+
+/// The shipped Pencil authors a `buildup` strictly inside the dial, so it
+/// compiles to the two-accumulation shape: a `Max` scratch for the washing
+/// half and a declared source-over channel for the stacking one. A stray
+/// `buildup` edit in its YAML collapses that to one accumulation and fails
+/// here, without a GPU.
+///
+/// The Ink Pen is the other side of the same guard. It never mentions the
+/// port, so it must keep the registration default and stay on the law every
+/// brush had before the dial existed.
+#[test]
+fn shipped_brushes_compile_on_the_law_their_yaml_authors() {
+    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+
+    let compiled_builtin = |name: &str| {
+        let brush = darkly::brush::builtin_brushes::all()
+            .into_iter()
+            .find(|b| b.metadata.name == name)
+            .unwrap_or_else(|| panic!("{name} brush registered"));
+        let plan = compile(&brush.metadata.graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(&brush.metadata.graph, &plan, &evals()).expect("compiles")
+    };
+
+    let pencil = compiled_builtin("Pencil");
+    assert_eq!(
+        pencil.dab_blend, COVERAGE_CEILING,
+        "inside the dial the scratch carries the washing half"
+    );
+    assert_eq!(
+        pencil.channels.iter().map(|c| c.name).collect::<Vec<_>>(),
+        ["build"],
+        "inside the dial the stacking half needs its own accumulation"
+    );
+
+    let ink_pen = compiled_builtin("Ink Pen");
+    assert_eq!(
+        ink_pen.dab_blend, PREMULTIPLIED_SOURCE_OVER,
+        "a brush that never mentions the port keeps the original law"
+    );
+    assert!(
+        ink_pen.channels.is_empty(),
+        "at the top of the dial the scratch is the only accumulation"
     );
 }
