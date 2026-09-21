@@ -31,11 +31,23 @@ component bugs.
 
 ## `npm test`
 
-Vitest runs in the node environment, so there is no DOM and globals like
-`KeyboardEvent`, `PointerEvent` and `window` are undefined. Test against plain
-object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code that touches
-`window`, stub it with `vi.stubGlobal('window', …)` and a fake node: see
+Vitest runs in the node environment by default, so there is no DOM and globals
+like `KeyboardEvent`, `PointerEvent` and `window` are undefined. Test against
+plain object fakes (`{ key, shiftKey } as KeyboardEvent`), and for code that
+touches `window`, stub it with `vi.stubGlobal('window', …)` and a fake node: see
 [`src/lib/__tests__/dismiss.test.ts`](../frontend/src/lib/__tests__/dismiss.test.ts).
+
+A file opting in with `// @vitest-environment jsdom` gets a DOM and can `mount`
+a component, which is how behaviour that only exists in how a component
+sequences DOM reads and writes is covered: see
+[`addLayerModal.component.test.ts`](../frontend/src/ui/layers/__tests__/addLayerModal.component.test.ts).
+jsdom has no layout, so it computes no geometry, runs no animation frames and
+implements neither `showModal` nor scrolling. A component test that needs any of
+those stubs them and supplies its own canned rects, which is a decision about
+what the test controls rather than a workaround: see
+[`brushExplorer.open.component.test.ts`](../frontend/src/ui/brush_explorer/__tests__/brushExplorer.open.component.test.ts).
+Anything whose cause is real layout (scroll anchoring, percentage resolution,
+`display: none` semantics) cannot be reproduced here at all.
 
 It is also the staleness gate for catalog graphics: it re-renders each one and
 fails if the committed image no longer matches its component and stills. See

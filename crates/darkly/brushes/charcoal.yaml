@@ -1,5 +1,5 @@
 name: Charcoal
-description: A grainy stick that catches on the paper's tooth, laying color down heavily where you press and skipping where you don't.
+description: A soft stick that crumbles onto the tooth of the paper, for broad, smoky marks.
 nodes:
   brush_settings:
     type: brush_settings
@@ -40,11 +40,10 @@ nodes:
         - 0.53
       - - 1.0
         - 1.0
-  document_settings:
-    type: document_settings
   image:
     type: image
     inputs:
+      scale: 500
       space: 0
       texture_name: paper
   levels:
@@ -53,14 +52,10 @@ nodes:
       in_low: 0.72
   multiply:
     type: multiply
-  multiply_2:
-    type: multiply
-    inputs:
-      a: 500.0
   paint:
     type: paint
     inputs:
-      flow: 0.5
+      build_flow: 0.5
   paint_color:
     type: paint_color
   pen_input:
@@ -76,13 +71,11 @@ nodes:
 connections:
 - circle.mask -> multiply.b
 - curve.output -> levels.in_low
-- curve_2.output -> paint.flow
+- curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.a
-- document_settings.dpi_scale -> multiply_2.b
 - image.color -> split_color.color
 - levels.output -> stamp.tip
 - multiply.result -> levels.input
-- multiply_2.result -> image.scale
 - paint_color.color -> stamp.color
 - pen_input.drawing_angle -> switch.in_0_scalar
 - pen_input.position -> paint.position
@@ -103,4 +96,4 @@ exposed_ports:
     label: Lock Rotation
     description: Routes one of two inputs to the output. If the chosen input is unconnected, downstream falls back to its own port default.
     icon: fa-solid fa-lock
-  paint.flow: {}
+  paint.build_flow: {}

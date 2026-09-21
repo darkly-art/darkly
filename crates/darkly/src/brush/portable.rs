@@ -79,6 +79,11 @@ pub struct PortableBrush {
 pub struct PortableNode {
     #[serde(rename = "type")]
     pub type_id: String,
+    /// Author-chosen display name for this node, shown in place of the
+    /// registration's. Empty is elided so unnamed nodes stay a bare
+    /// `type`/`inputs` entry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     /// Free-form author annotation on this node. Empty is elided so
     /// un-annotated nodes stay a bare `type`/`inputs` entry.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -235,6 +240,7 @@ impl PortableBrush {
                 id.0.clone(),
                 PortableNode {
                     type_id: node.type_id.clone(),
+                    name: node.name.clone(),
                     comment: node.comment.clone(),
                     inputs,
                     ranges,
@@ -340,6 +346,11 @@ impl PortableBrush {
             }
 
             let new_id = graph.add_node(pn.type_id.clone(), ports);
+            if !pn.name.is_empty() {
+                graph
+                    .set_node_name(&new_id, pn.name.clone())
+                    .expect("node just added by add_node must exist");
+            }
             if !pn.comment.is_empty() {
                 graph
                     .set_node_comment(&new_id, pn.comment.clone())
@@ -480,6 +491,7 @@ mod tests {
                 "Softness".into(),
                 "Edge falloff".into(),
                 "fa6-solid:circle-half-stroke".into(),
+                false,
             )
             .unwrap();
 
@@ -550,6 +562,46 @@ mod tests {
             .find(|p| p.name == "softness")
             .unwrap();
         assert_eq!((port.min, port.max), (-1.0, 2.5));
+    }
+
+    /// An inverted brush-bar entry survives the yaml round trip, and an
+    /// uninverted one writes no key at all: `invert` elides its default like
+    /// every sibling meta field, so a plain entry still serializes as `{}`.
+    #[test]
+    fn inverted_entry_survives_the_yaml_round_trip() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+        graph.expose_port(&circle, "softness").unwrap();
+        let key = exposed_port_key(&circle, "softness");
+
+        // Uninverted: the key is absent from the emitted yaml.
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(
+            !serde_yaml_ng::to_string(&clean).unwrap().contains("invert"),
+            "an uninverted entry must not serialize an invert key"
+        );
+
+        graph
+            .set_exposed_port_meta(&key, "Hardness".into(), String::new(), String::new(), true)
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert!(
+            restored.exposed_ports[&key].invert,
+            "the mirror is authored brush state and must survive save/load"
+        );
+        assert_eq!(restored.exposed_ports[&key].label, "Hardness");
     }
 
     /// A hand-edited yaml carrying a degenerate or inverted range is
@@ -738,6 +790,44 @@ nodes: {}
             serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&restored, registry).unwrap())
                 .unwrap();
         assert_eq!(yaml, reyaml);
+    }
+
+    /// An author-chosen node name survives the full YAML round trip, is
+    /// emitted only for the node that has one, and re-lands on the correct id
+    /// after same-kind normalization. The name is carried alongside the id
+    /// rather than replacing it: the ids stay `random` / `random_2`.
+    #[test]
+    fn node_name_round_trips() {
+        let registry = registry();
+        let mut graph = Graph::<BrushWireType>::new();
+        let a = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        let _b = graph.add_node("random", registry.get("random").unwrap().ports.clone());
+        graph
+            .set_node_name(&a, "Add pressure and tilt".into())
+            .unwrap();
+
+        let yaml =
+            serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&graph, registry).unwrap())
+                .unwrap();
+        // Only the named node emits `name:`.
+        assert_eq!(yaml.matches("name:").count(), 1);
+
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert_eq!(
+            restored.nodes().get(&NodeId("random".into())).unwrap().name,
+            "Add pressure and tilt"
+        );
+        assert_eq!(
+            restored
+                .nodes()
+                .get(&NodeId("random_2".into()))
+                .unwrap()
+                .name,
+            ""
+        );
     }
 
     /// A node comment survives the full YAML round trip (including multi-line

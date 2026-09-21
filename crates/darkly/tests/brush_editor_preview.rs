@@ -558,27 +558,27 @@ fn assert_no_ink_on_render_border(pixels: &[u8], w: u32, h: u32, label: &str) {
     }
 }
 
-/// Squash the active brush's tip to the extreme calligraphy nib (aspect
-/// 10% → ~10× anisotropy, the worst case the preview canvas is sized for)
-/// by scrubbing its exposed `aspect` port. Returns nothing; mutates the
-/// active graph in place.
+/// Squash the active brush's tip to the thinnest nib its `aspect` port allows
+/// by scrubbing that port. The squash is a contraction, so this is the most
+/// *eccentric* tip available, not the largest: it is the shape most likely to
+/// expose a frame or crop that assumes a round dab.
 fn squash_active_brush_to_extreme_nib(engine: &mut darkly::engine::DarklyEngine) {
     let aspect = engine
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "aspect")
         .expect("Calligraphy exposes an `aspect` port");
-    // Percent unit: display 10 → port 0.1 (the port's minimum, ~10× stretch).
+    // Percent unit: display 1 → port 0.01, the port's minimum (a 100:1 nib).
     engine
-        .brush_set_exposed_port(&aspect.node_id, "aspect", 10.0)
-        .expect("scrub aspect to 10%");
+        .brush_set_exposed_port(&aspect.node_id, "aspect", 1.0)
+        .expect("scrub aspect to 1%");
 }
 
 /// Regression: a broad-nib calligraphy tip must not be clipped against the
-/// stroke-preview render canvas. The tip's anisotropy stretches the dab
-/// footprint up to ~10×, so a fixed small canvas + absolute inset clipped the
-/// endpoints (and even mid-stroke edges) before the changed-pixel crop ever
-/// saw them: the artist-reported "calligraphy stroke is cut off" bug.
+/// stroke-preview render canvas. A fixed small canvas plus an absolute inset
+/// clipped the endpoints (and even mid-stroke edges) before the changed-pixel
+/// crop ever saw them: the artist-reported "calligraphy stroke is cut off"
+/// bug.
 ///
 /// The invariant is size-agnostic: whatever canvas the preview pipeline picks,
 /// the neutralized preview stroke must stay clear of its border. We assert

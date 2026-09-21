@@ -140,7 +140,11 @@ pub fn register() -> BrushNodeRegistration {
 /// `a` is the squeeze semi-axis (`1 − 0.9·squeeze`), `rounding` the corner
 /// radius `ρ`, `n` the side count, and `beta` the squeeze angle, or `None`
 /// when the axis is not known at compile time, which yields the
-/// orientation-agnostic worst case of a vertex on the stretched axis.
+/// orientation-agnostic worst case of a vertex on the unsqueezed axis.
+///
+/// Since `diag(a, 1)` with `a ≤ 1` is a contraction of unit base vertices,
+/// this is always `≤ 1`: the squeezed silhouette is *tighter* than the disc,
+/// never wider, so the value tightens the extent rather than inflating it.
 ///
 /// Shared by [`PolygonEvaluator::extent`] and the feature test that asserts
 /// nothing lies outside the bound, so the budgeted extent and the silhouette
@@ -154,18 +158,18 @@ pub fn silhouette_support(a: f32, rounding: f32, n: f32, beta: Option<f32>) -> f
     // distance field by `ρ`, so those two are the whole reach.
     let cr = 1.0 - rounding;
     let radial = match beta {
-        None => 1.0 / a,
+        None => 1.0,
         Some(beta) => {
             let n = n.round().max(3.0);
             let (sb, cb) = beta.sin_cos();
             (0..n as u32).fold(0.0_f32, |acc, i| {
                 // Vertex i's base direction, matching the emitted body's
                 // `vec2(sin(ak), cos(ak))`, carried into the squeeze frame by
-                // `R(−β)` and scaled by `diag(a, 1/a)`.
+                // `R(−β)` and scaled by `diag(a, 1)`.
                 let (s, c) = (std::f32::consts::TAU * i as f32 / n).sin_cos();
                 let wx = s * cb + c * sb;
                 let wy = c * cb - s * sb;
-                acc.max(((a * wx).powi(2) + (wy / a).powi(2)).sqrt())
+                acc.max(((a * wx).powi(2) + wy.powi(2)).sqrt())
             })
         }
     };
@@ -248,9 +252,10 @@ impl BrushNodeEvaluator for PolygonEvaluator {
         // point and measure distance in the distorted space (which stretches the
         // band and the corner fillets), the polygon's vertices are generated
         // *already squeezed and oriented* in screen space via the inverse
-        // transform `T⁻¹ = R(β−φ)·diag(a,1/a)·R(−β)`, and the SDF returns a true
+        // transform `T⁻¹ = R(β−φ)·diag(a,1)·R(−β)`, and the SDF returns a true
         // screen distance. `squeeze` maps to a semi-axis `a = 1 − 0.9·squeeze`
-        // (0% ⇒ round, 100% ⇒ a = 0.1).
+        // (0% ⇒ round, 100% ⇒ a = 0.1). The map is a contraction, so the
+        // nominal radius bounds the silhouette at every squeeze.
         //
         // Because the distance is exact and Euclidean, the softness band is a
         // uniform width on every edge under any squeeze, and the rounding
@@ -271,15 +276,18 @@ impl BrushNodeEvaluator for PolygonEvaluator {
              \x20   let {ident}_phi: f32 = -(3.14159265358979323846 / {ident}_n + ({rotation}) + ({rotation_input}) + u.intrinsic.view_rotation);\n\
              \x20   // Semi-axis from squeeze (0% ⇒ round, 100% ⇒ 0.1).\n\
              \x20   let {ident}_a: f32 = clamp(1.0 - 0.9 * clamp(({squeeze}), 0.0, 1.0), 0.01, 1.0);\n\
-             \x20   // Inverse squeeze transform: screen = R(β−φ)·diag(a,1/a)·R(−β)·p,\n\
+             \x20   // Inverse squeeze transform: screen = R(β−φ)·diag(a,1)·R(−β)·p,\n\
              \x20   // used to place each base vertex already squeezed and oriented.\n\
+             \x20   // `diag(a, 1)` contracts: the squeeze narrows one axis and\n\
+             \x20   // leaves the other at the radius, so the tip never reaches\n\
+             \x20   // further than a round one.\n\
              \x20   let {ident}_cb: f32 = cos({ident}_beta);\n\
              \x20   let {ident}_sb: f32 = sin({ident}_beta);\n\
              \x20   let {ident}_cbp: f32 = cos({ident}_beta - {ident}_phi);\n\
              \x20   let {ident}_sbp: f32 = sin({ident}_beta - {ident}_phi);\n\
              \x20   let {ident}_tinv: mat2x2<f32> =\n\
              \x20       mat2x2<f32>({ident}_cbp, {ident}_sbp, -{ident}_sbp, {ident}_cbp)\n\
-             \x20       * mat2x2<f32>({ident}_a, 0.0, 0.0, 1.0 / {ident}_a)\n\
+             \x20       * mat2x2<f32>({ident}_a, 0.0, 0.0, 1.0)\n\
              \x20       * mat2x2<f32>({ident}_cb, -{ident}_sb, {ident}_sb, {ident}_cb);\n\
              \x20   let {ident}_round: f32 = clamp(({rounding}), 0.0, 1.0);\n\
              \x20   let {ident}_cr: f32 = 1.0 - {ident}_round;\n\

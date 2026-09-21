@@ -13,7 +13,7 @@ use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::nodegraph::{compile, Graph, NodeId, PortRef};
+use darkly::nodegraph::{Graph, NodeId, PortRef};
 
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
     let (device, queue) = test_device();
@@ -40,20 +40,67 @@ fn wire(
         .expect("ports connect");
 }
 
-/// Slot index a specific node instance writes `port` to. `find_output_slot`
-/// resolves by type id, which is ambiguous in a graph with two `multiply`
-/// nodes; the plan carries the node id.
-fn slot_of(graph: &Graph<darkly::brush::wire::BrushWireType>, node_id: &str, port: &str) -> usize {
-    let plan = compile(graph, registry().as_map()).expect("graph compiles");
-    plan.steps
+/// The stock brush graph with `document_settings.dpi_scale` driving the
+/// terminal's per-touch size multiplier, plus the id of the node that
+/// publishes it. A document at twice the reference resolution therefore paints
+/// a dab twice as wide, which is what makes the delivery observable in pixels.
+fn graph_driven_by_dpi() -> (Graph<darkly::brush::wire::BrushWireType>, NodeId) {
+    let reg = registry();
+    let mut graph = darkly::brush::default_graph();
+    let ds = graph.add_node(
+        "document_settings",
+        reg.get("document_settings").unwrap().ports.clone(),
+    );
+    let terminal = darkly::brush::find_terminal(&graph).expect("the stock graph has a terminal");
+    wire(&mut graph, (&ds, "dpi_scale"), (&terminal, "size"));
+    (graph, ds)
+}
+
+/// The paper-grain shape the feature exists for: an authored feature size in
+/// canvas pixels, multiplied by `dpi_scale`, driving `noise.scale`, whose
+/// field becomes the stamp's tip. `noise.scale` is read per fragment, so this
+/// is the wiring that puts the value in front of the shader.
+fn graph_with_dpi_scaled_grain() -> (Graph<darkly::brush::wire::BrushWireType>, NodeId) {
+    let reg = registry();
+    let mut graph = darkly::brush::default_graph();
+
+    let ds = graph.add_node(
+        "document_settings",
+        reg.get("document_settings").unwrap().ports.clone(),
+    );
+    let mul = graph.add_node("multiply", reg.get("multiply").unwrap().ports.clone());
+    graph.set_port_default(&mul, "a", 2.5).unwrap();
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+
+    // The grain replaces the stock disc as the tip, so the stamp consumes it
+    // and the compiler keeps the whole chain.
+    let circle = graph
+        .nodes()
         .iter()
-        .find(|s| s.node_id.0 == node_id)
-        .unwrap_or_else(|| panic!("no node {node_id} in plan"))
-        .output_slots
+        .find(|(_, n)| n.type_id == "circle")
+        .map(|(id, _)| id.clone())
+        .expect("the stock graph has a circle");
+    let stamp = graph
+        .nodes()
         .iter()
-        .find(|(name, _)| name == port)
-        .unwrap_or_else(|| panic!("node {node_id} has no output {port}"))
-        .1
+        .find(|(_, n)| n.type_id == "stamp")
+        .map(|(id, _)| id.clone())
+        .expect("the stock graph has a stamp");
+    graph.disconnect(
+        &PortRef {
+            node: circle,
+            port: "mask".into(),
+        },
+        &PortRef {
+            node: stamp.clone(),
+            port: "tip".into(),
+        },
+    );
+
+    wire(&mut graph, (&ds, "dpi_scale"), (&mul, "b"));
+    wire(&mut graph, (&mul, "result"), (&noise, "scale"));
+    wire(&mut graph, (&noise, "value"), (&stamp, "tip"));
+    (graph, ds)
 }
 
 // ---------------------------------------------------------------------------
@@ -177,28 +224,16 @@ fn document_settings_publishes_dpi_scale() {
 }
 
 /// The value reaches the shader as a stroke-constant uniform, not as a literal
-/// baked into the WGSL at compile time: a compiled graph is document-agnostic
+/// baked into the WGSL at compile time: a compiled brush is document-agnostic,
 /// and must not need recompiling when the artist changes the DPI.
 #[test]
 fn dpi_scale_is_a_uniform_not_a_baked_literal() {
-    let charcoal = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Charcoal")
-        .expect("Charcoal brush registered");
-    let graph = &charcoal.metadata.graph;
-    let node_id = graph
-        .nodes()
-        .iter()
-        .find(|(_, n)| n.type_id == "document_settings")
-        .map(|(id, _)| id.clone())
-        .expect("Charcoal wires document_settings");
-
-    // Through `compile_graph`, the same entry point the engine uses, so this
-    // is the shader the shipped brush actually paints with.
-    let compiled = darkly::brush::compile_graph(graph)
-        .expect("Charcoal compiles")
+    let (graph, node_id) = graph_with_dpi_scaled_grain();
+    // Through `compile_graph`, the entry point the engine itself uses.
+    let compiled = darkly::brush::compile_graph(&graph)
+        .expect("graph compiles")
         .compiled_brush()
-        .expect("Charcoal terminates in `paint`, so it compiles to WGSL");
+        .expect("the graph terminates in `paint`, so it compiles to WGSL");
 
     // `CompileWgslCtx::uniform_field_name` names node contributions
     // `n{node_id}_{port}`; the packer finds the value under the same key that
@@ -219,35 +254,6 @@ fn dpi_scale_is_a_uniform_not_a_baked_literal() {
     );
 }
 
-/// Charcoal's paper texture is wired through `dpi_scale`, and at the default
-/// DPI that wiring is an identity: the scale arriving at the image node is the
-/// 500 px the brush authored. This is what makes the wiring safe to ship, and
-/// it fails if `DEFAULT_DPI` and the authored operand ever disagree.
-#[test]
-fn charcoal_paper_scale_is_unchanged_at_the_default_dpi() {
-    let charcoal = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Charcoal")
-        .expect("Charcoal brush registered");
-    let graph = &charcoal.metadata.graph;
-    let reg = registry();
-
-    let mut runner = BrushGraphRunner::new(graph, reg.as_map(), reg.evaluators()).unwrap();
-    runner.set_dpi(DEFAULT_DPI);
-    runner.seed_sensors(&PaintInformation::default(), [0.0, 0.0, 0.0, 1.0], 7, 0);
-    runner.execute_cpu();
-
-    let slot = slot_of(graph, "multiply_2", "result");
-    let scale = match runner.read_slot(slot).expect("paper scale computed") {
-        ScalarValue::Scalar(v) => v,
-        other => panic!("expected Scalar, got {other:?}"),
-    };
-    assert!(
-        (scale - 500.0).abs() < 1e-3,
-        "Charcoal's paper scale must be its authored 500 px at the default DPI, got {scale}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Document to shader, end to end
 // ---------------------------------------------------------------------------
@@ -264,14 +270,7 @@ fn dpi_reaches_the_graph_from_the_document() {
         let layer = engine.add_raster_layer(None);
         engine.set_document_dpi(dpi);
 
-        let reg = registry();
-        let mut graph = engine.default_brush_graph();
-        let ds = graph.add_node(
-            "document_settings",
-            reg.get("document_settings").unwrap().ports.clone(),
-        );
-        let terminal = darkly::brush::find_terminal(&graph).expect("default graph has a terminal");
-        wire(&mut graph, (&ds, "dpi_scale"), (&terminal, "size"));
+        let (graph, _) = graph_driven_by_dpi();
         engine
             .set_brush_graph(&serde_json::to_string(&graph).unwrap())
             .expect("graph compiles");

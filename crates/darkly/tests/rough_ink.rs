@@ -99,7 +99,9 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         )
         .unwrap();
     graph.set_port_default(&terminal, "opacity", 1.0).unwrap();
-    graph.set_port_default(&terminal, "flow", 1.0).unwrap();
+    graph
+        .set_port_default(&terminal, "build_flow", 1.0)
+        .unwrap();
 
     // No `pen.pressure → terminal.flow` wire, so tests that scale alpha by
     // flow rely on the per-test `set_port_default(terminal, "flow", …)`
@@ -580,7 +582,9 @@ fn terminal_flow_scales_dab_alpha() {
         // Replace the terminal.flow default. build_test_graph hard-
         // sets it to 1.0 already; override here per-test.
         let term_id = darkly::brush::find_terminal(&graph).unwrap();
-        graph.set_port_default(&term_id, "flow", flow).unwrap();
+        graph
+            .set_port_default(&term_id, "build_flow", flow)
+            .unwrap();
         let mut h = harness(&black_canvas(), graph);
         h.begin_stroke();
         let info = PaintInformation {

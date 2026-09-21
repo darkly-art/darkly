@@ -108,13 +108,24 @@ min: number,
 max: number, 
 /**
  * Display-space default: what double-click reset returns to.
- * Sourced from the node-type registration, not the loaded brush.
+ * The loaded brush's shipped value for this port when it has one,
+ * falling back to the node-type registration's.
  */
 default: number, 
 /**
  * Unit type for formatting and conversion.
  */
-unitType: UnitType, } | { "kind": "bool", 
+unitType: UnitType, 
+/**
+ * Whether this control is presented mirrored, for the brush-author
+ * entry editor to seed its checkbox from.
+ *
+ * The bar's *renderers* must not consult it: every number in this
+ * payload is already mirrored, and mirroring again at render time
+ * would cancel it out. Only the authoring modal reads this, and only
+ * so that saving the entry does not silently un-invert it.
+ */
+invert: boolean, } | { "kind": "bool", 
 /**
  * Current value.
  */
@@ -157,11 +168,13 @@ export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
-export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, };
+export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, invert: boolean, };
 
 export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
 export type BrushGraphSetNodeCommentReq = { node_id: string, comment: string, };
+
+export type BrushGraphSetNodeNameReq = { node_id: string, name: string, };
 
 export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, display_min: number, display_max: number, };
 
@@ -194,6 +207,12 @@ export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
 
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type PortDir = "Input" | "Output";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
  * Slider min when the port is disconnected (UI metadata only).
@@ -219,12 +238,14 @@ value: InputValue,
  */
 enum_options?: Array<string>, 
 /**
- * Whether an upstream wire may drive this input per-dab. Computed from
- * `wire_type.is_wirable()` at construction and carried as data so the
- * frontend reads it directly rather than re-deriving the rule; the
- * single source of truth is [`WireKind::is_wirable`]. Every port built
- * from a registration (`PortDef::input`/`output`, and the clones in
- * `add_node` / portable import) sets it correctly; serde round-trips it.
+ * Whether an upstream wire may drive this input per-dab. Seeded from
+ * `wire_type.is_wirable()` at construction, and cleared by
+ * [`PortDef::stroke_constant`] for an otherwise-wirable type whose value
+ * is read before any dab exists. Carried as data so `connect` and the
+ * frontend read the port's own answer rather than re-deriving a rule
+ * from the type. Every port built from a registration
+ * (`PortDef::input`/`output`, and the clones in `add_node` / portable
+ * import) sets it correctly; serde round-trips it.
  */
 wirable: boolean, 
 /**
@@ -386,12 +407,6 @@ preview_image: boolean,
  */
 source: boolean, };
 
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
-
-export type PortDir = "Input" | "Output";
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
 export type PreviewStaging = { 
 /**
  * Iconify glyph shown in the dab slot, where a single stationary sample
@@ -483,35 +498,6 @@ export type CanvasDimensionsResp = { width: number, height: number, };
 
 export type CanvasRectResp = { origin_x: number, origin_y: number, width: number, height: number, };
 
-export type CaptureKind = "camera" | "display" | "stream";
-
-export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
-
-export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
-/**
- * The unit suffix alone, for a column header. Empty for unitless values.
- */
-unit: string, };
-
-export type ParamInfo = { kind: string, name: string, 
-/**
- * Display label. `None` → the UI title-cases `name`.
- */
-label: string | null, description: string | null, 
-/**
- * How to render this parameter's editor. One closed set, which both
- * `ParamKind` and the settings schema's `WidgetHint` map into:
- * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
- */
-widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
-/**
- * Enum: `["Label1", "Label2", ...]`.
- * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
- */
-options: JsonValue | null, display: ParamDisplay, };
-
 export type CatalogEntry = { type: string, displayName: string, 
 /**
  * Iconify name, or `None` when the variant deliberately declares no icon
@@ -547,6 +533,35 @@ supportsPreview: boolean,
  * than sources of one.
  */
 source: VoidSource | null, };
+
+export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
+/**
+ * The unit suffix alone, for a column header. Empty for unitless values.
+ */
+unit: string, };
+
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
+export type ParamInfo = { kind: string, name: string, 
+/**
+ * Display label. `None` → the UI title-cases `name`.
+ */
+label: string | null, description: string | null, 
+/**
+ * How to render this parameter's editor. One closed set, which both
+ * `ParamKind` and the settings schema's `WidgetHint` map into:
+ * `"auto"`, `"numberInput"`, `"icon"`, `"hotkey"`, `"color"`, `"hidden"`.
+ */
+widget: string, unit: UnitType, min: number | null, max: number | null, default: ParamValue, value: ParamValue | null, 
+/**
+ * Enum: `["Label1", "Label2", ...]`.
+ * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
+ */
+options: JsonValue | null, display: ParamDisplay, };
+
+export type VoidSource = { "kind": "procedural" } | { "kind": "capture", capture: CaptureKind, } | { "kind": "image" };
+
+export type CaptureKind = "camera" | "display" | "stream";
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**
@@ -996,6 +1011,7 @@ export type RequestKind =
     | 'brush_graph_set_exposed_port_meta'
     | 'brush_graph_set_input'
     | 'brush_graph_set_node_comment'
+    | 'brush_graph_set_node_name'
     | 'brush_graph_set_port_range'
     | 'brush_graph_unexpose_port'
     | 'brush_graph_validate'
@@ -1196,6 +1212,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_set_exposed_port_meta',
     'brush_graph_set_input',
     'brush_graph_set_node_comment',
+    'brush_graph_set_node_name',
     'brush_graph_set_port_range',
     'brush_graph_unexpose_port',
     'brush_graph_validate',
@@ -1404,6 +1421,7 @@ export interface EngineApi {
     brushGraphSetExposedPortMeta(req: BrushGraphSetExposedPortMetaReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetInput(req: BrushGraphSetInputReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetNodeComment(req: BrushGraphSetNodeCommentReq): Promise<{ graph: JsonValue } | { error: string }>;
+    brushGraphSetNodeName(req: BrushGraphSetNodeNameReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphSetPortRange(req: BrushGraphSetPortRangeReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphUnexposePort(req: BrushGraphUnexposePortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
@@ -1606,6 +1624,7 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphSetExposedPortMeta: (req) => t.request('brush_graph_set_exposed_port_meta', req),
         brushGraphSetInput: (req) => t.request('brush_graph_set_input', req),
         brushGraphSetNodeComment: (req) => t.request('brush_graph_set_node_comment', req),
+        brushGraphSetNodeName: (req) => t.request('brush_graph_set_node_name', req),
         brushGraphSetPortRange: (req) => t.request('brush_graph_set_port_range', req),
         brushGraphUnexposePort: (req) => t.request('brush_graph_unexpose_port', req),
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),

@@ -23,6 +23,7 @@
      * synchronously while its `scroll` event does not, and anything computed
      * from the event describes a position the pane has already left.
      */
+    import { tick } from 'svelte';
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
@@ -157,9 +158,19 @@
      *  scroll offsets and writes one, and computes everything else from what
      *  was measured here; nothing in it asks the DOM a question, so nothing in
      *  it can force a layout or read back a value the current frame has not
-     *  applied yet. */
-    function measure() {
-        if (!listEl || !wheelEl || !explorerEl) return;
+     *  applied yet.
+     *
+     *  Returns whether there was a layout to measure. An undisplayed scrollport
+     *  reports every rect as zero and discards writes, so measuring one would
+     *  publish zeros over the last live values: the wheel's pads would collapse
+     *  and `sectionAt` would answer every query with the last section. The last
+     *  live geometry survives a close instead, and a caller that needs a
+     *  laid-out DOM (the opening placement) can tell that it has one.
+     *
+     *  Measuring does not schedule. Both callers decide that for themselves,
+     *  which is what makes this safe to call from anywhere. */
+    function measure(): boolean {
+        if (!listEl || !wheelEl || !explorerEl) return false;
 
         // Everything here is read through `getBoundingClientRect`, and nothing
         // through the `offset*` family.
@@ -178,6 +189,7 @@
         const base = explorerEl.getBoundingClientRect();
         const wheelPort = wheelEl.getBoundingClientRect();
         const listPort = listEl.getBoundingClientRect();
+        if (listPort.height === 0 || wheelPort.height === 0) return false;
 
         const cards = [...wheelEl.querySelectorAll<HTMLElement>('.pack-card')];
         // In the wheel's scroll-content coordinates, which is the frame
@@ -243,7 +255,7 @@
             viewportLeft: base.left,
             viewportTop: base.top,
         };
-        wake();
+        return true;
     }
 
     // Re-measure whenever the group set changes or anything resizes, rather
@@ -253,9 +265,11 @@
     $effect(() => {
         void groups;
         if (!listEl || !wheelEl) return;
-        measure();
+        if (measure()) wake();
         if (typeof ResizeObserver === 'undefined') return;
-        const ro = new ResizeObserver(() => measure());
+        const ro = new ResizeObserver(() => {
+            if (measure()) wake();
+        });
         ro.observe(listEl);
         ro.observe(wheelEl);
         for (const el of sectionElements()) ro.observe(el);
@@ -322,8 +336,14 @@
 
     /** Mark the panes as moving. Every scroll event and every input lands here
      *  and nowhere else: an event's job is to keep the loop alive, never to
-     *  compute anything from a position it may already have left. */
+     *  compute anything from a position it may already have left.
+     *
+     *  Guarded on `open` here rather than at each caller, so "a closed explorer
+     *  schedules nothing" holds for every one of them. A close still arrives
+     *  through a resize observer and a scroll event or two, and the pick that
+     *  closed the dialog re-derives the groups a beat later. */
     function wake() {
+        if (!open) return;
         idle = 0;
         if (!raf) raf = requestAnimationFrame(pump);
     }
@@ -338,10 +358,10 @@
      *  wheel follows it frame by frame, so the card stays under the pointer and
      *  the projection stretches through the jump instead of teleporting at the
      *  end of it. */
-    function jumpTo(index: number) {
+    function jumpTo(index: number, behavior: ScrollBehavior = 'smooth') {
         if (!listEl) return;
         drive('list');
-        listEl.scrollTo({ top: scrollTopForSection(index, geometry), behavior: 'smooth' });
+        listEl.scrollTo({ top: scrollTopForSection(index, geometry), behavior });
     }
 
     function selectBrush(brush: BrushInfo) {
@@ -355,10 +375,28 @@
         if (open) query = '';
     });
 
+    // Every open lands on section 0: Recents when there are any, the first pack
+    // otherwise. Without an explicit placement the landing is whatever the
+    // browser restored across the dialog's `display: none`, which is the pack
+    // you were last in on Firefox, and on Chromium that offset plus the lead
+    // spacer's height on every reopen (the spacer resolves to zero in the first
+    // layout after re-attach, and scroll anchoring compensates), walking the
+    // list to the last pack within a few picks.
+    //
+    // The placement waits a tick for the same reason `SettingsModal`'s focus
+    // does: `Modal` promotes the dialog to the top layer from its own effect,
+    // and a scrollport inside a dialog that is still `display: none` discards
+    // the write. Measuring first is what makes the target right on the frame it
+    // is written: the standing geometry is the previous session's, whose
+    // sections are stale whenever the group set changed while closed.
+    //
     // The loop belongs to the open dialog. A closed explorer schedules nothing,
     // and the teardown is what guarantees a stray frame cannot outlive it.
     $effect(() => {
         if (!open) return;
+        void tick().then(() => {
+            if (measure()) jumpTo(0, 'instant');
+        });
         wake();
         return () => {
             if (raf) cancelAnimationFrame(raf);

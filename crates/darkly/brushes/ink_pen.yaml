@@ -21,12 +21,12 @@ connections:
 - circle.mask -> stamp.tip
 - paint_color.color -> stamp.color
 - pen_input.position -> paint.position
-- pen_input.pressure -> paint.flow
+- pen_input.pressure -> paint.build_flow
 - pen_input.pressure -> paint.size
 - stamp.dab -> paint.rgba
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
   circle.softness: {}
-  paint.flow: {}
+  paint.build_flow: {}
   paint.opacity: {}

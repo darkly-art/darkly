@@ -118,6 +118,210 @@ Three independent reasons every stroke needs this pair:
 For a deeper trace look at
 [`engine/painting.rs::brush_stroke_to`](../../crates/darkly/src/engine/painting.rs).
 
+## How dabs accumulate in the scratch
+
+The scratch is written by one instanced draw per flush, so the law that
+combines overlapping dabs is a *blend state*, not shader code. Two exist,
+both in [`brush/node.rs`](../../crates/darkly/src/brush/node.rs).
+
+**`PREMULTIPLIED_SOURCE_OVER`** composites each dab over the last.
+Coverage accumulates as `1 - prod(1 - a_i)`, so a pixel's density rises
+with however many dabs the spacing happened to stack on it. Its density is
+therefore a function of `spacing`, not only of pressure: the Pencil
+measured 0.714 peak alpha at `spacing: 0.10` and 0.984 at `spacing: 0.01`,
+same path, same pressure.
+
+**`COVERAGE_CEILING`** uses `BlendOperation::Max` instead, so a pixel takes
+its strongest dab rather than the sum of its dabs. A stroke cannot darken
+itself by crossing back over its own path, density stops depending on
+spacing (identical to the byte across a 30x spacing spread), and pressure
+becomes the only thing setting it.
+
+### The accumulation dial
+
+A blend state cannot be interpolated: fixed-function blending offers one
+equation per attachment with no midpoint between `Add` and `Max`, and
+WebGPU has no framebuffer fetch, so no single attachment can be made to
+accumulate part-way between the two. What *is* continuous is the input.
+
+The `paint` terminal's `buildup` port is a scalar in `[0, 1]`, and the
+share it names splits every dab between two accumulations that each run
+one law untouched:
+
+| `buildup` | the scratch | second accumulation | the dab |
+| --- | --- | --- | --- |
+| `0` | `COVERAGE_CEILING` | none | all of it washes |
+| `1` | `PREMULTIPLIED_SOURCE_OVER` | none | all of it stacks |
+| between | `COVERAGE_CEILING` | `build` (`Rgba8Unorm`, source-over) | `1 - b` washes, `b` stacks |
+
+Both halves ride the one instanced draw as two colour attachments, so 1px
+spacing stays as affordable as it was, and a brush at either end declares
+no channel and pays nothing. The port is stroke-constant: its value picks
+blend states and colour targets when the brush compiles, so no per-dab wire
+can drive it, and `PortDef::stroke_constant` is what says so.
+
+Each half has its own per-dab intensity, `wash_flow` ("Flow (Wash)") and
+`build_flow` ("Flow (Build-up)"), so an author can scale one without the
+other. They matter because the two ends deposit different amounts on
+untouched ground: `Max` takes one dab where source-over stacks every dab
+that lands, which at 1px spacing is tens of them. A pass on fresh ground
+therefore darkens as the dial rises (measured on the Pencil at pressure
+0.7, darkest over white: 149 / 74 / 30 / 9 / 1 across the dial), and
+lowering `build_flow` against `wash_flow` is how a brush holds it level.
+The terminal does not correct it automatically: the only correction that
+would is a per-dab normalisation by the overlap count, and that removes
+the per-dab stacking the top of the dial exists to provide.
+
+What the dial buys is that the two places overlap can happen agree.
+Retracing a path inside one stroke and drawing a second stroke over it
+build the same amount at every setting (measured surcharge, median alpha
+at spacing 0.30: 2 / 25 / 43 / 54 / 62 within a stroke, 0 / 24 / 44 / 56 /
+63 across strokes). The wash half refuses at both sites, the stacking half
+compounds at both, and the commit is what keeps them in step.
+
+### What `Wash` requires, and what it changes
+
+**One chroma per stroke.** `Max` runs per channel. For a brush whose
+`stamp.color` comes from the stroke-constant `paint_color` uniform, all
+four channels scale by the same per-dab factor, and since rounding to 8
+bits is monotone, all four take their maximum from the *same* dab, which
+is the property this relies on. A graph that varies dab colour per dab
+(via `random`, `split_color`, or an `image` tip) would take per-channel
+maxima from different dabs and would fringe; such brushes must stay on
+`Build-up`. This is not checked automatically.
+
+**Canvas-space fields survive; dab-space fields do not.** Anything fixed
+per canvas pixel factors straight out of the max (`max_i(g(x) * k_i) =
+g(x) * max_i k_i` for `g >= 0`), so canvas-space noise and the selection
+mask modulate the finished mark instead of being saturated through. That
+is an improvement for selection in particular: under source-over a
+50%-selected region still converges toward 1 as dabs accumulate, where
+under `Max` it converges to `0.5 * max a_i`, so feathering is properly
+respected. The converse is the trap: a *dab*-space field draws an
+independent sample per dab, and with 17 to 35 samples the max saturates it
+to near 1 across the whole dab interior. Dab-space grain goes inert under
+`Wash`. The Pencil's paper grain is authored in canvas space for exactly
+this reason.
+
+**Erase inherits the law.** Erase reads the same scratch
+(`composite.wgsl`'s `destination_out` branch takes `fg_a` from it), so a
+`Wash` brush used as an eraser stops punching further through where its
+own dabs overlap. That is the same promise in both directions and is
+deliberate.
+
+### The ceiling also applies across strokes
+
+`Wash` caps overlapping deposit at both places it accumulates. The per-dab
+blend above handles one stroke's own dabs; the commit
+(`shaders/brush/composite.wgsl`) caps a stroke against what the layer already
+holds. One invariant covers both: **a pixel never takes more deposit than a
+single pass over it would have laid down.**
+
+The two are different mechanisms and have to be, and the ceiling is hard at
+both. Softening it per dab would compose to `1 - (1 - s*k)^n` with
+`n = diameter/spacing`, putting tone back under the spacing slider, which is
+the defect it exists to remove; softening it only at the commit would let
+separate strokes build while a stroke crossing its own path stayed capped.
+Keeping it hard at both sites is what makes crossing your own stroke and
+crossing an earlier one give the same result. The dial changes how much of
+each dab this law receives, never how strictly it then applies, which is why
+that parity survives at every setting.
+
+**The commit takes two foregrounds**, one per law, each with its own stroke
+opacity where zero means the slot is absent. The wash slot goes through the
+ceiling below; the build slot is then composited on top with plain
+source-over. The order is load-bearing: the ceiling reads the ground to find
+room, so a build half laid underneath would let a stroke's own build-up shrink
+its own wash. Under erase each slot removes its own coverage and neither
+consults the ceiling, because removal must be able to reach zero. Which
+accumulation fills which slot is the terminal's knowledge; the shader knows
+two slots and two laws, and watercolor fills the build slot alone.
+
+**How the commit decides.** A pass carrying pigment `C` at coverage `s` lands,
+starting from blank, a fixed fraction of the way to `C`. Everything past that
+is refused. So rather than asking what the pass would add, the shader asks how
+much room is left between where the pixel already sits and where this pass
+saturates, and deposits exactly that:
+
+```
+origin = gamut corner opposite C        // the deposit scale's zero
+reach  = chebyshev(origin, C)           // a full-strength deposit's span
+ground = bg.rgb * bg.a + origin * (1 - bg.a)
+d      = chebyshev(ground, C)           // how far this pixel still is from C
+t      = max(0, 1 - (1 - s) * reach / d)
+out    = source_over(C * t, t, bg)
+```
+
+It stays ordinary source-over, with an effective coverage computed from how
+close the pixel already is to the pigment. On untouched ground `d == reach` and
+`t == s`, the full deposit. At saturation `t == 0`. A heavier pass shrinks the
+saturation distance and reopens room, so pressure still works.
+
+Three properties fall out of that shape, and each was a bug in an earlier
+version of this code:
+
+- **Layer transparency does not change the result.** Room is read from the
+  pixel's colour composited over the deposit's origin, which is the one
+  quantity a transparent layer and an opaque one holding the same visible mark
+  agree on. An earlier version capped `max(bg.a, fg_a)` instead and was
+  therefore completely inert on an opaque layer, which is what Darkly's own
+  fresh document hands the artist.
+- **No assumption that pigment is dark.** `origin` is derived from `C`, so a
+  white pencil on black ground behaves exactly like a black one on white. An
+  earlier attempt measured room along a luminance axis and only worked for dark
+  pigments.
+- **Saturation is per pigment, not global.** Room is distance to the colour
+  being laid down, so a red mark is nowhere near saturated for blue and takes
+  it normally. A design that capped alpha alone could not express this.
+
+**The max-norm is load-bearing.** Under it `d <= reach` holds for every colour
+in the cube, so a pass can only ever be reduced, never amplified, and `t`
+collapses to exactly `s` on any untouched ground. Under a Euclidean norm that
+is false: white is not red's antipode, so a red pencil on white paper would
+saturate at a weaker mark than graphite does at the same pressure. This is also
+where a move to OKLab would land, since distance there is Euclidean and
+perceptually uniform, which is what this actually wants; it needs a different
+reference than the cube corner to keep the `d <= reach` guarantee, so it
+belongs with the colour-system rewrite rather than before it.
+
+**The refusal is absolute, within its half.** `t` is the whole answer: a pixel
+at the saturation level takes nothing more of the washing half, at any
+pressure, from any number of later strokes. There is no partial ceiling. A
+commit-side dial that relaxed it used to exist and was removed: it could only
+soften the *commit*, so a stroke crossing its own path stayed fully capped
+while separate strokes built, and the two sites agreed only at its zero. That
+made it a second, weaker copy of source-over accumulation. What varies with
+`buildup` is how much of each dab is handed to this law at all, not how
+strictly the law then applies.
+
+**What the ceiling costs.** At the bottom of the dial, crosshatch
+intersections do not build, abutting hatch strokes leave a seam at the join,
+and tone cannot be built by repeated passes at one pressure; pressure is the
+only tonal control. That is the opposite of how graphite behaves, and it is
+the trade the law makes. Raising `buildup` is how a brush buys some of that
+back, and the two shipped Pencils sit at the two ends.
+
+**What it still cannot know is history.** The layer stores appearance, not what
+made it. A pixel already close to the pigment reads as saturated whether this
+brush put it there, another brush did, or it came in with a pasted image. That
+is a real limitation, but it is a smaller one than the alpha cap's: it is
+scoped to the pigment being laid down and it behaves the same everywhere,
+rather than silently doing nothing on opaque ground.
+
+**Erase is deliberately not capped.** `destination_out` returns before the
+ceiling, so removal stays fully accumulative across strokes and an eraser can
+always reach zero. Within a stroke the scratch's `Max` still applies, so a soft
+eraser stops punching further through on self-overlap. Deposit saturates;
+removal does not.
+
+Prior art informs the shape but not the default. Krita's `KoCompositeOpGreater`
+(Nicholas Guttenberg) is a destination-aware ceiling, though it back-solves an
+effective source alpha and so cancels colour along with coverage; Krita's
+`KoCompositeOpAlphaDarken` and `KoCompositeOpMarker` run separate colour and
+alpha laws, as does GIMP's `GimpLayerCompositeMode`. But every
+cross-destination ceiling in either codebase is a user-selectable blend mode,
+never a paintop default: both editors cap only within a stroke.
+
 ## Terminal nodes
 
 The graph is free-form, but a stroke only produces visible output if at
@@ -129,7 +333,7 @@ overriding `begin_stroke` / `commit` in addition to per-dab `evaluate_gpu`.
 Non-terminal nodes (`stamp`, `circle`, `user_input`, …) don't override the
 lifecycle hooks; their default impls are no-ops.
 
-### `color_output` (paint terminal)
+### `paint` (paint terminal)
 
 - `begin_stroke`: clears `stroke_scratch_view` to transparent.
 - `evaluate_gpu` (per dab):
