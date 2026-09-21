@@ -193,7 +193,7 @@
             </p>
 
             <label class="row">
-                <span class="label">Filename</span>
+                <span class="field-label">Filename</span>
                 <div class="filename">
                     <input
                         type="text"
@@ -206,7 +206,7 @@
             </label>
 
             <label class="row">
-                <span class="label">Format</span>
+                <span class="field-label">Format</span>
                 <select bind:value={format} onchange={applyDimDefaults} disabled={exporting}>
                     {#each FORMATS as f (f.id)}
                         <option value={f.id}>{f.label}</option>
@@ -218,7 +218,7 @@
                 <!-- The canvas aspect changed mid-recording: pick the target
                      aspect and how other-aspect segments are converted. -->
                 <label class="row">
-                    <span class="label">Aspect ratio</span>
+                    <span class="field-label">Aspect ratio</span>
                     <select bind:value={groupIndex} onchange={applyDimDefaults} disabled={exporting}>
                         {#each info.groups as g, i (i)}
                             <option value={i}>{g.label} ({g.frameCount} frames)</option>
@@ -227,7 +227,7 @@
                 </label>
 
                 <label class="row">
-                    <span class="label">Size mismatch</span>
+                    <span class="field-label">Size mismatch</span>
                     <select bind:value={method} disabled={exporting}>
                         {#each METHODS as m (m.id)}
                             <option value={m.id}>{m.label}</option>
@@ -237,9 +237,9 @@
             {/if}
 
             <div class="row">
-                <span class="label">Resolution</span>
+                <span class="field-label">Resolution</span>
                 <div class="dims">
-                    <div class="num">
+                    <div class="field-num">
                         <input
                             type="number"
                             min={WIDTH_ALIGN}
@@ -252,7 +252,7 @@
                         <span class="unit">px</span>
                     </div>
                     <span class="times">×</span>
-                    <div class="num">
+                    <div class="field-num">
                         <input
                             type="number"
                             min={HEIGHT_ALIGN}
@@ -268,7 +268,7 @@
             </div>
 
             <label class="row">
-                <span class="label">Playback speed (fps)</span>
+                <span class="field-label">Playback speed (fps)</span>
                 <input
                     class="fps"
                     type="number"
@@ -281,11 +281,11 @@
             </label>
         {/if}
 
-        <div class="actions">
+        <div class="dialog-actions">
             {#if info}
                 <button
                     type="button"
-                    class="danger"
+                    class="btn danger"
                     onclick={deleteRecording}
                     disabled={exporting}
                 >
@@ -293,12 +293,12 @@
                 </button>
             {/if}
             <span class="spacer"></span>
-            <button type="button" class="cancel" onclick={close} disabled={exporting}>
+            <button type="button" class="btn" onclick={close} disabled={exporting}>
                 Cancel
             </button>
             <button
                 type="button"
-                class="ok"
+                class="btn primary"
                 onclick={confirm}
                 disabled={exporting || !info}
             >
@@ -326,13 +326,6 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-    }
-
-    .label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
     }
 
     .filename {
@@ -380,33 +373,6 @@
         color: var(--text-muted);
     }
 
-    .num {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex: 1;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 0 8px;
-    }
-
-    .num input {
-        flex: 1;
-        width: 100%;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        font: inherit;
-        outline: none;
-    }
-
-    .num .unit {
-        color: var(--text-muted);
-        font-size: 12px;
-    }
-
     input.fps {
         background: var(--bg);
         color: var(--text);
@@ -417,49 +383,4 @@
         outline: none;
     }
 
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 4px;
-    }
-
-    .actions .spacer {
-        flex: 1;
-    }
-
-    .actions button {
-        padding: 6px 14px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions button:disabled {
-        opacity: 0.5;
-        cursor: default;
-    }
-
-    .actions .danger {
-        color: var(--error, #e5484d);
-        border-color: var(--bg-hover);
-    }
-
-    .actions .ok {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-    }
-
-    .actions .ok:hover:not(:disabled) {
-        background: var(--accent);
-        filter: brightness(1.1);
-    }
 </style>

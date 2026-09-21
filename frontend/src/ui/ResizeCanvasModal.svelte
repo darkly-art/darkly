@@ -265,15 +265,15 @@
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="dim-row">
             <label class="field">
-                <span class="label">Width</span>
-                <div class="num">
+                <span class="field-label">Width</span>
+                <div class="field-num">
                     <input type="number" min="1" max={MAX_DIM} bind:value={width} oninput={onWidthInput} />
                     <span class="unit">px</span>
                 </div>
             </label>
             <label class="field">
-                <span class="label">Height</span>
-                <div class="num">
+                <span class="field-label">Height</span>
+                <div class="field-num">
                     <input type="number" min="1" max={MAX_DIM} bind:value={height} oninput={onHeightInput} />
                     <span class="unit">px</span>
                 </div>
@@ -326,9 +326,9 @@
             </svg>
         </div>
 
-        <div class="actions">
+        <div class="dialog-actions">
             <div class="anchor">
-                <span class="label">Anchor</span>
+                <span class="field-label">Anchor</span>
                 <div class="grid">
                     {#each ANCHORS as ay}
                         {#each ANCHORS as ax}
@@ -345,13 +345,20 @@
             </div>
             <div class="spacer"></div>
             <div class="dims-readout">{clampDim(rect.w)} × {clampDim(rect.h)} px</div>
-            <button type="button" class="cancel" onclick={close}>Cancel</button>
-            <button type="button" class="ok" onclick={apply}>Resize</button>
+            <button type="button" class="btn" onclick={close}>Cancel</button>
+            <button type="button" class="btn primary" onclick={apply}>Resize</button>
         </div>
     </div>
 </Modal>
 
 <style>
+    /* This footer carries the anchor picker as well as its buttons, so the row
+       is left-aligned and spaced by its own `.spacer`. */
+    .dialog-actions {
+        justify-content: flex-start;
+        gap: 10px;
+    }
+
     .body {
         display: flex;
         flex-direction: column;
@@ -364,46 +371,6 @@
         grid-template-columns: 1fr 1fr auto;
         gap: 12px;
         align-items: end;
-    }
-
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-    }
-
-    .num {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 0 8px;
-    }
-
-    .num input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        font: inherit;
-        outline: none;
-        min-width: 0;
-    }
-
-    .num .unit {
-        color: var(--text-muted);
-        font-family: var(--font-mono, monospace);
-        font-size: 12px;
     }
 
     /* Interactive preview ------------------------------------------------ */
@@ -466,11 +433,6 @@
     }
 
     /* Actions + anchor --------------------------------------------------- */
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
 
     .anchor {
         display: flex;
@@ -512,27 +474,4 @@
         font-size: 12px;
     }
 
-    .actions button {
-        padding: 6px 14px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions .ok {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-    }
-
-    .actions .ok:hover:not(:disabled) {
-        filter: brightness(1.1);
-    }
 </style>

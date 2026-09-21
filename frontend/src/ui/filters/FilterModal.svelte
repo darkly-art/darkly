@@ -104,9 +104,9 @@
 <Modal bind:open={filterModal.open} title={filterModal.displayName} size="sm" dimmed={false} draggable>
     <div class="body">
         <FilterParamsEditor params={scratch} {histogramBins} oninput={pushPreview} onchange={pushPreview} />
-        <div class="actions">
-            <button type="button" class="cancel" onclick={() => (filterModal.open = false)}>Cancel</button>
-            <button type="button" class="ok" onclick={apply}>Apply</button>
+        <div class="dialog-actions">
+            <button type="button" class="btn" onclick={() => (filterModal.open = false)}>Cancel</button>
+            <button type="button" class="btn primary" onclick={apply}>Apply</button>
         </div>
     </div>
 </Modal>
@@ -117,31 +117,5 @@
         flex-direction: column;
         gap: 14px;
         min-width: 260px;
-    }
-
-    .actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 10px;
-    }
-
-    .cancel,
-    .ok {
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 7px 16px;
-        cursor: pointer;
-        font-size: 13px;
-    }
-
-    .cancel {
-        background: transparent;
-        color: var(--text-muted);
-    }
-
-    .ok {
-        background: var(--accent, var(--bg-hover));
-        color: var(--text);
-        border-color: transparent;
     }
 </style>

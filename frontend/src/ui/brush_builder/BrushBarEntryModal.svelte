@@ -145,7 +145,7 @@
                     {/if}
                 </div>
             {/if}
-            <footer class="actions">
+            <footer class="dialog-actions">
                 <button type="button" class="btn" onclick={onCancel}>Cancel</button>
                 <button type="submit" class="btn primary" disabled={!rangeValid}>Save</button>
             </footer>
@@ -158,33 +158,6 @@
         display: flex;
         flex-direction: column;
         gap: 14px;
-    }
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .field-label {
-        font-size: 11px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .text-input {
-        width: 100%;
-        padding: 8px 10px;
-        font-size: 13px;
-        background: var(--bg);
-        color: var(--text);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        outline: none;
-        font-family: inherit;
-        box-sizing: border-box;
-    }
-    .text-input:focus {
-        border-color: var(--accent);
     }
     .text-input.description {
         resize: vertical;
@@ -240,34 +213,6 @@
     }
     .hint.error {
         color: var(--danger, #e0645a);
-    }
-    .actions {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 4px;
-    }
-    .btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-    .btn {
-        padding: 7px 14px;
-        font-size: 13px;
-        background: var(--bg);
-        color: var(--text);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        cursor: pointer;
-        font-family: inherit;
-    }
-    .btn:hover {
-        background: var(--bg-hover);
-    }
-    .btn.primary {
-        background: var(--accent);
-        color: var(--bg);
-        border-color: var(--accent);
     }
     .btn.primary:hover {
         filter: brightness(1.08);

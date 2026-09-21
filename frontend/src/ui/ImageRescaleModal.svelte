@@ -103,7 +103,7 @@
 <Modal bind:open={imageRescale.open} title="Image Size" size="sm">
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="unit-row">
-            <span class="label">Units</span>
+            <span class="field-label">Units</span>
             <div class="unit-toggle">
                 <button type="button" class:active={unit === 'px'} onclick={() => setUnit('px')}>px</button>
                 <button type="button" class:active={unit === '%'} onclick={() => setUnit('%')}>%</button>
@@ -112,8 +112,8 @@
 
         <div class="dim-row">
             <label class="field">
-                <span class="label">Width</span>
-                <div class="num">
+                <span class="field-label">Width</span>
+                <div class="field-num">
                     <input
                         type="number"
                         min="1"
@@ -126,8 +126,8 @@
                 </div>
             </label>
             <label class="field">
-                <span class="label">Height</span>
-                <div class="num">
+                <span class="field-label">Height</span>
+                <div class="field-num">
                     <input
                         type="number"
                         min="1"
@@ -142,25 +142,26 @@
             <LinkToggle linked={linkAspect} onchange={(v) => (linkAspect = v)} label="aspect ratio" />
         </div>
 
-        <div class="actions">
+        <div class="dialog-actions">
             <div class="dims-readout">{clampDim(pxW)} × {clampDim(pxH)} px</div>
-            <button type="button" class="cancel" onclick={close}>Cancel</button>
-            <button type="button" class="ok" onclick={apply}>Rescale</button>
+            <button type="button" class="btn" onclick={close}>Cancel</button>
+            <button type="button" class="btn primary" onclick={apply}>Rescale</button>
         </div>
     </div>
 </Modal>
 
 <style>
+    /* The two dimension fields share the row, so they keep a flex grow the
+       shared `.field` does not carry. */
+    .field {
+        flex: 1;
+    }
+
     .body {
         display: flex;
         flex-direction: column;
         gap: 14px;
         min-width: 320px;
-    }
-
-    .label {
-        font-size: 12px;
-        color: var(--text-muted);
     }
 
     .unit-row {
@@ -196,71 +197,10 @@
         gap: 12px;
     }
 
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        flex: 1;
-    }
-
-    .num {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 0 8px;
-    }
-
-    .num input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        width: 100%;
-        font-size: 14px;
-    }
-
-    .num input:focus {
-        outline: none;
-    }
-
-    .num .unit {
-        color: var(--text-muted);
-        font-size: 12px;
-    }
-
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
     .dims-readout {
         flex: 1;
         font-size: 12px;
         color: var(--text-muted);
     }
 
-    .cancel,
-    .ok {
-        border: 1px solid var(--bg-hover);
-        border-radius: 6px;
-        padding: 7px 16px;
-        cursor: pointer;
-        font-size: 13px;
-    }
-
-    .cancel {
-        background: transparent;
-        color: var(--text-muted);
-    }
-
-    .ok {
-        background: var(--accent, var(--bg-hover));
-        color: var(--text);
-        border-color: transparent;
-    }
 </style>
