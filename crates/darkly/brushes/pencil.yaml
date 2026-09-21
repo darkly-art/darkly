@@ -171,16 +171,15 @@ connections:
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
-  paint.opacity: {}
   paint.buildup:
     label: Strength
     description: How much graphite gets left by the pencil
     icon: fa6-solid:pen
-  paint.wash_flow:
-    label: Hardness
-    icon: mdi:pencil
-    invert: true
   user_input.value:
     label: Roughness
     description: Roughness of edges and paper grain texture
     icon: tabler:grain
+  paint.opacity:
+    label: Opacity
+    description: Transparency of the whole stroke
+    icon: mdi:texture-box
