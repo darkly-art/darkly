@@ -2,6 +2,7 @@
     import { app } from '../state/app.svelte';
     import { toolRegistry } from '../tools/registry';
     import { brushGraph } from '../state/brush_graph.svelte';
+    import FgBgSwatches from './color/FgBgSwatches.svelte';
 
     // The strip itself is always mounted: only the content inside (and
     // any optional panel above) varies per tool. Keeping the same DOM
@@ -13,6 +14,16 @@
 
 <div class="bottom-area" class:fullscreen={brushGraph.fullscreen}>
     <div class="tool-options">
+        <!-- Global color chrome, not a per-tool option. It sits inside
+             `.tool-options` rather than beside this bar because `.bottom-area`
+             also hosts a tool panel (the brush builder) and goes fixed and
+             fullscreen with it; a sibling would flank that panel and then
+             disappear. A consequence of living here: the swatches stay
+             reachable inside the fullscreen brush builder, where the old
+             vertical toolbar was covered over. -->
+        <div class="color-zone">
+            <FgBgSwatches mode="popup" />
+        </div>
         {#if Options}
             <Options />
         {:else}
@@ -56,6 +67,17 @@
          * taller when controls wrap onto extra lines in a narrow window
          * (see ToolBarLayout `.center`). */
         min-height: 40px;
+    }
+
+    /* Separated from the tool's own controls the same way the tool strip
+       separates its groups. */
+    .color-zone {
+        display: flex;
+        align-items: center;
+        flex: none;
+        padding-right: 8px;
+        margin-right: 4px;
+        border-right: 1px solid var(--bg-hover);
     }
 
     .tool-name {

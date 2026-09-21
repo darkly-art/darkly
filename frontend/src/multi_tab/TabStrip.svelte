@@ -259,16 +259,19 @@
 </div>
 
 <style>
+    /* Transparent: `.doc-top` in DocumentPanel carries the top bar's fill and
+       underline so they run the full panel width rather than stopping where
+       the tabs stop. `gap` must stay 0 to match `TAB_GAP`, which the
+       drag-reorder math above measures with. */
     .tab-strip {
         display: flex;
         align-items: stretch;
-        background: var(--bg-elevated, var(--bg-base));
-        border-bottom: 1px solid var(--border);
         height: 32px;
         padding: 0;
         gap: 0;
         user-select: none;
-        flex: 0 0 auto;
+        flex: 1 1 auto;
+        min-width: 0;
         overflow-x: auto;
         overflow-y: hidden;
     }
@@ -288,7 +291,7 @@
         background: transparent;
         border: none;
         border-radius: 0;
-        color: var(--fg-muted);
+        color: var(--text-muted);
         font-size: 12px;
         cursor: pointer;
         max-width: 200px;
@@ -299,10 +302,10 @@
         transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
         touch-action: none;
     }
-    .tab:hover { background: var(--bg-hover); color: var(--fg); }
+    .tab:hover { background: var(--bg-hover); color: var(--text); }
     .tab.active {
         background: var(--canvas-bg);
-        color: var(--fg);
+        color: var(--text);
         border-bottom-color: var(--canvas-bg);
     }
     .tab.editing { cursor: text; }
@@ -320,10 +323,10 @@
     .rename {
         flex: 1;
         min-width: 0;
-        background: var(--bg-base);
-        border: 1px solid var(--accent, var(--border));
+        background: var(--bg-raised);
+        border: 1px solid var(--accent);
         border-radius: 3px;
-        color: var(--fg);
+        color: var(--text);
         font: inherit;
         padding: 1px 4px;
         outline: none;
@@ -353,9 +356,9 @@
         height: 100%;
         border: none;
         background: transparent;
-        color: var(--fg-muted);
+        color: var(--text-muted);
         font-size: 16px;
         cursor: pointer;
     }
-    .new-tab:hover { background: var(--bg-hover); color: var(--fg); }
+    .new-tab:hover { background: var(--bg-hover); color: var(--text); }
 </style>

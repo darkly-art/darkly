@@ -39,7 +39,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="hamburger-container">
-    <button class="hamburger-btn" data-keep-open="menu" onclick={toggle} title="Menu">
+    <button class="icon-btn square hamburger-btn" data-keep-open="menu" onclick={toggle} title="Menu">
         <Icon name="fa6-solid:bars" />
     </button>
 
@@ -56,28 +56,12 @@
 </div>
 
 <style>
+    /* `align-self: center` because the container is stretched by the tab
+       row it sits in; the button keeps its 32px box either way. */
     .hamburger-container {
         position: relative;
-    }
-
-    .hamburger-btn {
-        width: 32px;
-        height: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: none;
-        border: none;
-        border-radius: 6px;
-        color: var(--text-muted);
-        cursor: pointer;
-        font-size: 14px;
-        transition: background 0.1s, color 0.1s;
-    }
-
-    .hamburger-btn:hover {
-        background: var(--bg-hover);
-        color: var(--text);
+        align-self: center;
+        flex: none;
     }
 
     .menu {

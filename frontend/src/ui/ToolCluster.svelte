@@ -50,7 +50,6 @@
     }
 
     // Dismiss the pinned state when the artist clicks outside this cluster.
-    // Mirrors LeftSidebar's color-picker dismissal pattern.
     $effect(() => {
         if (!pinned) return;
         const onPointerDown = (e: PointerEvent) => {
@@ -76,7 +75,7 @@
     role="presentation"
 >
     <button
-        class="tool cluster-btn"
+        class="icon-btn square tool"
         class:active={!!activeMember}
         onclick={onClusterClick}
         onmouseenter={onClusterEnter}
@@ -93,7 +92,7 @@
     >
         {#each members as tool}
             <button
-                class="tool"
+                class="icon-btn square tool"
                 class:active={app.activeToolId === tool.id}
                 onclick={() => pickTool(tool.id)}
                 title={app.toolTooltip(tool.id)}
@@ -156,40 +155,19 @@
         height: 100%;
     }
 
-    /* Reuse .tool styling (duplicated here because Svelte scoped styles
-       don't reach into this component). Kept in sync with LeftSidebar's. */
+    /* Box and reset come from `.icon-btn.square` in tokens.css; only the
+       flyout's own needs live here. */
     .tool {
-        width: 32px;
-        height: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: none;
-        border: none;
-        border-radius: 6px;
-        color: var(--text-muted);
-        cursor: pointer;
-        font-size: 14px;
-        transition: background 0.1s, color 0.1s;
         flex-shrink: 0;
     }
 
-    /* Normalize inline SVG icons. Forces 1em sizing regardless of the
-       source <svg>'s width/height attributes, and sets `fill: currentColor`
-       so SVGs downloaded from icon sets (Font Awesome, Boxicons, etc.)
-       inherit the toolbar's text color exactly like the webfont icons do.
-       Without this, raw FA SVG downloads default to black because their
-       paths have no explicit fill. Descendant paths inherit fill from
-       the <svg> element, so per-element fills in fancier SVGs still win. */
+    /* `fill: currentColor` so SVGs downloaded from icon sets (Font Awesome,
+       Boxicons, etc.) inherit the button's text color exactly like the webfont
+       icons do. Without it, raw FA SVG downloads render black because their
+       paths have no explicit fill. Descendant paths inherit fill from the
+       <svg> element, so per-element fills in fancier SVGs still win. */
     .tool :global(svg) {
-        width: 1em;
-        height: 1em;
         fill: currentColor;
-    }
-
-    .tool:hover {
-        background: var(--bg-hover);
-        color: var(--text);
     }
 
     .tool.active {

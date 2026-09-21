@@ -222,7 +222,7 @@ export class DarklyInstance {
 
     /** Last activated sub-tool per cluster id. Lets a cluster button restore
      *  the artist's previous choice on click (e.g. "the last selection tool I
-     *  used was lasso"). Populated by a $effect in LeftSidebar that watches
+     *  used was lasso"). Populated by a $effect in ToolStrip that watches
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
 

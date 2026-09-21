@@ -2,18 +2,15 @@
     import type { Snippet } from 'svelte';
 
     let {
-        left,
         center,
         right,
     }: {
-        left?: Snippet;
         center?: Snippet;
         right?: Snippet;
     } = $props();
 </script>
 
 <div class="layout">
-    {#if left}{@render left()}{/if}
     <div class="center">
         {#if center}{@render center()}{/if}
     </div>

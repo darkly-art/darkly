@@ -336,6 +336,15 @@
     color: var(--text);
 }
 
+/* Fixed 32px box: the tool strip, its cluster flyouts and the hamburger all
+ * sit in a 44px rail and need the same square hit target rather than sizing
+ * to their glyph. */
+.icon-btn.square {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+}
+
 /* Slider thumb: shared across tool options, layer controls, params */
 input[type="range"] {
     -webkit-appearance: none;
