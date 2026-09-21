@@ -2,7 +2,10 @@
     import Modal from '../Modal.svelte';
     import Icon from '../../icons/Icon.svelte';
     import IconPicker from '../IconPicker.svelte';
+    import EnumDropdown from '../settings/widgets/EnumDropdown.svelte';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
+    import { UNITS, unitFor, unitOptions } from '../../lib/units';
+    import type { UnitType } from '../../engine/protocol_gen';
 
     type Props = {
         open: boolean;
@@ -18,22 +21,42 @@
     // offline via <Icon>.
     let iconInput = $state('');
 
-    // Slider bounds, in the same display space the control renders in.
-    // Only scalars have them (a toggle or a dropdown has no travel to
-    // re-range or reverse), so the whole section is hidden for other kinds.
-    let minInput = $state(0);
-    let maxInput = $state(1);
+    // Slider bounds, held in port space: the space they are stored and saved
+    // in, so changing the unit below reconverts what is displayed without
+    // touching what will be written. Only scalars have them (a toggle or a
+    // dropdown has no travel to re-range or reverse), so the whole section is
+    // hidden for other kinds.
+    let portMin = $state(0);
+    let portMax = $state(1);
+    // What the bounds were seeded as, so a save can tell an edited bound from
+    // an untouched one and avoid pinning a port to bounds it was inheriting.
+    let seededMin = $state(0);
+    let seededMax = $state(1);
     // Present the control mirrored, so the number rises as the underlying
     // port value falls.
     let invertInput = $state(false);
+    // The unit the control reads in. '' means inherit the port's own.
+    let unitInput = $state<UnitType | ''>('');
     let advancedOpen = $state(false);
 
     const scalar = $derived(entry?.data.kind === 'scalar' ? entry.data : null);
+    // The unit the Min/Max fields are written in, which is whatever the
+    // selector currently says rather than what the entry was saved with.
+    const displayUnit = $derived(unitFor(unitInput || scalar?.inheritedUnit));
+    const displayMin = $derived(displayUnit.toDisplay(portMin));
+    const displayMax = $derived(displayUnit.toDisplay(portMax));
     // Mirrors the engine's rule, so an unsavable range is caught before the
-    // round trip rather than coming back as an error string.
+    // round trip rather than coming back as an error string. Every unit is a
+    // positive scale, so port space and display space agree on the ordering.
     const rangeValid = $derived(
-        Number.isFinite(minInput) && Number.isFinite(maxInput) && minInput < maxInput,
+        Number.isFinite(portMin) && Number.isFinite(portMax) && portMin < portMax,
     );
+    // The inherit row names what it falls back to, so the author can see what
+    // they are choosing between.
+    const unitRows = $derived<[string, string][]>([
+        ['', scalar ? `Default (${UNITS[scalar.inheritedUnit].label})` : 'Default'],
+        ...unitOptions(),
+    ]);
 
     /** Re-seed the inputs whenever the modal opens for a fresh entry:
      *  the engine emits the current effective values (registration
@@ -45,11 +68,19 @@
             descriptionInput = entry.description;
             iconInput = entry.icon;
             if (entry.data.kind === 'scalar') {
-                minInput = entry.data.min;
-                maxInput = entry.data.max;
+                // The payload's bounds are in the entry's resolved unit;
+                // convert once on the way in so everything below is port
+                // space.
+                const seeded = unitFor(entry.data.unitType);
+                portMin = seeded.toPort(entry.data.min);
+                portMax = seeded.toPort(entry.data.max);
+                seededMin = portMin;
+                seededMax = portMax;
                 // Seeding matters: onSave overwrites every meta field, so a
-                // checkbox left at false would silently un-invert the entry.
+                // control left at its empty value would silently clear the
+                // entry's invert or unit.
                 invertInput = entry.data.invert;
+                unitInput = entry.data.unitOverride ?? '';
             }
             advancedOpen = false;
         }
@@ -57,18 +88,20 @@
 
     async function onSave() {
         if (!entry || !rangeValid) return;
-        await brushGraph.setExposedPortMeta(
-            entry.key,
-            labelInput,
-            descriptionInput,
-            iconInput,
-            invertInput,
-        );
+        // The two writes are independent: the range handler stores port-space
+        // bounds verbatim, so it does not matter which lands first.
+        await brushGraph.setExposedPortMeta(entry.key, {
+            label: labelInput,
+            description: descriptionInput,
+            icon: iconInput,
+            invert: invertInput,
+            unit: unitInput || null,
+        });
         // Only when actually changed: the range is a per-instance override,
         // and re-sending the current bounds would pin a port to values it
         // was merely inheriting from its registration.
-        if (scalar && (minInput !== scalar.min || maxInput !== scalar.max)) {
-            await brushGraph.setPortRange(entry.nodeId, entry.portName, minInput, maxInput);
+        if (scalar && (portMin !== seededMin || portMax !== seededMax)) {
+            await brushGraph.setPortRange(entry.nodeId, entry.portName, portMin, portMax);
         }
         open = false;
     }
@@ -116,19 +149,45 @@
                     </button>
                     {#if advancedOpen}
                         <div class="advanced">
+                            <div class="field">
+                                <span class="field-label">Units</span>
+                                <EnumDropdown
+                                    value={unitInput}
+                                    options={unitRows}
+                                    onchange={(v) => (unitInput = v as UnitType | '')}
+                                />
+                            </div>
                             <p class="hint">
-                                Slider range for this brush. Narrow it onto the values that
-                                actually do something, or re-center it: a range of −1 to 1
-                                gives a control that works in both directions.
+                                How the control reads. This changes the numbers the artist
+                                sees and types, including the range below; the value the
+                                brush stores is untouched.
+                            </p>
+                            <p class="hint">
+                                Slider range for this brush, in the unit above. Narrow it
+                                onto the values that actually do something, or re-center
+                                it: a range of −1 to 1 gives a control that works in both
+                                directions.
                             </p>
                             <div class="range-row">
                                 <label class="field range-field">
-                                    <span class="field-label">Min</span>
-                                    <input type="number" class="text-input" step="any" bind:value={minInput} />
+                                    <span class="field-label">Min{displayUnit.suffix ? ` (${displayUnit.suffix})` : ''}</span>
+                                    <input
+                                        type="number"
+                                        class="text-input"
+                                        step="any"
+                                        value={displayMin}
+                                        onchange={(e) => (portMin = displayUnit.toPort(e.currentTarget.valueAsNumber))}
+                                    />
                                 </label>
                                 <label class="field range-field">
-                                    <span class="field-label">Max</span>
-                                    <input type="number" class="text-input" step="any" bind:value={maxInput} />
+                                    <span class="field-label">Max{displayUnit.suffix ? ` (${displayUnit.suffix})` : ''}</span>
+                                    <input
+                                        type="number"
+                                        class="text-input"
+                                        step="any"
+                                        value={displayMax}
+                                        onchange={(e) => (portMax = displayUnit.toPort(e.currentTarget.valueAsNumber))}
+                                    />
                                 </label>
                             </div>
                             {#if !rangeValid}

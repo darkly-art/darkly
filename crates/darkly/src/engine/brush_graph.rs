@@ -1039,6 +1039,8 @@ impl DarklyEngine {
                         default: display.value_to_display(reset_default),
                         unit_type: display.unit(),
                         invert: meta.invert,
+                        unit_override: meta.unit,
+                        inherited_unit: inherited_unit(port, reg_port),
                     }
                 }
                 BrushWireType::Bool => ExposedValue::Bool {
@@ -1220,11 +1222,16 @@ impl DarklyEngine {
 
     /// Override an input port's slider bounds on one node instance.
     ///
-    /// `display_min`/`display_max` arrive in **display space**, the same
-    /// contract [`Self::brush_set_exposed_port`] uses for its value, so the
-    /// caller hands back the numbers it was shown in
-    /// [`ExposedValue::Scalar`]'s `min`/`max` and needs no unit logic of its
-    /// own. Storage is raw port space, matching the brush yaml.
+    /// `min`/`max` arrive in **port space**, the space they are stored in and
+    /// the brush yaml writes. A bound is a stored fact about the port rather
+    /// than a number the artist is currently reading, which is why this
+    /// differs from [`Self::brush_set_exposed_port`]'s display-space value,
+    /// and why `ScalarDisplay::bound_to_display` already declines to mirror
+    /// bounds the way it mirrors values.
+    ///
+    /// The handler doing no unit logic is what makes it independent of the
+    /// entry's unit override: a caller changing both a unit and a range can
+    /// write them in either order.
     ///
     /// Bounds are UI-only, so nothing recompiles and the stored port value is
     /// untouched, but the override is authored brush state that survives
@@ -1237,35 +1244,19 @@ impl DarklyEngine {
         &mut self,
         node_id: &str,
         port_name: &str,
-        display_min: f32,
-        display_max: f32,
+        min: f32,
+        max: f32,
     ) -> Result<String, String> {
         let nid = NodeId(node_id.to_string());
-        let display = self.exposed_scalar_display(&nid, port_name);
-        let to_port = |bound: f32| display.map_or(bound, |d| d.bound_from_display(bound));
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .set_port_range(&nid, port_name, to_port(display_min), to_port(display_max))
+            .set_port_range(&nid, port_name, min, max)
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
-    }
-
-    /// [`scalar_display`] for one input port, taking its own read guard.
-    ///
-    /// For callers that need the mapping *before* they take a guard of their
-    /// own. Never call it from inside one: `tool_session` is a
-    /// `std::sync::RwLock` and recursively acquiring a read on a single
-    /// thread is documented as liable to deadlock. Code already holding a
-    /// guard (`brush_exposed_ports`, `brush_set_exposed_port`) calls the free
-    /// function directly with the port it has in hand.
-    fn exposed_scalar_display(&self, node_id: &NodeId, port_name: &str) -> Option<ScalarDisplay> {
-        let tool = self.tool_session.read();
-        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        scalar_display_in(&brush.graph, node_id, port_name)
     }
 
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
@@ -1287,7 +1278,7 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
-    /// Overwrite the meta (label / description / icon / invert) on a
+    /// Overwrite the meta (label / description / icon / invert / unit) on a
     /// brush-bar entry: single batched call so the brush-bar modal hits the
     /// engine once. Icon validation lives in `Graph::set_exposed_port_meta`.
     ///
@@ -1297,17 +1288,14 @@ impl DarklyEngine {
     pub fn brush_graph_set_exposed_port_meta(
         &mut self,
         key: &str,
-        label: String,
-        description: String,
-        icon: String,
-        invert: bool,
+        meta: ExposedPortMeta,
     ) -> Result<String, String> {
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .set_exposed_port_meta(key, label, description, icon, invert)
+            .set_exposed_port_meta(key, meta)
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
@@ -1342,8 +1330,9 @@ impl DarklyEngine {
 /// Reflecting about `min + max` is an involution and maps `[min, max]` onto
 /// itself, so one pivot serves both directions and the bounds a control
 /// reports are the same mirrored or not. That is why bounds and values get
-/// separate methods here: `value_*` mirrors, `bound_*` does not, and the name
-/// at the call site says which crossing it is. Every port-space to
+/// separate methods here: `value_*` mirrors and round-trips, `bound_to_display`
+/// neither, and the name at the call site says which crossing it is. Every
+/// port-space to
 /// display-space crossing on the exposed-port paths goes through this type, so
 /// the mirror is applied exactly once by construction rather than by
 /// convention.
@@ -1378,14 +1367,12 @@ impl ScalarDisplay {
 
     /// A bound crosses unconverted by the mirror: reflecting about
     /// `min + max` swaps the two bounds, so the interval a control reports is
-    /// the same either way, and an authored bound is authored in the artist's
-    /// own space regardless.
+    /// the same either way.
+    ///
+    /// One direction only. A bound is authored and stored in port space, so
+    /// nothing converts one back: the display number exists to be read.
     fn bound_to_display(self, bound: f32) -> f32 {
         self.unit.to_display(bound)
-    }
-
-    fn bound_from_display(self, bound: f32) -> f32 {
-        self.unit.from_display(bound)
     }
 
     fn unit(self) -> UnitType {
@@ -1467,9 +1454,23 @@ fn scalar_display(
         return None;
     }
     Some(ScalarDisplay {
-        unit: reg_port.map_or(port.unit_type, |rp| rp.unit_type),
+        unit: meta.unit.unwrap_or_else(|| inherited_unit(port, reg_port)),
         pivot: meta.invert.then_some(port.min + port.max),
     })
+}
+
+/// The unit a control shows when its entry declares no override:
+/// the registration's, falling back to the instance's own copy.
+///
+/// The registration wins deliberately. The instance copy is a clone taken at
+/// `add_node` time, so a brush saved before a registration changed its unit
+/// would otherwise be pinned to the stale one; the fallback covers a node
+/// type the registry no longer knows.
+fn inherited_unit(
+    port: &PortDef<BrushWireType>,
+    reg_port: Option<&PortDef<BrushWireType>>,
+) -> UnitType {
+    reg_port.map_or(port.unit_type, |rp| rp.unit_type)
 }
 
 /// Type-specific value data for an exposed port.
@@ -1503,6 +1504,23 @@ pub enum ExposedValue {
         /// would cancel it out. Only the authoring modal reads this, and only
         /// so that saving the entry does not silently un-invert it.
         invert: bool,
+        /// The entry's authored unit override, or `None` when the control
+        /// inherits the port's declared unit.
+        ///
+        /// `unit_type` above is the resolved unit and is what renderers use.
+        /// This is the authoring modal's seed, for the same reason `invert`
+        /// is: saving an entry overwrites every meta field, so a selector
+        /// seeded from the resolved unit would pin an inherited one.
+        #[serde(rename = "unitOverride")]
+        unit_override: Option<UnitType>,
+        /// The unit this control would show with no override: what the
+        /// authoring modal's inherit row falls back to.
+        ///
+        /// Sent rather than re-derived frontend-side because unit resolution
+        /// has one implementation and it is [`scalar_display`]; a second one
+        /// in TypeScript would be free to disagree about the fallback.
+        #[serde(rename = "inheritedUnit")]
+        inherited_unit: UnitType,
     },
     /// Boolean toggle. Currently emitted by the Switch node's `select`
     /// port; any other Bool input port marked `exposed` works too.
@@ -1653,6 +1671,31 @@ mod tests {
             no_reg.unit(),
             UnitType::Percent,
             "with no registration the instance's own unit stands in"
+        );
+    }
+
+    /// The entry's override outranks both, and clearing it falls straight
+    /// back to the registration. Pinning the three levels in one place is
+    /// what lets every consumer just ask `scalar_display`.
+    #[test]
+    fn scalar_display_prefers_the_entry_unit_override() {
+        let mut instance = scalar_port(0.0, 1.0);
+        instance.unit_type = UnitType::Percent;
+        let mut registration = scalar_port(0.0, 1.0);
+        registration.unit_type = UnitType::Degrees;
+
+        let overridden = ExposedPortMeta {
+            unit: Some(UnitType::Pixels),
+            ..Default::default()
+        };
+        let display = scalar_display(&instance, Some(&registration), &overridden).unwrap();
+        assert_eq!(display.unit(), UnitType::Pixels);
+
+        let inherited = scalar_display(&instance, Some(&registration), &meta(false)).unwrap();
+        assert_eq!(
+            inherited.unit(),
+            UnitType::Degrees,
+            "clearing the override falls back to the registration, not to the default"
         );
     }
 }

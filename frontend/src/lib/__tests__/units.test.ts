@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { UNITS, unitFor } from '../units';
+import { UNITS, unitFor, unitOptions } from '../units';
 import type { UnitType } from '../../engine/protocol_gen';
 
 const PI = Math.PI;
@@ -57,5 +57,20 @@ describe('units', () => {
         expect(unitFor('bogus')).toBe(UNITS.Normalized);
         expect(unitFor(undefined)).toBe(UNITS.Normalized);
         expect(unitFor(null)).toBe(UNITS.Normalized);
+    });
+
+    // The selector's rows come from UNITS, which `Record<UnitType, Unit>`
+    // keeps exhaustive, so this is the guard that a new UnitType gets a
+    // deliberate authorable/label decision rather than silently appearing or
+    // vanishing from the brush-bar entry editor.
+    it('offers every authorable unit exactly once, and never Normalized', () => {
+        const offered = unitOptions().map(([u]) => u);
+        // Sets, not positions: ALL_UNITS is in Rust declaration order while
+        // Object.keys(UNITS) is in TS source order, and the difference means
+        // nothing to a dropdown.
+        expect(new Set(offered)).toEqual(new Set(ALL_UNITS.filter((u) => UNITS[u].authorable)));
+        expect(offered).toHaveLength(new Set(offered).size);
+        expect(offered).not.toContain('Normalized');
+        for (const [, label] of unitOptions()) expect(label.length).toBeGreaterThan(0);
     });
 });

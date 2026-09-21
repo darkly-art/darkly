@@ -125,7 +125,26 @@ unitType: UnitType,
  * would cancel it out. Only the authoring modal reads this, and only
  * so that saving the entry does not silently un-invert it.
  */
-invert: boolean, } | { "kind": "bool", 
+invert: boolean, 
+/**
+ * The entry's authored unit override, or `None` when the control
+ * inherits the port's declared unit.
+ *
+ * `unit_type` above is the resolved unit and is what renderers use.
+ * This is the authoring modal's seed, for the same reason `invert`
+ * is: saving an entry overwrites every meta field, so a selector
+ * seeded from the resolved unit would pin an inherited one.
+ */
+unitOverride: UnitType | null, 
+/**
+ * The unit this control would show with no override: what the
+ * authoring modal's inherit row falls back to.
+ *
+ * Sent rather than re-derived frontend-side because unit resolution
+ * has one implementation and it is [`scalar_display`]; a second one
+ * in TypeScript would be free to disagree about the fallback.
+ */
+inheritedUnit: UnitType, } | { "kind": "bool", 
 /**
  * Current value.
  */
@@ -168,7 +187,45 @@ export type BrushGraphRemoveNodeReq = { node_id: string, };
 
 export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
 
-export type BrushGraphSetExposedPortMetaReq = { key: string, label: string, description: string, icon: string, invert: boolean, };
+export type BrushGraphSetExposedPortMetaReq = { key: string, meta: ExposedPortMeta, };
+
+export type ExposedPortMeta = { label?: string, description?: string, icon?: string, 
+/**
+ * Present the brush-bar control mirrored: the number the artist sees
+ * runs the opposite way from the value the port stores, so a port
+ * carrying softness can be exposed as a "Hardness" knob without a
+ * `1 - x` helper node in the graph.
+ *
+ * Display-space only, exactly like `PortDef::min`/`max`: the stored
+ * value and everything downstream of it (shader, wire remapping,
+ * dab extent, thumbnails) are untouched.
+ *
+ * The mirror reflects about the control's own bounds (`min + max`), so
+ * it equals the complement `1 - x` only when those bounds sum to 1. A
+ * port narrowed to `0.0..0.5` and labelled "Hardness" reads 0% to 50%,
+ * not 0% to 100%.
+ *
+ * Meaningful only for scalar ports; a toggle or a dropdown has no
+ * travel to reverse, and the resolver that builds the display mapping
+ * declines to produce one for them.
+ */
+invert?: boolean, 
+/**
+ * Show the brush-bar control in a unit of the author's choosing rather
+ * than the one the port's registration declares. `None` inherits.
+ *
+ * Display-space only, like `invert` and `PortDef::min`/`max`: the unit
+ * converts (percent is x100, degrees is radians to degrees), so the
+ * number the artist reads and types changes while the stored value and
+ * everything downstream of it do not. Switching to a unit and back
+ * restores the original reading exactly.
+ *
+ * `Option` rather than a plain `UnitType` because the resolver has to
+ * tell "the author chose this" from "nobody chose anything": a plain
+ * field would default to `Normalized` and silently strip the declared
+ * unit from every entry that never picked one.
+ */
+unit?: UnitType | null, };
 
 export type BrushGraphSetInputReq = { node_id: string, input_name: string, kind: string, value: JsonValue, };
 
@@ -176,7 +233,7 @@ export type BrushGraphSetNodeCommentReq = { node_id: string, comment: string, };
 
 export type BrushGraphSetNodeNameReq = { node_id: string, name: string, };
 
-export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, display_min: number, display_max: number, };
+export type BrushGraphSetPortRangeReq = { node_id: string, port_name: string, min: number, max: number, };
 
 export type BrushGraphUnexposePortReq = { node_id: string, port_name: string, };
 
@@ -206,12 +263,6 @@ can_edit: boolean, };
 export type BrushLoadReq = { name: string, };
 
 export type BrushNodePreviewReq = { node_id: string, };
-
-export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
-
-export type PortDir = "Input" | "Output";
-
-export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
 
 export type PortDef = { name: string, dir: PortDir, wire_type: BrushWireType, 
 /**
@@ -407,6 +458,12 @@ preview_image: boolean,
  */
 source: boolean, };
 
+export type PortDir = "Input" | "Output";
+
+export type BrushWireType = "Scalar" | "Int" | "Bool" | "Vec2" | "Vec4" | "Enum" | "String" | "Curve";
+
+export type InputValue = boolean | number | number | string | Array<[number, number]> | [number, number] | [number, number, number, number];
+
 export type PreviewStaging = { 
 /**
  * Iconify glyph shown in the dab slot, where a single stationary sample
@@ -555,13 +612,13 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  */
 options: JsonValue | null, display: ParamDisplay, };
 
+export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
+
 export type ParamDisplay = { min: string | null, max: string | null, default: string | null, 
 /**
  * The unit suffix alone, for a column header. Empty for unitless values.
  */
 unit: string, };
-
-export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
 export type Catalog = { id: string, title: string, description: string | null, icon: string | null, 
 /**

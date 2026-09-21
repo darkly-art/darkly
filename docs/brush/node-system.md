@@ -48,6 +48,7 @@ exposed_ports:
     description: Twirliness factor
     icon: tabler:galaxy
     invert: true            # mirror which way the control reads
+    unit: Degrees           # read the control in a different unit
 ```
 
 An entry with `{}` inherits the port's **label, unit, icon, range, and
@@ -56,6 +57,14 @@ description** from the node definition
 the entry overrides that for this brush only. The same edits are available at
 runtime through the brush bar's entry modal, so an author never has to
 hand-edit YAML to rename or re-range a control.
+
+`unit:` is worth a word, because it converts rather than just relabelling.
+Percent is a factor of 100 and degrees are radians on the wire, so choosing one
+changes the numbers the artist reads and types, including the range, while the
+value the brush stores and everything downstream of it stay put. Choosing a
+unit and clearing it again restores the original reading exactly. Ranges in the
+YAML are always in port space, the space the value is stored in, whatever unit
+the entry reads in.
 
 ### When to use a `user_input` node instead
 
@@ -80,7 +89,7 @@ per-instance state on the entry itself:
 - **Range rescaling** is `ranges:` in the YAML, or the entry modal's Advanced
   block (`Graph::set_port_range`).
 - **Per-brush custom label** is `label:` on the entry (`ExposedPortMeta`),
-  alongside `description`, `icon` and `invert`.
+  alongside `description`, `icon`, `invert` and `unit`.
 
 Fan-out is also expressible without the node, by exposing a math node's input
 and wiring its output around: place a `multiply`, leave `b` at its identity

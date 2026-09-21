@@ -13,7 +13,13 @@ import { config } from '../config/store.svelte';
 import { freshDocument } from './freshDocument';
 import { recentBrushes } from './recents.svelte';
 import { brushLibrary } from './brush_library.svelte';
-import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
+import type {
+    BrushInfo,
+    JsonValue,
+    ExposedValue,
+    ExposedPortInfo,
+    ExposedPortMeta,
+} from '../engine/protocol_gen';
 
 export type { BrushInfo };
 
@@ -496,39 +502,28 @@ export class BrushGraphState {
         );
     }
 
-    /** Overwrite a brush-bar entry's label / description / icon / invert.
-     *  Every field is overwritten, so pass the entry's current values for
-     *  the ones the caller isn't changing. */
-    async setExposedPortMeta(
-        key: string,
-        label: string,
-        description: string,
-        icon: string,
-        invert: boolean,
-    ) {
+    /** Overwrite a brush-bar entry's meta (label, description, icon, invert,
+     *  unit). Every field is overwritten, so pass the entry's current values
+     *  for the ones the caller isn't changing. */
+    async setExposedPortMeta(key: string, meta: ExposedPortMeta) {
         if (!app.engine) return;
         await this.applyResult(
-            await app.engine.api.brushGraphSetExposedPortMeta({
-                key,
-                label,
-                description,
-                icon,
-                invert,
-            }),
+            await app.engine.api.brushGraphSetExposedPortMeta({ key, meta }),
         );
     }
 
     /** Override an input port's slider bounds on one node instance.
-     *  `min`/`max` are display-space: hand back the numbers the control
-     *  was rendered with. Rejected by the engine unless ascending. */
+     *  `min`/`max` are port-space: the space the bounds are stored and saved
+     *  in, so the engine needs no unit logic and this call is independent of
+     *  the entry's unit. Rejected by the engine unless ascending. */
     async setPortRange(nodeId: string, portName: string, min: number, max: number) {
         if (!app.engine) return;
         await this.applyResult(
             await app.engine.api.brushGraphSetPortRange({
                 node_id: nodeId,
                 port_name: portName,
-                display_min: min,
-                display_max: max,
+                min,
+                max,
             }),
         );
     }

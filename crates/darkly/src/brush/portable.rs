@@ -488,10 +488,12 @@ mod tests {
         graph
             .set_exposed_port_meta(
                 &shape_key,
-                "Softness".into(),
-                "Edge falloff".into(),
-                "fa6-solid:circle-half-stroke".into(),
-                false,
+                ExposedPortMeta {
+                    label: "Softness".into(),
+                    description: "Edge falloff".into(),
+                    icon: "fa6-solid:circle-half-stroke".into(),
+                    ..Default::default()
+                },
             )
             .unwrap();
 
@@ -588,7 +590,14 @@ mod tests {
         );
 
         graph
-            .set_exposed_port_meta(&key, "Hardness".into(), String::new(), String::new(), true)
+            .set_exposed_port_meta(
+                &key,
+                ExposedPortMeta {
+                    label: "Hardness".into(),
+                    invert: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
@@ -602,6 +611,51 @@ mod tests {
             "the mirror is authored brush state and must survive save/load"
         );
         assert_eq!(restored.exposed_ports[&key].label, "Hardness");
+    }
+
+    /// A unit override is authored brush state: it survives the yaml round
+    /// trip, and an entry that never chose one writes no key, so shipped
+    /// brushes do not churn.
+    #[test]
+    fn unit_override_survives_the_yaml_round_trip() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+        graph.expose_port(&circle, "softness").unwrap();
+        let key = exposed_port_key(&circle, "softness");
+
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(
+            !serde_yaml_ng::to_string(&clean).unwrap().contains("unit"),
+            "an entry inheriting its unit must not serialize a unit key"
+        );
+
+        graph
+            .set_exposed_port_meta(
+                &key,
+                ExposedPortMeta {
+                    unit: Some(crate::units::UnitType::Degrees),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        assert_eq!(
+            restored.exposed_ports[&key].unit,
+            Some(crate::units::UnitType::Degrees),
+            "the unit override must survive save/load"
+        );
     }
 
     /// A hand-edited yaml carrying a degenerate or inverted range is

@@ -11,7 +11,7 @@ nodes:
     type: brush_settings
     inputs:
       size: 0.07
-      spacing: 0.1
+      spacing: 0.03
   circle:
     type: circle
     name: Brush tip circle
