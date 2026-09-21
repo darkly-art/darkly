@@ -47,7 +47,7 @@ Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*
 
 ![veil-demo](https://github.com/user-attachments/assets/d30a72e2-a613-4f57-bcb0-671feea08b8d)
 
-Veils are nondestructive. You can paint as usual, behind the veil, and if you disable it, you'll see the full-res result.
+Veils are nondestructive. You can paint as usual, behind the veil, and when you disable it, you'll see the full-res result.
 
 <!-- darkly:catalog-graphic catalog=effects category=Veils -->
 <img src="docs/images/graphics/effects-veils.jpg" alt="Veils: Chromatic Aberration, Frozen, Grain, Lens Blur, Painting, Pixelate, Rainy Glass, VHS">

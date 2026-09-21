@@ -12,67 +12,19 @@
  */
 
 import type { ParamInfo, ParamValue } from '../../engine/protocol_gen';
+import { cloneParamValue } from '../params/paramSchema';
 
-// The panel's own vocabulary for param *values*; the wire type is authoritative
-// and is re-exported rather than restated. (The hand-written union that used to
-// live here had already drifted: it omitted `string`, which the blender void's
-// `url` param carries.)
-export type { ParamInfo };
+export type { ParamInfo, ParamValue };
 
 export type CurvePoints = [number, number][];
 /** `[inBlack, inWhite, gamma, outBlack, outWhite]`: a Levels transfer. */
 export type LevelsValues = [number, number, number, number, number];
-/** Normalized sRGB `[r, g, b]` in `[0,1]`: a `ParamValue::Color`. */
-export type ColorValue = [number, number, number];
-/** A 2D vector `[x, y]`: a `ParamValue::Vec2` (offset pad). */
-export type Vec2Value = [number, number];
 /** A dynamic list of named-value entries: a `ParamValue::List`. */
-export type ListValue = Record<string, FilterParamValue>[];
-
-/** A concrete param value on the wire. */
-export type FilterParamValue = ParamValue;
+export type ListValue = Record<string, ParamValue>[];
 
 /** Kinds that are per-channel tone params, sharing the channel selector. */
 export function isChannelParam(kind: string): boolean {
     return kind === 'curve' || kind === 'levels';
-}
-
-/** Deep-clone a param value (curve pairs / levels arrays / list entries can't be
- *  `structuredClone`d through Svelte proxies, so copy by hand; scalars pass
- *  through). List entries are `{ name: value }` objects, cloned field-by-field
- *  so a modal's scratch copy never aliases back into the shared schema. */
-export function cloneParamValue<T extends FilterParamValue>(v: T): T {
-    if (!Array.isArray(v)) return v;
-    return v.map((x) => {
-        if (Array.isArray(x)) return [...x];
-        if (x && typeof x === 'object') {
-            const out: Record<string, FilterParamValue> = {};
-            for (const [k, val] of Object.entries(x)) out[k] = cloneParamValue(val as FilterParamValue);
-            return out;
-        }
-        return x;
-    }) as T;
-}
-
-/** True when a param has a meaningful neutral center to snap back to, and so
- *  earns a reset-to-default button: a 2D offset pad (recenters), or a numeric
- *  slider whose default sits in the *interior* of its range: a value you nudge
- *  away from in both directions, like scale's 1.0 between 0.9 and 1.1. Sliders
- *  whose default is a range endpoint (blur, which rests at 0) and deliberate
- *  picks (color) get none. */
-export function paramIsResettable(param: ParamInfo): boolean {
-    if (param.kind === 'vec2') return true;
-    if (param.kind === 'float' || param.kind === 'int') {
-        const { min, max, default: d } = param;
-        return (
-            typeof min === 'number' &&
-            typeof max === 'number' &&
-            typeof d === 'number' &&
-            d > min &&
-            d < max
-        );
-    }
-    return false;
 }
 
 /** The item schema of a `list` param: one `ParamInfo` per entry field.
@@ -85,8 +37,8 @@ export function listItemSchema(param: ParamInfo): ParamInfo[] {
 
 /** Build a fresh list entry from an item schema: each field seeded to a
  *  deep-clone of its default. */
-export function newListEntry(schema: ParamInfo[]): Record<string, FilterParamValue> {
-    const entry: Record<string, FilterParamValue> = {};
+export function newListEntry(schema: ParamInfo[]): Record<string, ParamValue> {
+    const entry: Record<string, ParamValue> = {};
     for (const p of schema) entry[p.name] = cloneParamValue(p.default);
     return entry;
 }
@@ -100,8 +52,8 @@ export function seedScratchParams(params: ParamInfo[]): ParamInfo[] {
 
 /** Build the `{ name: value }` map the engine's `updateFilterParams` /
  *  `applyFilter` expects: the effective value (`value ?? default`) per param. */
-export function filterParamMap(params: ParamInfo[]): Record<string, FilterParamValue> {
-    const out: Record<string, FilterParamValue> = {};
+export function filterParamMap(params: ParamInfo[]): Record<string, ParamValue> {
+    const out: Record<string, ParamValue> = {};
     for (const p of params) out[p.name] = p.value ?? p.default;
     return out;
 }
@@ -131,17 +83,4 @@ export function partitionFilterParams(params: ParamInfo[]): {
         (isChannelParam(p.kind) ? channels : scalars).push(p);
     }
     return { channels, scalars };
-}
-
-/** Channel ids that must render fully uppercase, not title-cased. */
-const ACRONYM_CHANNELS = new Set(['rgb', 'rgba', 'cmyk', 'xyz', 'ycbcr']);
-
-/**
- * Display label for a param name. Channel ids are lowercase stable ids
- * (`"rgb"`, `"saturation"`); acronyms render uppercase (`"rgb"` → `"RGB"`),
- * everything else title-cased (`"saturation"` → `"Saturation"`).
- */
-export function channelLabel(name: string): string {
-    if (ACRONYM_CHANNELS.has(name)) return name.toUpperCase();
-    return name.charAt(0).toUpperCase() + name.slice(1);
 }

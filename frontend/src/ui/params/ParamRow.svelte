@@ -9,14 +9,15 @@
         paramIsResettable,
         channelLabel,
         type ParamInfo,
-        type FilterParamValue,
+        type ParamValue,
         type ColorValue,
         type Vec2Value,
-    } from './filterParams';
+    } from './paramSchema';
 
-    // A single generic scalar/atom param row (label + control). Shared by the
-    // filter params editor and each list entry's fields. Mutates `param.value`
-    // in place and reports via `oninput` (mid-drag) / `onchange` (commit), the
+    // A single generic scalar/atom param row (label + control). Every panel
+    // that renders a `ParamInfo[]` uses it: the filter params editor, each list
+    // entry's fields, and the void properties panel. Mutates `param.value` in
+    // place and reports via `oninput` (mid-drag) / `onchange` (commit), the
     // same contract the channel editors use.
     type Props = {
         param: ParamInfo;
@@ -26,11 +27,11 @@
     };
     let { param, disabled = false, oninput, onchange }: Props = $props();
 
-    function commit(v: FilterParamValue) {
+    function commit(v: ParamValue) {
         param.value = v;
         onchange?.();
     }
-    function live(v: FilterParamValue) {
+    function live(v: ParamValue) {
         param.value = v;
         oninput?.();
     }
@@ -71,6 +72,14 @@
             checked={(param.value ?? param.default) as boolean}
             {disabled}
             onchange={(e) => commit(e.currentTarget.checked)}
+        />
+    {:else if param.kind === 'string'}
+        <input
+            type="text"
+            class="text-input"
+            value={(param.value ?? param.default) as string}
+            {disabled}
+            onchange={(e) => commit(e.currentTarget.value)}
         />
     {:else if param.kind === 'color'}
         <ColorInput
