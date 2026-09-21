@@ -41,8 +41,10 @@ class ToolStripPlacement {
     edge = $derived(this.override?.edge ?? readEdge());
     offset = $derived(this.override?.offset ?? readOffset());
 
-    /** False pins the strip permanently out, with no proximity tracking. */
-    autoHide = $derived(config.get(AUTO_HIDE_KEY) !== false);
+    /** Off pins the strip permanently out, with no proximity tracking. Opt-in,
+     *  so an unresolved read (before `config.init()` lands) leaves the strip
+     *  visible rather than flashing it tucked and then sliding it out. */
+    autoHide = $derived(config.get(AUTO_HIDE_KEY) === true);
 
     /** Land the drag's result in the persisted layer and drop the override. */
     commit(edge: Edge, offset: number) {

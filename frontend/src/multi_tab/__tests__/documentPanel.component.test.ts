@@ -114,6 +114,9 @@ describe('document panel layout', () => {
     // the strip intolerable if it silently regresses. jsdom reports zero rects,
     // so drive `canvasSlot` directly and assert the class, not any geometry.
     it('peek_slides_the_strip_out_on_a_nearby_move_and_never_while_a_button_is_held', () => {
+        // Opt in: the strip is permanently out by default, so without this the
+        // proximity listener is never installed.
+        fakeConfig.set('ui.toolStrip.autoHide', true);
         const target = render();
         const strip = target.querySelector('.toolbar')!;
         canvasSlot.rect = { left: 0, top: 0, width: 1000, height: 600 };

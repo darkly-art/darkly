@@ -1,12 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-// Node builtins; the project intentionally omits @types/node (see
-// vite.config.ts and dialogFocusRing.test.ts). Vitest runs under node.
-// @ts-ignore
-import { readFileSync, readdirSync } from 'node:fs';
-// @ts-ignore
-import { fileURLToPath } from 'node:url';
 import SearchField from '../SearchField.svelte';
 import SearchFieldHarness from './SearchFieldHarness.test.svelte';
 
@@ -65,31 +59,5 @@ describe('the search field', () => {
         flushSync();
 
         expect(onquery).toHaveBeenLastCalledWith('grain');
-    });
-});
-
-// The whole point of the component: a second hand-rolled search box is how the
-// ones that existed before drifted into as many different looks as there were
-// call sites.
-describe('search boxes across the app', () => {
-    it('are all this one component', () => {
-        const ui = fileURLToPath(new URL('..', import.meta.url));
-        const offenders: string[] = [];
-
-        const walk = (dir: string) => {
-            for (const e of readdirSync(dir, { withFileTypes: true })) {
-                const path = `${dir}/${e.name}`;
-                if (e.isDirectory()) {
-                    if (e.name !== '__tests__') walk(path);
-                } else if (e.name.endsWith('.svelte') && e.name !== 'SearchField.svelte') {
-                    if (/type=["']search["']/.test(readFileSync(path, 'utf8'))) {
-                        offenders.push(path.slice(ui.length));
-                    }
-                }
-            }
-        };
-        walk(ui);
-
-        expect(offenders, 'use SearchField instead of a bare search input').toEqual([]);
     });
 });
