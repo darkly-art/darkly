@@ -140,15 +140,27 @@
             if (m.ax !== null) anchorX = m.ax;
             if (m.ay !== null) anchorY = m.ay;
         };
-        const onUp = (ev: PointerEvent) => {
-            dragging = false;
-            el.releasePointerCapture?.(ev.pointerId);
+        // `lostpointercapture` as well as `pointerup`: capture can end without
+        // a pointerup on the handle (the pointer is removed, another element
+        // takes capture), and without this the move listener survives the
+        // gesture and a later hover keeps resizing the rect.
+        const detach = () => {
             el.removeEventListener('pointermove', onMove);
             el.removeEventListener('pointerup', onUp);
+            el.removeEventListener('lostpointercapture', onEnd);
+        };
+        const onEnd = () => {
+            dragging = false;
+            detach();
             refit();
+        };
+        const onUp = (ev: PointerEvent) => {
+            el.releasePointerCapture?.(ev.pointerId);
+            onEnd();
         };
         el.addEventListener('pointermove', onMove);
         el.addEventListener('pointerup', onUp);
+        el.addEventListener('lostpointercapture', onEnd);
     }
 
     // Frame rect in preview (CSS) pixels.

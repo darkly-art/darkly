@@ -124,13 +124,24 @@
     }
 
     function onSvgPointerUp(e: PointerEvent) {
-        if (draggingIndex !== null && localPoints !== null) {
-            svgEl.releasePointerCapture(e.pointerId);
-            const pts = localPoints;
-            draggingIndex = null;
-            localPoints = null;
-            onchange(pts);
-        }
+        if (draggingIndex === null || localPoints === null) return;
+        svgEl.releasePointerCapture(e.pointerId);
+        endDrag();
+    }
+
+    /** Capture can end without a `pointerup` on the SVG: the browser fires
+     *  `lostpointercapture` on its own when the pointer is removed or another
+     *  element takes capture. Ending here too keeps `draggingIndex` from
+     *  sticking, which would otherwise let a plain hover keep dragging the
+     *  point. The previewed points are committed rather than discarded: the
+     *  artist has already seen them (the same rule `lib/scrubDrag.ts`
+     *  documents). */
+    function endDrag() {
+        if (draggingIndex === null || localPoints === null) return;
+        const pts = localPoints;
+        draggingIndex = null;
+        localPoints = null;
+        onchange(pts);
     }
 
     function onSvgPointerDown(e: PointerEvent) {
@@ -198,6 +209,7 @@
         onpointerdown={onSvgPointerDown}
         onpointermove={onSvgPointerMove}
         onpointerup={onSvgPointerUp}
+        onlostpointercapture={endDrag}
     >
         <!-- Grid -->
         {#each gridLines() as line}

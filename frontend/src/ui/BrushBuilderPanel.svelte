@@ -16,12 +16,24 @@
             const dy = startY - ev.clientY; // dragging up = increase height
             builderHeight = Math.min(80, Math.max(15, startHeight + dy / vh));
         };
+        // `lostpointercapture` as well as `pointerup`: capture can end without
+        // a pointerup on the handle (the pointer is removed, another element
+        // takes capture), and without this the move listener survives the
+        // gesture and a later hover keeps resizing the panel.
         const onUp = () => {
+            el.releasePointerCapture?.(e.pointerId);
             el.removeEventListener('pointermove', onMove);
             el.removeEventListener('pointerup', onUp);
+            el.removeEventListener('lostpointercapture', onEnd);
+        };
+        const onEnd = () => {
+            el.removeEventListener('pointermove', onMove);
+            el.removeEventListener('pointerup', onUp);
+            el.removeEventListener('lostpointercapture', onEnd);
         };
         el.addEventListener('pointermove', onMove);
         el.addEventListener('pointerup', onUp);
+        el.addEventListener('lostpointercapture', onEnd);
     }
 </script>
 
