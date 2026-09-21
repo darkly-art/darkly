@@ -10,6 +10,7 @@
  * test exercises the equivalent path on the Rust side.
  */
 
+import { rgbaToCanvas } from '../lib/rgba';
 import { zip, type Zippable } from 'fflate';
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toast } from '../state/toast.svelte';
@@ -322,12 +323,7 @@ async function encodeThumbnailPng(
     const thumbW = Math.max(1, Math.round(width * scale));
     const thumbH = Math.max(1, Math.round(height * scale));
 
-    const src = new OffscreenCanvas(width, height);
-    const srcCtx = src.getContext('2d');
-    if (!srcCtx) throw new Error('2d context unavailable');
-    const copy = new Uint8ClampedArray(rgba.length);
-    copy.set(rgba);
-    srcCtx.putImageData(new ImageData(copy, width, height), 0, 0);
+    const src = rgbaToCanvas(rgba, width, height);
 
     const dst = new OffscreenCanvas(thumbW, thumbH);
     const dstCtx = dst.getContext('2d');

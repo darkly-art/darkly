@@ -37,15 +37,7 @@ export async function copyToSystemClipboard(
     richJson?: string,
 ): Promise<void> {
     try {
-        const canvas = new OffscreenCanvas(width, height);
-        const ctx = canvas.getContext('2d')!;
-        // Copy into a fresh ArrayBuffer to satisfy ImageData's type requirement
-        // (Uint8ClampedArray from WASM memory may have SharedArrayBuffer backing).
-        const copy = new Uint8ClampedArray(rgba.length);
-        copy.set(rgba);
-        const imageData = new ImageData(copy, width, height);
-        ctx.putImageData(imageData, 0, 0);
-        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        const blob = await rgbaToBlob(rgba, width, height, 'image/png');
 
         const items: Record<string, Blob | Promise<Blob>> = { 'image/png': blob };
         if (richJson) {

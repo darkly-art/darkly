@@ -1,4 +1,5 @@
 import { app } from '../../state/app.svelte';
+import { rgbaToDataUrl } from '../../lib/rgba';
 
 // Mirrors `darkly::engine::DEFAULT_THUMB_SIZE`. The engine's auto-queue
 // path renders thumbnail readbacks at this size; if it ever drifts,
@@ -6,20 +7,6 @@ import { app } from '../../state/app.svelte';
 // equality against `engine.engineDefaultThumbSize()` at init so drift fails
 // loudly on first run, not silently.
 const THUMB_SIZE = 36;
-
-/** Convert RGBA byte array to a data URL suitable for <img src>. */
-export function rgbaToDataUrl(rgba: Uint8Array, width: number, height: number): string {
-    const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = width;
-    tmpCanvas.height = height;
-    const tmpCtx = tmpCanvas.getContext('2d')!;
-    // Copy into a Uint8ClampedArray backed by a fresh ArrayBuffer to satisfy ImageData
-    const clamped = new Uint8ClampedArray(rgba.length);
-    clamped.set(rgba);
-    const imageData = new ImageData(clamped, width, height);
-    tmpCtx.putImageData(imageData, 0, 0);
-    return tmpCanvas.toDataURL();
-}
 
 // Reactive cache of node id → data URL. `node_thumbnail` is an async engine
 // query now, so it can't be read inline by the layer panel's `$derived`s.

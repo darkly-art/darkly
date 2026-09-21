@@ -1,6 +1,7 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
     import { pointerDrag } from '../lib/pointerDrag';
+    import { rgbaToImageData } from '../lib/rgba';
     import LinkToggle from './LinkToggle.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
@@ -89,9 +90,7 @@
             cv.height = result.height;
             const cctx = cv.getContext('2d');
             if (!cctx) return;
-            const clamped = new Uint8ClampedArray(result.rgba.length);
-            clamped.set(result.rgba);
-            cctx.putImageData(new ImageData(clamped, result.width, result.height), 0, 0);
+            cctx.putImageData(rgbaToImageData(result.rgba, result.width, result.height), 0, 0);
             compositeCanvas = cv;
             compositeVersion++;
         });

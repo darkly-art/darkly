@@ -7,6 +7,7 @@
  * zip's internal `composite.png` too, so the encode core exists once.
  */
 
+import { rgbaToBlob } from '../lib/rgba';
 import type { DarklyInstance } from '../state/app.svelte';
 
 export type ImageFormat = 'png' | 'jpeg' | 'webp';
@@ -20,29 +21,6 @@ const MIME: Record<ImageFormat, string> = {
 // JPEG/WebP quality is fixed at 0.92: the historical export default; PNG is
 // lossless and ignores it.
 const QUALITY = 0.92;
-
-/** Encode raw RGBA8 pixels to an image Blob via `OffscreenCanvas`. The
- *  browser's encoder runs off the WASM main thread. `quality` is omitted for
- *  PNG (lossless). */
-export async function rgbaToBlob(
-    rgba: Uint8Array,
-    width: number,
-    height: number,
-    mime: string,
-    quality?: number,
-): Promise<Blob> {
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('2d context unavailable');
-    // ImageData rejects SharedArrayBuffer-backed Uint8ClampedArray (which the
-    // WASM heap can be); copy into a fresh ArrayBuffer first.
-    const copy = new Uint8ClampedArray(rgba.length);
-    copy.set(rgba);
-    ctx.putImageData(new ImageData(copy, width, height), 0, 0);
-    return quality === undefined
-        ? await canvas.convertToBlob({ type: mime })
-        : await canvas.convertToBlob({ type: mime, quality });
-}
 
 /** Drive the async export readback for `instance` and encode the composite to
  *  an image Blob. Kicks `startExport` and awaits the one-shot `onExportResult`

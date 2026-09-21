@@ -1,3 +1,4 @@
+import { rgbaToBlob } from '../lib/rgba';
 import { actions } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
@@ -77,16 +78,7 @@ export function registerClipboardActions(): void {
                 // original blob: `readImageFromClipboard` already normalised
                 // whatever the clipboard held into RGBA, and the placement
                 // path owns the downscale-and-premultiply policy.
-                const canvas = new OffscreenCanvas(clip.width, clip.height);
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
-                const img = new ImageData(
-                    new Uint8ClampedArray(clip.rgba),
-                    clip.width,
-                    clip.height,
-                );
-                ctx.putImageData(img, 0, 0);
-                const blob = await canvas.convertToBlob({ type: 'image/png' });
+                const blob = await rgbaToBlob(clip.rgba, clip.width, clip.height, 'image/png');
                 await placeSmartObjectFromBlob(blob, 'clipboard image');
             })();
         },

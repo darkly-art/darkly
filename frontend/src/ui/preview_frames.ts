@@ -12,6 +12,7 @@
 //! and are polled separately, so a card never waits on a sequence to show
 //! something.
 
+import { rgbaToImageData } from '../lib/rgba';
 import type { Engine } from '../engine/protocol';
 import type { PreviewVariant } from '../engine/protocol_gen';
 
@@ -43,7 +44,7 @@ export function toPreviewData(raw: RawPreview): PreviewData {
     const frames: ImageData[] = [];
     for (let i = 0; i < raw.frameCount; i++) {
         const slice = raw.bytes.subarray(i * stride, (i + 1) * stride);
-        frames.push(new ImageData(new Uint8ClampedArray(slice), raw.width, raw.height));
+        frames.push(rgbaToImageData(slice, raw.width, raw.height));
     }
     return { width: raw.width, height: raw.height, fps: raw.fps, frames };
 }
