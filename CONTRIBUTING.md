@@ -2,7 +2,7 @@
 
 Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Typescript, leveraging WebAssembly and WebGPU.
 
-This document exists to keep Darkly **minimal, elegant, and proper**. The best code is the code never written; nearly all the principles below are in support of this core principle. It holds what applies to *every* contribution: the architecture, the principles, the workflow, the house rules and the check suite. Subsystem detail lives in [`docs/`](docs/) and is linked from where it matters. It is addressed to humans and coding agents alike, because the standards are the same for both. `AGENTS.md` and `CLAUDE.md` are symlinks to this file.
+This document exists to keep Darkly **minimal, elegant, and proper**. It's addressed to both humans and their agents, because the standards are the same for both. The best code is the code never written; pretty much all the principles below are in support of that core principle. `AGENTS.md` and `CLAUDE.md` are symlinks to this file.
 
 Thanks for wanting to contribute.
 
@@ -20,7 +20,7 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 (cd frontend && npm install && npm run dev)
 ```
 
-Before opening a PR, run the full suite under [Lint / CI Checks](#lint--ci-checks) and read the [Testing Principle](#testing-principle) for what your change owes in tests.
+Before opening a PR, run the full suite under [Lint / CI Checks](#lint--ci-checks) and read the [Testing Principle](#testing-principle).
 
 ## Architecture
 

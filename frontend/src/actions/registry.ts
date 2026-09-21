@@ -30,16 +30,17 @@ export interface ActionRegistration {
      *  through the `actions` catalog. */
     doc?: ActionDoc;
     type?: ActionType;
-    /** Top-level menu this action appears under, e.g. ['Select']. Absent →
-     *  not in the click-through menu (still available via hotkey + palette).
-     *  v1 is FLAT: only the first segment is used; the renderer is
-     *  non-recursive (no submenu flyouts). The array shape is kept for
-     *  forward-compat, but multi-segment nesting is deferred.
+    /** Where this action sits in the click-through menu, one segment per
+     *  level: `['Select']` is a row in the Select menu, `['Filters:20',
+     *  'Veils']` a row in a Veils submenu of the Filters menu. Absent → not in
+     *  the menu at all (still available via hotkey + palette).
      *
      *  Each segment may carry a position suffix `'Title:order'` (e.g.
-     *  `['Select:10']`): lower `order` sorts first within the menu, and
-     *  actions whose segment has no suffix fall to the end in registration
-     *  order. Parse with `parseMenuSegment`. */
+     *  `['Select:10']`). A segment's suffix positions, within the menu that
+     *  segment names, whatever this action contributes there: its own row for
+     *  the last segment, the submenu it descends into for any earlier one.
+     *  Lower sorts first; a segment with no suffix falls to the end in
+     *  registration order. Parse with `parseMenuSegment`. */
     menuPath?: string[];
     /** Menu/palette enablement. Absent or `true` → enabled. Return `false` to
      *  disable with no explanation, or a string to disable *and* use that
@@ -72,6 +73,12 @@ export interface BindingSiteRegistration {
      *  settings UI's site dropdown. Defaults to a title-cased `name`. */
     displayName?: string;
 }
+
+/** Sort key for a `menuPath` segment carrying no position suffix: finite, so
+ *  a comparator subtracting two of them yields 0 rather than NaN, and large,
+ *  so unordered entries fall to the end. Shared by every reader of a menu
+ *  order, so none of them has to invent its own sentinel. */
+export const UNORDERED = Number.MAX_SAFE_INTEGER;
 
 /** Parse a `menuPath` segment into its title and optional position. A bare
  *  `'Title'` has no order; `'Title:10'` places the action at order 10 within
