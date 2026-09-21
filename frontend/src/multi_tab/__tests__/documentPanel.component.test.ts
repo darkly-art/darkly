@@ -2,10 +2,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-// The tool strip and the tool-options bar both resolve tooltips through the
-// config store, which is WASM-backed in production.
+// The tool strip and the tool-options bar resolve tooltips through the config
+// store, and the strip's placement is a pref read from it. WASM-backed in
+// production, so stand in a plain map the tests can drive.
+const { fakeConfig } = vi.hoisted(() => ({
+    fakeConfig: {
+        values: {} as Record<string, unknown>,
+        get(k: string) { return this.values[k]; },
+        set(k: string, v: unknown) { this.values[k] = v; },
+    },
+}));
 vi.mock('../../config/store.svelte', async (importOriginal) => ({
     ...(await importOriginal<object>()),
+    config: fakeConfig,
     tooltipForAction: (label: string) => label,
 }));
 
@@ -18,6 +27,8 @@ vi.mock('../../state/brush_graph.svelte', () => ({
 
 import { DarklyInstance, setActiveInstance } from '../../state/app.svelte';
 import { menuBar } from '../../state/menuBar.svelte';
+import { toolStripPlacement } from '../../ui/tool_strip/placement.svelte';
+import { canvasSlot } from '../canvasSlot.svelte';
 import DocumentPanel from '../DocumentPanel.svelte';
 
 let inst: DarklyInstance;
@@ -33,6 +44,9 @@ beforeEach(() => {
     );
     inst = new DarklyInstance();
     setActiveInstance(inst);
+    fakeConfig.values = {};
+    toolStripPlacement.override = null;
+    canvasSlot.rect = null;
 });
 
 afterEach(() => {
@@ -55,8 +69,9 @@ function render() {
 // applied under vitest, so `getComputedStyle` proves nothing here. The
 // change's real risk, that the strip paints above the WebGPU canvases, is
 // invisible to jsdom at any number of assertions (it computes no layout and
-// `CanvasOverlay` is not mounted); the comment in `ToolStrip.svelte` is the
-// defence for that one.
+// `CanvasOverlay` is not mounted). So is which way the strip and its flyouts
+// actually face, since that is entirely the per-edge CSS table. The comments in
+// `styles/tool-strip-dock.css` are the defence for both.
 describe('document panel layout', () => {
     it('tool_strip_floats_inside_the_canvas_region', () => {
         const target = render();
@@ -84,6 +99,47 @@ describe('document panel layout', () => {
         flushSync();
 
         expect(target.querySelector('.doc-top .hamburger-btn')).toBeNull();
+    });
+
+    it('strip_and_canvas_region_carry_the_edge_the_placement_reports', () => {
+        fakeConfig.values['ui.toolStrip.edge'] = 'bottom';
+        const target = render();
+
+        expect(target.querySelector('.toolbar')!.getAttribute('data-edge')).toBe('bottom');
+        // Passed through so the CSS table can clip the tuck axis; DocumentPanel
+        // never asks the edge what it is.
+        expect(target.querySelector('.canvas-region')!.getAttribute('data-tool-strip-edge')).toBe('bottom');
+
+        toolStripPlacement.override = { edge: 'top', offset: 0.5 };
+        flushSync();
+
+        expect(target.querySelector('.toolbar')!.getAttribute('data-edge')).toBe('top');
+        expect(target.querySelector('.canvas-region')!.getAttribute('data-tool-strip-edge')).toBe('top');
+    });
+
+    // The peek's headline behaviour, and the one thing that makes painting near
+    // the strip intolerable if it silently regresses. jsdom reports zero rects,
+    // so drive `canvasSlot` directly and assert the class, not any geometry.
+    it('peek_slides_the_strip_out_on_a_nearby_move_and_never_while_a_button_is_held', () => {
+        const target = render();
+        const strip = target.querySelector('.toolbar')!;
+        canvasSlot.rect = { left: 0, top: 0, width: 1000, height: 600 };
+        flushSync();
+
+        expect(strip.classList.contains('out')).toBe(false);
+
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 5, clientY: 300, buttons: 0 }));
+        flushSync();
+        expect(strip.classList.contains('out')).toBe(true);
+
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 800, clientY: 300, buttons: 0 }));
+        flushSync();
+        expect(strip.classList.contains('out')).toBe(false);
+
+        // A held button means a stroke, a pan or a scrub is in flight.
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 5, clientY: 300, buttons: 1 }));
+        flushSync();
+        expect(strip.classList.contains('out')).toBe(false);
     });
 
     it('color_swatches_live_in_the_tool_options_bar_not_the_tool_strip', () => {

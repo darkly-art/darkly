@@ -1,7 +1,9 @@
 <script lang="ts">
-    import { app } from '../state/app.svelte';
-    import { toolRegistry, type ToolDescriptor, type ToolCluster } from '../tools/registry';
-    import Icon from '../icons/Icon.svelte';
+    import { getContext } from 'svelte';
+    import { app } from '../../state/app.svelte';
+    import { toolRegistry, type ToolDescriptor, type ToolCluster } from '../../tools/registry';
+    import Icon from '../../icons/Icon.svelte';
+    import { TOOL_STRIP_OUT, type ToolStripOut } from './context';
 
     interface Props { cluster: ToolCluster; }
     let { cluster }: Props = $props();
@@ -36,6 +38,7 @@
     }
 
     function onClusterEnter() {
+        if (settling) return;
         open = true;
     }
 
@@ -61,6 +64,28 @@
         };
         window.addEventListener('pointerdown', onPointerDown, true);
         return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    });
+
+    // A flyout left open when the strip tucks would hang in space over the
+    // canvas, anchored to a button that is no longer there.
+    const strip = getContext<ToolStripOut | undefined>(TOOL_STRIP_OUT);
+
+    /** Set for one frame after the strip slides out. The 160ms slide can drag a
+     *  cluster button under a motionless pointer, and browsers re-evaluate hover
+     *  when a transform moves what is underneath it, so `onmouseenter` would
+     *  fire and open a flyout the artist never asked for. */
+    let settling = $state(false);
+
+    $effect(() => {
+        const isOut = strip?.out ?? true;
+        if (!isOut) {
+            open = false;
+            pinned = false;
+            return;
+        }
+        settling = true;
+        const id = requestAnimationFrame(() => { settling = false; });
+        return () => cancelAnimationFrame(id);
     });
 
     const clusterTitle = $derived(
@@ -108,51 +133,14 @@
         position: relative;
     }
 
-    /* Vertical column of sub-tool buttons. Positioned flush against the
-       toolbar's right edge: the 6px margin-left bridges from the cluster
-       button (32px wide, centered in the 44px toolbar) to the toolbar's
-       right edge, so the popout's left edge butts cleanly onto the sidebar
-       with no visible gap. Vertically centered on the cluster button's
-       center via `top: 50%; translateY(-50%)`. */
+    /* The flyout's geometry (which way it opens, its rounding, its shadow, the
+       invisible hit bridge that keeps it from closing mid-transit) lives in
+       `styles/tool-strip-dock.css`, read from custom properties the strip sets.
+       This component has no edge prop and no conditionals: it never learns which
+       way it is facing. Only its own box and state styling are here. */
     .popout {
-        position: absolute;
-        top: 50%;
-        left: 100%;
-        margin-left: 6px;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 6px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-left: none;
-        border-radius: 0 6px 6px 0;
-        box-shadow: 4px 4px 12px rgba(0, 0, 0, 0.3);
-        z-index: 90;
-        opacity: 0;
-        transform: translate(-8px, -50%);
-        pointer-events: none;
-        transition: opacity 140ms ease-out, transform 140ms ease-out;
-    }
-
-    .popout.open {
-        opacity: 1;
-        transform: translate(0, -50%);
-        pointer-events: auto;
-    }
-
-    /* Invisible hit-area bridge: extends the popout's pointer hit zone
-       leftward by 6px to cover the toolbar's right padding between the
-       cluster button and the popout. Without this, the pointer crosses
-       "background of toolbar" mid-transit and fires `mouseleave` on the
-       cluster container, closing a non-pinned popout. */
-    .popout::before {
-        content: '';
-        position: absolute;
-        left: -6px;
-        top: 0;
-        width: 6px;
-        height: 100%;
+        min-width: 0;
+        min-height: 0;
     }
 
     /* Box and reset come from `.icon-btn.square` in tokens.css; only the

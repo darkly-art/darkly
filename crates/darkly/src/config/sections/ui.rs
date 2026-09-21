@@ -2,6 +2,13 @@ use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const THEME_OPTIONS: &[(&str, &str)] = &[("dark", "Dark"), ("light", "Light")];
 
+const TOOL_STRIP_EDGES: &[(&str, &str)] = &[
+    ("left", "Left"),
+    ("right", "Right"),
+    ("top", "Top"),
+    ("bottom", "Bottom"),
+];
+
 const PREFS: &[Pref] = &[
     Pref {
         key: "ui.theme",
@@ -35,6 +42,35 @@ const PREFS: &[Pref] = &[
         description: None,
         kind: PrefKind::Int { min: 60, max: 400 },
         widget: WidgetHint::Hidden,
+    },
+    Pref {
+        key: "ui.toolStrip.edge",
+        display_name: "Tool strip position",
+        description: Some("Which edge of the canvas the tool strip docks to."),
+        kind: PrefKind::Enum {
+            options: TOOL_STRIP_EDGES,
+        },
+        widget: WidgetHint::Auto,
+    },
+    // Where along that edge the strip sits, as a fraction of the travel it has
+    // (0 = flush against the start, 1 = flush against the end). A fraction
+    // rather than pixels so the strip keeps its place when the canvas area
+    // resizes. Set by dragging the strip, so it is not worth a Settings row.
+    Pref {
+        key: "ui.toolStrip.offset",
+        display_name: "Tool strip offset along its edge",
+        description: None,
+        kind: PrefKind::Float { min: 0.0, max: 1.0 },
+        widget: WidgetHint::Hidden,
+    },
+    Pref {
+        key: "ui.toolStrip.autoHide",
+        display_name: "Hide the tool strip until the pointer nears it",
+        description: Some(
+            "Tuck the tool strip against its edge, leaving a sliver, and slide it out on approach.",
+        ),
+        kind: PrefKind::Bool,
+        widget: WidgetHint::Auto,
     },
 ];
 

@@ -5,14 +5,10 @@
  * is directly unit-testable.
  */
 
+import { nearestEdge, type Rect } from '../../lib/edges';
 import type { DockingSplitDirection } from './tree';
 
-export interface Rect {
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-}
+export type { Rect };
 
 /** Where a body drop resolves: an edge (→ split) or the center (→ merge into
  *  the group as a new tab). */
@@ -26,34 +22,27 @@ export const EDGE_FRACTION = 0.25;
  * center. The band width is `EDGE_FRACTION` of the body's shorter side (so the
  * four bands stay symmetric on non-square panels). When a point falls in two
  * bands at once (a corner), the deeper penetration wins; exact ties break to
- * the horizontal edge.
+ * the edge that splits horizontally (left or right).
  */
 export function detectDockingEdge(x: number, y: number, rect: Rect): DockingEdge {
-    const dl = x - rect.left;
-    const dr = rect.left + rect.width - x;
-    const dt = y - rect.top;
-    const db = rect.top + rect.height - y;
-
     const band = Math.min(rect.width, rect.height) * EDGE_FRACTION;
 
-    // Distance *into* each edge band (0 = right at the edge, `band` = inner
-    // boundary). Negative means outside the band.
-    const candidates: { edge: DockingSplitDirection; penetration: number }[] = [];
-    if (dl < band) candidates.push({ edge: 'left', penetration: band - dl });
-    if (dr < band) candidates.push({ edge: 'right', penetration: band - dr });
-    if (dt < band) candidates.push({ edge: 'top', penetration: band - dt });
-    if (db < band) candidates.push({ edge: 'bottom', penetration: band - db });
+    const nearest = Math.min(
+        x - rect.left,
+        rect.left + rect.width - x,
+        y - rect.top,
+        rect.top + rect.height - y,
+    );
 
-    if (candidates.length === 0) return 'center';
-
-    // Deepest penetration wins; horizontal edges (left/right) win exact ties.
-    const horizontal = new Set<DockingSplitDirection>(['left', 'right']);
-    let best = candidates[0];
-    for (const c of candidates.slice(1)) {
-        if (c.penetration > best.penetration) best = c;
-        else if (c.penetration === best.penetration && horizontal.has(c.edge) && !horizontal.has(best.edge)) best = c;
-    }
-    return best.edge;
+    // Outside every band is a merge into the group, not a split. Inside one,
+    // the deepest penetration is the nearest edge: penetration is `band - d`,
+    // which is monotone decreasing in the distance `d`, so "deepest band" and
+    // "nearest edge" rank identically and `nearestEdge` answers both. Its
+    // tie-break order (left, right, top, bottom) resolves an exact corner to a
+    // vertical edge, which is the left/right-wins rule this function has always
+    // had, pinned by the corner cases in `__tests__/dropZones.test.ts`.
+    if (nearest >= band) return 'center';
+    return nearestEdge(x, y, rect);
 }
 
 /** An edge maps 1:1 to a split direction; `center` has no split. */

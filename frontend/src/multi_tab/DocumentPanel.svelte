@@ -1,10 +1,11 @@
 <script lang="ts">
-    import ToolStrip from '../ui/ToolStrip.svelte';
+    import ToolStrip from '../ui/tool_strip/ToolStrip.svelte';
     import HamburgerMenu from '../ui/HamburgerMenu.svelte';
     import TabStrip from './TabStrip.svelte';
     import ToolOptionsBar from '../ui/ToolOptionsBar.svelte';
     import { canvasSlot } from './canvasSlot.svelte';
     import { menuBar } from '../state/menuBar.svelte';
+    import { toolStripPlacement } from '../ui/tool_strip/placement.svelte';
 
     // The canvas itself lives in the persistent `CanvasOverlay`, not here; this
     // panel only reserves the space and publishes its rect. Registering on mount
@@ -18,7 +19,8 @@
 
 <!-- One column, full width at every row: the document tab strip, the canvas,
      and the tool-options bar. The tool strip is not a fourth row but an overlay
-     floating on the canvas region, so the canvas reaches the panel's left edge.
+     floating on the canvas region, docked to whichever edge the artist put it
+     on, so the canvas reaches the panel's edges underneath it.
      The hamburger and the foreground/background swatches ride in the top and
      bottom rows because a popup raised inside the tool strip would be trapped
      under its stacking context (see ToolStrip). -->
@@ -29,7 +31,7 @@
         {/if}
         <TabStrip />
     </div>
-    <div class="canvas-region" use:canvasMount>
+    <div class="canvas-region" use:canvasMount data-tool-strip-edge={toolStripPlacement.edge}>
         <ToolStrip />
     </div>
     <ToolOptionsBar />
@@ -62,7 +64,10 @@
        child does not affect that rect, so `canvasSlot` and the overlay's
        ResizeObserver are unaffected. Must never gain a `z-index` or
        `isolation`: either would make it a stacking context and bury the tool
-       strip behind the overlay's canvases. */
+       strip behind the overlay's canvases. `data-tool-strip-edge` is passed
+       through unread: `tool-strip-dock.css` keys the one-axis `overflow: clip`
+       off it, which a horizontal dock needs and which, unlike `isolation`,
+       creates no stacking context. */
     .canvas-region {
         position: relative;
         flex: 1;

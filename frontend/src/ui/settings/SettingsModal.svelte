@@ -97,8 +97,13 @@
             </button>
             <div class="search-wrap">
                 <Icon name="fa6-solid:magnifying-glass" />
+                <!-- `<dialog>`'s focusing steps prefer the autofocus element over
+                     the first focusable one, so opening Settings lands the caret
+                     here rather than on the Reset button. -->
+                <!-- svelte-ignore a11y_autofocus -->
                 <input
                     type="search"
+                    autofocus
                     bind:value={search}
                     placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
                 />

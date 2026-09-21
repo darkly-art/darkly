@@ -1,0 +1,267 @@
+/* Per-edge geometry for the floating tool strip and its cluster flyouts.
+ *
+ * Global rather than component-scoped for the same reason as
+ * `drop-indicator.css`: this is a contract between two components, and one home
+ * is what stops the two halves drifting. `ToolStrip` writes exactly two things,
+ * `data-edge` and `--strip-pos`; everything below is read from there, including
+ * by `ToolCluster`, which takes no edge prop and has no conditionals. Custom
+ * properties inherit through the DOM and Svelte's scoped-CSS rewriting touches
+ * selectors, not the cascade, so the flyout simply reads what the strip set.
+ *
+ * Adding a fifth arrangement (free floating, say) is adding a row here plus a
+ * variant in the placement store. No consumer rule changes.
+ *
+ * Consumer rules are scoped under `[data-edge]`: `.toolbar`, `.tool-group` and
+ * `.popout` are unique in the app today but generic enough to collide later,
+ * and the attribute is free. */
+
+:root {
+    /* How much of the strip stays visible when tucked. */
+    --peek: 10px;
+    --strip-thickness: 44px;
+    --strip-radius: 8px;
+    --flyout-gap: 6px;
+}
+
+/* ---- The table. Four rows of data; no rule below names an edge. ---- */
+
+[data-edge='left'] {
+    --strip-tuck: translateX(calc(-100% + var(--peek)));
+    --strip-inset: var(--strip-pos) auto auto 0;
+    --strip-flow: column;
+    --strip-w: var(--strip-thickness);
+    --strip-h: auto;
+    --strip-pad: 6px 0;
+    --strip-corners: 0 var(--strip-radius) var(--strip-radius) 0;
+    --strip-border-width: 1px 1px 1px 0;
+    --strip-shadow: 2px 2px 12px rgba(0, 0, 0, 0.3);
+
+    --group-pad: 0 0 6px 0;
+    --sep-pad: 6px 0 0 0;
+    --sep-border-width: 1px 0 0 0;
+
+    --flyout-inset: 50% auto auto 100%;
+    --flyout-margin: 0 0 0 var(--flyout-gap);
+    --flyout-corners: 0 var(--strip-radius) var(--strip-radius) 0;
+    --flyout-border-width: 1px 1px 1px 0;
+    --flyout-shadow: 4px 4px 12px rgba(0, 0, 0, 0.3);
+    --flyout-flow: column;
+    --flyout-hidden: translate(-8px, -50%);
+    --flyout-shown: translate(0, -50%);
+    --flyout-bridge: 0 100% 0 calc(-1 * var(--flyout-gap));
+}
+
+[data-edge='right'] {
+    --strip-tuck: translateX(calc(100% - var(--peek)));
+    --strip-inset: var(--strip-pos) 0 auto auto;
+    --strip-flow: column;
+    --strip-w: var(--strip-thickness);
+    --strip-h: auto;
+    --strip-pad: 6px 0;
+    --strip-corners: var(--strip-radius) 0 0 var(--strip-radius);
+    --strip-border-width: 1px 0 1px 1px;
+    --strip-shadow: -2px 2px 12px rgba(0, 0, 0, 0.3);
+
+    --group-pad: 0 0 6px 0;
+    --sep-pad: 6px 0 0 0;
+    --sep-border-width: 1px 0 0 0;
+
+    --flyout-inset: 50% 100% auto auto;
+    --flyout-margin: 0 var(--flyout-gap) 0 0;
+    --flyout-corners: var(--strip-radius) 0 0 var(--strip-radius);
+    --flyout-border-width: 1px 0 1px 1px;
+    --flyout-shadow: -4px 4px 12px rgba(0, 0, 0, 0.3);
+    --flyout-flow: column;
+    --flyout-hidden: translate(8px, -50%);
+    --flyout-shown: translate(0, -50%);
+    --flyout-bridge: 0 calc(-1 * var(--flyout-gap)) 0 100%;
+}
+
+[data-edge='top'] {
+    --strip-tuck: translateY(calc(-100% + var(--peek)));
+    --strip-inset: 0 auto auto var(--strip-pos);
+    --strip-flow: row;
+    --strip-w: auto;
+    --strip-h: var(--strip-thickness);
+    --strip-pad: 0 6px;
+    --strip-corners: 0 0 var(--strip-radius) var(--strip-radius);
+    --strip-border-width: 0 1px 1px 1px;
+    --strip-shadow: 2px 2px 12px rgba(0, 0, 0, 0.3);
+
+    --group-pad: 0 6px 0 0;
+    --sep-pad: 0 0 0 6px;
+    --sep-border-width: 0 0 0 1px;
+
+    --flyout-inset: 100% auto auto 50%;
+    --flyout-margin: var(--flyout-gap) 0 0 0;
+    --flyout-corners: 0 0 var(--strip-radius) var(--strip-radius);
+    --flyout-border-width: 0 1px 1px 1px;
+    --flyout-shadow: 2px 4px 12px rgba(0, 0, 0, 0.3);
+    --flyout-flow: row;
+    --flyout-hidden: translate(-50%, -8px);
+    --flyout-shown: translate(-50%, 0);
+    --flyout-bridge: calc(-1 * var(--flyout-gap)) 0 100% 0;
+}
+
+[data-edge='bottom'] {
+    --strip-tuck: translateY(calc(100% - var(--peek)));
+    --strip-inset: auto auto 0 var(--strip-pos);
+    --strip-flow: row;
+    --strip-w: auto;
+    --strip-h: var(--strip-thickness);
+    --strip-pad: 0 6px;
+    --strip-corners: var(--strip-radius) var(--strip-radius) 0 0;
+    --strip-border-width: 1px 1px 0 1px;
+    --strip-shadow: 2px -2px 12px rgba(0, 0, 0, 0.3);
+
+    --group-pad: 0 6px 0 0;
+    --sep-pad: 0 0 0 6px;
+    --sep-border-width: 0 0 0 1px;
+
+    --flyout-inset: auto auto 100% 50%;
+    --flyout-margin: 0 0 var(--flyout-gap) 0;
+    --flyout-corners: var(--strip-radius) var(--strip-radius) 0 0;
+    --flyout-border-width: 1px 1px 0 1px;
+    --flyout-shadow: 2px -4px 12px rgba(0, 0, 0, 0.3);
+    --flyout-flow: row;
+    --flyout-hidden: translate(-50%, 8px);
+    --flyout-shown: translate(-50%, 0);
+    --flyout-bridge: 100% 0 calc(-1 * var(--flyout-gap)) 0;
+}
+
+/* ---- Generic consumers. None of these names an edge. ---- */
+
+/* The strip floats over the canvas region, which extends underneath it. Its
+   z-index must out-rank `CanvasOverlay`'s 1: the WebGPU canvases are a fixed,
+   z-indexed layer positioned over the Document panel's placeholder, not
+   children of it. Two constraints follow, and both are load-bearing. Nothing
+   between the canvas region and the document root may create a stacking
+   context, or this z-index stops competing with the overlay's and the strip
+   vanishes behind the canvas. And the strip *is* a stacking context itself, so
+   any popup raised inside it is capped at this level relative to the rest of
+   the app; that is why the hamburger menu lives in the tab row and the color
+   popup in the tool-options bar, and why the cluster flyout, which only needs
+   to beat the canvas, is the only surface left in here.
+
+   Both axes are always set: a custom property can supply a value but cannot
+   switch which property is declared, so the free axis takes `auto` and
+   shrink-to-fits, which is what an absolutely positioned box with `auto` on
+   that inset pair does. */
+[data-edge].toolbar {
+    position: absolute;
+    inset: var(--strip-inset);
+    width: var(--strip-w);
+    height: var(--strip-h);
+    z-index: 2;
+
+    display: flex;
+    flex-direction: var(--strip-flow);
+    align-items: center;
+    padding: var(--strip-pad);
+    gap: 2px;
+
+    background: var(--bg);
+    border-style: solid;
+    border-color: var(--bg-hover);
+    border-width: var(--strip-border-width);
+    border-radius: var(--strip-corners);
+    box-shadow: var(--strip-shadow);
+
+    /* Tucked at rest, leaving `--peek` of its outer edge showing. `.out` is
+       set by proximity, by a tap on touch, or permanently when the autoHide
+       pref is off. */
+    transform: var(--strip-tuck);
+    transition: transform 160ms ease;
+}
+
+[data-edge].toolbar.out {
+    transform: none;
+}
+
+/* The exposed sliver overlaps the buttons' outer few pixels, so without this a
+   press on a tucked strip would activate whichever tool happened to be under
+   it, invisibly. The strip itself keeps its pointer events: it is the drag
+   handle and it carries the tap-to-open handler. */
+[data-edge].toolbar:not(.out) .tool {
+    pointer-events: none;
+}
+
+[data-edge] > .tool-group {
+    display: flex;
+    flex-direction: var(--strip-flow);
+    gap: 2px;
+    padding: var(--group-pad);
+}
+
+[data-edge] > .tool-group:last-child {
+    padding: 0;
+}
+
+[data-edge] > .tool-group + .tool-group {
+    padding: var(--sep-pad);
+    border-style: solid;
+    border-color: var(--bg-hover);
+    border-width: var(--sep-border-width);
+}
+
+/* Anchored to the strip's outward side and centered on its cluster button.
+   Deliberately allowed to overflow the canvas region rather than scroll: a
+   scroll container here would clip the flyout it exists to show. */
+[data-edge] .popout {
+    position: absolute;
+    inset: var(--flyout-inset);
+    margin: var(--flyout-margin);
+    display: flex;
+    flex-direction: var(--flyout-flow);
+    gap: 2px;
+    padding: 6px;
+    z-index: 90;
+
+    background: var(--bg);
+    border-style: solid;
+    border-color: var(--bg-hover);
+    border-width: var(--flyout-border-width);
+    border-radius: var(--flyout-corners);
+    box-shadow: var(--flyout-shadow);
+
+    opacity: 0;
+    transform: var(--flyout-hidden);
+    pointer-events: none;
+    transition: opacity 140ms ease-out, transform 140ms ease-out;
+}
+
+[data-edge] .popout.open {
+    opacity: 1;
+    transform: var(--flyout-shown);
+    pointer-events: auto;
+}
+
+/* Invisible hit-area bridge spanning the gap between the cluster button and the
+   flyout. Without it the pointer crosses the strip's own padding mid-transit,
+   which fires `mouseleave` on the cluster container and closes an unpinned
+   flyout. */
+[data-edge] .popout::before {
+    content: '';
+    position: absolute;
+    inset: var(--flyout-bridge);
+}
+
+/* A strip docked to a horizontal edge tucks *out of the canvas region*, where
+   the region's edges are not the Document panel's own: the tab row is above and
+   the tool-options bar below, and the strip's z-index would paint it over them.
+   Clip that axis only.
+
+   `clip` rather than `hidden` on purpose, twice over. It creates no scroll
+   container, so the other axis can stay `visible` instead of computing to
+   `auto` (CSS Overflow 3: `visible` computes to `auto` only when the other axis
+   is neither `visible` nor `clip`), which preserves the two vertical-overflow
+   behaviours the floating strip depends on: a strip too long for a short region
+   still spills over the tool-options bar where it stays painted and clickable,
+   and a flyout near the region's end still overflows rather than being cut. And
+   `clip` creates no stacking context (only `contain: paint` does), so the
+   strip's z-index still competes with the overlay's in the root stacking
+   context. `isolation` or a `z-index` here would not be safe; this is. */
+[data-tool-strip-edge='top'],
+[data-tool-strip-edge='bottom'] {
+    overflow-y: clip;
+}
