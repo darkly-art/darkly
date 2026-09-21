@@ -204,11 +204,13 @@
     dialog.modal.size-sm { width: min(90vw, 420px); }
     dialog.modal.size-md { width: min(92vw, 560px); }
     dialog.modal.size-lg { width: min(90vw, 720px); }
-    /* The one size that also fixes a height: browsing dialogs need a stable
-     * box, not one that resizes as the result set changes. */
+    /* Fixes a height as well as a width: browsing dialogs need a stable box,
+     * not one that resizes as the result set changes. */
     dialog.modal.size-xl { width: min(92vw, 960px); height: min(82vh, 720px); }
-    /* Near-fullscreen, for a view whose whole point is room to browse. */
-    dialog.modal.size-full { width: 92vw; height: 88vh; max-height: 88vh; }
+    /* Tall, for a view whose whole point is room to browse, but capped
+     * horizontally: past about this width the browse grid just stretches its
+     * columns instead of showing more of them. */
+    dialog.modal.size-full { width: min(92vw, 1180px); height: 88vh; max-height: 88vh; }
 
     /* Anchored below the top edge rather than centered. The margin replaces
      * the centering `auto` on the top side only, so it stays horizontally

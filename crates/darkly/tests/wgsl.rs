@@ -1506,6 +1506,45 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise wired-scale preview");
 }
 
+/// An `invert` upstream of a compiled terminal emits its complement inline.
+/// `noise.scale` declares `natural_range(1, 512)`, so the wire remap wraps the
+/// complement rather than replacing it, and the literal default is gone.
+#[test]
+fn invert_wired_emits_complement_and_validates() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let inv = graph.add_node("invert", reg.get("invert").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, &noise, 0);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen.clone(), "position", term.clone(), "position"),
+            (pen.clone(), "pressure", inv.clone(), "input"),
+            (inv.clone(), "output", noise.clone(), "scale"),
+            (noise.clone(), "color", term.clone(), "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
+        "wired scale must not fall back to the literal default",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("(1.0 - ("),
+        "invert must emit its complement expression",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("_pressure"),
+        "the complement must be of the upstream pressure expression",
+    );
+    naga_validate(&compiled.stroke_wgsl, "invert wired stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "invert wired preview");
+}
+
 /// A wired `octaves` input must emit the `clamp(i32(round(..)), 1, 8)` guard
 /// (i32, not u32, since `fbm_tile`'s octave arg is i32) and validate on both
 /// variants: the naga-riskiest arm of the subsumed conversion.

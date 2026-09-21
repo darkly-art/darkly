@@ -69,6 +69,11 @@ is: a node whose entire content is one settable-source scalar, exposed by
 default. Place it, wire its `value` port to as many inputs as you like, and the
 painter gets one dial that moves all of them.
 
+When some of those sinks should read backwards, put an
+[`invert`](../../crates/darkly/src/brush/nodes/invert.rs) node on their wires
+(`output = 1 - input`). The entry's `invert` flag flips the whole dial, so it
+cannot single out one sink.
+
 The other two reasons this section used to give are gone, absorbed by
 per-instance state on the entry itself:
 
