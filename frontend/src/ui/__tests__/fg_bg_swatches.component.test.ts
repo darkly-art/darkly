@@ -4,15 +4,13 @@ import { flushSync, mount, unmount } from 'svelte';
 
 // The swatches read and write the focused instance's colors and the two
 // color prefs through the config store, which is WASM-backed in production.
-const { fakeConfig } = vi.hoisted(() => ({
-    fakeConfig: { values: {} as Record<string, unknown>, get(k: string) { return this.values[k]; } },
-}));
 vi.mock('../../config/store.svelte', async (importOriginal) => ({
     ...(await importOriginal<object>()),
-    config: fakeConfig,
+    config: (await import('../../__tests__/fakeConfig.svelte')).fakeConfig,
     tooltipForAction: (label: string) => label,
 }));
 
+import { fakeConfig } from '../../__tests__/fakeConfig.svelte';
 import { DarklyInstance, setActiveInstance } from '../../state/app.svelte';
 import { RECIPES, deployMode } from '../../state/freshDocument';
 import FgBgSwatches from '../color/FgBgSwatches.svelte';
@@ -33,7 +31,7 @@ const mounted: Array<Record<string, unknown>> = [];
 beforeEach(() => {
     inst = new DarklyInstance();
     setActiveInstance(inst);
-    fakeConfig.values = {};
+    fakeConfig.reset();
 });
 afterEach(() => {
     for (const m of mounted.splice(0)) void unmount(m);
@@ -86,7 +84,8 @@ describe('foreground/background swatches', () => {
     });
 
     it('reset_uses_the_configured_defaults', () => {
-        fakeConfig.values = { 'colors.defaultForeground': '#112233', 'colors.defaultBackground': '#445566' };
+        fakeConfig.set('colors.defaultForeground', '#112233');
+        fakeConfig.set('colors.defaultBackground', '#445566');
         inst.foreground = { r: 1, g: 2, b: 3, a: 255 };
         const target = render();
 
@@ -97,7 +96,7 @@ describe('foreground/background swatches', () => {
     });
 
     it('reset_falls_back_to_the_fresh_document_pair_when_a_pref_is_unset_or_malformed', () => {
-        fakeConfig.values = { 'colors.defaultForeground': 'not a color' };
+        fakeConfig.set('colors.defaultForeground', 'not a color');
         inst.foreground = { r: 1, g: 2, b: 3, a: 255 };
         inst.background = { r: 4, g: 5, b: 6, a: 255 };
         const target = render();

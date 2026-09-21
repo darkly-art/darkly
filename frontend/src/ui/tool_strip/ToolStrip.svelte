@@ -194,6 +194,10 @@
 <div
     class="toolbar"
     class:out={showing}
+    role="toolbar"
+    tabindex="-1"
+    aria-label="Tools"
+    aria-orientation={isRow(placement.edge) ? 'horizontal' : 'vertical'}
     bind:this={stripEl}
     data-edge={placement.edge}
     style:--strip-pos="{pos}px"

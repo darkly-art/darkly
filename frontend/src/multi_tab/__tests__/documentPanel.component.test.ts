@@ -3,18 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 // The tool strip and the tool-options bar resolve tooltips through the config
-// store, and the strip's placement is a pref read from it. WASM-backed in
-// production, so stand in a plain map the tests can drive.
-const { fakeConfig } = vi.hoisted(() => ({
-    fakeConfig: {
-        values: {} as Record<string, unknown>,
-        get(k: string) { return this.values[k]; },
-        set(k: string, v: unknown) { this.values[k] = v; },
-    },
-}));
+// store, and the strip's placement is a pref read from it.
 vi.mock('../../config/store.svelte', async (importOriginal) => ({
     ...(await importOriginal<object>()),
-    config: fakeConfig,
+    config: (await import('../../__tests__/fakeConfig.svelte')).fakeConfig,
     tooltipForAction: (label: string) => label,
 }));
 
@@ -25,6 +17,7 @@ vi.mock('../../state/brush_graph.svelte', () => ({
     brushGraph: { fullscreen: false },
 }));
 
+import { fakeConfig } from '../../__tests__/fakeConfig.svelte';
 import { DarklyInstance, setActiveInstance } from '../../state/app.svelte';
 import { menuBar } from '../../state/menuBar.svelte';
 import { toolStripPlacement } from '../../ui/tool_strip/placement.svelte';
@@ -44,7 +37,7 @@ beforeEach(() => {
     );
     inst = new DarklyInstance();
     setActiveInstance(inst);
-    fakeConfig.values = {};
+    fakeConfig.reset();
     toolStripPlacement.override = null;
     canvasSlot.rect = null;
 });
@@ -102,7 +95,7 @@ describe('document panel layout', () => {
     });
 
     it('strip_and_canvas_region_carry_the_edge_the_placement_reports', () => {
-        fakeConfig.values['ui.toolStrip.edge'] = 'bottom';
+        fakeConfig.set('ui.toolStrip.edge', 'bottom');
         const target = render();
 
         expect(target.querySelector('.toolbar')!.getAttribute('data-edge')).toBe('bottom');
