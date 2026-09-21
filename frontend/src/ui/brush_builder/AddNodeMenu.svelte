@@ -1,6 +1,7 @@
 <script lang="ts">
     import { tick } from 'svelte';
     import { brushGraph, type NodeTypeInfo } from '../../state/brush_graph.svelte';
+    import SearchField from '../SearchField.svelte';
 
     interface Props {
         open: boolean;
@@ -216,14 +217,14 @@
         style="left: {placed?.left ?? 0}px; top: {placed?.top ?? 0}px; opacity: {placed ? 1 : 0}; pointer-events: {placed ? 'auto' : 'none'};"
         role="menu"
     >
-        <input
-            type="text"
-            class="search-input"
-            placeholder="Search nodes…"
-            bind:this={searchEl}
-            bind:value={searchTerm}
-            onkeydown={onSearchKeydown}
-        />
+        <div class="search-slot">
+            <SearchField
+                bind:element={searchEl}
+                bind:value={searchTerm}
+                placeholder="Search nodes…"
+                onkeydown={onSearchKeydown}
+            />
+        </div>
 
         <div class="menu-body" class:searching={searchTerm.trim().length > 0}>
             {#if searchTerm.trim()}
@@ -293,19 +294,17 @@
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
         display: flex;
         flex-direction: column;
+        gap: 4px;
+        /* A popup surface is already raised, so the field sinks to the ground
+           colour to stay legible on it, at the popup's own type size. */
+        --search-field-bg: var(--bg);
+        --search-field-font-size: 12px;
     }
-    .search-input {
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        color: var(--text);
-        font-size: 12px;
-        padding: 5px 8px;
-        margin-bottom: 4px;
-        outline: none;
-    }
-    .search-input:focus {
-        border-color: var(--accent, #4a9eff);
+    /* A row for the field to fill: the popup itself is a column, where the
+       field's own `flex: 1` would stretch it down the menu instead. */
+    .search-slot {
+        display: flex;
+        flex: none;
     }
     .menu-body {
         flex: 1;

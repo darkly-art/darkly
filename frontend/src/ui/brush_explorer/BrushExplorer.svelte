@@ -25,6 +25,7 @@
      */
     import { tick } from 'svelte';
     import Modal from '../Modal.svelte';
+    import SearchField from '../SearchField.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../engine/protocol_gen';
@@ -407,12 +408,7 @@
 
 <Modal bind:open title="Brushes" size="full">
     {#snippet headerControls()}
-        <input
-            bind:value={query}
-            type="search"
-            class="search"
-            placeholder="Search brushes, packs and tags…"
-        />
+        <SearchField bind:value={query} placeholder="Search brushes, packs and tags…" />
     {/snippet}
 
     <div
@@ -513,25 +509,6 @@
         flex-direction: column;
         min-height: 0;
         min-width: 0;
-    }
-    /* Lives in the dialog's header, which was a title and a close button with a
-     * whole row of nothing between them. */
-    .search {
-        width: 100%;
-        /* Kept close to the title's own line height so moving it up here costs
-         * a few pixels of header rather than a new bar's worth. */
-        padding: 6px 12px;
-        font-size: 13px;
-        font-family: inherit;
-        background: var(--bg-hover);
-        color: var(--text);
-        border: none;
-        border-radius: var(--radius-md);
-        outline: none;
-        transition: background var(--transition-fast);
-    }
-    .search:focus {
-        background: var(--bg-active);
     }
     .list {
         flex: 1 1 auto;

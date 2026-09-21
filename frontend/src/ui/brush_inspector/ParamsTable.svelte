@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { inspector, type KritaParam } from '../../state/brush_inspector.svelte';
+    import SearchField from '../SearchField.svelte';
     import SensorCurveSparkline from './SensorCurveSparkline.svelte';
     import XmlNodeView from './XmlNodeView.svelte';
 
@@ -68,11 +69,9 @@
 <section class="params">
     <header>
         <h3>Params ({params.length})</h3>
-        <input
-            type="search"
-            placeholder="filter by name or value..."
-            bind:value={filter}
-        />
+        <div class="filter">
+            <SearchField bind:value={filter} placeholder="Filter by name or value…" />
+        </div>
     </header>
 
     {#if groups.length === 0}
@@ -169,16 +168,14 @@
         color: var(--text);
         font-size: 1.05rem;
     }
-    input[type='search'] {
+    /* The panel is wide; the field has no reason to run its whole width. */
+    .filter {
+        display: flex;
         flex: 1;
         max-width: 320px;
-        padding: 6px 10px;
-        background: var(--bg);
-        color: var(--text);
-        border: 1px solid var(--bg-hover);
-        border-radius: var(--radius-sm);
-        font-family: inherit;
-        font-size: 0.85rem;
+        /* The section sits on a raised surface, so the field takes the ground
+           beneath it rather than the panel's own fill. */
+        --search-field-bg: var(--bg);
     }
     details {
         margin-bottom: 8px;

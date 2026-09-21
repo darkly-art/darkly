@@ -224,21 +224,20 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 14px;
+        gap: 16px;
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
-        gap: 16px;
     }
 
-    /* Takes the slack so the title stays left and the close button stays
-       right, whatever the controls are. */
+    /* Takes the room between the title and the close button, which is the
+       whole point of putting anything here. */
     .header-controls {
-        flex: 1;
-        min-width: 0;
         display: flex;
         align-items: center;
         justify-content: flex-end;
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     header h2 {
@@ -247,15 +246,6 @@
         font-weight: 600;
         /* The title states its size; the controls take what is left. */
         flex: none;
-    }
-
-    /* Takes the room between the title and the close button, which is the whole
-     * point of putting anything here. */
-    .header-controls {
-        display: flex;
-        align-items: center;
-        flex: 1 1 auto;
-        min-width: 0;
     }
 
     .close {
