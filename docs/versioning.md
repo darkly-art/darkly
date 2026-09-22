@@ -2,7 +2,8 @@
 
 Darkly's version is `git describe --tags --long` off the `v*` tags, derived at
 build time. It is not stored anywhere in the repo: the `version` fields in
-`Cargo.toml` and `package.json` sit at `0.1.0` and are vestigial.
+`Cargo.toml` and `package.json` are vestigial and pinned at a deliberately
+impossible `0.0.0`, so an artifact carrying one is recognisably unstamped.
 
 ```
 v0.7.0-2-g1eabe67
@@ -48,6 +49,16 @@ Both fall back to `0.0.0-0-gunknown` when describe fails.
 
 - **Never read `env!("CARGO_PKG_VERSION")`** or a `package.json` version. Import
   from the two homes above. A test fails if the crate reverts to it.
+- **`desktop/package.json`'s version is written by the release build, not by
+  hand.** Electron's packager stamps installer metadata from it and reads no
+  other source, so `build.sh` overwrites it from the same describe, builds, and
+  restores the file. Packaging the desktop host directly, without that script,
+  therefore produces installers labelled `0.0.0`: that is the tell, not a bug to
+  work around by typing a real-looking number into the file. It sat at `0.6.0`
+  for several releases after a stamped value was committed by accident, which
+  made unstamped artifacts indistinguishable from a genuine 0.6.0 build.
+  `package-lock.json` carries the same placeholder; npm does not check the root
+  version when installing, so the two only need to agree for the reader's sake.
 - **Never re-derive the string.** No third `git describe` call.
 - **Any CI job that builds needs `fetch-depth: 0`.** A shallow checkout has no
   tags, so the build silently ships `0.0.0-0-gunknown`.

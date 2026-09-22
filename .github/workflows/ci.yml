@@ -156,3 +156,44 @@ jobs:
       - name: vite build (includes svelte-check via tsc)
         working-directory: frontend
         run: npm run build
+
+  desktop:
+    name: desktop host typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: desktop
+        run: npm ci
+
+      - name: tsc
+        working-directory: desktop
+        run: npx tsc --noEmit
+
+      - name: vitest
+        working-directory: desktop
+        run: npm test
+
+  packaging:
+    name: desktop integration metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --no-net packaging/art.darkly.Darkly.metainfo.xml
+
+      - name: Validate desktop entry
+        run: desktop-file-validate packaging/art.darkly.Darkly.desktop
