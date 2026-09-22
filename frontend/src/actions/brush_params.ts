@@ -1,4 +1,5 @@
 import { actions } from './registry';
+import { clamp } from '../lib/clamp';
 import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
 import { cursorPose, focusedBrushTool } from '../tools/brush.svelte';
 import { runHook } from '../tools/tool_session';
@@ -36,9 +37,6 @@ function findScalarPort(role: Role) {
     return { port, data: port.data, spec };
 }
 
-function clamp(v: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, v));
-}
 
 function commit(nodeId: string, portName: string, value: number) {
     brushGraph.setExposedPortValueLocal(nodeId, portName, value);

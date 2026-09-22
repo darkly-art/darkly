@@ -1,22 +1,11 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { maskOf } from './rowNode';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
-
-    function findNode(nodes: any[], id: number): any | null {
-        for (const n of nodes) {
-            if (n.id === id) return n;
-            if (n.children) {
-                const found = findNode(n.children, id);
-                if (found) return found;
-            }
-        }
-        return null;
-    }
-
 
     // The footer buttons route through the action registry so their tooltips
     // can surface the bound hotkey (resolved via `tooltipForAction`) and so
@@ -27,26 +16,21 @@
         onupdate();
     }
 
-    function hostHasMask(layer: any): boolean {
-        return Array.isArray(layer?.modifiers)
-            && layer.modifiers.some((m: any) => m.kind === 'mask');
-    }
-
     // Effective editability of the active layer: mirrors the engine's
     // `is_node_editable` (locked node OR any ancestor locked → not editable).
     // Used to grey out destructive footer actions so artists don't get the
     // "drag the slider, nothing happens" feedback loop.
     let activeEditable = $derived.by(() => {
         if (app.activeLayerId === null) return true;
-        const layer = findNode(app.layerTree, app.activeLayerId);
+        const layer = app.nodeById(app.activeLayerId);
         return layer ? layer.editable !== false : true;
     });
 
     let canAddMask = $derived.by(() => {
         if (!app.engine || app.activeLayerId === null) return false;
-        const layer = findNode(app.layerTree, app.activeLayerId);
+        const layer = app.nodeById(app.activeLayerId);
         return Boolean(layer?.canHaveMask)
-            && !hostHasMask(layer)
+            && maskOf(layer) === null
             && layer.editable !== false;
     });
 
@@ -57,12 +41,12 @@
     }
 
     let canDelete = $derived(
-        app.activeLayerId !== null && findNode(app.layerTree, app.activeLayerId) !== null,
+        app.activeLayerId !== null && app.nodeById(app.activeLayerId) !== null,
     );
 
     let canDuplicate = $derived(
         app.activeLayerId !== null
-            && findNode(app.layerTree, app.activeLayerId) !== null,
+            && app.nodeById(app.activeLayerId) !== null,
     );
 
     // Show the multi-selection count in the footer button tooltips so

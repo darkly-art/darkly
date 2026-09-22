@@ -14,7 +14,7 @@ import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
 import { freshDocument } from './freshDocument';
 import { recentColors } from './recents.svelte';
-import { colorToHex, hexToColor } from '../lib/color';
+import { colorToHex, hexToColor, type Color } from '../lib/color';
 import { newId } from '../lib/id';
 import {
     appearedRoots,
@@ -24,10 +24,6 @@ import {
     type DropRow,
     type LayerTreeIndex,
 } from './layerTree';
-
-export interface Color {
-    r: number; g: number; b: number; a: number;
-}
 
 /** Packed `poll_save_result` payload: every byte blob concatenated into one
  *  `bytes` buffer, with the lengths needed to slice them back out. */

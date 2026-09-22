@@ -29,7 +29,10 @@
         prevOpen = selectionModify.open;
     });
 
-    function clamp(v: number): number {
+    /** Coerce a typed value to a usable radius. Not `lib/clamp`: this also
+     *  rejects NaN and rounds to whole pixels, because the engine op takes an
+     *  integer radius. */
+    function validRadius(v: number): number {
         if (!Number.isFinite(v) || v < 1) return 1;
         return Math.min(MAX_RADIUS, Math.round(v));
     }
@@ -39,7 +42,7 @@
     }
 
     function apply() {
-        if (app.engine) meta.call(app.engine.api, { radius: clamp(radius) });
+        if (app.engine) meta.call(app.engine.api, { radius: validRadius(radius) });
         app.requestFrame();
         close();
     }

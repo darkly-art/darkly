@@ -27,6 +27,7 @@
  * nearest one to the line at every scroll position.
  */
 import { PACK_RIM, type PackPalette } from '../../lib/packPalette';
+import { clamp } from '../../lib/clamp';
 
 /** One group's vertical extent within the list's scroll content, measured from
  *  the rendered DOM by the component. */
@@ -77,7 +78,6 @@ export interface WheelGeometry {
     sections: SectionExtent[];
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
  * One CSS `LayoutUnit`: 1/64 px, the quantum the engine lays out in. No

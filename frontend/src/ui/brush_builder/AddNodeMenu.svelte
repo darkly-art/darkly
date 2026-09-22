@@ -1,5 +1,6 @@
 <script lang="ts">
     import { tick } from 'svelte';
+    import { clampToViewport } from '../../lib/viewportClamp';
     import { brushGraph, type NodeTypeInfo } from '../../state/brush_graph.svelte';
     import SearchField from '../SearchField.svelte';
 
@@ -116,7 +117,7 @@
                 // matters because visibility:hidden elements can't receive
                 // focus per the HTML spec, but opacity:0 ones can.
                 searchEl?.focus();
-                clampToViewport();
+                place();
             });
         } else {
             placed = null;
@@ -130,7 +131,7 @@
         void x;
         void y;
         void anchor;
-        if (open) tick().then(clampToViewport);
+        if (open) tick().then(place);
     });
 
     $effect(() => {
@@ -139,9 +140,9 @@
         // expanding (which grows the visible footprint to the right and
         // can push past the right edge) and content reflows after typing
         // in the search box.
-        const ro = new ResizeObserver(() => clampToViewport());
+        const ro = new ResizeObserver(() => place());
         ro.observe(popupEl);
-        const onResize = () => clampToViewport();
+        const onResize = () => place();
         window.addEventListener('resize', onResize);
         return () => {
             ro.disconnect();
@@ -150,33 +151,25 @@
     });
 
     /** Position the popup relative to the anchor, then nudge it back into the
-     *  viewport if it would overflow. */
-    function clampToViewport() {
+     *  viewport if it would overflow. A tighter margin than the shared default:
+     *  this one hangs off a toolbar button rather than floating free. */
+    const MARGIN = 4;
+
+    function place() {
         if (!popupEl) return;
         const rect = popupEl.getBoundingClientRect();
-        const w = rect.width;
-        const h = rect.height;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const margin = 4;
-
-        let left = x;
-        let top = anchor === 'bottom-left' ? y - h : y;
-
-        // Horizontal: prefer the requested side, flip if it overflows right.
-        if (left + w + margin > vw) left = vw - w - margin;
-        if (left < margin) left = margin;
-
-        // Vertical: clamp into viewport. If the natural placement overflows
-        // the bottom edge, shift up. If it overflows the top, shift down.
-        if (top + h + margin > vh) top = vh - h - margin;
-        if (top < margin) top = margin;
-
+        const size = { width: rect.width, height: rect.height };
+        const { x: left, y: top } = clampToViewport(
+            x,
+            anchor === 'bottom-left' ? y - size.height : y,
+            size,
+            MARGIN,
+        );
         placed = { left, top };
 
         // Submenu side: prefer right; flip when there isn't room.
         const SUBMENU_W = 200; // matches .submenu min-width + a little slack
-        submenuSide = left + w + SUBMENU_W + margin <= vw ? 'right' : 'left';
+        submenuSide = left + size.width + SUBMENU_W + MARGIN <= window.innerWidth ? 'right' : 'left';
     }
 
     function pick(typeId: string) {

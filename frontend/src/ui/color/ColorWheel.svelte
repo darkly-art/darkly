@@ -11,7 +11,7 @@
      */
     import { untrack } from 'svelte';
     import { pointerDrag } from '../../lib/pointerDrag';
-    import type { Color } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
     import { hsvToRgb, type Hsv } from '../../lib/color';
     import {
         barycentricFor,

@@ -11,6 +11,8 @@
  * Original: https://invent.kde.org/graphics/krita, `KisLevelsSlider.cpp:550-583`.
  */
 
+import { clamp, clamp01 } from './clamp';
+
 /** Gamma exponent range (Krita's `KisInputLevelsSliderWithGamma`). */
 export const GAMMA_MIN = 0.1;
 export const GAMMA_MAX = 10;
@@ -19,10 +21,6 @@ export const MIN_INPUT_GAP = 0.001;
 
 const LN_HALF = Math.log(0.5);
 
-function clamp(v: number, lo: number, hi: number): number {
-    return Math.max(lo, Math.min(hi, v));
-}
-const clamp01 = (v: number): number => clamp(v, 0, 1);
 
 /**
  * Map a gamma handle's position *relative to the black↔white span* (`0..1`,

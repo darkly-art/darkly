@@ -1,5 +1,6 @@
 import { ToolBase, type ToolDescriptor } from './registry';
-import { getActiveInstance, type DarklyInstance, type Color } from '../state/app.svelte';
+import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
+import type { Color } from '../lib/color';
 import { runHook } from './tool_session';
 import { beginPaintStroke } from './paint_stroke';
 import { brushGraph } from '../state/brush_graph.svelte';

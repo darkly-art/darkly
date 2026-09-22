@@ -4,7 +4,7 @@
      * field snaps back on the next value change, rather than silently painting
      * black. Alpha is carried over from the current value.
      */
-    import type { Color } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
     import { colorToHexRgb, hexToColor } from '../../lib/color';
 
     let { value, onchange }: { value: Color; onchange: (c: Color) => void } = $props();

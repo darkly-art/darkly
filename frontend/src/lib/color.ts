@@ -7,7 +7,10 @@
  * normalizations; there is deliberately no gamma/linear conversion anywhere in
  * the color path.
  */
-import type { Color } from '../state/app.svelte';
+/** A display-referred sRGB color, one byte per channel. */
+export interface Color {
+    r: number; g: number; b: number; a: number;
+}
 
 const HEX = /^#?([0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)$/;
 
