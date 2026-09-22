@@ -13,6 +13,7 @@ import { flushSync, mount, unmount, type ComponentProps } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
 import LayerRow from '../LayerRow.svelte';
+import { rasterNode, voidNode } from './rowFixtures';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -49,10 +50,7 @@ function openRowMenu(layer: ComponentProps<typeof LayerRow>['node']) {
     return target;
 }
 
-const convertible = {
-    type: 'raster', id: 3, name: 'Raster', visible: true, editable: true,
-    paintable: true, hasThumbnail: true, canBecomeSmartObject: true, modifiers: [],
-};
+const convertible = rasterNode({ id: 3, canBecomeSmartObject: true });
 
 beforeEach(() => {
     convertLayerToSmartObject = vi.fn(async () => 9);
@@ -94,10 +92,7 @@ describe('the layer row convert-to-smart-object entry', () => {
     });
 
     it('is absent on a smart object, which already holds its source', () => {
-        const target = openRowMenu({
-            type: 'void', id: 7, name: 'Smart Object', visible: true, editable: true,
-            paintable: false, hasThumbnail: true, canBecomeSmartObject: false, modifiers: [],
-        });
+        const target = openRowMenu(voidNode({ id: 7, name: 'Smart Object', hasThumbnail: true }));
         expect(menuItem(target, 'Convert to Smart Object')).toBeNull();
     });
 });

@@ -12,6 +12,7 @@ import { flushSync, mount, unmount, type ComponentProps } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
 import LayerRow from '../LayerRow.svelte';
+import { maskModifier, rasterNode, voidNode } from './rowFixtures';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -48,10 +49,7 @@ function openRowMenu(layer: ComponentProps<typeof LayerRow>['node']) {
     return target;
 }
 
-const smartObject = {
-    type: 'void', id: 7, name: 'Smart Object', visible: true, editable: true,
-    paintable: false, hasThumbnail: false, modifiers: [],
-};
+const smartObject = voidNode({ id: 7, name: 'Smart Object', hasThumbnail: false });
 
 beforeEach(() => {
     flattenNode = vi.fn(async () => 8);
@@ -83,14 +81,7 @@ describe('the layer row rasterize entry', () => {
     });
 
     it('says Flatten instead when the layer owns its pixels and carries a mask', () => {
-        const target = openRowMenu({
-            type: 'raster', id: 3, name: 'Raster', visible: true, editable: true,
-            paintable: true, hasThumbnail: false,
-            modifiers: [{
-                id: 42, kind: 'mask', name: 'Mask', visible: true, locked: false,
-                linkedToHost: true, editable: true,
-            }],
-        });
+        const target = openRowMenu(rasterNode({ id: 3, modifiers: [maskModifier] }));
 
         expect(menuItem(target, 'Rasterize')).toBeNull();
         menuItem(target, 'Flatten')!.click();
@@ -98,10 +89,7 @@ describe('the layer row rasterize entry', () => {
     });
 
     it('offers neither for a plain raster that already is its own pixels', () => {
-        const target = openRowMenu({
-            type: 'raster', id: 4, name: 'Raster', visible: true, editable: true,
-            paintable: true, hasThumbnail: false, modifiers: [],
-        });
+        const target = openRowMenu(rasterNode({ id: 4 }));
 
         expect(menuItem(target, 'Rasterize')).toBeNull();
         expect(menuItem(target, 'Flatten')).toBeNull();

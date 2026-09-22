@@ -16,6 +16,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
 import LayerRow from '../LayerRow.svelte';
+import { groupNode, rasterNode } from './rowFixtures';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -38,23 +39,11 @@ function menuItem(target: HTMLElement, label: string): HTMLButtonElement | null 
 }
 
 function child(id: number, name = `Child ${id}`) {
-    return {
-        type: 'raster', id, name, visible: true, locked: false, editable: true,
-        paintable: true, canHaveMask: true, canRename: true, hasThumbnail: true,
-        canBecomeSmartObject: false, icon: 'fa6-solid:image', kindName: 'Raster Layer',
-        opacity: 1, blendMode: 'normal', modifiers: [],
-    };
+    return rasterNode({ id, name });
 }
 
 function group(overrides: Record<string, unknown> = {}) {
-    return {
-        type: 'group', id: 2, name: 'Group', visible: true, locked: false, editable: true,
-        paintable: false, canHaveMask: true, canRename: true, hasThumbnail: false,
-        canBecomeSmartObject: false, icon: 'fa6-solid:folder', kindName: 'Group',
-        collapsed: false, passthrough: false, opacity: 1, blendMode: 'normal',
-        modifiers: [], children: [child(3)],
-        ...overrides,
-    };
+    return groupNode({ children: [child(3)] as never, ...overrides } as never);
 }
 
 function render(g: Record<string, unknown>) {

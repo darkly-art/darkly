@@ -10,13 +10,13 @@
  * test exercises the equivalent path on the Rust side.
  */
 
-import { rgbaToCanvas } from '../lib/rgba';
+import { rgbaToBlob, rgbaToCanvas } from '../lib/rgba';
 import { zip, type Zippable } from 'fflate';
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toast } from '../state/toast.svelte';
 import { hasFilePicker, pickFileHandle, writeToHandle, type SaveAccept } from './fileHandle';
 import { downloadBlob, sanitizeFilename } from './index';
-import { exportComposite, rgbaToBlob } from './exportComposite';
+import { exportComposite } from './exportComposite';
 import { saveModal } from '../state/saveModal.svelte';
 import { removeSnapshot } from './recovery';
 import { sessionId } from '../state/recoverySession';

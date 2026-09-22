@@ -27,6 +27,12 @@
  * `onStart`, route `onMove` into `drag.move` and `onEnd` into `drag.end`.
  */
 
+/** Anything with the pointer-capture API and pointer events in its event map:
+ *  an `HTMLElement`, or the `<svg>` and `<rect>` handles the curve editor and
+ *  the resize preview drag. `Element` is too wide, since pointer events are
+ *  declared on these two subtypes rather than on the base. */
+export type DragTarget = HTMLElement | SVGElement;
+
 export interface PointerDragParams {
     /**
      * Pointer went down, before anything has been captured or defaulted.
@@ -62,13 +68,30 @@ export interface PointerDragParams {
      * a slider's small grab handle capturing on its full-width track, so moves
      * keep resolving past the end of the handle. Defaults to the node itself.
      */
-    captureOn?: () => HTMLElement;
+    captureOn?: () => DragTarget;
     /** Suppress the browser default on `pointerdown` (text selection, pen
      *  fling-scroll). Default true. */
     preventDefault?: boolean;
 }
 
-export function pointerDrag(node: HTMLElement, params: PointerDragParams) {
+/**
+ * Register a pointer handler.
+ *
+ * `addEventListener` on a `HTMLElement | SVGElement` union resolves to the
+ * untyped base overload rather than the pointer-typed one, because TypeScript
+ * cannot pick an overload across a union receiver. Both members declare the
+ * same pointer event map, so the cast is sound, and doing it here keeps it to
+ * one place instead of four call sites.
+ */
+function on(el: DragTarget, type: string, fn: (e: PointerEvent) => void) {
+    el.addEventListener(type, fn as EventListener);
+}
+
+function off(el: DragTarget, type: string, fn: (e: PointerEvent) => void) {
+    el.removeEventListener(type, fn as EventListener);
+}
+
+export function pointerDrag(node: DragTarget, params: PointerDragParams) {
     let current = params;
     let startX = 0;
     let startY = 0;
@@ -77,7 +100,7 @@ export function pointerDrag(node: HTMLElement, params: PointerDragParams) {
      *  only meaningful when a threshold defers that. */
     let pending = false;
 
-    function target(): HTMLElement {
+    function target(): DragTarget {
         return current.captureOn?.() ?? node;
     }
 
@@ -151,10 +174,10 @@ export function pointerDrag(node: HTMLElement, params: PointerDragParams) {
         finish(false);
     }
 
-    node.addEventListener('pointerdown', onDown);
-    node.addEventListener('pointermove', onMove);
-    node.addEventListener('pointerup', onUp);
-    node.addEventListener('pointercancel', onUp);
+    on(node, 'pointerdown', onDown);
+    on(node, 'pointermove', onMove);
+    on(node, 'pointerup', onUp);
+    on(node, 'pointercancel', onUp);
 
     return {
         update(next: PointerDragParams) {
@@ -162,10 +185,10 @@ export function pointerDrag(node: HTMLElement, params: PointerDragParams) {
         },
         destroy() {
             finish(false);
-            node.removeEventListener('pointerdown', onDown);
-            node.removeEventListener('pointermove', onMove);
-            node.removeEventListener('pointerup', onUp);
-            node.removeEventListener('pointercancel', onUp);
+            off(node, 'pointerdown', onDown);
+            off(node, 'pointermove', onMove);
+            off(node, 'pointerup', onUp);
+            off(node, 'pointercancel', onUp);
             window.removeEventListener('keydown', onKey, true);
         },
     };

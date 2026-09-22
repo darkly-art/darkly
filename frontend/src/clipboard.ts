@@ -17,6 +17,8 @@
 /** MIME type for our rich-layer JSON envelope. The `web ` prefix is
  *  required by the Web Custom Formats spec: without it, browsers refuse
  *  to write or read the type. */
+import { rgbaToBlob } from './lib/rgba';
+
 export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
 
 /**

@@ -15,6 +15,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
 import LayerRow from '../LayerRow.svelte';
+import { maskModifier, rasterNode, voidNode } from './rowFixtures';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -50,10 +51,7 @@ function rightClick(el: Element) {
     flushSync();
 }
 
-const mask = {
-    id: 99, kind: 'mask', name: 'Mask', visible: true, locked: false,
-    linkedToHost: true, editable: true,
-};
+const mask = { ...maskModifier, id: 99 };
 
 function instanceWithTree(tree: unknown[] = []) {
     const inst = new DarklyInstance();
@@ -74,11 +72,7 @@ describe('Apply mask', () => {
     beforeEach(() => instanceWithTree());
 
     it('is disabled on a void row, because apply_mask is raster only', () => {
-        const target = mountRow({
-            type: 'void', id: 7, name: 'Void', visible: true, editable: true,
-            paintable: false, canHaveMask: true, hasThumbnail: false, kindName: 'Void',
-            modifiers: [mask],
-        });
+        const target = mountRow(voidNode({ id: 7, modifiers: [mask] }) as never);
         rightClick(target.querySelector('[aria-label="Edit mask"]')!);
         const entry = menuItem(target, 'Apply mask');
         expect(entry).not.toBeNull();
@@ -86,11 +80,7 @@ describe('Apply mask', () => {
     });
 
     it('stays enabled on a raster row', () => {
-        const target = mountRow({
-            type: 'raster', id: 3, name: 'Raster', visible: true, editable: true,
-            paintable: true, canHaveMask: true, hasThumbnail: true, kindName: 'Raster Layer',
-            modifiers: [mask],
-        });
+        const target = mountRow(rasterNode({ id: 3, modifiers: [mask] }) as never);
         rightClick(target.querySelector('[aria-label="Edit mask"]')!);
         expect(menuItem(target, 'Apply mask')!.disabled).toBe(false);
     });
@@ -98,10 +88,7 @@ describe('Apply mask', () => {
 
 describe('Merge Down', () => {
     it('is disabled when the only row below is the viewport divider', () => {
-        const layer = {
-            type: 'raster', id: 3, name: 'Raster', visible: true, editable: true,
-            paintable: true, hasThumbnail: true, kindName: 'Raster Layer', modifiers: [],
-        };
+        const layer = rasterNode({ id: 3 });
         instanceWithTree([layer, { type: 'divider', id: -1 }]);
         const target = mountRow(layer);
         rightClick(target.querySelector('.layer-row')!);
@@ -109,14 +96,8 @@ describe('Merge Down', () => {
     });
 
     it('stays enabled when a real layer sits below', () => {
-        const layer = {
-            type: 'raster', id: 3, name: 'Raster', visible: true, editable: true,
-            paintable: true, hasThumbnail: true, kindName: 'Raster Layer', modifiers: [],
-        };
-        instanceWithTree([
-            layer,
-            { type: 'raster', id: 4, name: 'Below', visible: true, editable: true, paintable: true, modifiers: [] },
-        ]);
+        const layer = rasterNode({ id: 3 });
+        instanceWithTree([layer, rasterNode({ id: 4, name: 'Below' })]);
         const target = mountRow(layer);
         rightClick(target.querySelector('.layer-row')!);
         expect(menuItem(target, 'Merge Down')!.disabled).toBe(false);
