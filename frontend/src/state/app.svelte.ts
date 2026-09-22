@@ -560,7 +560,7 @@ export class DarklyInstance {
     }
 
     /** Layer-panel row click router. Plain → select, ctrl/cmd → toggle,
-     *  shift → extend range. Both LayerItem and LayerGroup call this so
+     *  shift → extend range. Every layer row calls this so
      *  the modifier handling stays in one place. */
     handleLayerRowClick(id: number, e: MouseEvent) {
         if (e.shiftKey) this.extendSelectionTo(id);

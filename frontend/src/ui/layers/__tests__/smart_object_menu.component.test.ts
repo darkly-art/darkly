@@ -12,7 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { flushSync, mount, unmount, type ComponentProps } from 'svelte';
 import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
-import LayerItem from '../LayerItem.svelte';
+import LayerRow from '../LayerRow.svelte';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -35,15 +35,15 @@ function menuItem(target: HTMLElement, label: string): HTMLButtonElement | null 
 }
 
 /** Mount a layer row and open its context menu, as a right-click does. */
-function openRowMenu(layer: ComponentProps<typeof LayerItem>['layer']) {
+function openRowMenu(layer: ComponentProps<typeof LayerRow>['node']) {
     const target = document.createElement('div');
     document.body.append(target);
-    const instance = mount(LayerItem, { target, props: { layer, onupdate: vi.fn() } });
+    const instance = mount(LayerRow, { target, props: { node: layer, onupdate: vi.fn() } });
     mounted.push(instance as Record<string, unknown>);
     flushSync();
 
     target
-        .querySelector('.layer-item')!
+        .querySelector('.layer-row')!
         .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
     flushSync();
     return target;

@@ -5,8 +5,7 @@ import { DarklyInstance, setActiveInstance } from '../../../state/app.svelte';
 import { registerActions } from '../../../actions';
 import MaskChainHarness from './MaskChainHarness.svelte';
 import MaskChainControl from '../MaskChainControl.svelte';
-import LayerItem from '../LayerItem.svelte';
-import LayerGroup from '../LayerGroup.svelte';
+import LayerRow from '../LayerRow.svelte';
 
 vi.mock('../thumbnails.svelte', () => ({
     THUMB_SIZE: 36,
@@ -139,23 +138,24 @@ describe('layer row mask integrations', () => {
         linkedToHost: true, editable: true,
     };
 
+    // One component, two node kinds. These used to be two components, which is
+    // why the mask sub-row was written twice.
+    const raster = {
+        type: 'raster', id: 1, name: 'Raster', visible: true, editable: true,
+        paintable: true, hasThumbnail: false, modifiers: [modifier],
+    };
+    const container = {
+        type: 'group', id: 2, name: 'Group', visible: true, editable: true,
+        paintable: false, hasThumbnail: false, collapsed: true, passthrough: false,
+        opacity: 1, blendMode: 'normal', children: [], modifiers: [modifier],
+    };
+
     it.each([
-        ['raster', LayerItem, {
-            layer: {
-                type: 'raster', id: 1, name: 'Raster', visible: true, editable: true,
-                hasThumbnail: false, modifiers: [modifier],
-            },
-        }],
-        ['group', LayerGroup, {
-            group: {
-                type: 'group', id: 2, name: 'Group', visible: true, editable: true,
-                collapsed: true, passthrough: false, opacity: 1, blendMode: 'normal',
-                children: [], modifiers: [modifier],
-            },
-        }],
-    ])('renders the shared mask controls in the %s row', (_kind, component, props) => {
-        const { target } = render(component as Parameters<typeof mount>[0], {
-            ...props,
+        ['raster', raster],
+        ['group', container],
+    ])('renders the shared mask controls in the %s row', (_kind, node) => {
+        const { target } = render(LayerRow as Parameters<typeof mount>[0], {
+            node,
             onupdate: vi.fn(),
         });
         expect(button(target, 'Unlink mask from layer transforms')).toBeTruthy();
@@ -163,22 +163,11 @@ describe('layer row mask integrations', () => {
     });
 
     it.each([
-        ['raster', LayerItem, {
-            layer: {
-                type: 'raster', id: 1, name: 'Raster', visible: true, editable: true,
-                hasThumbnail: false, modifiers: [modifier],
-            },
-        }],
-        ['group', LayerGroup, {
-            group: {
-                type: 'group', id: 2, name: 'Group', visible: true, editable: true,
-                collapsed: true, passthrough: false, opacity: 1, blendMode: 'normal',
-                children: [], modifiers: [modifier],
-            },
-        }],
-    ])("the %s mask menu's Mask to Selection loads the mask as a selection", (_kind, component, props) => {
-        const { target } = render(component as Parameters<typeof mount>[0], {
-            ...props,
+        ['raster', raster],
+        ['group', container],
+    ])("the %s mask menu's Mask to Selection loads the mask as a selection", (_kind, node) => {
+        const { target } = render(LayerRow as Parameters<typeof mount>[0], {
+            node,
             onupdate: vi.fn(),
         });
         // Right-click the mask thumbnail to open its context menu.
