@@ -71,6 +71,12 @@ pub fn generate_protocol_ts() -> String {
         }
     }
 
+    // `EngineState` belongs to no request: it rides the value `render` returns
+    // each frame (`frontend/wasm/src/api.rs`), so the registry walk above never
+    // reaches it. Seeding it here is what keeps the frontend's copy generated
+    // rather than a hand-written twin that drifts when a field is added.
+    collector.add::<crate::engine::EngineState>();
+
     let mut out = String::new();
     out.push_str(
         "// @generated from RequestRegistry (ts-rs): do not edit by hand.\n\
@@ -82,6 +88,14 @@ pub fn generate_protocol_ts() -> String {
          | JsonValue[]\n    \
          | { [key: string]: JsonValue };\n\n",
     );
+
+    // Emit in a canonical order. The visit order these arrive in is not stable:
+    // ts-rs's derive builds each type's dependency list in a `HashSet` and emits
+    // the `visit_dependencies` body by iterating it, so the order is fixed
+    // within a compiled binary but changes every time the crate is recompiled.
+    // TS type declarations hoist, so sorting costs nothing and is what makes
+    // this file reproducible enough to be worth checking in CI.
+    collector.decls.sort();
 
     for decl in &collector.decls {
         let decl = decl.trim_end();

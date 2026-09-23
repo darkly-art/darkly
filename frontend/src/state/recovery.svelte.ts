@@ -56,9 +56,11 @@ class RecoveryState {
                 // Recovered work has no backing file: keep it dirty so
                 // closing the tab still prompts and autosave re-snapshots it.
                 engine.api.markDirty();
-                await inst.syncCanvasRect();
-                await app.refreshLayerTree();
-                app.requestFrame();
+                // One receiver throughout: this callback runs after an async
+                // handle bootstrap, and the artist may have focused another tab
+                // by then, so `app` would refresh the wrong instance.
+                await inst.refreshLayerTree();
+                inst.requestFrame();
             } catch (e) {
                 loadError.show(parseLoadErrorMessage(e));
                 shell.close(inst.id);

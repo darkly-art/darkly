@@ -5,6 +5,7 @@
     import LinkToggle from './LinkToggle.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
+    import { reportEngineError } from '../engine/protocol';
     import {
         type Rect,
         type Handle,
@@ -81,19 +82,20 @@
     // poll). The result is the current canvas window at oldW×oldH, so it maps
     // 1:1 onto the content rect.
     function requestComposite() {
-        if (!app.engine) return;
-        app.engine.api.startExport();
-        app.onExportResult((result) => {
+        const engine = app.engine;
+        if (!engine) return;
+        engine.api.startExport();
+        void app.awaitReadback('export', () => engine.api.pollExportResult()).then((result) => {
             if (!resizeCanvas.open) return; // modal closed before it landed
             const cv = document.createElement('canvas');
             cv.width = result.width;
             cv.height = result.height;
             const cctx = cv.getContext('2d');
             if (!cctx) return;
-            cctx.putImageData(rgbaToImageData(result.rgba, result.width, result.height), 0, 0);
+            cctx.putImageData(rgbaToImageData(result.bytes, result.width, result.height), 0, 0);
             compositeCanvas = cv;
             compositeVersion++;
-        });
+        }, reportEngineError);
     }
 
     // --- Numeric / anchor controls --------------------------------------
@@ -245,9 +247,8 @@
             w,
             h,
         });
-        // The new origin/dims are known synchronously in this JS turn, so the
-        // coordinate transforms recenter before any pointer event reads them.
-        app.syncCanvasRect();
+        // The new origin and dims reach the coordinate transforms on the next
+        // frame's snapshot, which the refresh and the request below schedule.
         app.refreshLayerTree();
         app.requestFrame();
         close();

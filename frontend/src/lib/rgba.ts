@@ -12,6 +12,18 @@
  */
 
 /**
+ * RGBA8 pixels as they arrive from the engine.
+ *
+ * A `Uint8Array` when the payload rode the protocol's binary sidecar, and a
+ * plain number array when it crossed inside the JSON value instead: `serde_json`
+ * has no byte type, so a Rust `Vec<u8>` in a response body lands as an array of
+ * numbers (the clipboard readback is the one that does). Every sink here copies
+ * into a fresh buffer regardless, and `TypedArray.set` accepts either, so the
+ * distinction stops at this module rather than spreading to the call sites.
+ */
+export type RgbaBytes = ArrayLike<number>;
+
+/**
  * Wrap RGBA bytes in an `ImageData`, copying them first.
  *
  * The copy is load-bearing, not defensive. `ImageData` rejects a
@@ -20,14 +32,14 @@
  * a fresh `ArrayBuffer` is what makes the bytes acceptable, and it also detaches
  * the result from a heap that the next engine call may resize under us.
  */
-export function rgbaToImageData(rgba: Uint8Array, width: number, height: number): ImageData {
+export function rgbaToImageData(rgba: RgbaBytes, width: number, height: number): ImageData {
     const copy = new Uint8ClampedArray(rgba.length);
     copy.set(rgba);
     return new ImageData(copy, width, height);
 }
 
 /** Paint RGBA bytes into an `OffscreenCanvas`, for the encode paths. */
-export function rgbaToCanvas(rgba: Uint8Array, width: number, height: number): OffscreenCanvas {
+export function rgbaToCanvas(rgba: RgbaBytes, width: number, height: number): OffscreenCanvas {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
@@ -38,7 +50,7 @@ export function rgbaToCanvas(rgba: Uint8Array, width: number, height: number): O
 /** Encode RGBA bytes to an image Blob. The browser's encoder runs off the WASM
  *  main thread. `quality` is omitted for PNG, which is lossless and ignores it. */
 export async function rgbaToBlob(
-    rgba: Uint8Array,
+    rgba: RgbaBytes,
     width: number,
     height: number,
     mime: string,
@@ -57,7 +69,7 @@ export async function rgbaToBlob(
  * `toDataURL` is synchronous and `convertToBlob` is not, and the layer panel
  * reads thumbnails inside a `$derived` that cannot await.
  */
-export function rgbaToDataUrl(rgba: Uint8Array, width: number, height: number): string {
+export function rgbaToDataUrl(rgba: RgbaBytes, width: number, height: number): string {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -69,7 +81,7 @@ export function rgbaToDataUrl(rgba: Uint8Array, width: number, height: number): 
 
 /** Decode RGBA bytes into an `ImageBitmap`, for GPU-side reuse. */
 export function rgbaToBitmap(
-    rgba: Uint8Array,
+    rgba: RgbaBytes,
     width: number,
     height: number,
 ): Promise<ImageBitmap> {

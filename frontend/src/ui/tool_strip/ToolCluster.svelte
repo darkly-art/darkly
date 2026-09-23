@@ -1,6 +1,7 @@
 <script lang="ts">
     import { getContext } from 'svelte';
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import { toolRegistry, type ToolDescriptor, type ToolCluster } from '../../tools/registry';
     import Icon from '../../icons/Icon.svelte';
     import { TOOL_STRIP_OUT, type ToolStripOut } from './context';
@@ -89,7 +90,7 @@
     });
 
     const clusterTitle = $derived(
-        activeMember ? app.toolTooltip(activeMember.id) : cluster.displayName
+        activeMember ? catalogs.toolTooltip(activeMember.id) : cluster.displayName
     );
 </script>
 
@@ -107,7 +108,7 @@
         title={clusterTitle}
     >
         {#if iconSource}
-            <Icon name={app.toolGlyph(iconSource.id)} />
+            <Icon name={catalogs.toolGlyph(iconSource.id)} />
         {/if}
     </button>
 
@@ -120,9 +121,9 @@
                 class="icon-btn square tool"
                 class:active={app.activeToolId === tool.id}
                 onclick={() => pickTool(tool.id)}
-                title={app.toolTooltip(tool.id)}
+                title={catalogs.toolTooltip(tool.id)}
             >
-                <Icon name={app.toolGlyph(tool.id)} />
+                <Icon name={catalogs.toolGlyph(tool.id)} />
             </button>
         {/each}
     </div>

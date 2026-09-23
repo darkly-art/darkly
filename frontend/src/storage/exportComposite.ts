@@ -23,36 +23,19 @@ const MIME: Record<ImageFormat, string> = {
 const QUALITY = 0.92;
 
 /** Drive the async export readback for `instance` and encode the composite to
- *  an image Blob. Kicks `startExport` and awaits the one-shot `onExportResult`
- *  callback the render loop resolves. */
-export function exportComposite(
+ *  an image Blob. Kicks `startExport` and awaits the one-shot readback the
+ *  render loop polls to completion. */
+export async function exportComposite(
     instance: DarklyInstance,
     format: ImageFormat,
 ): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-        const engine = instance.engine;
-        if (!engine) {
-            reject(new Error('no engine handle'));
-            return;
-        }
-        instance.onExportResult(async (result) => {
-            try {
-                if (!result?.rgba) {
-                    reject(new Error('export produced no pixels'));
-                    return;
-                }
-                const quality = format === 'png' ? undefined : QUALITY;
-                resolve(
-                    await rgbaToBlob(result.rgba, result.width, result.height, MIME[format], quality),
-                );
-            } catch (e) {
-                reject(e instanceof Error ? e : new Error(String(e)));
-            }
-        });
-        // `startExport` rejects on error; surface that instead of hanging on a
-        // callback that will never fire.
-        Promise.resolve(engine.api.startExport()).catch((e) =>
-            reject(e instanceof Error ? e : new Error(String(e))),
-        );
-    });
+    const engine = instance.engine;
+    if (!engine) throw new Error('no engine handle');
+    // Fire-and-forget by protocol: `start_export` reports its own failures
+    // through the transport's error path rather than returning a promise.
+    engine.api.startExport();
+    const result = await instance.awaitReadback('export', () => engine.api.pollExportResult());
+    if (!result?.bytes) throw new Error('export produced no pixels');
+    const quality = format === 'png' ? undefined : QUALITY;
+    return rgbaToBlob(result.bytes, result.width, result.height, MIME[format], quality);
 }

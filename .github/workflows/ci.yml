@@ -111,6 +111,28 @@ jobs:
           fail_ci_if_error: false
           flags: rust
 
+  protocol-ts:
+    name: generated TS client in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Mesa Vulkan software renderer (lavapipe) + fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1 libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # `frontend/src/engine/protocol_gen.ts` is generated from the request
+      # registry, and the test that asserts it matches what is checked in is
+      # behind `ts-export` (ts-rs is off the production and wasm path, so no
+      # other job enables it). Without this job that assertion never runs
+      # anywhere, and a handler can drift from the frontend's typed client
+      # unnoticed. The feature flags match the regeneration command the test
+      # prints on failure, so a red X here is directly actionable.
+      - name: cargo test --test protocol (ts-export)
+        env:
+          WGPU_BACKEND: vulkan
+        run: cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
+
   wasm-build:
     name: wasm-pack build
     runs-on: ubuntu-latest

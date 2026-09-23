@@ -1,6 +1,7 @@
 <script lang="ts">
     import { setContext, untrack } from 'svelte';
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { toolRegistry, toolClusterRegistry, type ToolDescriptor, type ToolCluster as ToolClusterDef } from '../../tools/registry';
     import { canvasSlot } from '../../multi_tab/canvasSlot.svelte';
@@ -213,9 +214,9 @@
                         class="icon-btn square tool"
                         class:active={app.activeToolId === item.tool.id}
                         onclick={() => app.activeToolId = item.tool.id}
-                        title={app.toolTooltip(item.tool.id)}
+                        title={catalogs.toolTooltip(item.tool.id)}
                     >
-                        <Icon name={app.toolGlyph(item.tool.id)} />
+                        <Icon name={catalogs.toolGlyph(item.tool.id)} />
                     </button>
                 {/if}
             {/each}

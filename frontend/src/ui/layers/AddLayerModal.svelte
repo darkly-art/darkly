@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import { addLayerModal } from '../../state/addLayerModal.svelte';
     import { actions } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
@@ -27,7 +28,7 @@
         registryEpoch();
         return buildTabs({
             sources: addSources,
-            catalog: id => app.catalogs[id],
+            catalog: id => catalogs.catalog(id),
             action: id => actions.get(id),
         });
     });

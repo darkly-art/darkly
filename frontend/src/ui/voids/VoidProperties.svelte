@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ParamRow from '../params/ParamRow.svelte';
     import type { ParamInfo, ParamValue } from '../params/paramSchema';
@@ -31,12 +32,12 @@
         pushParams();
     }
 
-    const voidLabel = $derived(app.displayName('voids', node.voidType));
+    const voidLabel = $derived(catalogs.displayName('voids', node.voidType));
 
     // Capture kind (camera / screenshare / Blender stream) for this void, or
     // undefined for procedural voids: the single signal that gates every
     // stream-related affordance below.
-    const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
+    const captureKind = $derived(catalogs.voidCaptureKind.get(node.voidType));
 
     // Stream-backed voids surface source-level errors here so the artist sees a
     // human-readable reason ("Camera access was denied", "Could not connect to

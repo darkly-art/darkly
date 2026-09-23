@@ -17,7 +17,7 @@
 /** MIME type for our rich-layer JSON envelope. The `web ` prefix is
  *  required by the Web Custom Formats spec: without it, browsers refuse
  *  to write or read the type. */
-import { rgbaToBlob } from './lib/rgba';
+import { rgbaToBlob, type RgbaBytes } from './lib/rgba';
 
 export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
 
@@ -33,7 +33,7 @@ export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
  * path (e.g. when the rich payload isn't ready yet).
  */
 export async function copyToSystemClipboard(
-    rgba: Uint8Array,
+    rgba: RgbaBytes,
     width: number,
     height: number,
     richJson?: string,

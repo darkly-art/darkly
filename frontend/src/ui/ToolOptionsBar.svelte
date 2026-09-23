@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
+    import { catalogs } from '../state/catalogs.svelte';
     import { toolRegistry } from '../tools/registry';
     import { brushGraph } from '../state/brush_graph.svelte';
     import FgBgSwatches from './color/FgBgSwatches.svelte';
@@ -27,7 +28,7 @@
         {#if Options}
             <Options />
         {:else}
-            <span class="tool-name">{tool ? app.displayName('tools', tool.id) : ''}</span>
+            <span class="tool-name">{tool ? catalogs.displayName('tools', tool.id) : ''}</span>
             <div class="spacer"></div>
         {/if}
     </div>

@@ -1644,11 +1644,16 @@ impl DarklyEngine {
     /// instead of awaiting per-value queries. See [`crate::engine::EngineState`].
     /// Call *after* `render` so `frame_count` is the post-increment value.
     pub fn engine_state(&self) -> crate::engine::EngineState {
+        let rect = self.doc.canvas_rect();
         crate::engine::EngineState {
             frame_count: self.frame_count() as f64,
             thumbnail_version: self.thumbnail_version(),
             dirty: self.is_dirty(),
             has_selection: self.has_selection(),
+            canvas_origin_x: rect.origin.x,
+            canvas_origin_y: rect.origin.y,
+            canvas_width: rect.width,
+            canvas_height: rect.height,
         }
     }
 

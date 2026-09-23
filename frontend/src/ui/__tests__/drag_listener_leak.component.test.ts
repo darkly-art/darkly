@@ -36,7 +36,7 @@ const { fakeApp } = vi.hoisted(() => ({
         canvasOriginX: 0,
         canvasOriginY: 0,
         requestFrame: () => {},
-        onExportResult: () => {},
+        awaitReadback: () => new Promise(() => {}),
     },
 }));
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp, getActiveInstance: () => fakeApp }));

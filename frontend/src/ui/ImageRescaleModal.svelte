@@ -84,9 +84,8 @@
         const w = clampDim(pxW);
         const h = clampDim(pxH);
         app.engine?.api.rescaleImage({ new_width: w, new_height: h });
-        // New dims are known synchronously this JS turn; recenter the
-        // coordinate transforms before any pointer event reads them.
-        app.syncCanvasRect();
+        // The new dims reach the coordinate transforms on the next frame's
+        // snapshot, which the refresh and the explicit request below schedule.
         app.refreshLayerTree();
         app.requestFrame();
         close();
