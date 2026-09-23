@@ -46,7 +46,8 @@ fn wire(graph: &mut Graph<BrushWireType>, from: (&NodeId, &str), to: (&NodeId, &
 
 /// `user_input.value` into both `multiply.a` and `add.a`, with the other
 /// operands set to their identities so each sink reports the dial verbatim.
-fn dial_into_two_sinks() -> (Graph<BrushWireType>, NodeId) {
+/// Returns the dial and the `add` node, the sink the invert test re-routes.
+fn dial_into_two_sinks() -> (Graph<BrushWireType>, NodeId, NodeId) {
     let registry = registry();
     let mut graph = Graph::new();
 
@@ -64,7 +65,7 @@ fn dial_into_two_sinks() -> (Graph<BrushWireType>, NodeId) {
     wire(&mut graph, (&ui, "value"), (&mul, "a"));
     wire(&mut graph, (&ui, "value"), (&add, "a"));
 
-    (graph, ui)
+    (graph, ui, add)
 }
 
 /// Run one dab and read `multiply.result` and `add.result`.
@@ -92,7 +93,7 @@ fn both_sinks(graph: &Graph<BrushWireType>) -> (f32, f32) {
 /// cannot be wired *from* at all.
 #[test]
 fn one_dial_drives_two_sinks_on_the_cpu() {
-    let (mut graph, ui) = dial_into_two_sinks();
+    let (mut graph, ui, _) = dial_into_two_sinks();
 
     graph.set_port_default(&ui, "value", 0.37).unwrap();
     let (mul, add) = both_sinks(&graph);
@@ -125,12 +126,41 @@ fn one_dial_drives_two_sinks_on_the_cpu() {
     }
 }
 
+/// The reason `invert` exists: one dial, two sinks, only one of them
+/// backwards. The entry's `invert` flag cannot express this because it mirrors
+/// the dial itself, and so every sink at once. Re-routing the `add` wire
+/// through an inverter leaves `multiply` reading the dial verbatim and `add`
+/// reading its complement, both still following the one control.
+#[test]
+fn dial_inverted_for_one_sink_only() {
+    let (mut graph, ui, add) = dial_into_two_sinks();
+    graph.disconnect(
+        &PortRef {
+            node: ui.clone(),
+            port: "value".into(),
+        },
+        &PortRef {
+            node: add.clone(),
+            port: "a".into(),
+        },
+    );
+    let registry = registry();
+    let inv = graph.add_node("invert", registry.get("invert").unwrap().ports.clone());
+    wire(&mut graph, (&ui, "value"), (&inv, "input"));
+    wire(&mut graph, (&inv, "output"), (&add, "a"));
+
+    graph.set_port_default(&ui, "value", 0.25).unwrap();
+    let (mul, add) = both_sinks(&graph);
+    assert!((mul - 0.25).abs() < 1e-6, "straight sink read {mul}");
+    assert!((add - 0.75).abs() < 1e-6, "inverted sink read {add}");
+}
+
 /// The painter's end of the feature: scrubbing the single bar entry moves
 /// every sink. Also pins the display mapping, which is identity here because
 /// the port is `UnitType::Raw`; a `Percent` registration would store 0.0025.
 #[test]
 fn scrubbing_the_bar_entry_moves_every_sink() {
-    let (graph, ui) = dial_into_two_sinks();
+    let (graph, ui, _) = dial_into_two_sinks();
     let mut engine = fresh_engine();
     load(&mut engine, &graph);
 

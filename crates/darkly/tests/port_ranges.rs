@@ -1,6 +1,7 @@
 //! The authored display mapping for an exposed control: the per-instance
-//! range (`PortDef::min`/`max`) and the per-entry mirror
-//! (`ExposedPortMeta::invert`).
+//! range (`PortDef::min`/`max`), the per-entry mirror
+//! (`ExposedPortMeta::invert`) and the per-entry unit
+//! (`ExposedPortMeta::unit`).
 //!
 //! A brush author can re-range any input port for one brush, so a control
 //! whose registration range is a poor fit (a math node's hardcoded `0..1`
@@ -14,12 +15,18 @@
 //! otherwise wire in to expose a softness port as a hardness knob. Unlike
 //! the range it is brush-bar only, because a mirrored number under the node
 //! editor's registration label would simply be wrong.
+//!
+//! The unit override is the third: it changes which unit the control reads
+//! in, so one dial can be authored as degrees or percent whatever its
+//! registration declares. Like the mirror it is display-only and brush-bar
+//! only, and like the mirror it converts on the way in as well as out.
 
 use darkly::brush::builtin_brushes;
 use darkly::engine::{DarklyEngine, ExposedValue};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::nodegraph::{NodeId, PortDir};
+use darkly::nodegraph::{ExposedPortMeta, NodeId, PortDir};
+use darkly::units::UnitType;
 
 fn fresh_engine() -> DarklyEngine {
     let (device, queue) = test_device();
@@ -57,18 +64,46 @@ fn stored_value(json: &str, node: &str, port_name: &str) -> f64 {
         .expect("scalar port value")
 }
 
-/// Flip an entry's `invert` the way the authoring modal does: by rewriting
-/// the whole meta bundle, carrying the entry's current label / description /
-/// icon back so the flip doesn't clear them.
-fn set_invert(engine: &mut DarklyEngine, key: &str, invert: bool) -> String {
+/// Rewrite one entry's meta the way the authoring modal does: the whole
+/// bundle at once, carrying the entry's current label / description / icon
+/// back so the edit doesn't clear them.
+fn set_meta(
+    engine: &mut DarklyEngine,
+    key: &str,
+    edit: impl FnOnce(&mut ExposedPortMeta),
+) -> String {
     let info = engine
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.key == key)
         .unwrap_or_else(|| panic!("no exposed entry keyed '{key}'"));
+    let mut meta = ExposedPortMeta {
+        label: info.label,
+        description: info.description,
+        icon: info.icon,
+        ..Default::default()
+    };
+    if let ExposedValue::Scalar {
+        invert,
+        unit_override,
+        ..
+    } = info.data
+    {
+        meta.invert = invert;
+        meta.unit = unit_override;
+    }
+    edit(&mut meta);
     engine
-        .brush_graph_set_exposed_port_meta(key, info.label, info.description, info.icon, invert)
+        .brush_graph_set_exposed_port_meta(key, meta)
         .expect("meta write succeeds")
+}
+
+fn set_invert(engine: &mut DarklyEngine, key: &str, invert: bool) -> String {
+    set_meta(engine, key, |m| m.invert = invert)
+}
+
+fn set_unit(engine: &mut DarklyEngine, key: &str, unit: Option<UnitType>) -> String {
+    set_meta(engine, key, |m| m.unit = unit)
 }
 
 /// The end-to-end path the feature exists for: a range set through the
@@ -118,37 +153,51 @@ fn engine_rejects_degenerate_and_inverted_ranges() {
     assert_eq!(scalar_control(&engine, "Twirl").0, -1.0);
 }
 
-/// The handler's numbers are display-space, the storage is raw. Without the
-/// conversion a `Percent` port's declared range drifts by 100× on every
-/// save/reload cycle, which is invisible until a brush is reopened.
+/// Bounds are stored verbatim, whatever unit the control reads in. The
+/// handler is unit-blind on purpose: it is what lets a caller write a unit
+/// override and a range in either order without the second write being
+/// interpreted in the wrong unit.
 #[test]
-fn percent_port_range_round_trips_through_display_space() {
+fn port_range_is_stored_verbatim_whatever_the_unit() {
     let mut engine = fresh_engine();
     engine.brush_load("Hair").expect("Hair builtin loads");
 
     // `brush_settings.stabilize` is declared `UnitType::Percent`, so a
-    // display range of 0-50% must land as a raw 0.0-0.5.
-    let json = engine
-        .brush_graph_set_port_range("brush_settings", "stabilize", 0.0, 50.0)
-        .expect("re-range succeeds");
+    // stored 0.0-0.5 is the 0-50% band the artist sees.
+    let bounds = |json: &str| {
+        let graph: serde_json::Value = serde_json::from_str(json).expect("graph json");
+        let port = graph["nodes"]["brush_settings"]["ports"]
+            .as_array()
+            .expect("ports array")
+            .iter()
+            .find(|p| p["name"] == "stabilize")
+            .expect("stabilize port")
+            .clone();
+        (port["min"].as_f64().unwrap(), port["max"].as_f64().unwrap())
+    };
 
-    let graph: serde_json::Value = serde_json::from_str(&json).expect("graph json");
-    let port = graph["nodes"]["brush_settings"]["ports"]
-        .as_array()
-        .expect("ports array")
-        .iter()
-        .find(|p| p["name"] == "stabilize")
-        .expect("stabilize port");
-    assert_eq!(port["min"].as_f64().unwrap(), 0.0);
+    let json = engine
+        .brush_graph_set_port_range("brush_settings", "stabilize", 0.0, 0.5)
+        .expect("re-range succeeds");
+    assert_eq!(bounds(&json), (0.0, 0.5));
+    let (min, max, _) = scalar_control(&engine, "Stabilize");
     assert_eq!(
-        port["max"].as_f64().unwrap(),
-        0.5,
-        "display 50% must store as raw 0.5"
+        (min, max),
+        (0.0, 50.0),
+        "a stored 0.0-0.5 is the 0-50% band the artist reads"
     );
 
-    // And it comes back out in the space it went in.
-    let (min, max, _) = scalar_control(&engine, "Stabilize");
-    assert_eq!((min, max), (0.0, 50.0));
+    // The same call with a unit override in force stores the same numbers.
+    // If the handler converted, this would land at 0.005.
+    set_unit(&mut engine, "brush_settings.stabilize", Some(UnitType::Raw));
+    let json = engine
+        .brush_graph_set_port_range("brush_settings", "stabilize", 0.0, 0.5)
+        .expect("re-range succeeds");
+    assert_eq!(
+        bounds(&json),
+        (0.0, 0.5),
+        "the handler must not read its bounds through the entry's unit"
+    );
 }
 
 /// The Hair conversion: both controls that used to need a helper node are
@@ -361,7 +410,7 @@ fn mirror_reflects_within_the_controls_own_range() {
         .brush_set_exposed_port("brush_settings", "stabilize", 10.0)
         .expect("scrub succeeds");
     engine
-        .brush_graph_set_port_range("brush_settings", "stabilize", 0.0, 50.0)
+        .brush_graph_set_port_range("brush_settings", "stabilize", 0.0, 0.5)
         .expect("re-range succeeds");
     set_invert(&mut engine, "brush_settings.stabilize", true);
 
@@ -399,5 +448,111 @@ fn inverting_an_entry_does_not_change_what_the_graph_evaluates() {
         before,
         wgsl(&engine),
         "an inverted control must compile to the same shader"
+    );
+}
+
+/// The override changes what the control reads and nothing else, and it is
+/// reversible: clearing it restores the original reading exactly. That is
+/// the guarantee that makes trying a unit out safe.
+#[test]
+fn unit_override_changes_only_what_the_control_shows() {
+    let mut engine = fresh_engine();
+    engine.brush_load("Hair").expect("Hair builtin loads");
+
+    // `brush_settings.stabilize` is `Percent`, stored 0.5, so it reads 50.
+    let (min, max, value) = scalar_control(&engine, "Stabilize");
+    assert_eq!((min, max), (0.0, 100.0));
+    assert!(
+        (value - 50.0).abs() < 1e-4,
+        "stored 0.5 reads 50%, got {value}"
+    );
+
+    let json = set_unit(&mut engine, "brush_settings.stabilize", Some(UnitType::Raw));
+    assert!(
+        (stored_value(&json, "brush_settings", "stabilize") - 0.5).abs() < 1e-6,
+        "overriding the unit must not touch the stored value"
+    );
+    let (min, max, value) = scalar_control(&engine, "Stabilize");
+    assert_eq!(
+        (min, max),
+        (0.0, 1.0),
+        "the same bounds read in the new unit"
+    );
+    assert!((value - 0.5).abs() < 1e-6, "raw 0.5 reads 0.5, got {value}");
+
+    set_unit(&mut engine, "brush_settings.stabilize", None);
+    let (min, max, value) = scalar_control(&engine, "Stabilize");
+    assert_eq!((min, max), (0.0, 100.0));
+    assert!(
+        (value - 50.0).abs() < 1e-4,
+        "clearing the override restores the original reading, got {value}"
+    );
+}
+
+/// The override applies to writes as well as reads. A one-sided override
+/// (converting what the bar shows but not what it writes) would move the
+/// stored value every time the artist touched the control.
+#[test]
+fn unit_override_converts_a_scrub_written_from_the_bar() {
+    let mut engine = fresh_engine();
+    engine.brush_load("Hair").expect("Hair builtin loads");
+    set_unit(
+        &mut engine,
+        "brush_settings.stabilize",
+        Some(UnitType::Degrees),
+    );
+
+    // 90 degrees in, radians stored, 90 back out.
+    let json = engine
+        .brush_set_exposed_port("brush_settings", "stabilize", 90.0)
+        .expect("scrub succeeds");
+    assert!(
+        (stored_value(&json, "brush_settings", "stabilize") - std::f64::consts::FRAC_PI_2).abs()
+            < 1e-6,
+        "a degrees control stores radians"
+    );
+    let (_, _, value) = scalar_control(&engine, "Stabilize");
+    assert!(
+        (value - 90.0).abs() < 1e-3,
+        "and reads back as 90, got {value}"
+    );
+}
+
+/// The payload tells the authoring modal what its inherit row falls back
+/// to, so the frontend never re-derives the precedence chain. It names the
+/// port's own unit whether or not an override is in force.
+#[test]
+fn inherited_unit_names_the_ports_own_unit() {
+    let mut engine = fresh_engine();
+    engine.brush_load("Hair").expect("Hair builtin loads");
+
+    let inherited = |engine: &DarklyEngine| {
+        let info = engine
+            .brush_exposed_ports()
+            .into_iter()
+            .find(|p| p.key == "brush_settings.stabilize")
+            .expect("stabilize is exposed");
+        match info.data {
+            ExposedValue::Scalar {
+                unit_type,
+                unit_override,
+                inherited_unit,
+                ..
+            } => (unit_type, unit_override, inherited_unit),
+            other => panic!("not a scalar control: {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        inherited(&engine),
+        (UnitType::Percent, None, UnitType::Percent),
+        "with no override the resolved and inherited units agree"
+    );
+
+    set_unit(&mut engine, "brush_settings.stabilize", Some(UnitType::Raw));
+    assert_eq!(
+        inherited(&engine),
+        (UnitType::Raw, Some(UnitType::Raw), UnitType::Percent),
+        "an override changes the resolved unit but not what inheriting would mean"
     );
 }

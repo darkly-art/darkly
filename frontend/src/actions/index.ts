@@ -215,6 +215,18 @@ export async function handleDroppedFile(file: File, altKey = false): Promise<voi
     toast.show('error', `Unsupported file type: ${file.name}`);
 }
 
+/**
+ * Top-level menu the destructive applies live in, named for the effect
+ * category whose effects are its own rows: an effect declaring any other
+ * category lands in a submenu named for that category instead.
+ *
+ * This string must equal one of the categories the core declares
+ * (`crates/darkly/tests/effect_categories.rs` holds the closed list). Rename
+ * that category and this has to follow, or the adjustments quietly demote
+ * themselves into a submenu of their own menu.
+ */
+const EFFECT_MENU = 'Filters';
+
 export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
@@ -246,14 +258,16 @@ export function registerActions() {
     });
 
     // -- Colors --
+    // No `menuPath` on either: the pair is the two glyphs on the
+    // foreground/background swatches, where the tooltip names the binding, and
+    // both stay in the command palette. A menu row would be a third way to
+    // reach what is already the most visible control in the editor.
     actions.register({
         id: 'resetColors',
-        menuPath: ['Colors:20'],
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
-        menuPath: ['Colors:10'],
         handler: () => app.swapColors(),
     });
 
@@ -735,7 +749,7 @@ export function registerActions() {
     });
     // Destructive applies (invert, …) are registered dynamically from the
     // Rust effect registry (the `effects` catalog), so a new effect in the
-    // core surfaces a Colors-menu entry with no frontend edit. The target is the active *node*
+    // core surfaces a menu entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
     for (const flt of catalogs.entries('effects')) {
@@ -761,7 +775,16 @@ export function registerActions() {
                 description: `${flt.description ?? ''} Applies to the active layer or mask (respecting any selection).`.trim(),
                 icon: flt.icon ?? '',
             },
-            menuPath: ['Colors:10'],
+            // Placement follows the effect's own declared category rather
+            // than being assigned here: the menu is named for the category
+            // whose effects are its direct rows, and an effect of any other
+            // category lands in a submenu named for that category. A new
+            // category in the core therefore grows a submenu with no edit
+            // on this side.
+            menuPath:
+                flt.category && flt.category !== EFFECT_MENU
+                    ? [`${EFFECT_MENU}:20`, flt.category]
+                    : [`${EFFECT_MENU}:10`],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
                 const engine = app.engine;
@@ -937,6 +960,12 @@ export function registerActions() {
         id: 'openGithub',
         menuPath: ['Help:40'],
         handler: () => openExternal(links.github),
+    });
+
+    actions.register({
+        id: 'openDiscord',
+        menuPath: ['Help:45'],
+        handler: () => openExternal(links.discord),
     });
 
     actions.register({

@@ -15,13 +15,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use darkly::gpu::effect::{catalog, EffectRegistry};
 
 /// The two categories the UI shows, and nothing else.
+///
+/// Renaming one of these also renames a menu: `EFFECT_MENU` in
+/// `frontend/src/actions/index.ts` names the category whose effects are the
+/// Filters menu's direct rows, and every other category becomes a submenu
+/// under it. Nothing on that side can observe the drift, so this closed list
+/// is the checkpoint that forces the paired edit.
 const CATEGORIES: [&str; 2] = ["Filters", "Veils"];
 
 /// Every effect declares exactly one category, and it is one of the two the UI
 /// renders a tab for.
 ///
 /// A misspelling or a third value would silently produce a tab nobody meant to
-/// add, since the rail is derived from whatever the entries declare.
+/// add (the add-layer rail is derived from whatever the entries declare) and,
+/// for the same reason, a stray submenu in the Filters menu.
 #[test]
 fn every_effect_declares_a_known_category() {
     let registry = EffectRegistry::new();

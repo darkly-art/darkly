@@ -657,6 +657,7 @@ impl std::error::Error for FindTerminalError {}
 /// (map iteration order is the brush-bar order) and gives the
 /// brush-author editor one canonical place to read and write.
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ExposedPortMeta {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
@@ -683,6 +684,21 @@ pub struct ExposedPortMeta {
     /// declines to produce one for them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invert: bool,
+    /// Show the brush-bar control in a unit of the author's choosing rather
+    /// than the one the port's registration declares. `None` inherits.
+    ///
+    /// Display-space only, like `invert` and `PortDef::min`/`max`: the unit
+    /// converts (percent is x100, degrees is radians to degrees), so the
+    /// number the artist reads and types changes while the stored value and
+    /// everything downstream of it do not. Switching to a unit and back
+    /// restores the original reading exactly.
+    ///
+    /// `Option` rather than a plain `UnitType` because the resolver has to
+    /// tell "the author chose this" from "nobody chose anything": a plain
+    /// field would default to `Normalized` and silently strip the declared
+    /// unit from every entry that never picked one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<UnitType>,
 }
 
 /// Format the canonical key for an exposed-port entry. Keys are
@@ -850,21 +866,24 @@ impl<W: WireKind> Graph<W> {
     /// the caller learns about the constraint rather than seeing the
     /// icon silently dropped.
     ///
-    /// `invert` is stored as given even on a non-scalar port. It is not an
-    /// invariant of the entry the way a safe icon is: the author can swap
-    /// the node or wire the port at any time, so whatever reads the flag
-    /// has to tolerate a stale one regardless, and rejecting it here would
-    /// only add a failure mode without removing that obligation.
+    /// `invert` and `unit` are stored as given even on a non-scalar port.
+    /// Neither is an invariant of the entry the way a safe icon is: the
+    /// author can swap the node or wire the port at any time, so whatever
+    /// reads them has to tolerate a stale one regardless, and rejecting
+    /// them here would only add a failure mode without removing that
+    /// obligation.
+    ///
+    /// Takes the whole [`ExposedPortMeta`] rather than one parameter per
+    /// field: every field is overwritten anyway (a caller that omits one
+    /// clears it), so the struct says that outright and a new field costs
+    /// no call-site churn.
     pub fn set_exposed_port_meta(
         &mut self,
         key: &str,
-        label: String,
-        description: String,
-        icon: String,
-        invert: bool,
+        meta: ExposedPortMeta,
     ) -> Result<(), GraphError> {
-        if !icon.bytes().all(is_safe_icon_byte) {
-            return Err(GraphError::InvalidIcon { icon });
+        if !meta.icon.bytes().all(is_safe_icon_byte) {
+            return Err(GraphError::InvalidIcon { icon: meta.icon });
         }
         let entry =
             self.exposed_ports
@@ -872,10 +891,7 @@ impl<W: WireKind> Graph<W> {
                 .ok_or_else(|| GraphError::ExposedPortNotFound {
                     key: key.to_string(),
                 })?;
-        entry.label = label;
-        entry.description = description;
-        entry.icon = icon;
-        entry.invert = invert;
+        *entry = meta;
         Ok(())
     }
 
@@ -1843,10 +1859,12 @@ mod tests {
         // Safe icon class: accepted.
         g.set_exposed_port_meta(
             &key,
-            "Label".into(),
-            "Desc".into(),
-            "fa6-solid:sun".into(),
-            false,
+            ExposedPortMeta {
+                label: "Label".into(),
+                description: "Desc".into(),
+                icon: "fa6-solid:sun".into(),
+                ..Default::default()
+            },
         )
         .unwrap();
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
@@ -1855,10 +1873,12 @@ mod tests {
         let err = g
             .set_exposed_port_meta(
                 &key,
-                "Label2".into(),
-                "Desc2".into(),
-                "<script>x</script>".into(),
-                false,
+                ExposedPortMeta {
+                    label: "Label2".into(),
+                    description: "Desc2".into(),
+                    icon: "<script>x</script>".into(),
+                    ..Default::default()
+                },
             )
             .unwrap_err();
         assert!(matches!(err, GraphError::InvalidIcon { .. }));
@@ -1874,16 +1894,58 @@ mod tests {
         let key = exposed_port_key(&id, "val");
         assert!(!g.exposed_ports[&key].invert, "entries start uninverted");
 
-        g.set_exposed_port_meta(&key, "Label".into(), String::new(), String::new(), true)
-            .unwrap();
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                label: "Label".into(),
+                invert: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(g.exposed_ports[&key].invert);
 
         // Every field is overwritten, invert included: that is what lets the
         // authoring modal save the whole bundle in one call, and why it has
         // to seed its checkbox from the current value.
-        g.set_exposed_port_meta(&key, "Label".into(), String::new(), String::new(), false)
-            .unwrap();
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                label: "Label".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(!g.exposed_ports[&key].invert);
+    }
+
+    /// The unit override stores, survives, and clears. `None` is a real
+    /// value here (inherit), not an absence, which is why the modal has to
+    /// seed its selector the same way it seeds the invert checkbox.
+    #[test]
+    fn set_exposed_port_meta_carries_unit_override() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.expose_port(&id, "val").unwrap();
+        let key = exposed_port_key(&id, "val");
+        assert_eq!(
+            g.exposed_ports[&key].unit, None,
+            "entries start inheriting their port's unit"
+        );
+
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                unit: Some(UnitType::Degrees),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(g.exposed_ports[&key].unit, Some(UnitType::Degrees));
+
+        g.set_exposed_port_meta(&key, ExposedPortMeta::default())
+            .unwrap();
+        assert_eq!(g.exposed_ports[&key].unit, None);
     }
 
     #[test]

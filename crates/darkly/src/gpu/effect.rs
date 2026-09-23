@@ -392,8 +392,10 @@ pub struct EffectRegistration {
     /// live previews in the picker, so the icon is not what identifies them
     /// there.
     pub icon: &'static str,
-    /// Which group of the picker this effect appears under. Presentational
-    /// only: nothing in [`Effect`], the layer kind, the compositor or the save
+    /// Which group this effect appears under: the add-layer picker's tab, and
+    /// the Filters menu, where the category naming the menu contributes direct
+    /// rows and every other category becomes a submenu. Presentational only:
+    /// nothing in [`Effect`], the layer kind, the compositor or the save
     /// format reads it. Same field and same frontend grouping as
     /// [`BlendModeRegistration::category`](super::blend_mode::BlendModeRegistration).
     pub category: &'static str,

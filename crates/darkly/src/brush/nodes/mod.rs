@@ -10,6 +10,7 @@ pub mod clone_source;
 pub mod curve;
 pub mod divide;
 pub mod image;
+pub mod invert;
 pub mod levels;
 pub mod liquify;
 pub mod multiply;
@@ -40,6 +41,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         curve::register(),
         divide::register(),
         image::register(),
+        invert::register(),
         levels::register(),
         liquify::register(),
         multiply::register(),

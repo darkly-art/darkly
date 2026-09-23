@@ -26,10 +26,11 @@ describe('menu action registrations', () => {
         expect(actions.get('aboutDarkly')?.menuPath).toEqual(['Help:50']);
     });
 
-    it('puts docs, website, and github links under Help, before about', () => {
+    it('puts docs, website, github, and discord links under Help, before about', () => {
         expect(actions.get('openDocs')?.menuPath).toEqual(['Help:20']);
         expect(actions.get('openWebsite')?.menuPath).toEqual(['Help:30']);
         expect(actions.get('openGithub')?.menuPath).toEqual(['Help:40']);
+        expect(actions.get('openDiscord')?.menuPath).toEqual(['Help:45']);
 
         const help = buildTopMenus(actions.all()).find(m => m.title === 'Help');
         const ids = help!.entries
@@ -40,6 +41,7 @@ describe('menu action registrations', () => {
             'openDocs',
             'openWebsite',
             'openGithub',
+            'openDiscord',
             'aboutDarkly',
         ]);
     });
@@ -215,6 +217,17 @@ describe('menu action registrations', () => {
         expect(parseMenuSegment('Help:10')).toEqual({ title: 'Help', order: 10 });
         // Non-numeric suffix is not an order, so treat the whole thing as a title.
         expect(parseMenuSegment('A:B')).toEqual({ title: 'A:B' });
+    });
+
+    it('keeps the colour swatch commands out of the menu, but in the palette', () => {
+        // Both are the two glyphs on the fg/bg swatches plus X / D; a menu row
+        // would be a third route to the editor's most visible control.
+        for (const id of ['swapColors', 'resetColors']) {
+            expect(actions.get(id), id).toBeTruthy();
+            expect(actions.get(id)?.menuPath, `${id} has no menu row`).toBeUndefined();
+        }
+        const hits = filterPalette(actions.all(), 'colors').map(a => a.id);
+        expect(hits).toEqual(expect.arrayContaining(['swapColors', 'resetColors']));
     });
 
     it('gives every registered action a non-empty Iconify icon name', () => {
