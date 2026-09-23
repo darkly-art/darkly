@@ -1,6 +1,8 @@
 <script lang="ts">
     import { tick } from 'svelte';
+    import { clampToViewport } from '../../lib/viewportClamp';
     import { brushGraph, type NodeTypeInfo } from '../../state/brush_graph.svelte';
+    import SearchField from '../SearchField.svelte';
 
     interface Props {
         open: boolean;
@@ -115,7 +117,7 @@
                 // matters because visibility:hidden elements can't receive
                 // focus per the HTML spec, but opacity:0 ones can.
                 searchEl?.focus();
-                clampToViewport();
+                place();
             });
         } else {
             placed = null;
@@ -129,7 +131,7 @@
         void x;
         void y;
         void anchor;
-        if (open) tick().then(clampToViewport);
+        if (open) tick().then(place);
     });
 
     $effect(() => {
@@ -138,9 +140,9 @@
         // expanding (which grows the visible footprint to the right and
         // can push past the right edge) and content reflows after typing
         // in the search box.
-        const ro = new ResizeObserver(() => clampToViewport());
+        const ro = new ResizeObserver(() => place());
         ro.observe(popupEl);
-        const onResize = () => clampToViewport();
+        const onResize = () => place();
         window.addEventListener('resize', onResize);
         return () => {
             ro.disconnect();
@@ -149,33 +151,25 @@
     });
 
     /** Position the popup relative to the anchor, then nudge it back into the
-     *  viewport if it would overflow. */
-    function clampToViewport() {
+     *  viewport if it would overflow. A tighter margin than the shared default:
+     *  this one hangs off a toolbar button rather than floating free. */
+    const MARGIN = 4;
+
+    function place() {
         if (!popupEl) return;
         const rect = popupEl.getBoundingClientRect();
-        const w = rect.width;
-        const h = rect.height;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const margin = 4;
-
-        let left = x;
-        let top = anchor === 'bottom-left' ? y - h : y;
-
-        // Horizontal: prefer the requested side, flip if it overflows right.
-        if (left + w + margin > vw) left = vw - w - margin;
-        if (left < margin) left = margin;
-
-        // Vertical: clamp into viewport. If the natural placement overflows
-        // the bottom edge, shift up. If it overflows the top, shift down.
-        if (top + h + margin > vh) top = vh - h - margin;
-        if (top < margin) top = margin;
-
+        const size = { width: rect.width, height: rect.height };
+        const { x: left, y: top } = clampToViewport(
+            x,
+            anchor === 'bottom-left' ? y - size.height : y,
+            size,
+            MARGIN,
+        );
         placed = { left, top };
 
         // Submenu side: prefer right; flip when there isn't room.
         const SUBMENU_W = 200; // matches .submenu min-width + a little slack
-        submenuSide = left + w + SUBMENU_W + margin <= vw ? 'right' : 'left';
+        submenuSide = left + size.width + SUBMENU_W + MARGIN <= window.innerWidth ? 'right' : 'left';
     }
 
     function pick(typeId: string) {
@@ -216,14 +210,14 @@
         style="left: {placed?.left ?? 0}px; top: {placed?.top ?? 0}px; opacity: {placed ? 1 : 0}; pointer-events: {placed ? 'auto' : 'none'};"
         role="menu"
     >
-        <input
-            type="text"
-            class="search-input"
-            placeholder="Search nodes…"
-            bind:this={searchEl}
-            bind:value={searchTerm}
-            onkeydown={onSearchKeydown}
-        />
+        <div class="search-slot">
+            <SearchField
+                bind:element={searchEl}
+                bind:value={searchTerm}
+                placeholder="Search nodes…"
+                onkeydown={onSearchKeydown}
+            />
+        </div>
 
         <div class="menu-body" class:searching={searchTerm.trim().length > 0}>
             {#if searchTerm.trim()}
@@ -293,19 +287,17 @@
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
         display: flex;
         flex-direction: column;
+        gap: 4px;
+        /* A popup surface is already raised, so the field sinks to the ground
+           colour to stay legible on it, at the popup's own type size. */
+        --search-field-bg: var(--bg);
+        --search-field-font-size: 12px;
     }
-    .search-input {
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        color: var(--text);
-        font-size: 12px;
-        padding: 5px 8px;
-        margin-bottom: 4px;
-        outline: none;
-    }
-    .search-input:focus {
-        border-color: var(--accent, #4a9eff);
+    /* A row for the field to fill: the popup itself is a column, where the
+       field's own `flex: 1` would stretch it down the menu instead. */
+    .search-slot {
+        display: flex;
+        flex: none;
     }
     .menu-body {
         flex: 1;

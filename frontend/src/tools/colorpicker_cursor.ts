@@ -1,4 +1,5 @@
-import { app, type Color } from '../state/app.svelte';
+import { app } from '../state/app.svelte';
+import type { Color } from '../lib/color';
 import { toolRegistry } from './registry';
 import { dragModifierActions } from '../actions/triggers';
 import { heldMods, onHeldModsChange } from '../actions/held_mods';

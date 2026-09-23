@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { config, tooltipForAction } from '../../config/store.svelte';
     import { toast } from '../../state/toast.svelte';
@@ -145,33 +146,22 @@
     const previewSize = $derived(liveSize ?? { w: configW, h: configH });
 
     let resizing = false;
-    let startClientX = 0;
-    let startClientY = 0;
     let startW = 0;
     let startH = 0;
 
-    function startResize(e: PointerEvent) {
-        // Left-button only: ignore right-click and middle-click.
-        if (e.button !== 0) return;
+    function startResize() {
         resizing = true;
-        startClientX = e.clientX;
-        startClientY = e.clientY;
         startW = previewSize.w;
         startH = previewSize.h;
         liveSize = { w: startW, h: startH };
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         // Suppress the engine's continuous render loop so resize pointer
         // events stay on the hot path.
         app.beginInteraction();
-        e.preventDefault();
     }
 
-    function onResizeMove(e: PointerEvent) {
-        if (!resizing) return;
+    function onResizeMove(dx: number, dy: number) {
         // Dock is anchored bottom-right. Dragging up+left grows the box;
         // down+right shrinks it.
-        const dx = e.clientX - startClientX;
-        const dy = e.clientY - startClientY;
         const w = Math.max(MIN_W, Math.min(MAX_W, Math.round(startW - dx)));
         const h = Math.max(MIN_H, Math.min(MAX_H, Math.round(startH - dy)));
         if (!liveSize || w !== liveSize.w || h !== liveSize.h) {
@@ -179,10 +169,8 @@
         }
     }
 
-    function endResize(e: PointerEvent) {
-        if (!resizing) return;
+    function endResize() {
         resizing = false;
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
         app.endInteraction();
         if (liveSize) {
             config.set('ui.brushBuilder.previewWidth', liveSize.w);
@@ -208,10 +196,11 @@
                 <LiveBrushPreviewStrip width={previewSize.w} />
                 <div
                     class="resize-handle"
-                    onpointerdown={startResize}
-                    onpointermove={onResizeMove}
-                    onpointerup={endResize}
-                    onpointercancel={endResize}
+                    use:pointerDrag={{
+                        onStart: startResize,
+                        onMove: onResizeMove,
+                        onEnd: endResize,
+                    }}
                     role="slider"
                     aria-label="Resize brush preview"
                     aria-valuenow={previewSize.w}

@@ -1,5 +1,6 @@
 <script lang="ts">
     import { resolveStep, clampValue, valueToFraction, fractionToValue } from '../../../lib/slider';
+    import { pointerDrag } from '../../../lib/pointerDrag';
 
     type Props = {
         value: number;
@@ -42,22 +43,6 @@
         return fractionToValue(f, min, max, integer, step);
     }
 
-    function startDrag(e: PointerEvent) {
-        if (disabled) return;
-        e.preventDefault();
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        dragging = true;
-        onchange(valueFromClientX(e.clientX));
-    }
-    function moveDrag(e: PointerEvent) {
-        if (!dragging) return;
-        onchange(valueFromClientX(e.clientX));
-    }
-    function endDrag(e: PointerEvent) {
-        if (!dragging) return;
-        dragging = false;
-        (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    }
 
     function onKey(e: KeyboardEvent) {
         if (disabled) return;
@@ -96,10 +81,17 @@
         aria-valuemax={max}
         aria-valuenow={value}
         aria-disabled={disabled}
-        onpointerdown={startDrag}
-        onpointermove={moveDrag}
-        onpointerup={endDrag}
-        onpointercancel={endDrag}
+        use:pointerDrag={{
+            onStart: (e) => {
+                if (disabled) return false;
+                dragging = true;
+                // The track jumps to the press, so the gesture takes effect
+                // before any movement.
+                onchange(valueFromClientX(e.clientX));
+            },
+            onMove: (_dx, _dy, e) => onchange(valueFromClientX(e.clientX)),
+            onEnd: () => { dragging = false; },
+        }}
         onkeydown={onKey}
     >
         <div class="track" bind:this={trackEl}>

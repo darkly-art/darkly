@@ -2,8 +2,6 @@
  * Global toggle for the "New Document" modal. The `newDocument` action
  * dispatches into this; the hamburger menu reads it.
  */
-class NewDocumentState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const newDocument = new NewDocumentState();
+export const newDocument = dialogState();

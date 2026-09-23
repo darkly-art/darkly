@@ -286,6 +286,10 @@ RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unkn
 # `--test-threads=1` is mandatory: GPU-touching integration tests share a
 # process-wide wgpu device and SIGSEGV when run in parallel.
 cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
+# `protocol_gen.ts` is generated from the request registry, and the test that
+# asserts it matches what is checked in sits behind `ts-export`, which the run
+# above does not enable. Without this line nothing checks it.
+cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
 # Both TS gates are required: `tsc` cannot see inside `.svelte` files, so it
 # gives a false green on component bugs that `svelte-check` catches.

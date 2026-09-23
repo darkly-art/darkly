@@ -12,7 +12,7 @@ vi.mock('../../../state/brush_library.svelte', () => ({ brushLibrary: {} }));
 
 import { colorNodes, SWATCH_COUNT, type ColorDeps } from '../sections/colors';
 import { brushNodes, RECENT_COUNT, type BrushDeps } from '../sections/brushes';
-import type { Color } from '../../../state/app.svelte';
+import type { Color } from '../../../lib/color';
 import type { WheelBranch, WheelLeaf } from '../model';
 import { NEUTRAL_PALETTE, type PackPalette } from '../../../lib/packPalette';
 

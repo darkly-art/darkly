@@ -41,3 +41,23 @@ describe('smartObjectOffer', () => {
         expect(smartObjectOffer({ canBecomeSmartObject: true }, true)).toBe(false);
     });
 });
+
+describe('flattenOffer for containers', () => {
+    // A group reports `paintable: false` because it owns no pixels of its own,
+    // so without the container check it would be offered "Rasterize". The
+    // group row says "Flatten" today and must keep saying it.
+    it('offers Flatten for a container, not Rasterize', () => {
+        expect(flattenOffer({ paintable: false, hasMask: false, isContainer: true })).toBe('Flatten');
+        expect(flattenOffer({ paintable: false, hasMask: true, isContainer: true })).toBe('Flatten');
+    });
+
+    it('still offers Rasterize for a non-container with generated pixels', () => {
+        expect(flattenOffer({ paintable: false, hasMask: false, isContainer: false })).toBe('Rasterize');
+    });
+
+    it('is unchanged when isContainer is omitted', () => {
+        expect(flattenOffer({ paintable: false, hasMask: false })).toBe('Rasterize');
+        expect(flattenOffer({ paintable: true, hasMask: true })).toBe('Flatten');
+        expect(flattenOffer({ paintable: true, hasMask: false })).toBe(null);
+    });
+});

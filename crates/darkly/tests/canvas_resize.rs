@@ -1141,3 +1141,66 @@ fn screen_space_effect_survives_viewport_resize() {
         "the instance must be rebuilt against the resized run textures"
     );
 }
+
+/// The frame snapshot carries the canvas window, so the frontend's mirror of it
+/// follows every op that moves or resizes the window without a call of its own.
+///
+/// This is the contract that replaced twelve hand-written `syncCanvasRect`
+/// calls: if the rect stops riding `EngineState`, the JS coordinate transforms
+/// silently keep transforming against the pre-crop window.
+#[test]
+fn engine_state_carries_the_canvas_window() {
+    let mut engine = test_engine(64, 64);
+
+    let fresh = engine.engine_state();
+    assert_eq!(
+        (
+            fresh.canvas_origin_x,
+            fresh.canvas_origin_y,
+            fresh.canvas_width,
+            fresh.canvas_height
+        ),
+        (0, 0, 64, 64),
+        "a fresh document's window is the whole canvas at the plane origin"
+    );
+
+    // A crop that both moves the origin and shrinks the window: the origin is
+    // the half a size-only mirror would miss.
+    engine.resize_canvas(CanvasRect::from_xywh(16, 8, 32, 24));
+
+    let cropped = engine.engine_state();
+    let rect = engine.canvas_rect();
+    assert_eq!(
+        (
+            cropped.canvas_origin_x,
+            cropped.canvas_origin_y,
+            cropped.canvas_width,
+            cropped.canvas_height
+        ),
+        (rect.origin.x, rect.origin.y, rect.width, rect.height),
+        "the snapshot must agree with `canvas_rect()`, which is the document's own answer"
+    );
+    assert_eq!(
+        (
+            cropped.canvas_origin_x,
+            cropped.canvas_origin_y,
+            cropped.canvas_width,
+            cropped.canvas_height
+        ),
+        (16, 8, 32, 24)
+    );
+
+    // Undo restores the window, and the snapshot follows it back: the undo
+    // handler schedules a frame and does nothing else about the rect.
+    engine.undo();
+    let undone = engine.engine_state();
+    assert_eq!(
+        (
+            undone.canvas_origin_x,
+            undone.canvas_origin_y,
+            undone.canvas_width,
+            undone.canvas_height
+        ),
+        (0, 0, 64, 64)
+    );
+}

@@ -78,6 +78,18 @@
     function onUp(e: PointerEvent) {
         if (!dragging) return;
         trackEl.releasePointerCapture(e.pointerId);
+        endDrag();
+    }
+
+    /** Capture can end without a `pointerup` on the track: the browser fires
+     *  `lostpointercapture` on its own when the pointer is removed or another
+     *  element takes capture. Ending here too keeps `dragging` from sticking,
+     *  which would otherwise let a plain hover keep moving the handle. The
+     *  previewed value is committed rather than discarded: the artist has
+     *  already seen it, so committing is what keeps the panel and the filter in
+     *  agreement (the same rule `lib/scrubDrag.ts` documents). */
+    function endDrag() {
+        if (!dragging) return;
         const next = draft ?? active;
         dragging = null;
         draft = null;
@@ -138,7 +150,13 @@
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="track" bind:this={trackEl} onpointermove={onMove} onpointerup={onUp}>
+    <div
+        class="track"
+        bind:this={trackEl}
+        onpointermove={onMove}
+        onpointerup={onUp}
+        onlostpointercapture={endDrag}
+    >
         <canvas bind:this={grooveCanvas} width={CANVAS_W} height="1" class="groove"></canvas>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div

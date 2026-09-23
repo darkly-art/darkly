@@ -1,9 +1,9 @@
 import { reportEngineError, type Engine, type EngineState } from '../engine/protocol';
-import type { Catalog, CatalogEntry, JsonValue } from '../engine/protocol_gen';
-import type { SaveBundle } from '../storage/saveDocument';
+import { ReadbackQueue, type ReadbackSlot } from '../engine/readbacks';
+import type { JsonValue } from '../engine/protocol_gen';
 import { compute_view_matrices } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry, type Tool } from '../tools/registry';
-import { config, tooltipForAction } from '../config/store.svelte';
+import { config } from '../config/store.svelte';
 import { pollPick } from '../tools/color_pick_sync';
 import { SessionEngine, runHook } from '../tools/tool_session';
 import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
@@ -12,9 +12,10 @@ import { MediaStreamSource, describeMediaError } from '../lib/mediaStreamSource'
 import { HttpStreamSource } from '../lib/httpStreamSource';
 import type { FrameSource, CaptureKind } from '../lib/frameSource';
 import { processRecording } from '../recording/recorder.svelte';
+import { catalogs } from './catalogs.svelte';
 import { freshDocument } from './freshDocument';
 import { recentColors } from './recents.svelte';
-import { colorToHex, hexToColor } from '../lib/color';
+import { colorToHex, hexToColor, type Color } from '../lib/color';
 import { newId } from '../lib/id';
 import {
     appearedRoots,
@@ -25,47 +26,10 @@ import {
     type LayerTreeIndex,
 } from './layerTree';
 
-export interface Color {
-    r: number; g: number; b: number; a: number;
-}
-
-/** Packed `poll_save_result` payload: every byte blob concatenated into one
- *  `bytes` buffer, with the lengths needed to slice them back out. */
-interface PackedSaveResult {
-    manifestLen: number;
-    compositeWidth: number;
-    compositeHeight: number;
-    compositeLen: number;
-    blobs: Array<{ path: string; len: number }>;
-    bytes: Uint8Array;
-}
-
-/** Reconstruct the {@link SaveBundle} `saveDocument.ts` expects from the packed
- *  protocol result (manifest ++ composite ++ blob0 ++ blob1 ++ … in `bytes`). */
-function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
-    let off = 0;
-    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
-    off += p.manifestLen;
-    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
-    off += p.compositeLen;
-    const blobs = p.blobs.map((b) => {
-        const bytes = p.bytes.subarray(off, off + b.len);
-        off += b.len;
-        return { path: b.path, bytes };
-    });
-    return {
-        manifestJson,
-        compositeWidth: p.compositeWidth,
-        compositeHeight: p.compositeHeight,
-        compositeRgba,
-        blobs,
-    };
-}
-
 /**
  * A self-contained Darkly editor: one `DarklyHandle`, one canvas, one
  * document, one set of UI state (active tool, layer selection, view
- * transform, copy callback, frame scheduler, …). Multiple instances can
+ * transform, pending readbacks, frame scheduler, …). Multiple instances can
  * coexist (multi-tab host); a stand-alone embed has just one. The instance
  * has zero awareness of tabs, siblings, or any host that might contain it;
  * tab management is an outer layer (`frontend/src/multi_tab/shell.svelte.ts`)
@@ -192,7 +156,10 @@ export class DarklyInstance {
     }
 
     /** Tear this instance down when its tab closes: stop its tool session and
-     *  stream sources, free the WASM handle, then drop the engine reference. The
+     *  stream sources, fail any outstanding readback, free the WASM handle, then
+     *  drop the engine reference. A waiting save or export has to be rejected
+     *  here rather than left pending: once the handle is freed nothing can ever
+     *  poll its result, so the awaiting caller would hang forever. The
      *  instance owns every consumer of its handle, so it owns their teardown:
      *  the shell just removes it from the strip. Nulling `engine` is what makes
      *  the render loop's `if (!engine) return` guard short-circuit an
@@ -203,6 +170,7 @@ export class DarklyInstance {
     dispose(): void {
         this.killToolSession();
         for (const id of [...this.streamSources.keys()]) this.stopStreamSource(id);
+        this.#readbacks.abort();
         this.engine?.free();
         this.engine = null;
         this.engineState = null;
@@ -222,81 +190,9 @@ export class DarklyInstance {
 
     /** Last activated sub-tool per cluster id. Lets a cluster button restore
      *  the artist's previous choice on click (e.g. "the last selection tool I
-     *  used was lasso"). Populated by a $effect in LeftSidebar that watches
+     *  used was lasso"). Populated by a $effect in ToolStrip that watches
      *  activeToolId. */
     lastToolByCluster = $state<Record<string, string>>({});
-
-    /** Every registry the Rust core declares, keyed by catalog id ("effects",
-     *  "tools", …). Fetched once at startup (see `loadRegistries`).
-     *  Per-instance payloads (LayerInfo, …) carry only the stable
-     *  `type_id`; UI code resolves the human-readable label and the icon
-     *  through here, so there is no second copy of either. */
-    catalogs = $state<Record<string, Catalog>>({});
-
-    /** `voidType → CaptureKind` for voids backed by a browser MediaStream
-     *  (camera / screenshare). Built from the `voids` catalog in
-     *  `loadRegistries`; procedural voids are absent. Drives which
-     *  `MediaDevices` API to call and is the single source of truth for "is
-     *  this a stream-backed void?" across the reconciler, picker, and
-     *  properties panel. */
-    voidCaptureKind = $state<Map<string, CaptureKind>>(new Map());
-
-    /** Entries of one catalog, or an empty array when it is unknown. */
-    entries(catalogId: string): CatalogEntry[] {
-        return this.catalogs[catalogId]?.entries ?? [];
-    }
-
-    /** One entry by catalog and `type_id`, or `undefined`. */
-    entry(catalogId: string, typeId: string): CatalogEntry | undefined {
-        return this.entries(catalogId).find((e) => e.type === typeId);
-    }
-
-    /** Display label for a `type_id` within a catalog (e.g. `"curves"` →
-     *  `"Curves"`), falling back to the id itself when unknown. */
-    displayName(catalogId: string, typeId: string): string {
-        return this.entry(catalogId, typeId)?.displayName ?? typeId;
-    }
-
-    /** The Iconify glyph to render for a tool.
-     *
-     *  A tool's glyph is registry metadata and lives on its Rust registration.
-     *  A descriptor may override it when the glyph depends on live session
-     *  state a static registration cannot express: the brush shows the eraser
-     *  icon while erase mode is on. This is the single place that precedence
-     *  is decided, so no caller branches on a tool id. */
-    toolGlyph(typeId: string): string {
-        const override = toolRegistry.get(typeId)?.icon;
-        const resolved = typeof override === 'function' ? override() : override;
-        return resolved ?? this.entry('tools', typeId)?.icon ?? 'fa6-solid:wrench';
-    }
-
-    /** A tool button's `title`: its label plus the chord currently bound to
-     *  the action that selects it. Both the label and that action id are the
-     *  tool's own registry metadata, so resolving them together here keeps the
-     *  toolbar and the cluster flyout from each doing the lookup. */
-    toolTooltip(typeId: string): string {
-        const entry = this.entry('tools', typeId);
-        return tooltipForAction(entry?.displayName ?? typeId, entry?.hotkeyAction ?? '');
-    }
-
-    /** Populate every registry projection from the Rust core in one pass.
-     *  Called once during editor init, before action registration and before
-     *  `this.handle` is set, so the catalogs are ready by the time any UI
-     *  mounts. */
-    async loadRegistries(engine: Engine) {
-        const byId: Record<string, Catalog> = {};
-        for (const c of (await engine.api.catalogs()) ?? []) byId[c.id] = c;
-        this.catalogs = byId;
-        // Map each void type to its browser capture API, if any. Only voids
-        // whose source is a capture stream (camera / screenshare) drive the
-        // generic MediaStream lifecycle; procedural and image-sourced voids
-        // never appear here.
-        const capKinds = new Map<string, CaptureKind>();
-        for (const v of this.entries('voids')) {
-            if (v.source?.kind === 'capture') capKinds.set(v.type, v.source.capture);
-        }
-        this.voidCaptureKind = capKinds;
-    }
 
     // Active layer: the "primary" layer within the selection. Drives the
     // properties panel, paint target, shift-click anchor, and per-row
@@ -360,20 +256,25 @@ export class DarklyInstance {
     // Fresh-eyes horizontal flip. Session-only; resets on reload.
     mirrorH = $state(false);
 
-    /** Mirror of the engine's document dimensions, set at handle creation
-     *  and on `open_document`. JS coord transforms (`canvasToScreen` /
-     *  `screenToCanvas`) recenter around these; reading the engine
-     *  per-frame would alias the RefCell borrow held by `render()`. The
-     *  Rust side stays the source of truth; this is a read-only cache
-     *  kept in sync at the same join points that already mutate the doc. */
+    /**
+     * Mirror of the engine's canvas window: its size (`docW`/`docH`) and its
+     * plane-space origin (`Document::canvas_origin`), `(0, 0)` until the
+     * document is cropped or resized with a moved window. JS coord transforms
+     * recenter around these: `screenToCanvas` returns plane coords (adds the
+     * origin); `canvasToScreen` subtracts it.
+     *
+     * The document owns the rect; this is a read-only cache, because reading
+     * the engine per-frame would alias the RefCell borrow `render()` holds.
+     * It has exactly **one runtime writer**, the frame snapshot in
+     * {@link runFrame}, which carries the rect downhill on `EngineState` every
+     * frame. Nothing else assigns these after boot: an op that moves the
+     * window (load, resize, crop, undo) just schedules a frame, and the value
+     * follows. The one other write is the seed in `createInstance`, before any
+     * frame has rendered, which is what `fitZoom` reads to open a tab at the
+     * right zoom.
+     */
     docW = $state(1);
     docH = $state(1);
-
-    /** Plane-space offset of the canvas window (`Document::canvas_origin`),
-     *  mirrored from the engine's `canvas_rect()` query. `(0, 0)` until the
-     *  document is cropped/resized with a moved window. `screenToCanvas`
-     *  returns plane coords (adds this); `canvasToScreen` subtracts it. Kept
-     *  in sync at the same join points as `docW`/`docH`. */
     canvasOriginX = $state(0);
     canvasOriginY = $state(0);
 
@@ -560,7 +461,7 @@ export class DarklyInstance {
     }
 
     /** Layer-panel row click router. Plain → select, ctrl/cmd → toggle,
-     *  shift → extend range. Both LayerItem and LayerGroup call this so
+     *  shift → extend range. Every layer row calls this so
      *  the modifier handling stays in one place. */
     handleLayerRowClick(id: number, e: MouseEvent) {
         if (e.shiftKey) this.extendSelectionTo(id);
@@ -869,7 +770,7 @@ export class DarklyInstance {
                 // `type` (not `kind`) is the serde variant tag on `LayerInfo`,
                 // set by `#[serde(tag = "type")]` in engine/types.rs. Any
                 // void whose kind declares a `captureKind` is stream-backed.
-                const cap = this.voidCaptureKind.get(n?.voidType);
+                const cap = catalogs.voidCaptureKind.get(n?.voidType);
                 if (n?.type === 'void' && cap) {
                     const params = (n.params ?? []) as Array<{
                         name: string;
@@ -960,26 +861,6 @@ export class DarklyInstance {
         this.background = pref('colors.defaultBackground') ?? { ...freshDocument.background };
     }
 
-    /** Sync the JS canvas-window mirror (`docW`/`docH`/`canvasOriginX`/
-     *  `canvasOriginY`) from the engine's `canvas_rect()`. Call after any op
-     *  that moves or resizes the canvas window (load, resize, crop) so the
-     *  coordinate transforms in `coordinates.ts` recenter around the real
-     *  window. Returns the `[ox, oy, w, h]` rect for callers that need it. */
-    async syncCanvasRect(): Promise<[number, number, number, number] | null> {
-        if (!this.engine) return null;
-        const r = (await this.engine.api.canvasRect()) as {
-            origin_x: number;
-            origin_y: number;
-            width: number;
-            height: number;
-        };
-        this.canvasOriginX = r.origin_x;
-        this.canvasOriginY = r.origin_y;
-        this.docW = r.width;
-        this.docH = r.height;
-        return [r.origin_x, r.origin_y, r.width, r.height];
-    }
-
     /** Re-read the layer tree and reconcile session state against it.
      *
      *  `adoptAppeared` makes rows that just came into existence the selection,
@@ -1008,39 +889,31 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
-    // --- Async copy result callback ---
+    // --- One-shot engine readbacks ---
 
-    private _copyCallback: ((result: any) => void) | null = null;
+    /** Outstanding one-shot readbacks (copy, export, save), driven by the frame
+     *  loop. Private: the whole surface a caller needs is
+     *  {@link awaitReadback}, so there is exactly one way to reach it. */
+    readonly #readbacks = new ReadbackQueue();
 
-    /** Register a one-shot callback for when the async copy readback completes. */
-    onCopyResult(cb: (result: any) => void) {
-        this._copyCallback = cb;
+    /** Await a one-shot engine readback, driving its poll from this instance's
+     *  frame loop until the value lands.
+     *
+     *  Requesting a frame here is what makes the await terminate: the readback
+     *  is only ever polled from `runFrame`, and the loop keeps rescheduling
+     *  itself while anything is outstanding, so a save on a backgrounded tab
+     *  still completes. Rejects if the poll fails, if the tab closes first, or
+     *  if a later readback claims the same `slot`.
+     *
+     *  ```ts
+     *  engine.api.startExport();
+     *  const composite = await inst.awaitReadback('export', () => engine.api.pollExportResult());
+     *  ```
+     */
+    awaitReadback<T>(slot: ReadbackSlot, poll: () => Promise<T | null>): Promise<T> {
+        const result = this.#readbacks.awaitResult(slot, poll);
         this.requestFrame();
-    }
-
-    // --- Async export result callback ---
-
-    private _exportCallback:
-        | ((result: { width: number; height: number; rgba: Uint8Array }) => void)
-        | null = null;
-
-    /** Register a one-shot callback for when the async export readback completes. */
-    onExportResult(cb: (result: { width: number; height: number; rgba: Uint8Array }) => void) {
-        this._exportCallback = cb;
-        this.requestFrame();
-    }
-
-    // --- Async save result callback ---
-
-    private _saveCallback: ((bundle: SaveBundle) => void) | null = null;
-
-    /** Register a one-shot callback for when the async `.darkly` save
-     *  readback completes (manifest JSON + composite RGBA + per-blob
-     *  bytes arrive together). The caller PNG-encodes the composite +
-     *  thumbnail and assembles the zip; see `storage/saveDocument.ts`. */
-    onSaveResult(cb: (bundle: SaveBundle) => void) {
-        this._saveCallback = cb;
-        this.requestFrame();
+        return result;
     }
 
     // --- Demand-driven rendering ---
@@ -1190,11 +1063,20 @@ export class DarklyInstance {
 
         // Refresh the synchronously-readable engine-state mirror from
         // render's returned snapshot: no per-frame query; it's a downhill
-        // projection of the borrow render already held this frame. This one
-        // assignment updates everything the UI caches: frame/thumbnail
-        // counters (thumbnail `$derived`s re-run when `thumbnailVersion`
-        // changes) and document bools.
-        if (frame.state) this.engineState = frame.state;
+        // projection of the borrow render already held this frame. One snapshot
+        // carries everything the UI caches: frame/thumbnail counters (thumbnail
+        // `$derived`s re-run when `thumbnailVersion` changes), document bools,
+        // and the canvas window.
+        if (frame.state) {
+            this.engineState = frame.state;
+            // The canvas-window mirror's one runtime writer. The rect rides the
+            // same snapshot, so an op that moves or resizes the window needs
+            // only to schedule a frame; nothing has to fetch the new rect back.
+            this.canvasOriginX = frame.state.canvasOriginX;
+            this.canvasOriginY = frame.state.canvasOriginY;
+            this.docW = frame.state.canvasWidth;
+            this.docH = frame.state.canvasHeight;
+        }
 
         // Per-frame tool hook: async state sync (e.g. GPU readback
         // completion). The instance's OWN tool runs against its OWN session,
@@ -1225,51 +1107,16 @@ export class DarklyInstance {
             tickCloneSourceCursor();
         }
 
-        // Check for completed async copy/cut readback.
-        if (this._copyCallback) {
-            engine.api.pollCopyResult().then((result) => {
-                if (result && this._copyCallback) {
-                    const cb = this._copyCallback;
-                    this._copyCallback = null;
-                    cb(result);
-                }
-            });
-        }
-
-        // Check for completed async export readback.
-        if (this._exportCallback) {
-            engine
-                .api.pollExportResult()
-                .then((result) => {
-                    if (result && this._exportCallback) {
-                        const cb = this._exportCallback;
-                        this._exportCallback = null;
-                        cb({ width: result.width, height: result.height, rgba: result.bytes });
-                    }
-                });
-        }
-
-        // Check for completed async `.darkly` save readbacks. The bundle's
-        // byte blobs arrive concatenated in `bytes`; slice them back out
-        // into the per-blob shape `saveDocument.ts` expects.
-        if (this._saveCallback) {
-            engine.api.pollSaveResult().then((packed) => {
-                if (!packed || !this._saveCallback) return;
-                const cb = this._saveCallback;
-                this._saveCallback = null;
-                cb(unpackSaveBundle(packed));
-            });
-        }
+        // Resolve whichever one-shot readbacks (copy, export, save) have
+        // landed. One generic queue rather than a block per result kind: they
+        // all share the shape "poll until non-null, then settle".
+        this.#readbacks.poll();
 
         // Continue animation loop only when no UI interaction is
         // monopolizing the main thread.  One-shot renders (tool
         // actions, resize, etc.) always go through; only the
         // self-scheduling continuous loop is suppressed.
-        const shouldContinue =
-            frame.needsMore ||
-            this._copyCallback ||
-            this._exportCallback ||
-            this._saveCallback;
+        const shouldContinue = frame.needsMore || this.#readbacks.pending > 0;
         if (shouldContinue && this._interactionCount === 0) {
             this.requestFrame();
         }

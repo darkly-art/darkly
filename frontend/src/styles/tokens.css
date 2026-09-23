@@ -336,6 +336,141 @@
     color: var(--text);
 }
 
+/* Fixed 32px box: the tool strip, its cluster flyouts and the hamburger all
+ * sit in a 44px rail and need the same square hit target rather than sizing
+ * to their glyph. */
+.icon-btn.square {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+}
+
+/* Dialog chrome: the footer row, its buttons, and the labelled field shapes
+ * every modal builds out of. Each dialog used to carry its own copy, which is
+ * how they drifted to three radii, three paddings and three names for the
+ * confirm button. One home, so a dialog gets the house look by not styling
+ * anything.
+ *
+ * Global rather than a component because the markup lives in eleven different
+ * files: a `<Modal>` wrapper would have to take the whole footer as a snippet
+ * to style it, which is more plumbing than a class. Same reasoning as
+ * `.icon-btn` and `.bar-control` above. */
+.dialog-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* Pushes what follows to the right edge: a left-aligned Delete beside
+ * right-aligned Cancel / Save. */
+.dialog-actions .spacer {
+    flex: 1;
+}
+
+/* `font: inherit` resets the UA button font, then `font-size` sets the real
+ * one. Both are needed: nothing sets a font-size on html/body/#app, so a bare
+ * `font: inherit` button inherits the UA default 16px. */
+.btn {
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--bg-hover);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* `--on-accent` rather than a literal white: the accent is mid-grey in both
+ * themes (#6c6c6c dark, #878787 light), so white clears 4.5:1 against it in
+ * dark but only reaches ~3.5:1 in light. Each theme names its own legible
+ * foreground. */
+.btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.btn.primary:hover:not(:disabled) {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+
+.btn.danger {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.btn.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* Labelled field: a caption stacked over its control. */
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.field-label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Number entry with a trailing unit, framed as one control so the unit reads
+ * as part of the field rather than as text beside it. */
+.field-num {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    background: var(--bg);
+    border: 1px solid var(--bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+.field-num input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 6px 0;
+    font: inherit;
+    outline: none;
+}
+
+.field-num .unit {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.text-input {
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--bg-hover);
+    border-radius: var(--radius-sm);
+    outline: none;
+}
+
+.text-input:focus {
+    border-color: var(--accent);
+}
+
 /* Slider thumb: shared across tool options, layer controls, params */
 input[type="range"] {
     -webkit-appearance: none;

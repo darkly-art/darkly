@@ -6,9 +6,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // to pin the behaviour that matters, including the regression that Firefox
 // (no File System Access API) can now save at all.
 
+vi.mock('../../lib/rgba', () => ({
+    rgbaToBlob: vi.fn(),
+    rgbaToCanvas: vi.fn(() => ({ convertToBlob: vi.fn() })),
+}));
 vi.mock('../exportComposite', () => ({
     exportComposite: vi.fn(),
-    rgbaToBlob: vi.fn(),
 }));
 vi.mock('../recovery', () => ({
     removeSnapshot: vi.fn(async () => {}),

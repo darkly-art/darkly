@@ -1,5 +1,6 @@
 <script lang="ts">
     import { getContext } from 'svelte';
+    import { pointerDrag } from '../../lib/pointerDrag';
     import { flip } from 'svelte/animate';
     import { cubicOut } from 'svelte/easing';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
@@ -17,33 +18,25 @@
 
     // Drag-move (whole-node) state.
     let movingNode = false;
-    let moveStart = { px: 0, py: 0, x: 0, y: 0 };
+    let moveStart = { x: 0, y: 0 };
 
-    function startMove(e: PointerEvent) {
+    function startMove(e: PointerEvent): boolean | void {
         // Ignore drag-init when the gesture started on an interactive
         // child (row drag handle, edit button, etc.).
         const target = e.target as HTMLElement;
-        if (target.closest('.entry-row, button, input, textarea')) return;
+        if (target.closest('.entry-row, button, input, textarea')) return false;
         movingNode = true;
-        moveStart = { px: e.clientX, py: e.clientY, x: pos.x, y: pos.y };
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        e.preventDefault();
+        moveStart = { x: pos.x, y: pos.y };
         e.stopPropagation();
     }
-    function moveNode(e: PointerEvent) {
-        if (!movingNode) return;
+    function moveNode(dx: number, dy: number) {
         // Convert client-px delta to graph-units so the node moves with
         // the cursor at any zoom level.
-        const d = coords.clientDeltaToGraph(
-            e.clientX - moveStart.px,
-            e.clientY - moveStart.py,
-        );
+        const d = coords.clientDeltaToGraph(dx, dy);
         pos = { x: moveStart.x + d.x, y: moveStart.y + d.y };
     }
-    function endMove(e: PointerEvent) {
-        if (!movingNode) return;
+    function endMove() {
         movingNode = false;
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     }
 
     // Drag-reorder state. `liveOrder` shadows the engine's port list
@@ -143,10 +136,7 @@
 <div
     class="brush-bar-node"
     style="transform: translate({pos.x}px, {pos.y}px);"
-    onpointerdown={startMove}
-    onpointermove={moveNode}
-    onpointerup={endMove}
-    onlostpointercapture={endMove}
+    use:pointerDrag={{ onStart: startMove, onMove: moveNode, onEnd: endMove }}
 >
     <header class="header">
         <Icon name="fa6-solid:sliders" class="header-icon" />

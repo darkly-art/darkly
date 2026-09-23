@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { pointerDrag } from '../lib/pointerDrag';
     import { getContext } from 'svelte';
     import { sampleCurve, evaluateCurve } from '../lib/curve_math';
     import type { NodeCanvasContext } from './brush_builder/NodeCanvas.svelte';
@@ -88,18 +89,15 @@
         return toNorm(x, y);
     }
 
-    function onPointDown(e: PointerEvent, index: number) {
-        e.stopPropagation();
-        e.preventDefault();
-        // preventDefault above suppresses the default focus behavior on the
-        // tabindex=0 container, so focus it explicitly, otherwise the keydown
-        // handler never fires and Delete/Backspace appear broken until the
-        // artist happens to spawn a new point (which doesn't preventDefault).
+    /** Grab the point that was pressed. `preventDefault` (which `pointerDrag`
+     *  applies) suppresses the default focus behavior on the tabindex=0
+     *  container, so focus it explicitly: otherwise the keydown handler never
+     *  fires and Delete/Backspace appear broken. */
+    function grabPoint(index: number) {
         rootEl.focus();
         selectedIndex = index;
         draggingIndex = index;
         localPoints = [...activePoints.map(p => [...p] as Point)];
-        svgEl.setPointerCapture(e.pointerId);
     }
 
     function onSvgPointerMove(e: PointerEvent) {
@@ -123,19 +121,30 @@
         oninput?.(pts);
     }
 
-    function onSvgPointerUp(e: PointerEvent) {
-        if (draggingIndex !== null && localPoints !== null) {
-            svgEl.releasePointerCapture(e.pointerId);
-            const pts = localPoints;
-            draggingIndex = null;
-            localPoints = null;
-            onchange(pts);
-        }
+    /** `pointerDrag` routes every termination path here, including the lost
+     *  capture that used to leave `draggingIndex` stuck. The previewed points
+     *  are committed rather than discarded: the artist has already seen them
+     *  (the same rule `lib/scrubDrag.ts` documents). */
+    function endDrag() {
+        if (draggingIndex === null || localPoints === null) return;
+        const pts = localPoints;
+        draggingIndex = null;
+        localPoints = null;
+        onchange(pts);
     }
 
+    /** A press on the plot either grabs the point under it or spawns a new one
+     *  on the curve, and either way the same drag follows. Both used to capture
+     *  the same SVG through separate handlers. */
     function onSvgPointerDown(e: PointerEvent) {
         const target = e.target as Element;
-        if (target.classList.contains('curve-point')) return;
+        const pointIndex = target.classList.contains('curve-point')
+            ? Number((target as SVGElement).dataset.pointIndex)
+            : -1;
+        if (pointIndex >= 0) {
+            grabPoint(pointIndex);
+            return;
+        }
 
         // Spawn a new point on the curve and immediately start dragging it.
         const [nx, _ny] = svgToNorm(e);
@@ -149,10 +158,10 @@
         const curveY = evaluateCurve(activePoints, nx);
         pts.splice(insertIdx, 0, [nx, curveY]);
 
+        rootEl.focus();
         selectedIndex = insertIdx;
         draggingIndex = insertIdx;
         localPoints = pts;
-        svgEl.setPointerCapture(e.pointerId);
         oninput?.(pts);
     }
 
@@ -195,9 +204,11 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <svg
         bind:this={svgEl}
-        onpointerdown={onSvgPointerDown}
-        onpointermove={onSvgPointerMove}
-        onpointerup={onSvgPointerUp}
+        use:pointerDrag={{
+            onStart: onSvgPointerDown,
+            onMove: (_dx, _dy, e) => onSvgPointerMove(e),
+            onEnd: endDrag,
+        }}
     >
         <!-- Grid -->
         {#each gridLines() as line}
@@ -227,7 +238,7 @@
                 class="curve-point"
                 class:selected={selectedIndex === i}
                 class:dragging={draggingIndex === i}
-                onpointerdown={(e) => onPointDown(e, i)}
+                data-point-index={i}
                 ondblclick={(e) => onPointDblClick(e, i)}
             />
         {/each}

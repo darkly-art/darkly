@@ -1,8 +1,11 @@
 <script lang="ts">
     import Modal from './Modal.svelte';
+    import { pointerDrag } from '../lib/pointerDrag';
+    import { rgbaToImageData } from '../lib/rgba';
     import LinkToggle from './LinkToggle.svelte';
     import { resizeCanvas } from '../state/resizeCanvas.svelte';
     import { app } from '../state/app.svelte';
+    import { reportEngineError } from '../engine/protocol';
     import {
         type Rect,
         type Handle,
@@ -79,21 +82,20 @@
     // poll). The result is the current canvas window at oldW×oldH, so it maps
     // 1:1 onto the content rect.
     function requestComposite() {
-        if (!app.engine) return;
-        app.engine.api.startExport();
-        app.onExportResult((result) => {
+        const engine = app.engine;
+        if (!engine) return;
+        engine.api.startExport();
+        void app.awaitReadback('export', () => engine.api.pollExportResult()).then((result) => {
             if (!resizeCanvas.open) return; // modal closed before it landed
             const cv = document.createElement('canvas');
             cv.width = result.width;
             cv.height = result.height;
             const cctx = cv.getContext('2d');
             if (!cctx) return;
-            const clamped = new Uint8ClampedArray(result.rgba.length);
-            clamped.set(result.rgba);
-            cctx.putImageData(new ImageData(clamped, result.width, result.height), 0, 0);
+            cctx.putImageData(rgbaToImageData(result.bytes, result.width, result.height), 0, 0);
             compositeCanvas = cv;
             compositeVersion++;
-        });
+        }, reportEngineError);
     }
 
     // --- Numeric / anchor controls --------------------------------------
@@ -119,36 +121,38 @@
     const highlight = $derived(matchedAnchor(oldW, oldH, rect));
 
     // --- Drag interaction -----------------------------------------------
-    function beginDrag(e: PointerEvent, handle: Handle) {
-        e.preventDefault();
-        const el = e.currentTarget as HTMLElement;
-        el.setPointerCapture(e.pointerId);
-        const startRect = { ...rect };
-        const startFit = fit; // held for the duration of the drag
-        const startX = e.clientX;
-        const startY = e.clientY;
+    // Held for the duration of one drag: the rect it started from and the
+    // content-to-preview scale, so a refit mid-gesture cannot change the
+    // mapping under the pointer.
+    let dragStart: { rect: Rect; fit: Fit; handle: Handle } | null = null;
+
+    function beginDrag(handle: Handle) {
+        dragStart = { rect: { ...rect }, fit, handle };
         dragging = true;
-        const onMove = (ev: PointerEvent) => {
-            const dx = (ev.clientX - startX) / startFit.scale;
-            const dy = (ev.clientY - startY) / startFit.scale;
-            rect = applyDrag(startRect, handle, dx, dy, ev.shiftKey);
-            width = rect.w;
-            height = rect.h;
-            // Keep the numeric-distribution anchor consistent when the rect
-            // happens to sit on an anchor.
-            const m = matchedAnchor(oldW, oldH, rect);
-            if (m.ax !== null) anchorX = m.ax;
-            if (m.ay !== null) anchorY = m.ay;
-        };
-        const onUp = (ev: PointerEvent) => {
-            dragging = false;
-            el.releasePointerCapture?.(ev.pointerId);
-            el.removeEventListener('pointermove', onMove);
-            el.removeEventListener('pointerup', onUp);
-            refit();
-        };
-        el.addEventListener('pointermove', onMove);
-        el.addEventListener('pointerup', onUp);
+    }
+
+    function onDragMove(dx: number, dy: number, e: PointerEvent) {
+        if (!dragStart) return;
+        rect = applyDrag(
+            dragStart.rect,
+            dragStart.handle,
+            dx / dragStart.fit.scale,
+            dy / dragStart.fit.scale,
+            e.shiftKey,
+        );
+        width = rect.w;
+        height = rect.h;
+        // Keep the numeric-distribution anchor consistent when the rect
+        // happens to sit on an anchor.
+        const m = matchedAnchor(oldW, oldH, rect);
+        if (m.ax !== null) anchorX = m.ax;
+        if (m.ay !== null) anchorY = m.ay;
+    }
+
+    function endDrag() {
+        dragging = false;
+        dragStart = null;
+        refit();
     }
 
     // Frame rect in preview (CSS) pixels.
@@ -243,9 +247,8 @@
             w,
             h,
         });
-        // The new origin/dims are known synchronously in this JS turn, so the
-        // coordinate transforms recenter before any pointer event reads them.
-        app.syncCanvasRect();
+        // The new origin and dims reach the coordinate transforms on the next
+        // frame's snapshot, which the refresh and the request below schedule.
         app.refreshLayerTree();
         app.requestFrame();
         close();
@@ -265,15 +268,15 @@
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="dim-row">
             <label class="field">
-                <span class="label">Width</span>
-                <div class="num">
+                <span class="field-label">Width</span>
+                <div class="field-num">
                     <input type="number" min="1" max={MAX_DIM} bind:value={width} oninput={onWidthInput} />
                     <span class="unit">px</span>
                 </div>
             </label>
             <label class="field">
-                <span class="label">Height</span>
-                <div class="num">
+                <span class="field-label">Height</span>
+                <div class="field-num">
                     <input type="number" min="1" max={MAX_DIM} bind:value={height} oninput={onHeightInput} />
                     <span class="unit">px</span>
                 </div>
@@ -299,7 +302,11 @@
                     width={Math.max(0, frame.w)}
                     height={Math.max(0, frame.h)}
                     style={`cursor:${CURSORS.body}`}
-                    onpointerdown={(e) => beginDrag(e, 'body')}
+                    use:pointerDrag={{
+                        onStart: () => beginDrag('body'),
+                        onMove: onDragMove,
+                        onEnd: endDrag,
+                    }}
                     role="presentation"
                 />
                 <rect
@@ -319,16 +326,20 @@
                         height="12"
                         style={`cursor:${CURSORS[h]}`}
                         aria-label={`Resize ${h}`}
-                        onpointerdown={(e) => beginDrag(e, h)}
+                        use:pointerDrag={{
+                            onStart: () => beginDrag(h),
+                            onMove: onDragMove,
+                            onEnd: endDrag,
+                        }}
                         role="presentation"
                     />
                 {/each}
             </svg>
         </div>
 
-        <div class="actions">
+        <div class="dialog-actions">
             <div class="anchor">
-                <span class="label">Anchor</span>
+                <span class="field-label">Anchor</span>
                 <div class="grid">
                     {#each ANCHORS as ay}
                         {#each ANCHORS as ax}
@@ -345,13 +356,20 @@
             </div>
             <div class="spacer"></div>
             <div class="dims-readout">{clampDim(rect.w)} × {clampDim(rect.h)} px</div>
-            <button type="button" class="cancel" onclick={close}>Cancel</button>
-            <button type="button" class="ok" onclick={apply}>Resize</button>
+            <button type="button" class="btn" onclick={close}>Cancel</button>
+            <button type="button" class="btn primary" onclick={apply}>Resize</button>
         </div>
     </div>
 </Modal>
 
 <style>
+    /* This footer carries the anchor picker as well as its buttons, so the row
+       is left-aligned and spaced by its own `.spacer`. */
+    .dialog-actions {
+        justify-content: flex-start;
+        gap: 10px;
+    }
+
     .body {
         display: flex;
         flex-direction: column;
@@ -364,46 +382,6 @@
         grid-template-columns: 1fr 1fr auto;
         gap: 12px;
         align-items: end;
-    }
-
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-    }
-
-    .num {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 0 8px;
-    }
-
-    .num input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        font: inherit;
-        outline: none;
-        min-width: 0;
-    }
-
-    .num .unit {
-        color: var(--text-muted);
-        font-family: var(--font-mono, monospace);
-        font-size: 12px;
     }
 
     /* Interactive preview ------------------------------------------------ */
@@ -466,11 +444,6 @@
     }
 
     /* Actions + anchor --------------------------------------------------- */
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
 
     .anchor {
         display: flex;
@@ -512,27 +485,4 @@
         font-size: 12px;
     }
 
-    .actions button {
-        padding: 6px 14px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions .ok {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-    }
-
-    .actions .ok:hover:not(:disabled) {
-        filter: brightness(1.1);
-    }
 </style>

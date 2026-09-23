@@ -1,8 +1,6 @@
 /**
  * Global toggle for the About modal. The hamburger menu writes here to open it.
  */
-class AboutState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const about = new AboutState();
+export const about = dialogState();

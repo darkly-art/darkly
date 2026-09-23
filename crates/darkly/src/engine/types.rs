@@ -22,6 +22,7 @@ use crate::units::UnitType;
 /// `number`, not a `BigInt`: values up to 2^53 round-trip exactly.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct EngineState {
     /// Compositor master tick (post-increment for this frame). Drives JS-side
     /// divisor phase-locking (camera upload throttle).
@@ -33,6 +34,16 @@ pub struct EngineState {
     pub dirty: bool,
     /// Document has an active selection. Backs selection-gated menu items.
     pub has_selection: bool,
+    /// The canvas window rect in plane coordinates (`Document::canvas_rect`):
+    /// where the window sits and how big it is. Rides the frame snapshot
+    /// because the frontend's copy of it has to follow every op that moves or
+    /// resizes the window (load, resize, crop, undo), and a value the document
+    /// owns is carried downhill rather than fetched back by each of those
+    /// callers. See `docs/coordinate-systems.md` for what "plane" means here.
+    pub canvas_origin_x: i32,
+    pub canvas_origin_y: i32,
+    pub canvas_width: u32,
+    pub canvas_height: u32,
 }
 
 /// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
