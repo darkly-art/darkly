@@ -110,3 +110,22 @@ fn normalize(path: &Path) -> PathBuf {
     }
     out
 }
+
+/// The generated product metadata matches what `crates/darkly/product.yaml`
+/// says today.
+///
+/// `packaging/app.json` is the one generated target that is not a region:
+/// JSON has no comment syntax to carry a marker, so the whole file is written.
+/// That puts it outside `sync`'s sweep and it needs its own assertion, or the
+/// desktop makers that read it drift from the AppStream metainfo and the
+/// desktop entry, which is the divergence this whole mechanism exists to stop.
+#[test]
+fn generated_app_json_is_up_to_date() {
+    let root = docs_md::repo_root();
+    let stale = darkly::product::sync_app_json(&root, false).expect("the file is readable");
+    assert!(
+        !stale,
+        "{} is stale; run `cargo sync-docs`",
+        darkly::product::APP_JSON
+    );
+}
