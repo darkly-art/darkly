@@ -1,5 +1,6 @@
 import type { Engine } from '../engine/protocol';
-import type { Color, DarklyInstance } from './app.svelte';
+import type { Color } from '../lib/color';
+import type { DarklyInstance } from './app.svelte';
 
 /** Which deploy flavor this build was compiled for. Selected at build time by
  *  Vite's `--mode` and injected as `__DARKLY_APP_MODE__` (see vite.config.ts). */

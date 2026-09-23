@@ -117,7 +117,7 @@
         overflow: hidden;
     }
 
-    /* Main workspace fills the whole app area right of the tool sidebar; the
+    /* Main workspace fills the whole app area below the menu bar; the
        canvas↔panels split is a normal tiling gutter, not a fixed region edge. */
     .workspace.main {
         flex: 1;

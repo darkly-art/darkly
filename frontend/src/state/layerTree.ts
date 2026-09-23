@@ -72,6 +72,36 @@ export interface LayerTreeIndex {
 }
 
 /**
+ * Is this node a container, i.e. does it hold other rows?
+ *
+ * The one predicate for the question. The drop-target model resolves its
+ * `into` band from `DropRow.isGroup`, and the row component decides whether to
+ * render a collapse chevron and accept child rows; those two answers must be
+ * the same answer or a row renders as a container and then refuses an
+ * into-drop. Asking here rather than reading `.type` at either call site keeps
+ * the tag in one place.
+ */
+export function isContainer(node: any): boolean {
+    return node?.type === 'group';
+}
+
+/**
+ * Does `id` have a sibling below it, i.e. is there a row it could merge down
+ * into?
+ *
+ * Answered from the one walk's `slots`, whose sibling lists already exclude the
+ * viewport divider: the divider occupies a row but is not a layer, so the bottom-most
+ * real layer correctly reports `false` rather than offering a merge into it.
+ * Index 0 is the top of the stack, so "below" is the next higher index.
+ */
+export function hasSiblingBelow(tree: any[], id: number): boolean {
+    const slot = indexLayerTree(tree).slots.get(id);
+    if (!slot) return false;
+    const idx = slot.siblings.indexOf(id);
+    return idx >= 0 && idx < slot.siblings.length - 1;
+}
+
+/**
  * The single walk over a layer tree. Every structural question (liveness,
  * panel order, visibility, parentage) is answered from the one traversal, so
  * callers never hand-roll another.
@@ -103,7 +133,7 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
             order.push(id);
             if (visible) {
                 visibleOrder.push(id);
-                rows.push({ id, depth, isGroup: n.type === 'group' });
+                rows.push({ id, depth, isGroup: isContainer(n) });
             }
             slots.set(id, { parent, siblings });
 
@@ -120,7 +150,7 @@ export function indexLayerTree(tree: any[]): LayerTreeIndex {
                 }
             }
 
-            if (n.type === 'group') {
+            if (isContainer(n)) {
                 if (n.collapsed) collapsed.add(id);
                 if (Array.isArray(n.children)) {
                     walk(n.children, id, visible && !n.collapsed, depth + 1);

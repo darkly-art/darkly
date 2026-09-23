@@ -2,19 +2,19 @@
     import { setContext } from 'svelte';
     import CurveEditor from '../CurveEditor.svelte';
     import LevelsEditor from './LevelsEditor.svelte';
-    import ParamRow from './ParamRow.svelte';
+    import ParamRow from '../params/ParamRow.svelte';
     import ListParamEditor from './ListParamEditor.svelte';
     import { createGraphCoords } from '../brush_builder/coords';
     import type { NodeCanvasContext } from '../brush_builder/NodeCanvas.svelte';
     import {
         partitionFilterParams,
-        channelLabel,
         colorizeActive,
         type ParamInfo,
-        type FilterParamValue,
+        type ParamValue,
         type CurvePoints,
         type LevelsValues,
     } from './filterParams';
+    import { channelLabel } from '../params/paramSchema';
 
     // The reusable param-editing surface for a filter's params (channel selector
     // + Curve/Levels editor + scalar rows). Both the layer properties panel and
@@ -97,7 +97,7 @@
         const d = selectedParam.default;
         selectedParam.value = (
             Array.isArray(d) ? d.map((v) => (Array.isArray(v) ? [...v] : v)) : d
-        ) as FilterParamValue;
+        ) as ParamValue;
         onchange?.();
     }
 </script>

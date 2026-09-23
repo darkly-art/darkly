@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
     appearedRoots,
     collapsedAncestorsOf,
+    hasSiblingBelow,
     indexLayerTree,
+    isContainer,
     nextActiveAfterRemoval,
 } from '../layerTree';
 
@@ -202,5 +204,66 @@ describe('appearedRoots', () => {
         const prev = indexLayerTree(flat);
         expect(appearedRoots(prev, indexLayerTree([layer(3), layer(1)]))).toEqual([]);
         expect(appearedRoots(prev, indexLayerTree(flat))).toEqual([]);
+    });
+});
+
+describe('hasSiblingBelow', () => {
+    /** Index 0 is the top of the stack, so "below" is the next higher index. */
+    function idx(tree: unknown[]) {
+        return tree as never;
+    }
+
+    it('is true for a root layer with another below it', () => {
+        const i = idx([{ id: 1, type: 'raster' }, { id: 2, type: 'raster' }]);
+        expect(hasSiblingBelow(i, 1)).toBe(true);
+    });
+
+    it('is false for the bottom-most root layer', () => {
+        const i = idx([{ id: 1, type: 'raster' }, { id: 2, type: 'raster' }]);
+        expect(hasSiblingBelow(i, 2)).toBe(false);
+    });
+
+    it('is false for the bottom-most layer when only the divider sits below', () => {
+        // The divider occupies a row but is not a layer, so there is nothing to
+        // merge into. `slots` excludes it, which is what makes this fall out.
+        const i = idx([{ id: 1, type: 'raster' }, { id: -1, type: 'divider' }]);
+        expect(hasSiblingBelow(i, 1)).toBe(false);
+    });
+
+    it('is true for a child mid-list inside a group', () => {
+        const i = idx([
+            { id: 1, type: 'group', children: [{ id: 2, type: 'raster' }, { id: 3, type: 'raster' }] },
+        ]);
+        expect(hasSiblingBelow(i, 2)).toBe(true);
+    });
+
+    it("is false for a group's last child: the group's own sibling is not its child's", () => {
+        const i = idx([
+            { id: 1, type: 'group', children: [{ id: 2, type: 'raster' }, { id: 3, type: 'raster' }] },
+            { id: 4, type: 'raster' },
+        ]);
+        expect(hasSiblingBelow(i, 3)).toBe(false);
+    });
+
+    it('is false for an id that is not in the tree', () => {
+        expect(hasSiblingBelow(idx([{ id: 1, type: 'raster' }]), 99)).toBe(false);
+    });
+});
+
+describe('isContainer', () => {
+    it('is true for a group and false for everything else', () => {
+        expect(isContainer({ type: 'group' })).toBe(true);
+        expect(isContainer({ type: 'raster' })).toBe(false);
+        expect(isContainer({ type: 'divider' })).toBe(false);
+        expect(isContainer(undefined)).toBe(false);
+    });
+
+    it('agrees with the drop model, which resolves its into band from it', () => {
+        const i = indexLayerTree([
+            { id: 1, type: 'group', children: [] },
+            { id: 2, type: 'raster' },
+        ] as never);
+        expect(i.rows.find((r) => r.id === 1)!.isGroup).toBe(isContainer({ type: 'group' }));
+        expect(i.rows.find((r) => r.id === 2)!.isGroup).toBe(isContainer({ type: 'raster' }));
     });
 });

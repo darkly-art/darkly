@@ -2,8 +2,6 @@
  * Global toggle for the "Canvas Size" (resize) modal. The `resizeCanvas`
  * action dispatches into this; the modal reads it.
  */
-class ResizeCanvasState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const resizeCanvas = new ResizeCanvasState();
+export const resizeCanvas = dialogState();

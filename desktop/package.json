@@ -1,0 +1,35 @@
+{
+    "name": "darkly-desktop",
+    "productName": "Darkly",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Darkly desktop bundle",
+    "author": "Darkly <info@darkly.art>",
+    "main": "dist/main.js",
+    "scripts": {
+        "tsc": "tsc",
+        "start": "npm run tsc && electron-forge start",
+        "package": "npm run tsc && electron-forge package",
+        "make": "npm run tsc && electron-forge make",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:e2e": "playwright test"
+    },
+    "devDependencies": {
+        "@electron-forge/cli": "^7.11.0",
+        "@electron-forge/maker-deb": "^7.11.0",
+        "@electron-forge/maker-dmg": "^7.11.0",
+        "@electron-forge/maker-squirrel": "^7.11.0",
+        "@electron-forge/maker-zip": "^7.11.0",
+        "@playwright/test": "^1.50.0",
+        "@reforged/maker-appimage": "^5.2.0",
+        "@types/node": "^22.0.0",
+        "electron": "^43.0.0",
+        "playwright": "^1.50.0",
+        "typescript": "^5.7.0",
+        "vitest": "^2.1.0"
+    },
+    "dependencies": {
+        "electron-squirrel-startup": "^1.0.1"
+    }
+}

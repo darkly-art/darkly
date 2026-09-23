@@ -12,14 +12,10 @@
         <strong>{closeGuard.tabName}</strong> has unsaved changes.
         Save before closing?
     </p>
-    <div class="actions">
-        <button type="button" class="ghost" onclick={onCancel}>Cancel</button>
-        <button type="button" class="danger" onclick={onDiscard}>Discard</button>
-        <button
-            type="button"
-            class="primary"
-            onclick={onSave}
-        >Save</button>
+    <div class="dialog-actions">
+        <button type="button" class="btn" onclick={onCancel}>Cancel</button>
+        <button type="button" class="btn danger" onclick={onDiscard}>Discard</button>
+        <button type="button" class="btn primary" onclick={onSave}>Save</button>
     </div>
 </Modal>
 
@@ -29,50 +25,5 @@
         font-size: 13px;
         line-height: 1.5;
         color: var(--text);
-    }
-
-    .actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-    }
-
-    .actions button {
-        padding: 6px 14px;
-        font-size: 13px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: transparent;
-        color: var(--text);
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions button:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-    }
-
-    .actions .primary {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #ffffff;
-    }
-
-    .actions .primary:hover:not(:disabled) {
-        filter: brightness(1.1);
-        background: var(--accent);
-    }
-
-    .actions .danger {
-        color: var(--danger, #e35858);
-        border-color: var(--danger, #e35858);
-    }
-
-    .actions .danger:hover {
-        background: rgba(227, 88, 88, 0.12);
     }
 </style>

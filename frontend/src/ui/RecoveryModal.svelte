@@ -49,10 +49,10 @@
                 </div>
                 <span class="name" title={entry.name}>{entry.name}</span>
                 <div class="row-actions">
-                    <button type="button" class="danger" onclick={() => onDiscard(entry)}>
+                    <button type="button" class="btn danger" onclick={() => onDiscard(entry)}>
                         Discard
                     </button>
-                    <button type="button" class="primary" onclick={() => onRestore(entry)}>
+                    <button type="button" class="btn primary" onclick={() => onRestore(entry)}>
                         Restore
                     </button>
                 </div>
@@ -60,9 +60,9 @@
         {/each}
     </ul>
 
-    <div class="actions">
-        <button type="button" class="danger" onclick={onDiscardAll}>Discard all</button>
-        <button type="button" class="primary" onclick={onRestoreAll}>Restore all</button>
+    <div class="dialog-actions">
+        <button type="button" class="btn danger" onclick={onDiscardAll}>Discard all</button>
+        <button type="button" class="btn primary" onclick={onRestoreAll}>Restore all</button>
     </div>
 </Modal>
 
@@ -91,7 +91,7 @@
         gap: 10px;
         padding: 6px 8px;
         border: 1px solid var(--bg-hover);
-        border-radius: 4px;
+        border-radius: var(--radius-sm);
     }
 
     .thumb {
@@ -133,45 +133,10 @@
         flex: none;
     }
 
-    .actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
+    /* The only dialog whose footer is separated from a scrolling list above
+     * it; the rule stays local because no other dialog wants the divider. */
+    .dialog-actions {
         border-top: 1px solid var(--bg-hover);
         padding-top: 14px;
-    }
-
-    button {
-        padding: 6px 14px;
-        font-size: 13px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: transparent;
-        color: var(--text);
-        cursor: pointer;
-    }
-
-    button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .primary {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #ffffff;
-    }
-
-    .primary:hover:not(:disabled) {
-        filter: brightness(1.1);
-        background: var(--accent);
-    }
-
-    .danger {
-        color: var(--danger, #e35858);
-        border-color: var(--danger, #e35858);
-    }
-
-    .danger:hover {
-        background: rgba(227, 88, 88, 0.12);
     }
 </style>

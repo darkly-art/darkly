@@ -148,6 +148,9 @@ settings:
   ui.brushBuilder.previewVisible: true
   ui.brushBuilder.previewWidth: 320
   ui.brushBuilder.previewHeight: 120
+  ui.toolStrip.edge: left
+  ui.toolStrip.offset: 0.5
+  ui.toolStrip.autoHide: false
   # Input.
   input.fingerPainting: true
   # Stroke prediction look-ahead in ms (0 = off). See config/sections/input.rs.

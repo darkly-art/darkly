@@ -4,7 +4,8 @@
      * the pair the wheel edits; the wheel itself is the same component the
      * ad-hoc popup hosts.
      */
-    import { app, type Color } from '../../state/app.svelte';
+    import { app } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
     import ColorWheel from './ColorWheel.svelte';
     import HexField from './HexField.svelte';
     import FgBgSwatches, { type SwatchTarget } from './FgBgSwatches.svelte';

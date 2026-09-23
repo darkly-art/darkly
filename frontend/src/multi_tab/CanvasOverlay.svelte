@@ -6,9 +6,10 @@
     // Mounted exactly once at the app root. Holds the persistent WebGPU canvases
     // and positions itself (position:fixed) over wherever the `Document` panel's
     // placeholder currently sits, so the canvas follows the panel as it's tiled
-    // without the canvases ever remounting. `null` rect ⇒ no Document panel
+    // without the canvases ever remounting. The rect is measured and owned by
+    // `canvasSlot`, which the tool strip also reads. `null` ⇒ no Document panel
     // mounted (hidden).
-    let rect = $state<{ left: number; top: number; width: number; height: number } | null>(null);
+    let rect = $derived(canvasSlot.rect);
 
     // CanvasStack must first mount only once the overlay has a real, visible
     // rect; CanvasView sizes its WebGPU surface from getBoundingClientRect on
@@ -22,42 +23,17 @@
         if (rect && !everSized) everSized = true;
     });
 
-    function reposition() {
-        const el = canvasSlot.current;
-        if (!el) {
-            rect = null;
-            return;
-        }
-        const r = el.getBoundingClientRect();
-        rect = { left: r.left, top: r.top, width: r.width, height: r.height };
-    }
-
-    // Track the current placeholder: reposition on its resize (covers gutter
-    // drags, which resize the slot) and on window resize. Re-runs when the
-    // placeholder element itself changes, i.e. when the Document panel remounts
-    // in a new spot after being moved/tiled.
-    $effect(() => {
-        const el = canvasSlot.current;
-        if (!el) {
-            rect = null;
-            return;
-        }
-        reposition();
-        const ro = new ResizeObserver(() => reposition());
-        ro.observe(el);
-        window.addEventListener('resize', reposition);
-        return () => {
-            ro.disconnect();
-            window.removeEventListener('resize', reposition);
-        };
-    });
-
     // Belt-and-suspenders: any tiling mutation (including a gutter drag that
     // moves the slot's position without resizing it) touches the workspace
-    // trees. Deep-read them to subscribe, then reposition after layout settles.
+    // trees. Deep-read them to subscribe, then re-measure after layout settles.
+    // This trigger stays here rather than in `canvasSlot` because it subscribes
+    // to `workspaces.workspaces`, which is workspace-global rather than
+    // element-local; the module would need an `$effect.root` to hold it, which
+    // is not worth the lifecycle care for one rAF. This component is mounted
+    // once at the app root, so the trigger is always live.
     $effect(() => {
         void $state.snapshot(workspaces.workspaces);
-        requestAnimationFrame(reposition);
+        requestAnimationFrame(() => canvasSlot.reposition());
     });
 
     // During a tab drag the overlay must not intercept hit-testing, so a panel

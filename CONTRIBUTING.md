@@ -84,13 +84,24 @@ crates/darkly/src/
                         selection, gpu_region, compound)
   format/               Save/load: zip container, manifest, registry I/O
   nodegraph/            Generic node-graph (graph, compiler, layout)
-  docs_md/              Generated regions in this repo's markdown
+  docs_md/              Generated regions in this repo's text files
     fragments/    ★     what a region can be filled with (catalog_table,
-                          catalog_graphic, …)
+                          catalog_graphic, app_description, …)
+  product.rs            Loads product.yaml and projects it for packaging
+crates/darkly/product.yaml
+                        Darkly's summary, description,
+                        categories, keywords. The one home for all four.
+crates/darkly/releases.json
+                        Release history for the store listing and the
+                        GitHub release notes. Written by `cargo releases`,
+                        never by hand (docs/versioning.md).
 crates/darkly/presets/  Bundled config overlays (gimp, krita, photoshop)
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
   graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
+desktop/                Electron host: main, preload, storage bridge, forge
+packaging/              Desktop-integration resources shared by every
+                        channel (desktop entry, AppStream metainfo, icons)
 ```
 
 ### Read Before You Touch
@@ -172,55 +183,13 @@ When an idea, algorithm, shader, or implementation comes from an external source
 
 ## Planning and Independent Review Workflow
 
-Unless the user explicitly waives it, every bug fix and feature follows this workflow. Production code may not change before step 5.
+Every bug fix and feature follows these five steps unless the user waives them, and no production code changes before step 5. Steps 1 and 2 each need a fresh, isolated agent given only the repository instructions and its own task; if isolated agents are unavailable, ask the user to run that step in a fresh session.
 
-### 1. Draft
-
-Delegate planning to a fresh, isolated agent with only the repository instructions and user request. It must investigate the code and required prior art, then write a self-contained plan to `docs/plans/<name>.md` covering:
-
-- Problem and root cause or feature semantics
-- Architectural impact and implementation steps
-- Tests, risks, and unresolved questions
-- A rough LOC estimate (lines added or lines removed, not lines touched) split
-  into production, tests, and generated/docs changes. This estimate is a primary
-  scope and complexity signal, not optional metadata.
-- For bugs, a regression test that will fail before the fix
-
-The planning agent must not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
-
-### 2. Review
-
-Have a different fresh, isolated agent independently investigate the repository and review the plan. Give it only the repository instructions, plan path, and review task.
-
-The reviewer must challenge the diagnosis, scope, architecture, ownership, authority, modularity, duplication, complexity, prior-art support, and test coverage. It should seek the simplest general solution, including removing machinery or relocating behavior to its proper owner, and ensure bug tests reproduce the reported failure.
-
-Add concrete, file-referenced findings under `## Independent Review` at the top of the plan and give a verdict: `accept`, `revise`, or `rethink`. Do not modify production code. If isolated agents are unavailable, ask the user to run this step in a fresh session.
-
-### 3. Revise
-
-The orchestrator addresses every substantive finding in the plan or records an evidence-backed reason for rejecting it. A `rethink` verdict requires re-investigation and a rewritten approach, not an incremental patch. Preserve the review.
-
-### 4. Approve
-
-Give the user:
-
-- **First:** the estimated LOC range from the plan. Lead the approval summary with
-  this because it is the clearest signal of implementation size and possible
-  over-design.
-- The plan path and review verdict
-- The proposed approach, tradeoffs, and unresolved questions
-- Confirmation that implementation has not begun
-
-Then stop and request explicit approval. Plan changes require revision and, when material, another independent review and approval.
-
-### 5. Implement
-
-After approval, the orchestrator implements and verifies the plan. For bugs, first demonstrate the regression test failing, then make it pass.
-
-Keep the plan synchronized with material discoveries. If the implementation's
-expected LOC materially exceeds the approved estimate, stop and explain why
-before continuing. If implementation requires a material redesign, stop and
-return to review, revision, and user approval.
+1. **Draft.** The planning agent investigates the code and any prior art it needs, then writes a self-contained plan to `docs/plans/<name>.md`: root cause or feature semantics, architectural impact, implementation steps, tests, risks, open questions, and a LOC estimate (lines added or removed, split into production, tests, and generated/docs). The estimate is a primary scope and complexity signal, not optional metadata. For bugs, include a regression test that will fail before the fix.
+2. **Review.** A different agent investigates independently and challenges the plan: diagnosis, scope, architecture, ownership, authority, modularity, duplication, complexity, prior-art support, test coverage. It hunts for the simplest general solution, including deleting machinery or moving behavior to its proper owner, and checks that bug tests reproduce the reported failure. Concrete, file-referenced findings go under `## Independent Review` at the top of the plan, with a verdict: `accept`, `revise`, or `rethink`.
+3. **Revise.** The orchestrator addresses every substantive finding in the plan or records an evidence-backed reason for rejecting it, preserving the review. `rethink` means re-investigate and rewrite the approach, not patch it.
+4. **Approve.** Give the user the LOC estimate first, since it is the clearest signal of implementation size and possible over-design, then the plan path, verdict, approach, tradeoffs, and open questions, and confirm implementation has not begun. Stop and wait for explicit approval. Material plan changes go back through review and approval.
+5. **Implement.** The orchestrator implements and verifies the plan, demonstrating each bug's regression test failing first. Keep the plan synchronized with material discoveries. If the expected LOC materially exceeds the approved estimate, or the design has to change materially, stop and explain before continuing.
 
 ## Testing Principle
 
@@ -286,6 +255,10 @@ RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unkn
 # `--test-threads=1` is mandatory: GPU-touching integration tests share a
 # process-wide wgpu device and SIGSEGV when run in parallel.
 cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
+# `protocol_gen.ts` is generated from the request registry, and the test that
+# asserts it matches what is checked in sits behind `ts-export`, which the run
+# above does not enable. Without this line nothing checks it.
+cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
 # Both TS gates are required: `tsc` cannot see inside `.svelte` files, so it
 # gives a false green on component bugs that `svelte-check` catches.
@@ -293,6 +266,7 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 (cd frontend && npm run check)
 (cd frontend && npm run build)
 (cd frontend && npm test)
+(cd desktop && npm ci && npx tsc --noEmit && npm test)
 ```
 
 Every flag above is load-bearing. What each one defends against, the shape Vitest tests have to take with no DOM, and the `cargo sweep` housekeeping that keeps `target/` from ballooning are in [`docs/checks.md`](docs/checks.md).

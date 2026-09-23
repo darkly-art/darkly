@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import Slider from '../settings/widgets/Slider.svelte';
 
     let { node }: {
@@ -15,7 +16,7 @@
     // (and its category-based <optgroup>s) is built entirely from that table,
     // which arrives in registry order (GPU value, i.e. the conventional
     // Photoshop / Krita ordering) as the `blendModes` catalog.
-    let blendModeTypes = $derived(app.entries?.('blendModes') ?? []);
+    let blendModeTypes = $derived(catalogs.entries('blendModes'));
 
     interface BlendModeGroup { label: string; modes: typeof blendModeTypes; }
     let blendModeGroups = $derived((() => {

@@ -8,3 +8,9 @@ Graphite
 .claude
 frontend/wasm/pkg
 frontend/dist
+
+# Electron desktop host build output
+desktop/dist/
+desktop/out/
+desktop/resources/app/
+desktop/test-results/

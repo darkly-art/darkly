@@ -1,0 +1,30 @@
+# What Darkly says it is, in one place.
+#
+# The store listing, the desktop entry, the installer metadata and the README
+# all need the same summary, description and categories in four different
+# syntaxes. Before this file they were four hand-written copies, and they
+# disagreed: the AppImage maker advertised `Graphics;2DGraphics`, the deb maker
+# `Graphics`, and the desktop entry a third list again, so the app landed in a
+# different menu section depending on how it was installed.
+#
+# This file is the authority. Edit it here, then run `cargo sync-docs` to push
+# it into packaging/art.darkly.Darkly.desktop,
+# packaging/art.darkly.Darkly.metainfo.xml and packaging/app.json. Never edit
+# those: they are generated, and the test suite fails on a stale one.
+
+# The one-line pitch. AppStream lints above 35 characters, and a desktop entry's
+# `Comment` is truncated by most shells well before that, so keep it short and
+# give it no trailing period.
+summary: "Forbidden Editor for Artists"
+
+# Freedesktop menu categories. One list, so every channel files the app in the
+# same place. Values come from the freedesktop menu spec, not from invention.
+categories: ["Graphics", "2DGraphics", "RasterGraphics"]
+
+# Desktop-entry search keywords: what someone types into a launcher when they
+# want this and do not know its name.
+keywords: ["art", "draw", "paint", "image", "photo", "picture", "editor"]
+
+# The long description. One paragraph; make it a list of strings on the day
+# there is a second one.
+description: "Darkly is a GPU-native paint program built for artists. It has a powerful brush engine and dark arts to help you commune with your imagination."

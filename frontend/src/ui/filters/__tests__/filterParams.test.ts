@@ -1,17 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
     partitionFilterParams,
-    channelLabel,
     colorizeActive,
     seedScratchParams,
     filterParamMap,
-    cloneParamValue,
-    paramIsResettable,
     listItemSchema,
     newListEntry,
     type ParamInfo,
     type ListValue,
 } from '../filterParams';
+import { channelLabel, cloneParamValue, paramIsResettable } from '../../params/paramSchema';
 
 
 /** Fill the fields every `ParamInfo` carries but these cases don't exercise, so

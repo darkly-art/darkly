@@ -16,7 +16,8 @@
      * `select` mode (the docked color panel, which shows its own wheel) a click
      * only reports which swatch the host should edit.
      */
-    import { app, type Color } from '../../state/app.svelte';
+    import { app } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
     import { tooltipForAction } from '../../config/store.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ColorPopup from './ColorPopup.svelte';

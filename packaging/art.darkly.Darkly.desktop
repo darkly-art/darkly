@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Darkly
+GenericName=Image Editor
+# darkly:app-desktop-entry
+Comment=Forbidden Editor for Artists
+Categories=Graphics;2DGraphics;RasterGraphics;
+Keywords=art;draw;paint;image;photo;picture;editor;
+# /darkly:app-desktop-entry
+Exec=darkly
+Icon=art.darkly.Darkly
+Terminal=false
+StartupWMClass=Darkly

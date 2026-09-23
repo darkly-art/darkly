@@ -2,8 +2,6 @@
  * Global toggle for the Settings modal. The action registry dispatches
  * `openSettings` into this; the hamburger menu also writes here.
  */
-class SettingsState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const settings = new SettingsState();
+export const settings = dialogState();

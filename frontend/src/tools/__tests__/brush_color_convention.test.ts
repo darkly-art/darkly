@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { brushStrokeParams } from '../brush.svelte';
-import type { Color } from '../../state/app.svelte';
+import type { Color } from '../../lib/color';
 
 // Regression for the brush-darkens-paint bug: the brush was the only paint
 // tool that ran the picked color through an sRGB->linear conversion before

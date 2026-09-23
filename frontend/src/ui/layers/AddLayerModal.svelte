@@ -1,10 +1,11 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import { addLayerModal } from '../../state/addLayerModal.svelte';
     import { actions } from '../../actions/registry';
     import { registryEpoch } from '../../actions/registryEpoch.svelte';
     import Modal from '../Modal.svelte';
-    import Icon from '../../icons/Icon.svelte';
+    import SearchField from '../SearchField.svelte';
     import EffectPreview from '../EffectPreview.svelte';
     import { addSources } from './addSources';
     import { buildTabs, filterTabs, type AddCard } from './addLayerTabs';
@@ -27,7 +28,7 @@
         registryEpoch();
         return buildTabs({
             sources: addSources,
-            catalog: id => app.catalogs[id],
+            catalog: id => catalogs.catalog(id),
             action: id => actions.get(id),
         });
     });
@@ -132,20 +133,15 @@
 
 <Modal bind:open title="Add Layer" size="lg">
     {#snippet headerControls()}
-        <div class="search-wrap">
-            <Icon name="fa6-solid:magnifying-glass" />
-            <!-- svelte-ignore a11y_autofocus -->
-            <!-- The header sits outside `.add-layer`, so the search box needs
-                 the shared handler directly rather than by bubbling. -->
-            <input
-                bind:this={searchEl}
-                type="search"
-                bind:value={query}
-                placeholder="Search layer types…"
-                onkeydown={onKeyDown}
-                autofocus
-            />
-        </div>
+        <!-- The header sits outside `.add-layer`, so the search box needs the
+             shared handler directly rather than by bubbling. -->
+        <SearchField
+            bind:element={searchEl}
+            bind:value={query}
+            placeholder="Search layer types…"
+            onkeydown={onKeyDown}
+            autofocus
+        />
     {/snippet}
 
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -196,29 +192,6 @@
         height: 100%;
         min-height: 0;
         outline: none;
-    }
-
-    .search-wrap {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: var(--bg-hover);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 6px 10px;
-        color: var(--text-muted);
-        font-size: 13px;
-        width: min(320px, 100%);
-    }
-    .search-wrap:focus-within { border-color: var(--accent); }
-    .search-wrap input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        font-size: 13px;
-        outline: none;
-        min-width: 0;
     }
 
     .tab-strip {
