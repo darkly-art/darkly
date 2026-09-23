@@ -80,7 +80,12 @@ jobs:
     name: cargo test + coverage
     runs-on: ubuntu-latest
     steps:
+      # Full history so build.rs's `git describe --tags` resolves and the
+      # version tests compare against a real tag instead of the fallback
+      # (docs/versioning.md: any CI job that builds needs fetch-depth 0).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Install Mesa Vulkan software renderer (lavapipe) + fontconfig
         run: |
           sudo apt-get update
@@ -185,7 +190,33 @@ jobs:
     name: desktop integration metadata
     runs-on: ubuntu-latest
     steps:
+      # The release gate below needs the tags; only a PR into master pays for
+      # the full clone.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: ${{ github.base_ref == 'master' && 0 || 1 }}
+
+      # Release-prep gate. A PR into master ships a release, and the tag that
+      # follows the merge is the irreversible step (publish.yml fires on it),
+      # so the snapshot must already carry an entry newer than the last tag
+      # this PR descends from. This is the shell twin of
+      # `releases.rs::previous_tag` (same rule, no shared runtime), the same
+      # documented exception docs/versioning.md makes for build.rs and
+      # vite.config.ts; change one, change the other.
+      - name: Release snapshot is ahead of the last tag
+        if: github.event_name == 'pull_request' && github.base_ref == 'master'
+        run: |
+          last=$(git tag --merged HEAD --list 'v*' --sort=-v:refname \
+                 | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          newest=$(jq -r '.[0].version // empty' crates/darkly/releases.json)
+          if [ -z "$last" ] || [ -z "$newest" ]; then
+            echo "::error::no v*.*.* tag reachable from HEAD ($last) or no snapshot entry ($newest); is the checkout full?"
+            exit 1
+          fi
+          if ! printf '%s\n%s\n' "${last#v}" "$newest" | sort -V -C -u; then
+            echo "::error::releases.json newest entry $newest is not newer than $last; run cargo releases --fetch X.Y.Z"
+            exit 1
+          fi
 
       - name: Install validators
         run: |

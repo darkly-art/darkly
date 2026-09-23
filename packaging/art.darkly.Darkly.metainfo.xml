@@ -35,10 +35,84 @@
 
   <content_rating type="oars-1.1"/>
 
+  <!-- darkly:app-releases -->
   <releases>
-    <release version="0.8.0" date="2026-09-10"/>
-    <release version="0.7.0" date="2026-07-31"/>
-    <release version="0.6.0" date="2026-07-26"/>
-    <release version="0.5.0" date="2026-07-09"/>
+    <release version="0.8.0" date="2026-09-10">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.8.0</url>
+      <description>
+        <ul>
+          <li>Brush node improvements (#91)</li>
+          <li>Misc bugfixes (#95)</li>
+          <li>Docs (#97)</li>
+          <li>Better watercolor (#100)</li>
+          <li>Smart Objects (#107)</li>
+          <li>Brush work (#106)</li>
+          <li>Brush explorer improvements (#114)</li>
+          <li>Better veils (#111)</li>
+          <li>Radial Widget (#113)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-07-31">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.7.0</url>
+      <description>
+        <ul>
+          <li>Misc polishes and bugfixes (#80)</li>
+          <li>Recording feature (#76)</li>
+          <li>Linked masks and mask transform bugfixes (#84)</li>
+          <li>Input latency (#88)</li>
+          <li>Brush work (#87)</li>
+          <li>Electron shader fixes (#90)</li>
+          <li>Node comments (#92)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-07-26">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.6.0</url>
+      <description>
+        <ul>
+          <li>Crates.io autopublishing (#54)</li>
+          <li>Perspective transform (#55)</li>
+          <li>Blur brush (#56)</li>
+          <li>Calligraphy brush (#57)</li>
+          <li>Angle snapping (#58)</li>
+          <li>Curves Layer (#59)</li>
+          <li>Frontend Bugfixes + Tool Session (#65)</li>
+          <li>Text layer (#61)</li>
+          <li>Uniform icon sizes (#66)</li>
+          <li>Typed engine bridge (#64)</li>
+          <li>Tiling windows (#68)</li>
+          <li>Levels filter layer (#67)</li>
+          <li>HSV filter layer + destructive action (#69)</li>
+          <li>Styling improvements (#70)</li>
+          <li>Clone brush (#73)</li>
+          <li>Brightness/contrast (#75)</li>
+          <li>Desaturate (#77)</li>
+          <li>Chromatic aberration (#78)</li>
+          <li>Blender void (#74)</li>
+          <li>Multiple deployment modes (#79)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-07-09">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.5.0</url>
+      <description>
+        <ul>
+          <li>Add autosave / restore feature (#34)</li>
+          <li>Image rescale (#36)</li>
+          <li>Asyncify Engine Bridge (#37)</li>
+          <li>Selection Grow / Shrink / Feather (#40)</li>
+          <li>Transform tool improvement (#42)</li>
+          <li>Layer flip / rotate (#41)</li>
+          <li>Fix safari bugs (#43)</li>
+          <li>Fix mask pasting (#44)</li>
+          <li>Void preview (#46)</li>
+          <li>Screenshare void (#48)</li>
+          <li>Improve screenshare void performance (#50)</li>
+          <li>Filter layers (#49)</li>
+        </ul>
+      </description>
+    </release>
   </releases>
+  <!-- /darkly:app-releases -->
 </component>

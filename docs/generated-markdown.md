@@ -45,7 +45,12 @@ description in one belongs to the thing that owns it, so a typo in the README's
 effects table is fixed on the registration in
 [`crates/darkly/src/gpu/effects/`](../crates/darkly/src/gpu/effects/), and the
 app's own summary, description, categories and keywords are fixed in
-[`crates/darkly/product.yaml`](../crates/darkly/product.yaml).
+[`crates/darkly/product.yaml`](../crates/darkly/product.yaml). The metainfo's
+`<releases>` block renders [`crates/darkly/releases.json`](../crates/darkly/releases.json),
+which is itself generated: `cargo releases --fetch X.Y.Z` writes an entry from
+the tag graph and the titles of the PRs merged in it (see
+[`docs/versioning.md`](versioning.md)), so a release line is fixed on the PR
+title on GitHub and re-fetched.
 
 ```bash
 cargo sync-docs              # refill every region

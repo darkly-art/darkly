@@ -91,6 +91,10 @@ crates/darkly/src/
 crates/darkly/product.yaml
                         Darkly's summary, description,
                         categories, keywords. The one home for all four.
+crates/darkly/releases.json
+                        Release history for the store listing and the
+                        GitHub release notes. Written by `cargo releases`,
+                        never by hand (docs/versioning.md).
 crates/darkly/presets/  Bundled config overlays (gimp, krita, photoshop)
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
@@ -220,6 +224,8 @@ Darkly's prose uses plain hyphens. **No en dashes and no em dashes anywhere in a
 ## PR Descriptions
 
 Fork every feature branch off `dev` and target PRs at `dev`, never `master` (which only receives release merges from `dev`, despite being GitHub's default branch).
+
+A PR's title is the line the store listing and the GitHub release notes show for it, so write it in user language with no URL. PRs are merged with a merge commit or a squash, never a rebase: the release notes are read from the merge subject, and a rebased PR leaves none.
 
 Every PR body has **two parts**: a human-written preamble explaining *why* the work was undertaken and who it's useful to, then the AI-generated technical description below a `---` separator. When you finish implementing a plan, emit the PR description in a fenced markdown code block as part of your reply, shaped like this, leaving the top as a placeholder for the human to fill in:
 

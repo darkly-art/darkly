@@ -125,7 +125,15 @@ jobs:
         if: env.TARGET != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        #
+        # The notes are the release's entry in crates/darkly/releases.json,
+        # rendered by the tagged tree itself, with GitHub's generated list
+        # appended under them. Written only when this job creates the release:
+        # a re-run against an existing one re-attaches the tarball and leaves
+        # whatever body it has alone.
         run: |
-          gh release view "$TARGET" >/dev/null 2>&1 \
-            || gh release create "$TARGET" --draft --prerelease --generate-notes
+          if ! gh release view "$TARGET" >/dev/null 2>&1; then
+            cargo run -q -p darkly --bin releases -- --notes "$TARGET" > notes.md
+            gh release create "$TARGET" --draft --prerelease --generate-notes --notes-file notes.md
+          fi
           gh release upload "$TARGET" "$ARTIFACT" --clobber

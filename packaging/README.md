@@ -36,6 +36,12 @@ source on its own infrastructure with no network access, so every dependency is
 vendored as a pinned source list rather than fetched at build time, and the
 manifest lives in the `flathub/art.darkly.Darkly` repository rather than here.
 
+The summary, description and desktop-entry fields in the two text files are
+generated from `crates/darkly/product.yaml`, and the metainfo's `<releases>`
+block from `crates/darkly/releases.json`; `cargo sync-docs` refills both, and
+[`docs/versioning.md`](../docs/versioning.md) has the release procedure that
+writes a new entry.
+
 Validate changes to the two text files in this directory the way CI does:
 
 ```bash
