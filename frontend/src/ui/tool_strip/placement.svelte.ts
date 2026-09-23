@@ -30,8 +30,7 @@ function readEdge(): Edge {
 }
 
 function readOffset(): number {
-    const raw = config.get(OFFSET_KEY);
-    return typeof raw === 'number' && Number.isFinite(raw) ? raw : FALLBACK.offset;
+    return config.number(OFFSET_KEY, FALLBACK.offset);
 }
 
 class ToolStripPlacement {

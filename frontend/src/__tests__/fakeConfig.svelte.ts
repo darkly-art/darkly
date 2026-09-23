@@ -19,6 +19,11 @@ class FakeConfigStore {
         return this.#values[key];
     }
 
+    number(key: string, fallback: number): number {
+        const raw = this.get(key);
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
+    }
+
     set(key: string, value: unknown) {
         this.#values[key] = value;
         this.#version++;

@@ -89,7 +89,7 @@
         onchange={(c) => open && write(open, c)}
         onclose={() => (open = null)}
         scope={SCOPE}
-        anchor={(open === 'foreground' ? fgButton : bgButton)!}
+        anchor={() => (open === 'foreground' ? fgButton : bgButton)!.getBoundingClientRect()}
     />
 {/if}
 

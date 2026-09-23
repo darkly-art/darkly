@@ -43,14 +43,21 @@ const cancelEv = (pointerId = 1) =>
 registerPalettePopupAction();
 const action = actions.get('palettePopup')!;
 
-/** Ring-0 bottom-half midpoint of the first of two color sectors. */
-const colorPoint = (cx: number, cy: number): [number, number] => {
+/** Ring-0 midpoint of the colors section's `i`th sector.
+ *
+ *  The section spans 120 degrees from theta PI/6 with +y down, split evenly
+ *  among its nodes: the spectrum leaf, then the two mocked recents. So with
+ *  three sectors each is 40 degrees wide, and index 0 is the screen-right one. */
+const colorPoint = (cx: number, cy: number, i: number): [number, number] => {
     const r = HUB_R + RING_T / 2;
-    return [cx + r * Math.cos(Math.PI / 4), cy + r * Math.sin(Math.PI / 4)];
+    const span = (2 * Math.PI) / 3 / 3;
+    const theta = Math.PI / 6 + (i + 0.5) * span;
+    return [cx + r * Math.cos(theta), cy + r * Math.sin(theta)];
 };
 
 beforeEach(() => {
     palettePopup.cancel();
+    palettePopup.closeColorWheel();
     fakeApp.pointerActive = false;
     fakeApp.foreground = { r: 1, g: 2, b: 3, a: 255 };
     loadBrush.mockClear();
@@ -83,11 +90,24 @@ describe('palettePopup action', () => {
 
     it('thread to a color leaf and release commits it to the foreground', () => {
         action.handler({ event: down(400, 400) });
-        const [x, y] = colorPoint(400, 400);
+        // Sector 1: the most recent color, which follows the spectrum leaf.
+        const [x, y] = colorPoint(400, 400, 1);
         action.onMove!({}, move(x, y), 0, 0);
         action.deactivate!({ upEvent: up() });
         expect(palettePopup.isOpen).toBe(false);
         expect(fakeApp.foreground).toEqual({ r: 255, g: 0, b: 0, a: 255 });
+    });
+
+    it('thread to the spectrum leaf and release opens the color wheel at the pen', () => {
+        action.handler({ event: down(400, 400) });
+        const [x, y] = colorPoint(400, 400, 0);
+        action.onMove!({}, move(x, y), 0, 0);
+        action.deactivate!({ upEvent: up() });
+        expect(palettePopup.isOpen).toBe(false);
+        // The foreground is untouched: the spectrum leaf picks no colour, it
+        // offers the wheel that picks one. And the wheel outlives the gesture.
+        expect(fakeApp.foreground).toEqual({ r: 1, g: 2, b: 3, a: 255 });
+        expect(palettePopup.colorWheelAt).toEqual({ x, y });
     });
 
     it('release over the hub cancels (zero-movement gesture)', () => {
@@ -99,7 +119,7 @@ describe('palettePopup action', () => {
 
     it('a pointercancel release cancels even with a leaf highlighted', () => {
         action.handler({ event: down(400, 400) });
-        const [x, y] = colorPoint(400, 400);
+        const [x, y] = colorPoint(400, 400, 1);
         action.onMove!({}, move(x, y), 0, 0);
         action.deactivate!({ upEvent: cancelEv() });
         expect(palettePopup.isOpen).toBe(false);
@@ -108,7 +128,7 @@ describe('palettePopup action', () => {
 
     it('ignores moves and releases from non-latched pointers', () => {
         action.handler({ event: down(400, 400) });
-        const [x, y] = colorPoint(400, 400);
+        const [x, y] = colorPoint(400, 400, 1);
         action.onMove!({}, move(x, y, 9), 0, 0);
         const s = palettePopup.state;
         expect(s.kind === 'engaged' && s.highlight.kind).toBe('hub');
