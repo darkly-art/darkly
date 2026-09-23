@@ -1,9 +1,11 @@
+import { rgbaToBlob } from '../lib/rgba';
 import { actions } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { placeSmartObjectFromBlob } from './place_smart_object';
+import { reportEngineError } from '../engine/protocol';
 import { toast } from '../state/toast.svelte';
 
 /** Switch to the transform tool after a paste so the freshly-floated layer is
@@ -36,14 +38,14 @@ export function registerClipboardActions(): void {
             // the same async pixel readback that `copy` does: it's a
             // superset, so we don't need to call both.
             engine.api.copyLayerRich({ id: app.activeLayerId });
-            app.onCopyResult(async (result) => {
+            void app.awaitReadback('copy', () => engine.api.pollCopyResult()).then(async (result) => {
                 if (!result?.rgba) return;
                 // The rich JSON lands one frame later, on the same readback
                 // completion path. Polling here is safe because we got the
-                // pixel result; the rich result is set before this callback.
+                // pixel result; the rich result is set before it.
                 const richJson = (await engine.api.pollCopyRichResult()) ?? undefined;
                 copyToSystemClipboard(result.rgba, result.width, result.height, richJson);
-            });
+            }, reportEngineError);
         },
     });
     actions.register({
@@ -57,12 +59,11 @@ export function registerClipboardActions(): void {
             // fallback restores the bitmap) but loses blend mode/opacity.
             // Worth a follow-up.
             await engine.api.cut({ id: app.activeLayerId });
-            app.onCopyResult((result) => {
+            void app.awaitReadback('copy', () => engine.api.pollCopyResult()).then((result) => {
                 if (result?.rgba) {
                     copyToSystemClipboard(result.rgba, result.width, result.height);
                 }
-            });
-            app.requestFrame();
+            }, reportEngineError);
         },
     });
     actions.register({
@@ -77,16 +78,7 @@ export function registerClipboardActions(): void {
                 // original blob: `readImageFromClipboard` already normalised
                 // whatever the clipboard held into RGBA, and the placement
                 // path owns the downscale-and-premultiply policy.
-                const canvas = new OffscreenCanvas(clip.width, clip.height);
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
-                const img = new ImageData(
-                    new Uint8ClampedArray(clip.rgba),
-                    clip.width,
-                    clip.height,
-                );
-                ctx.putImageData(img, 0, 0);
-                const blob = await canvas.convertToBlob({ type: 'image/png' });
+                const blob = await rgbaToBlob(clip.rgba, clip.width, clip.height, 'image/png');
                 await placeSmartObjectFromBlob(blob, 'clipboard image');
             })();
         },

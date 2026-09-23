@@ -77,7 +77,7 @@ export interface ToolDescriptor {
      *  the UI through the `tools` catalog. This field exists only for a glyph
      *  that depends on live session state, which a static registration cannot
      *  express: the brush swaps to the eraser icon while erase mode is on.
-     *  Resolve through `app.toolGlyph(id)` rather than reading it directly:
+     *  Resolve through `catalogs.toolGlyph(id)` rather than reading it directly:
      *  that is where override-beats-registry is decided. */
     readonly icon?: string | (() => string);
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */

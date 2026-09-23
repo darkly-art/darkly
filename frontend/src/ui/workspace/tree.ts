@@ -21,6 +21,8 @@
  *  Graphite), so the whole window tiles and horizontal splitting (canvas |
  *  panels) is meaningful. It is a non-closable, non-poppable singleton kept
  *  present by {@link ensureDocument}. */
+import type { Edge } from '../../lib/edges';
+
 export type PanelType = 'document' | 'layers' | 'properties' | 'color';
 
 export interface PanelGroupState {
@@ -45,7 +47,10 @@ export interface WorkspaceLayout {
     root: Subdivision;
 }
 
-export type DockingSplitDirection = 'left' | 'right' | 'top' | 'bottom';
+/** A dock lands on one of the four edges; the split it produces is named after
+ *  that edge. Same union as `lib/edges.ts`'s `Edge`, aliased rather than
+ *  redeclared so there is one definition in the app. */
+export type DockingSplitDirection = Edge;
 
 /** Even share for a fresh adjacent split when no source-size hint is given. */
 const DEFAULT_SPLIT_SHARE = 0.5;

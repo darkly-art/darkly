@@ -23,9 +23,10 @@
 //! Fragments are a modular registry: a new one is a new file in `fragments/`
 //! exporting `pub fn register()`, and nothing here is edited to admit it.
 //!
-//! Needs no GPU. Like [`crate::catalog`], every fragment builds from `&'static`
-//! registration data alone, which is what lets the check run in the ordinary
-//! test suite rather than behind a device.
+//! Needs no GPU, and reads no files: like [`crate::catalog`], every fragment
+//! builds from the registries and from text embedded at compile time, which is
+//! what lets the check run in the ordinary test suite rather than behind a
+//! device.
 
 pub mod fragments;
 
@@ -201,21 +202,63 @@ impl std::error::Error for SyncError {}
 // Markers
 // ---------------------------------------------------------------------------
 
-/// The inside of an HTML comment occupying a whole line, or `None` for any other
+/// How a target spells a comment, which is the only thing that varies between
+/// the file types this system writes into.
+///
+/// Markdown and XML share `<!-- -->` exactly, which is why an AppStream
+/// metainfo file needed no grammar of its own. A desktop entry has no such
+/// syntax and uses `#`, which markdown must never be read with: `# Heading`
+/// would parse as a comment body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Syntax {
+    /// `<!-- ... -->`, and `` ``` `` fences are honoured.
+    Markdown,
+    /// `<!-- ... -->`, with no fences.
+    Xml,
+    /// `# ...`, with no fences.
+    Hash,
+}
+
+impl Syntax {
+    /// The syntax a path is written in, or `None` for a file this system does
+    /// not generate into.
+    pub fn of(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()? {
+            "md" => Some(Syntax::Markdown),
+            "xml" => Some(Syntax::Xml),
+            "desktop" => Some(Syntax::Hash),
+            _ => None,
+        }
+    }
+
+    /// Whether fenced code blocks shield markers from being read as regions.
+    fn fenced(self) -> bool {
+        self == Syntax::Markdown
+    }
+}
+
+/// The inside of a comment occupying a whole line, or `None` for any other
 /// line. Indentation is tolerated so a region can sit inside a list item.
-fn comment_body(line: &str) -> Option<&str> {
+fn comment_body(line: &str, syntax: Syntax) -> Option<&str> {
     let t = line.trim();
-    t.strip_prefix("<!--")?.strip_suffix("-->").map(str::trim)
+    match syntax {
+        Syntax::Markdown | Syntax::Xml => {
+            t.strip_prefix("<!--")?.strip_suffix("-->").map(str::trim)
+        }
+        Syntax::Hash => t.strip_prefix('#').map(str::trim),
+    }
 }
 
 /// The fragment a close marker names.
-fn close_marker(line: &str) -> Option<&str> {
-    comment_body(line)?.strip_prefix("/darkly:").map(str::trim)
+fn close_marker(line: &str, syntax: Syntax) -> Option<&str> {
+    comment_body(line, syntax)?
+        .strip_prefix("/darkly:")
+        .map(str::trim)
 }
 
 /// The fragment an open marker names, with its arguments still unparsed.
-fn open_marker(line: &str) -> Option<(&str, &str)> {
-    let body = comment_body(line)?.strip_prefix("darkly:")?;
+fn open_marker(line: &str, syntax: Syntax) -> Option<(&str, &str)> {
+    let body = comment_body(line, syntax)?.strip_prefix("darkly:")?;
     Some(match body.split_once(char::is_whitespace) {
         Some((id, rest)) => (id, rest.trim()),
         None => (body, ""),
@@ -279,6 +322,15 @@ pub struct Rendered {
 /// number of regions, including several of the same fragment with different
 /// arguments: one page listing two catalogs is a table each, not a conflict.
 pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
+    // A path this system does not generate into cannot hold a region, so it
+    // renders to itself rather than erroring: `sync` never offers one, and a
+    // caller that does gets its file back untouched.
+    let Some(syntax) = Syntax::of(rel) else {
+        return Ok(Rendered {
+            text: text.to_string(),
+            regions: 0,
+        });
+    };
     let md_dir = rel.parent().unwrap_or(Path::new(""));
     let err = |line: usize, kind: SyncErrorKind| SyncError {
         file: rel.to_path_buf(),
@@ -296,13 +348,13 @@ pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
     for (i, line) in text.lines().enumerate() {
         let no = i + 1;
 
-        if open.is_none() && fence.consume(line) {
+        if syntax.fenced() && open.is_none() && fence.consume(line) {
             out.push_str(line);
             out.push('\n');
             continue;
         }
 
-        if let Some((id, arg_text)) = open_marker(line) {
+        if let Some((id, arg_text)) = open_marker(line, syntax) {
             if let Some((outer, at)) = &open {
                 // A marker inside a region is content the region owns, and the
                 // region is about to be overwritten, so it cannot be one.
@@ -351,7 +403,7 @@ pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
             continue;
         }
 
-        if let Some(id) = close_marker(line) {
+        if let Some(id) = close_marker(line, syntax) {
             match open.take() {
                 None => return Err(err(no, SyncErrorKind::StrayClose(id.to_string()))),
                 Some((opened, _)) if opened != id => {
@@ -393,8 +445,9 @@ pub fn render_text(rel: &Path, text: &str) -> Result<Rendered, SyncError> {
 // Walking the tree
 // ---------------------------------------------------------------------------
 
-/// Every markdown file under `root`, relative to it, in a stable order.
-pub fn markdown_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
+/// Every file under `root` this system can generate into, relative to it, in a
+/// stable order. See [`Syntax::of`] for which those are.
+pub fn generated_files(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let mut found = Vec::new();
     walk(root, Path::new(""), &mut found)?;
     found.sort();
@@ -422,7 +475,7 @@ fn walk(root: &Path, rel: &Path, found: &mut Vec<PathBuf>) -> Result<(), std::io
                 continue;
             }
             walk(root, &path, found)?;
-        } else if path.extension().is_some_and(|e| e == "md") {
+        } else if Syntax::of(&path).is_some() {
             found.push(path);
         }
     }
@@ -459,7 +512,7 @@ pub fn sync(root: &Path, mode: Mode) -> Result<Report, SyncError> {
     };
 
     let mut report = Report::default();
-    for rel in markdown_files(root).map_err(|e| io(e, root))? {
+    for rel in generated_files(root).map_err(|e| io(e, root))? {
         let path = root.join(&rel);
         let text = std::fs::read_to_string(&path).map_err(|e| io(e, &rel))?;
         if !text.contains("darkly:") {
@@ -539,6 +592,60 @@ mod tests {
     fn a_missing_trailing_newline_is_not_invented() {
         let text = format!("{OPEN}\n{CLOSE}");
         assert!(!render(&text).unwrap().ends_with('\n'));
+    }
+
+    /// A markdown heading is not a marker.
+    ///
+    /// The desktop-entry syntax reads `#` as a comment introducer. Markdown
+    /// must never be parsed that way: every `## Rules` in this repository's own
+    /// documentation would become a comment body, and one of them starting with
+    /// `darkly:` would open a region nobody wrote.
+    #[test]
+    fn a_markdown_heading_is_not_a_marker() {
+        assert_eq!(comment_body("# Versioning", Syntax::Markdown), None);
+        assert_eq!(comment_body("# darkly:app-summary", Syntax::Markdown), None);
+        assert_eq!(open_marker("# darkly:app-summary", Syntax::Markdown), None);
+    }
+
+    /// The desktop-entry syntax reads its own comments, and only its own.
+    #[test]
+    fn hash_syntax_reads_hash_comments() {
+        assert_eq!(
+            open_marker("# darkly:app-desktop-entry", Syntax::Hash),
+            Some(("app-desktop-entry", ""))
+        );
+        assert_eq!(
+            close_marker("# /darkly:app-desktop-entry", Syntax::Hash),
+            Some("app-desktop-entry")
+        );
+        // An ordinary comment is not a marker.
+        assert_eq!(open_marker("# just a note", Syntax::Hash), None);
+    }
+
+    /// XML needs no grammar of its own: its comments are markdown's exactly.
+    #[test]
+    fn xml_shares_the_html_comment_grammar() {
+        assert_eq!(
+            open_marker("<!-- darkly:app-summary -->", Syntax::Xml),
+            Some(("app-summary", ""))
+        );
+        assert_eq!(
+            close_marker("<!-- /darkly:app-summary -->", Syntax::Xml),
+            Some("app-summary")
+        );
+    }
+
+    /// Which files the system will generate into, and which it refuses.
+    #[test]
+    fn syntax_is_chosen_by_extension() {
+        use std::path::Path;
+        assert_eq!(Syntax::of(Path::new("README.md")), Some(Syntax::Markdown));
+        assert_eq!(Syntax::of(Path::new("a.metainfo.xml")), Some(Syntax::Xml));
+        assert_eq!(Syntax::of(Path::new("a.desktop")), Some(Syntax::Hash));
+        // Not a target: JSON has no comment syntax to hide a marker in, which
+        // is why packaging/app.json is written whole instead.
+        assert_eq!(Syntax::of(Path::new("app.json")), None);
+        assert_eq!(Syntax::of(Path::new("main.rs")), None);
     }
 
     #[test]
@@ -666,7 +773,7 @@ mod tests {
     /// thousands of markdown files, and rewriting any of them would be wrong.
     #[test]
     fn the_walk_skips_vendored_and_hidden_directories() {
-        let files = markdown_files(&repo_root()).unwrap();
+        let files = generated_files(&repo_root()).unwrap();
         assert!(files.iter().any(|p| p == Path::new("README.md")));
         for f in &files {
             let first = f.components().next().unwrap().as_os_str().to_string_lossy();
@@ -683,7 +790,7 @@ mod tests {
     /// link out of the tree would be followed out of it.
     #[test]
     fn the_walk_reaches_a_linked_file_once_under_its_real_name() {
-        let files = markdown_files(&repo_root()).unwrap();
+        let files = generated_files(&repo_root()).unwrap();
         assert!(files.iter().any(|p| p == Path::new("CONTRIBUTING.md")));
         for link in ["AGENTS.md", "CLAUDE.md"] {
             assert!(

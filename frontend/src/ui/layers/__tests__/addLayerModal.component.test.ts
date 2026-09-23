@@ -54,16 +54,22 @@ const app = {
     // The catalog-less sources dispatch their real action handlers, which reach
     // for these.
     engine: { api: { addGroup: vi.fn(async () => 9), addRaster: vi.fn(async () => 9) } },
-    catalogs,
     activeLayerId: 3,
     selectedLayerIds: new Set<number>(),
-    entries: (id: string) => catalogs[id]?.entries ?? [],
     refreshLayerTree: vi.fn(),
     requestFrame: vi.fn(),
     selectLayer: vi.fn(),
 };
 
 vi.mock('../../../state/app.svelte', () => ({ app }));
+// The registries are process state, so the modal and the dynamically
+// registered filter actions both read them straight from the module.
+vi.mock('../../../state/catalogs.svelte', () => ({
+    catalogs: {
+        catalog: (id: string) => catalogs[id],
+        entries: (id: string) => catalogs[id]?.entries ?? [],
+    },
+}));
 // The preview canvas needs a GPU round-trip; the cards' names are what matter.
 vi.mock('../../EffectPreview.svelte', async () => {
     const stub = (await import('./EffectPreviewStub.svelte')).default;

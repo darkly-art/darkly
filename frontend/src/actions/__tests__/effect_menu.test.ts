@@ -2,13 +2,15 @@
 // land in the menu. Placement is derived from each effect's own declared
 // category, so this seeds a catalog and reads the menu back out.
 //
-// Separate from `menu_actions.test.ts` because seeding catalogs needs an
-// active instance, and that test deliberately asserts against an instance-free
-// `app`.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+// Separate from `menu_actions.test.ts` because the effect actions only exist
+// once the catalog is loaded, and that test deliberately asserts against the
+// registrations that stand without one.
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DarklyInstance, setActiveInstance } from '../../state/app.svelte';
 import { registerActions } from '../index';
 import { actions, type Action } from '../registry';
+import { catalogs } from '../../state/catalogs.svelte';
+import { withApi } from '../../engine/testApi';
 import { buildTopMenus, type MenuEntry } from '../../ui/menu/menuModel';
 import { filterPalette } from '../../ui/menu/paletteFilter';
 import type { Catalog, CatalogEntry, ParamInfo } from '../../engine/protocol_gen';
@@ -60,10 +62,14 @@ function submenu(title: string): Extract<MenuEntry, { kind: 'submenu' }> {
 const idsOf = (entries: MenuEntry[]) =>
     entries.flatMap(e => (e.kind === 'action' ? [e.actionId] : []));
 
+// The registries are process state, so the singleton is what `registerActions`
+// reads; loading it once here is what a real session's bootstrap does.
+beforeAll(async () => {
+    await catalogs.load(withApi({ send: async (kind: string) => (kind === 'catalogs' ? [EFFECTS] : null) }));
+});
+
 beforeEach(() => {
-    const instance = new DarklyInstance();
-    instance.catalogs = { effects: EFFECTS };
-    setActiveInstance(instance);
+    setActiveInstance(new DarklyInstance());
     actions.setDocs(rustActionDocs());
     registerActions();
 });

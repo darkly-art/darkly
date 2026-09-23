@@ -4,6 +4,7 @@
     import { actions, type Action } from '../../actions/registry';
     import { exportRootAsZip, downloadBlob } from '../../storage';
     import Modal from '../Modal.svelte';
+    import SearchField from '../SearchField.svelte';
     import PrefRow from './PrefRow.svelte';
     import ActionTriggerRow from './ActionTriggerRow.svelte';
     import type { ParamInfo } from '../../engine/protocol_gen';
@@ -91,11 +92,11 @@
 </script>
 
 <Modal bind:open={settings.open} title="Settings" size="xl">
-    <div class="settings-body">
-        <header class="topbar">
+    {#snippet headerControls()}
+        <div class="tools">
             <button
                 type="button"
-                class="topbar-action"
+                class="tool-btn"
                 onclick={resetAll}
                 title="Remove every personal override; the base layout shows through."
             >
@@ -104,7 +105,7 @@
             </button>
             <button
                 type="button"
-                class="topbar-action"
+                class="tool-btn"
                 onclick={exportZip}
                 disabled={exporting}
                 title="Bundle the whole Darkly directory into a downloadable .zip"
@@ -112,84 +113,77 @@
                 <Icon name="fa6-solid:file-export" />
                 {exporting ? 'Exporting…' : 'Export .zip'}
             </button>
-            <div class="search-wrap">
-                <Icon name="fa6-solid:magnifying-glass" />
-                <input
-                    type="search"
-                    bind:this={searchEl}
-                    bind:value={search}
-                    placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
-                />
-            </div>
+            <SearchField
+                bind:element={searchEl}
+                bind:value={search}
+                placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
+            />
             {#if activeTab === 'hotkeys'}
                 <label class="scope-toggle" title="Show a Scope dropdown on each trigger row">
                     <input type="checkbox" bind:checked={showScopes} />
                     Show scopes
                 </label>
             {/if}
-        </header>
+        </div>
+    {/snippet}
 
-        <div class="main">
-            <nav class="tab-strip">
-                <button
-                    type="button"
-                    class="tab"
-                    class:active={activeTab === 'settings'}
-                    onclick={() => activeTab = 'settings'}
-                >Settings</button>
-                <button
-                    type="button"
-                    class="tab"
-                    class:active={activeTab === 'hotkeys'}
-                    onclick={() => activeTab = 'hotkeys'}
-                >Hotkeys</button>
-            </nav>
+    <div class="main">
+        <nav class="tab-strip">
+            <button
+                type="button"
+                class="tab"
+                class:active={activeTab === 'settings'}
+                onclick={() => activeTab = 'settings'}
+            >Settings</button>
+            <button
+                type="button"
+                class="tab"
+                class:active={activeTab === 'hotkeys'}
+                onclick={() => activeTab = 'hotkeys'}
+            >Hotkeys</button>
+        </nav>
 
-            <div class="prefs-list">
-                {#if activeTab === 'settings'}
-                    {#if visiblePrefs.length === 0}
-                        <div class="empty">No matching settings.</div>
-                    {:else}
-                        {#each visiblePrefs as pref (pref.name)}
-                            <PrefRow {pref} />
-                        {/each}
-                    {/if}
+        <div class="prefs-list">
+            {#if activeTab === 'settings'}
+                {#if visiblePrefs.length === 0}
+                    <div class="empty">No matching settings.</div>
                 {:else}
-                    {#if visibleActions.length === 0}
-                        <div class="empty">No matching actions.</div>
-                    {:else}
-                        <header class="trigger-header">
-                            <span class="label-col">Action</span>
-                            <span class="trigger-col">Triggers</span>
-                        </header>
-                        {#each visibleActions as action (action.id)}
-                            <ActionTriggerRow {action} showScope={showScopes} />
-                        {/each}
-                    {/if}
+                    {#each visiblePrefs as pref (pref.name)}
+                        <PrefRow {pref} />
+                    {/each}
                 {/if}
-            </div>
+            {:else}
+                {#if visibleActions.length === 0}
+                    <div class="empty">No matching actions.</div>
+                {:else}
+                    <header class="trigger-header">
+                        <span class="label-col">Action</span>
+                        <span class="trigger-col">Triggers</span>
+                    </header>
+                    {#each visibleActions as action (action.id)}
+                        <ActionTriggerRow {action} showScope={showScopes} />
+                    {/each}
+                {/if}
+            {/if}
         </div>
     </div>
 </Modal>
 
 <style>
-    .settings-body {
+    /* The dialog's own header row holds these, so all this layer supplies is
+       the spacing between them. */
+    .tools {
         display: flex;
-        flex-direction: column;
-        height: 100%;
-        min-height: 0;
-    }
-
-    .topbar {
-        display: flex;
-        gap: 12px;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--bg-hover);
         align-items: center;
-        flex-shrink: 0;
+        gap: 12px;
+        flex: 1;
+        min-width: 0;
+        /* Sized to the buttons beside it rather than to a dialog header's
+           default, so the row reads as one set of controls. */
+        --search-field-font-size: 12px;
     }
 
-    .topbar-action {
+    .tool-btn {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -201,38 +195,14 @@
         font-size: 12px;
         cursor: pointer;
     }
-    .topbar-action:hover:not(:disabled) { border-color: var(--accent); }
-    .topbar-action:disabled { opacity: 0.4; cursor: default; }
-
-    .search-wrap {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        background: var(--bg-hover);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 5px 8px;
-        color: var(--text-muted);
-        font-size: 12px;
-        flex: 1;
-        min-width: 0;
-    }
-    .search-wrap:focus-within { border-color: var(--accent); }
-    .search-wrap input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        font-size: 12px;
-        outline: none;
-        min-width: 0;
-    }
+    .tool-btn:hover:not(:disabled) { border-color: var(--accent); }
+    .tool-btn:disabled { opacity: 0.4; cursor: default; }
 
     .main {
-        flex: 1;
-        min-height: 0;
         display: flex;
         flex-direction: row;
+        height: 100%;
+        min-height: 0;
     }
 
     .tab-strip {

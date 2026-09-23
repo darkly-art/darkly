@@ -21,10 +21,18 @@
  * the handler still early-returned unless there was a mask, so clicking
  * Rasterize did nothing at all: no error, no change.
  *
- * Groups are not covered: they always flatten, under that name, and their row
- * is a different component.
+ * A container is checked first and always gets **Flatten**. It has to be: a
+ * group reports `paintable: false` (it owns no pixels of its own, see
+ * `Document::pixel_buffer` returning `None` for `LayerNode::Group`), so falling
+ * through would offer every group "Rasterize", which is not the verb for
+ * collapsing a group into one layer.
  */
-export function flattenOffer(node: { paintable: boolean; hasMask: boolean }): string | null {
+export function flattenOffer(node: {
+    paintable: boolean;
+    hasMask: boolean;
+    isContainer?: boolean;
+}): string | null {
+    if (node.isContainer) return 'Flatten';
     if (!node.paintable) return 'Rasterize';
     return node.hasMask ? 'Flatten' : null;
 }

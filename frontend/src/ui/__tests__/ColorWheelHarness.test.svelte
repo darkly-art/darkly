@@ -4,7 +4,7 @@
      * into its `value`, the round trip through RGB every real host performs.
      */
     import { untrack } from 'svelte';
-    import type { Color } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
     import ColorWheel from '../color/ColorWheel.svelte';
 
     let { initial, onvalue, size }: { initial: Color; onvalue: (c: Color) => void; size: number } = $props();

@@ -1,5 +1,5 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
-import { makeApi, type EngineApi, type RequestKind, type Transport } from './protocol_gen';
+import { makeApi, type EngineApi, type EngineState, type RequestKind, type Transport } from './protocol_gen';
 
 export type { RequestKind, EngineApi };
 
@@ -52,16 +52,14 @@ interface DrainResult {
 
 /** Cached, synchronously-readable snapshot of engine state the frontend mirrors,
  *  returned by {@link Engine.render} each frame. One struct for every value the
- *  UI caches (frame/thumbnail counters + document bools): they ride together
- *  because they all exist for the same reason (mirroring), not as a handful of
- *  loose return scalars. The UI reads this (sync) instead of awaiting per-value
- *  engine queries; grow it as the UI needs more. Mirrors the Rust `EngineState`. */
-export interface EngineState {
-    frameCount: number;
-    thumbnailVersion: number;
-    dirty: boolean;
-    hasSelection: boolean;
-}
+ *  UI caches (frame/thumbnail counters, document bools, the canvas window rect):
+ *  they ride together because they all exist for the same reason (mirroring),
+ *  not as a handful of loose return scalars. The UI reads this (sync) instead of
+ *  awaiting per-value engine queries; grow it as the UI needs more.
+ *
+ *  Generated from the Rust `EngineState`, so a field added there reaches the
+ *  frontend as a type error rather than a silent gap. */
+export type { EngineState };
 
 interface FrameStatus {
     busy: boolean;

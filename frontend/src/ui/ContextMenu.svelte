@@ -13,6 +13,7 @@
 
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { clampToViewport } from '../lib/viewportClamp';
 
     let { x, y, items, onclose }: {
         x: number;
@@ -32,6 +33,23 @@
         };
     });
 
+    // Measured after mount, so a menu opened near a bottom or right edge is
+    // pulled back on screen instead of clipping. The destructive entries sit
+    // last, so a clipped menu loses exactly the rows worth reaching.
+    //
+    // The size is state (it needs the mounted element) and the position is
+    // derived from it, rather than both being state: that way the position
+    // still follows `x`/`y` if the menu is repositioned while open, and the
+    // first paint before measurement uses the raw point rather than a stale
+    // clamp.
+    let menuEl = $state<HTMLDivElement | undefined>();
+    let size = $state({ width: 0, height: 0 });
+    $effect(() => {
+        if (!menuEl) return;
+        size = { width: menuEl.offsetWidth, height: menuEl.offsetHeight };
+    });
+    let pos = $derived(size.width > 0 ? clampToViewport(x, y, size) : { x, y });
+
     function pick(item: Extract<ContextMenuItem, { onclick: () => void }>) {
         if (item.disabled) return;
         item.onclick();
@@ -39,7 +57,7 @@
     }
 </script>
 
-<div class="context-menu" style:left="{x}px" style:top="{y}px">
+<div class="context-menu" bind:this={menuEl} style:left="{pos.x}px" style:top="{pos.y}px">
     {#each items as item}
         {#if 'separator' in item}
             <div class="context-menu-sep"></div>

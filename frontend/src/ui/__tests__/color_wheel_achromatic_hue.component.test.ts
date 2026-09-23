@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import type { Color } from '../../state/app.svelte';
+import type { Color } from '../../lib/color';
 import ColorWheelHarness from './ColorWheelHarness.test.svelte';
 import { pointForHue, pointForSv, wheelGeometry } from '../color/wheel_model';
 

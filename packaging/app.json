@@ -1,0 +1,7 @@
+{
+  "_generated": "cargo sync-docs writes this from crates/darkly/product.yaml; do not edit",
+  "summary": "Forbidden Editor for Artists",
+  "categories": ["Graphics", "2DGraphics", "RasterGraphics"],
+  "keywords": ["art", "draw", "paint", "image", "photo", "picture", "editor"],
+  "description": "Darkly is a GPU-native paint program built for artists. It has a powerful brush engine and dark arts to help you commune with your imagination."
+}

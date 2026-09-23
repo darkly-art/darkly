@@ -4,21 +4,18 @@
  * Global rather than component-scoped because `layerDropTarget` toggles these
  * classes through `classList`, which Svelte cannot see: a scoped selector it
  * cannot statically match is pruned as unused, and the indicator would silently
- * never draw. One home also means the row and group-header variants cannot drift.
+ * never draw. One row class means there are no variants to drift.
  *
  * `--drop-indent` is the depth the drop resolves to; the line starts at the
  * indent that depth renders at, so the gesture is visible rather than implied.
  */
 
-.layer-item,
-.group-header {
+.layer-row {
     --drop-indent: 0;
 }
 
-.layer-item.drop-above::before,
-.layer-item.drop-below::after,
-.group-header.drop-above::before,
-.group-header.drop-below::after {
+.layer-row.drop-above::before,
+.layer-row.drop-below::after {
     content: '';
     position: absolute;
     left: calc(8px + var(--drop-indent) * 16px);
@@ -28,17 +25,15 @@
     pointer-events: none;
 }
 
-.layer-item.drop-above::before,
-.group-header.drop-above::before {
+.layer-row.drop-above::before {
     top: -1px;
 }
 
-.layer-item.drop-below::after,
-.group-header.drop-below::after {
+.layer-row.drop-below::after {
     bottom: -1px;
 }
 
-.group-header.drop-into {
+.layer-row.drop-into {
     outline: 1px solid var(--accent);
     outline-offset: -1px;
 }

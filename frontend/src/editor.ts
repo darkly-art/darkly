@@ -7,6 +7,7 @@ import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
+import { catalogs } from './state/catalogs.svelte';
 import { freshDocument } from './state/freshDocument';
 import { createHandle } from './state/session';
 import { fontLibrary } from './state/font_library.svelte';
@@ -124,10 +125,10 @@ export async function createInstance(
 
     const engine = await createHandle(canvas, docWidth, docHeight);
 
-    // Display-name maps describe the WASM core's process-global registries,
-    // identical for every instance, but loading them per-instance keeps the
-    // instance self-contained (no shell-level "registry source" coupling).
-    await instance.loadRegistries(engine);
+    // The registries are process-global and identical for every handle, so
+    // they load once for the process rather than once per tab. Any handle can
+    // serve the request; concurrent tab bootstraps share the one in flight.
+    await catalogs.load(engine);
 
     // Replay the personal font library into this fresh handle so its engine's
     // font collection matches every other tab's before the first frame: the
@@ -141,7 +142,7 @@ export async function createInstance(
     // arrives in the `actions` catalog; the registry joins it to the handlers by
     // id. Installed before registration so nothing observes a half-joined
     // registry.
-    actions.setDocs(actionDocs(instance.entries('actions')));
+    actions.setDocs(actionDocs(catalogs.entries('actions')));
     registerActions();
     registerHotkeys();
     rebuildClickIndex();
@@ -167,6 +168,9 @@ export async function createInstance(
     }
 
     instance.canvasEl = canvas;
+    // Seed the canvas-window mirror. Every later value comes from the frame
+    // snapshot, but `CanvasView` calls `fitZoom()` before the first frame
+    // renders, so without this the tab would open at the fallback zoom.
     instance.docW = docWidth;
     instance.docH = docHeight;
     instance.engine = engine;

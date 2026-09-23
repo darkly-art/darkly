@@ -17,6 +17,8 @@
 /** MIME type for our rich-layer JSON envelope. The `web ` prefix is
  *  required by the Web Custom Formats spec: without it, browsers refuse
  *  to write or read the type. */
+import { rgbaToBlob, type RgbaBytes } from './lib/rgba';
+
 export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
 
 /**
@@ -31,21 +33,13 @@ export const LAYER_CLIPBOARD_MIME = 'web application/x-darkly-layer';
  * path (e.g. when the rich payload isn't ready yet).
  */
 export async function copyToSystemClipboard(
-    rgba: Uint8Array,
+    rgba: RgbaBytes,
     width: number,
     height: number,
     richJson?: string,
 ): Promise<void> {
     try {
-        const canvas = new OffscreenCanvas(width, height);
-        const ctx = canvas.getContext('2d')!;
-        // Copy into a fresh ArrayBuffer to satisfy ImageData's type requirement
-        // (Uint8ClampedArray from WASM memory may have SharedArrayBuffer backing).
-        const copy = new Uint8ClampedArray(rgba.length);
-        copy.set(rgba);
-        const imageData = new ImageData(copy, width, height);
-        ctx.putImageData(imageData, 0, 0);
-        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        const blob = await rgbaToBlob(rgba, width, height, 'image/png');
 
         const items: Record<string, Blob | Promise<Blob>> = { 'image/png': blob };
         if (richJson) {

@@ -1,17 +1,15 @@
 <script lang="ts">
-    import ParamRow from './ParamRow.svelte';
+    import ParamRow from '../params/ParamRow.svelte';
     import Icon from '../../icons/Icon.svelte';
     import { rgb01ToHex } from '../../lib/color';
     import {
         listItemSchema,
         newListEntry,
-        cloneParamValue,
-        channelLabel,
         type ParamInfo,
-        type FilterParamValue,
+        type ParamValue,
         type ListValue,
-        type ColorValue,
     } from './filterParams';
+    import { cloneParamValue, channelLabel, type ColorValue } from '../params/paramSchema';
 
     // Generic editor for a `list` param: a dynamic list of homogeneous entries,
     // each a bordered group of `ParamRow`s bound into its `{ name: value }`
@@ -42,7 +40,7 @@
     // becomes the header swatch (falls back to the entry index when absent).
     const colorField = $derived(schema.find((d) => d.kind === 'color')?.name);
 
-    function entryHex(entry: Record<string, FilterParamValue>): string | null {
+    function entryHex(entry: Record<string, ParamValue>): string | null {
         if (!colorField) return null;
         const c = (entry[colorField] ?? schema.find((d) => d.name === colorField)?.default) as
             | ColorValue
@@ -69,7 +67,7 @@
         expanded = next;
     }
 
-    function writeField(i: number, name: string, value: FilterParamValue, commit: boolean) {
+    function writeField(i: number, name: string, value: ParamValue, commit: boolean) {
         const arr = owned();
         arr[i] = { ...arr[i], [name]: value };
         param.value = arr;
@@ -191,8 +189,8 @@
                     {@const field = { ...def, value: entry[def.name] ?? def.default }}
                     <ParamRow
                         param={field}
-                        oninput={() => writeField(i, def.name, field.value as FilterParamValue, false)}
-                        onchange={() => writeField(i, def.name, field.value as FilterParamValue, true)}
+                        oninput={() => writeField(i, def.name, field.value as ParamValue, false)}
+                        onchange={() => writeField(i, def.name, field.value as ParamValue, true)}
                     />
                 {/each}
             {/if}

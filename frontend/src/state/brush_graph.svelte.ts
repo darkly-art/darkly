@@ -7,6 +7,7 @@
  * `nodePositions` here, populated by `autoLayout` after every structural
  * change, and never travel back to Rust.
  */
+import { rgbaToBitmap } from '../lib/rgba';
 import { app, getActiveInstance } from './app.svelte';
 import { brushColors } from './brushColors.svelte';
 import { config } from '../config/store.svelte';
@@ -793,10 +794,7 @@ export class BrushGraphState {
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: 'texture_name', kind: 'string', value: resourceName }));
 
         // Cache a thumbnail for canvas rendering.
-        const clamped = new Uint8ClampedArray(rgba.length);
-        clamped.set(rgba);
-        const imageData = new ImageData(clamped, width, height);
-        const bitmap = await createImageBitmap(imageData);
+        const bitmap = await rgbaToBitmap(rgba, width, height);
         this.imageThumbnails.set(resourceName, bitmap);
     }
 

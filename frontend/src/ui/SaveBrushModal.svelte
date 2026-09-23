@@ -72,7 +72,7 @@
             />
         </label>
 
-        <div class="actions">
+        <div class="dialog-actions">
             <button class="btn" onclick={() => (open = false)}>Cancel</button>
             <div class="spacer"></div>
             <button
@@ -96,55 +96,5 @@
         display: flex;
         flex-direction: column;
         gap: 14px;
-    }
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-    }
-    .field-label {
-        font-size: 11px;
-        color: var(--text-muted);
-    }
-    .text-input {
-        padding: 6px 8px;
-        font-size: 12px;
-        font-family: inherit;
-        color: var(--text);
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        outline: none;
-    }
-    .text-input:focus {
-        border-color: var(--accent);
-    }
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .spacer {
-        flex: 1;
-    }
-    .btn {
-        padding: 6px 12px;
-        font-size: 12px;
-        font-family: inherit;
-        color: var(--text);
-        background: var(--bg-hover);
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-    }
-    .btn:hover:not(:disabled) {
-        background: var(--bg-active);
-    }
-    .btn:disabled {
-        opacity: 0.5;
-        cursor: default;
-    }
-    .btn.primary {
-        color: var(--accent);
     }
 </style>

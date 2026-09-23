@@ -10,12 +10,13 @@
  * test exercises the equivalent path on the Rust side.
  */
 
+import { rgbaToBlob, rgbaToCanvas } from '../lib/rgba';
 import { zip, type Zippable } from 'fflate';
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { toast } from '../state/toast.svelte';
 import { hasFilePicker, pickFileHandle, writeToHandle, type SaveAccept } from './fileHandle';
 import { downloadBlob, sanitizeFilename } from './index';
-import { exportComposite, rgbaToBlob } from './exportComposite';
+import { exportComposite } from './exportComposite';
 import { saveModal } from '../state/saveModal.svelte';
 import { removeSnapshot } from './recovery';
 import { sessionId } from '../state/recoverySession';
@@ -27,7 +28,7 @@ import { processRecording } from '../recording/recorder.svelte';
 export type SavePurpose = 'file' | 'snapshot';
 
 /** Wire shape reconstructed from the `poll_save_result` request (the engine
- *  packs it; `app.svelte.ts::unpackSaveBundle` slices it back out). Mirrors
+ *  packs it; {@link unpackSaveBundle} slices it back out). Mirrors
  *  `crates/darkly/src/format/manifest.rs::SaveBundle`. */
 export interface SaveBundle {
     manifestJson: Uint8Array;
@@ -35,6 +36,39 @@ export interface SaveBundle {
     compositeHeight: number;
     compositeRgba: Uint8Array;
     blobs: Array<{ path: string; bytes: Uint8Array }>;
+}
+
+/** Packed `poll_save_result` payload: every byte blob concatenated into one
+ *  `bytes` buffer, with the lengths needed to slice them back out. */
+interface PackedSaveResult {
+    manifestLen: number;
+    compositeWidth: number;
+    compositeHeight: number;
+    compositeLen: number;
+    blobs: Array<{ path: string; len: number }>;
+    bytes: Uint8Array;
+}
+
+/** Reconstruct a {@link SaveBundle} from the packed protocol result
+ *  (manifest ++ composite ++ blob0 ++ blob1 ++ ... in `bytes`). */
+function unpackSaveBundle(p: PackedSaveResult): SaveBundle {
+    let off = 0;
+    const manifestJson = p.bytes.subarray(off, off + p.manifestLen);
+    off += p.manifestLen;
+    const compositeRgba = p.bytes.subarray(off, off + p.compositeLen);
+    off += p.compositeLen;
+    const blobs = p.blobs.map((b) => {
+        const bytes = p.bytes.subarray(off, off + b.len);
+        off += b.len;
+        return { path: b.path, bytes };
+    });
+    return {
+        manifestJson,
+        compositeWidth: p.compositeWidth,
+        compositeHeight: p.compositeHeight,
+        compositeRgba,
+        blobs,
+    };
 }
 
 const THUMBNAIL_MAX_DIM = 256;
@@ -217,8 +251,8 @@ async function afterSaved(instance: DarklyInstance, format: Format): Promise<voi
  * Drive a `.darkly` save for `instance` to completion and return the
  * assembled zip bytes, the destination-agnostic core shared by file-save
  * (above) and autosave snapshots. It kicks `start_save_document` over the
- * async transport and awaits the `poll_save_result` callback, which the
- * instance's render loop drives to completion (`onSaveResult` keeps that
+ * async transport and awaits the `poll_save_result` readback, which the
+ * instance's render loop drives to completion (the readback keeps that
  * loop alive even for a backgrounded tab; the Rust `poll_save_result`
  * drains the readback scheduler itself).
  *
@@ -239,25 +273,19 @@ export async function produceDarklyBytes(
     return assembleZip(bundle, recording);
 }
 
-/** Kick `start_save_document` on `instance` and await the
- *  `poll_save_result` callback. `snapshot` marks an autosave save (which
+/** Kick `start_save_document` on `instance` and await the packed
+ *  `poll_save_result` payload. `snapshot` marks an autosave save (which
  *  must not clear the document's dirty flag; see the Rust `SavePurpose`).
- *  The instance's render loop polls `poll_save_result` until the bundle
- *  lands; `onSaveResult` keeps that loop alive even for a backgrounded tab. */
-function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
-    return new Promise((resolve, reject) => {
-        const engine = instance.engine;
-        if (!engine) {
-            reject(new Error('no engine handle'));
-            return;
-        }
-        instance.onSaveResult((bundle: SaveBundle) => resolve(bundle));
-        // `start_save_document` rejects on error; surface that as the save
-        // failure rather than waiting forever for a callback that won't fire.
-        engine
-            .api.startSaveDocument({ snapshot })
-            .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
-    });
+ *  The instance's render loop drives the poll until the bundle lands, and
+ *  keeps itself alive meanwhile even for a backgrounded tab. */
+async function runSaveBundle(instance: DarklyInstance, snapshot: boolean): Promise<SaveBundle> {
+    const engine = instance.engine;
+    if (!engine) throw new Error('no engine handle');
+    // Await the start: it rejects on error (a save already in flight), and
+    // surfacing that is the difference between a reported failure and a
+    // readback that never lands.
+    await engine.api.startSaveDocument({ snapshot });
+    return unpackSaveBundle(await instance.awaitReadback('save', () => engine.api.pollSaveResult()));
 }
 
 /** Build the .darkly zip bytes from a SaveBundle, plus any embedded
@@ -322,12 +350,7 @@ async function encodeThumbnailPng(
     const thumbW = Math.max(1, Math.round(width * scale));
     const thumbH = Math.max(1, Math.round(height * scale));
 
-    const src = new OffscreenCanvas(width, height);
-    const srcCtx = src.getContext('2d');
-    if (!srcCtx) throw new Error('2d context unavailable');
-    const copy = new Uint8ClampedArray(rgba.length);
-    copy.set(rgba);
-    srcCtx.putImageData(new ImageData(copy, width, height), 0, 0);
+    const src = rgbaToCanvas(rgba, width, height);
 
     const dst = new OffscreenCanvas(thumbW, thumbH);
     const dstCtx = dst.getContext('2d');

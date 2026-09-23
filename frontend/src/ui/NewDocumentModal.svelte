@@ -134,8 +134,8 @@
     <div class="body" onkeydown={onKeydown} role="presentation">
         <div class="row dim-row">
             <label class="field">
-                <span class="label">Width</span>
-                <div class="num">
+                <span class="field-label">Width</span>
+                <div class="field-num">
                     <input
                         type="number"
                         min="1"
@@ -146,8 +146,8 @@
                 </div>
             </label>
             <label class="field">
-                <span class="label">Height</span>
-                <div class="num">
+                <span class="field-label">Height</span>
+                <div class="field-num">
                     <input
                         type="number"
                         min="1"
@@ -160,7 +160,7 @@
         </div>
 
         <label class="row color-row">
-            <span class="label">Background</span>
+            <span class="field-label">Background</span>
             <ColorInput value={color} oninput={(hex) => (color = hex)} onchange={(hex) => (color = hex)} />
         </label>
 
@@ -178,16 +178,16 @@
                     alt="Clipboard preview"
                 />
                 <div class="meta">
-                    <span class="label">Clipboard image</span>
+                    <span class="field-label">Clipboard image</span>
                     <span class="dim">{clipboardPeek.width} × {clipboardPeek.height} px</span>
                 </div>
             </button>
         {/if}
 
-        <div class="actions">
+        <div class="dialog-actions">
             <div class="spacer"></div>
-            <button type="button" class="cancel" onclick={close}>Cancel</button>
-            <button type="button" class="ok" onclick={create}>Create</button>
+            <button type="button" class="btn" onclick={close}>Cancel</button>
+            <button type="button" class="btn primary" onclick={create}>Create</button>
         </div>
     </div>
 </Modal>
@@ -200,61 +200,15 @@
         min-width: 320px;
     }
 
-    .row {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
     .dim-row {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 12px;
     }
 
-    .field {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-    }
-
-    .num {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 0 8px;
-    }
-
-    .num input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        font: inherit;
-        outline: none;
-        min-width: 0;
-    }
-
-    .num input::-webkit-inner-spin-button,
-    .num input::-webkit-outer-spin-button {
+    .field-num input::-webkit-inner-spin-button,
+    .field-num input::-webkit-outer-spin-button {
         opacity: 0.6;
-    }
-
-    .num .unit {
-        color: var(--text-muted);
-        font-family: var(--font-mono, monospace);
-        font-size: 12px;
     }
 
     .clipboard-preview {
@@ -308,7 +262,7 @@
         min-width: 0;
     }
 
-    .clipboard-preview .meta .label {
+    .clipboard-preview .meta .field-label {
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
@@ -321,39 +275,4 @@
         color: var(--text);
     }
 
-    .actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 4px;
-    }
-
-    .actions .spacer {
-        flex: 1;
-    }
-
-    .actions button {
-        padding: 6px 14px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions .ok {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-    }
-
-    .actions .ok:hover:not(:disabled) {
-        background: var(--accent);
-        filter: brightness(1.1);
-    }
 </style>

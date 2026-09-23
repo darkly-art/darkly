@@ -11,7 +11,8 @@
      * else closes it. Escape is window-level, since the popup never needs
      * focus to be open.
      */
-    import type { Color } from '../../state/app.svelte';
+    import type { Color } from '../../lib/color';
+    import { clampToViewport, VIEWPORT_MARGIN as MARGIN } from '../../lib/viewportClamp';
     import { watchDismiss } from '../../lib/dismiss';
     import ColorWheel from './ColorWheel.svelte';
     import HexField from './HexField.svelte';
@@ -33,7 +34,7 @@
     } = $props();
 
     const WHEEL_SIZE = 200;
-    const MARGIN = 8;
+
 
     let surface = $state<HTMLDivElement | null>(null);
     let pos = $state({ x: 0, y: 0 });
@@ -46,10 +47,7 @@
         const w = surface.offsetWidth, h = surface.offsetHeight;
         let x = a.right + MARGIN;
         if (x + w > window.innerWidth - MARGIN) x = a.left - MARGIN - w;
-        let y = a.top;
-        x = Math.max(MARGIN, Math.min(x, window.innerWidth - MARGIN - w));
-        y = Math.max(MARGIN, Math.min(y, window.innerHeight - MARGIN - h));
-        pos = { x, y };
+        pos = clampToViewport(x, a.top, { width: w, height: h }, MARGIN);
     });
 
     $effect(() => watchDismiss(scope, onclose));

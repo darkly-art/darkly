@@ -1,9 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import LayerItem from './LayerItem.svelte';
-    import LayerGroup from './LayerGroup.svelte';
     import LayerFooter from './LayerFooter.svelte';
-    import SpaceDivider from './SpaceDivider.svelte';
+    import LayerRows from './LayerRows.svelte';
     import { bindingSite } from '../../actions/binding_site';
     import { layerDropTarget } from './dropTarget.svelte';
 
@@ -39,17 +37,7 @@
         class="layer-list"
         use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
     >
-        <!-- The divider is a tree node like any other; its slot in the list
-             *is* the boundary, and dragging it is an ordinary layer move. -->
-        {#each app.layerTree as node, i (node.id)}
-            {#if node.type === 'divider'}
-                <SpaceDivider divider={node} empty={i === 0} onupdate={refresh} />
-            {:else if node.type === 'group'}
-                <LayerGroup group={node} onupdate={refresh} />
-            {:else}
-                <LayerItem layer={node} onupdate={refresh} />
-            {/if}
-        {/each}
+        <LayerRows nodes={app.layerTree} onupdate={refresh} />
 
         <!-- The divider is always in the tree, so "no layers" means no rows
              besides it. -->

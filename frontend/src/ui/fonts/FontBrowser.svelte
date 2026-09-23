@@ -1,5 +1,6 @@
 <script lang="ts">
     import Modal from '../Modal.svelte';
+    import SearchField from '../SearchField.svelte';
     import { fontLibrary } from '../../state/font_library.svelte';
     import { loadCatalog, previewUrl, importFont, type CatalogFont } from '../../lib/google_fonts';
     import { virtualGridWindow } from '../../lib/virtual_grid';
@@ -214,25 +215,19 @@
 </svelte:head>
 
 <Modal bind:open title="Fonts" size="xl">
+    {#snippet headerControls()}
+        <SearchField bind:value={query} placeholder="Search fonts…" />
+    {/snippet}
+
     <div class="font-browser">
-        <div class="fields">
-            <input
-                class="search"
-                type="search"
-                placeholder="Search fonts…"
-                bind:value={query}
-                autocomplete="off"
-                spellcheck="false"
-            />
-            <input
-                class="search preview-input"
-                type="text"
-                placeholder="Preview text (defaults to the font name)…"
-                bind:value={preview}
-                autocomplete="off"
-                spellcheck="false"
-            />
-        </div>
+        <input
+            class="preview-input"
+            type="text"
+            placeholder="Preview text (defaults to the font name)…"
+            bind:value={preview}
+            autocomplete="off"
+            spellcheck="false"
+        />
 
         <div
             class="dropzone"
@@ -325,27 +320,19 @@
         max-height: 70vh;
     }
 
-    .fields {
-        display: flex;
-        gap: 8px;
-    }
-    .fields .search {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .search {
+    /* Not a search: it types the sample every tile renders in its own face. */
+    .preview-input {
         width: 100%;
         box-sizing: border-box;
         background: var(--bg-hover);
         border: 1px solid var(--bg-hover);
         border-radius: var(--radius-sm);
         color: var(--text);
-        font-size: 14px;
-        padding: 8px 10px;
+        font-size: 13px;
+        padding: 6px 10px;
         outline: none;
     }
-    .search:focus {
+    .preview-input:focus {
         border-color: var(--accent);
     }
 

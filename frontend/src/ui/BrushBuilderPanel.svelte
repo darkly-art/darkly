@@ -1,34 +1,30 @@
 <script lang="ts">
     import { brushGraph } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
+    import { pointerDrag } from '../lib/pointerDrag';
 
     let builderHeight = $state(33); // vh units
 
-    function handleResizeStart(e: PointerEvent) {
-        e.preventDefault();
-        const el = e.currentTarget as HTMLElement;
-        el.setPointerCapture(e.pointerId);
-        const startY = e.clientY;
-        const startHeight = builderHeight;
-        const vh = window.innerHeight / 100;
+    let startHeight = 0;
 
-        const onMove = (ev: PointerEvent) => {
-            const dy = startY - ev.clientY; // dragging up = increase height
-            builderHeight = Math.min(80, Math.max(15, startHeight + dy / vh));
-        };
-        const onUp = () => {
-            el.removeEventListener('pointermove', onMove);
-            el.removeEventListener('pointerup', onUp);
-        };
-        el.addEventListener('pointermove', onMove);
-        el.addEventListener('pointerup', onUp);
+    function startResize() {
+        startHeight = builderHeight;
+    }
+
+    function onResizeMove(_dx: number, dy: number) {
+        const vh = window.innerHeight / 100;
+        // Dragging up grows the panel.
+        builderHeight = Math.min(80, Math.max(15, startHeight - dy / vh));
     }
 </script>
 
 {#if brushGraph.isOpen}
     {#if !brushGraph.fullscreen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="resize-handle" onpointerdown={handleResizeStart}></div>
+        <div
+            class="resize-handle"
+            use:pointerDrag={{ onStart: startResize, onMove: onResizeMove }}
+        ></div>
     {/if}
     <div
         class="builder-panel"

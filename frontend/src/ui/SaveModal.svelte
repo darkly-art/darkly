@@ -55,9 +55,9 @@
 
 <Modal bind:open={saveModal.open} title="Save" size="sm">
     <div class="save-body">
-        <label class="row">
-            <span class="label">Filename</span>
-            <div class="filename">
+        <label class="field">
+            <span class="field-label">Filename</span>
+            <div class="field-num filename">
                 <input
                     type="text"
                     bind:value={baseName}
@@ -68,8 +68,8 @@
             </div>
         </label>
 
-        <label class="row">
-            <span class="label">Type</span>
+        <label class="field">
+            <span class="field-label">Type</span>
             <select bind:value={format} disabled={saving}>
                 {#each SAVE_FORMAT_ORDER as f (f)}
                     <option value={f}>{LABELS[f]}</option>
@@ -77,11 +77,11 @@
             </select>
         </label>
 
-        <div class="actions">
-            <button type="button" class="cancel" onclick={() => saveModal.finish()} disabled={saving}>
+        <div class="dialog-actions">
+            <button type="button" class="btn" onclick={() => saveModal.finish()} disabled={saving}>
                 Cancel
             </button>
-            <button type="button" class="ok" onclick={confirm} disabled={saving}>
+            <button type="button" class="btn primary" onclick={confirm} disabled={saving}>
                 {saving ? 'Saving…' : 'Save'}
             </button>
         </div>
@@ -96,39 +96,8 @@
         min-width: 320px;
     }
 
-    .row {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-    }
-
-    .filename {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: 4px;
-        padding: 0 8px;
-    }
-
-    .filename input {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text);
-        padding: 6px 0;
-        font: inherit;
-        outline: none;
-    }
-
+    /* The extension rides inside the field frame, so the input gives up its
+     * own padding to `.field-num`. */
     .filename .ext {
         color: var(--text-muted);
         font-family: var(--font-mono, monospace);
@@ -139,45 +108,8 @@
         background: var(--bg);
         color: var(--text);
         border: 1px solid var(--bg-hover);
-        border-radius: 4px;
+        border-radius: var(--radius-sm);
         padding: 6px 8px;
         font: inherit;
-    }
-
-    .actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        margin-top: 4px;
-    }
-
-    .actions button {
-        padding: 6px 14px;
-        border-radius: 4px;
-        border: 1px solid var(--bg-hover);
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .actions button:hover:not(:disabled) {
-        background: var(--bg-hover);
-    }
-
-    .actions button:disabled {
-        opacity: 0.5;
-        cursor: default;
-    }
-
-    .actions .ok {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-    }
-
-    .actions .ok:hover:not(:disabled) {
-        background: var(--accent);
-        filter: brightness(1.1);
     }
 </style>
