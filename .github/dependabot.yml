@@ -20,6 +20,24 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: npm
+    directory: /desktop
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      # Electron carries Chromium, which is Darkly's renderer: a major bump
+      # swaps out the WebGPU implementation the whole editor draws through.
+      # It gets its own PR so a WebGPU regression has exactly one suspect.
+      electron:
+        patterns:
+          - "electron"
+      desktop:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "electron"
+
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
