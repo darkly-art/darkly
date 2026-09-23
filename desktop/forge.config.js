@@ -5,6 +5,14 @@
 
 const path = require('path');
 
+// Product metadata has one home, crates/darkly/product.yaml, and reaches
+// non-Rust consumers through this generated file. `cargo sync-docs` writes it
+// and the test suite fails when it is stale, so the maker fields below cannot
+// drift from the desktop entry and the AppStream metainfo the way three
+// hand-written copies of the category list did.
+const app = require('../packaging/app.json');
+
+
 // macOS code signing + notarization, enabled only when the CI signing step has
 // provisioned credentials (see the "Sign and notarize (macOS)" job step).
 //
@@ -153,7 +161,7 @@ module.exports = {
                 options: {
                     bin: 'darkly',
                     icon: path.resolve(__dirname, '..', 'packaging', 'icon.png'),
-                    categories: ['Graphics', '2DGraphics'],
+                    categories: app.categories,
                 },
             },
         },
@@ -167,7 +175,8 @@ module.exports = {
                     maintainer: 'Darkly <info@darkly.art>',
                     homepage: 'https://darkly.art',
                     section: 'graphics',
-                    categories: ['Graphics'],
+                    categories: app.categories,
+                    description: app.summary,
                 },
             },
         },

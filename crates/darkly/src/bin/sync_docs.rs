@@ -1,4 +1,5 @@
-//! Re-render every generated region in the repository's markdown.
+//! Re-render every generated region in the repository, and the generated
+//! product metadata beside them.
 //!
 //! ```text
 //! cargo sync-docs              # rewrite
@@ -7,13 +8,15 @@
 //!
 //! `--check` is what `tests/docs_md.rs` asserts and what CI therefore enforces;
 //! the writing mode is what you run by hand to make a stale checkout correct.
-//! Needs no GPU: every fragment builds from `&'static` registration data, the
-//! same property that lets the check live in the ordinary test suite.
+//! Needs no GPU and reads no files: every fragment builds from the registries
+//! and from text embedded at compile time, the same property that lets the
+//! check live in the ordinary test suite.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use darkly::docs_md::{self, Mode};
+use darkly::product;
 
 const HELP: &str = "\
 sync-docs - fill the generated regions of the repository's markdown
@@ -63,13 +66,30 @@ fn main() -> ExitCode {
         }
     };
 
-    let report = match docs_md::sync(&args.root, args.mode) {
+    let mut report = match docs_md::sync(&args.root, args.mode) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("sync-docs: {e}");
             return ExitCode::FAILURE;
         }
     };
+
+    // The machine-readable projection of the same product metadata, for
+    // consumers that cannot read a Rust constant. Not a region, because JSON
+    // has no comment syntax to hide a marker in: the whole file is generated.
+    match product::sync_app_json(&args.root, args.mode == Mode::Write) {
+        Ok(stale) => {
+            let path = PathBuf::from(product::APP_JSON);
+            report.generated.push(path.clone());
+            if stale {
+                report.changed.push(path);
+            }
+        }
+        Err(e) => {
+            eprintln!("sync-docs: {}: {e}", product::APP_JSON);
+            return ExitCode::FAILURE;
+        }
+    }
 
     if report.changed.is_empty() {
         println!(

@@ -22,6 +22,11 @@ pub mod gpu;
 pub mod layer;
 pub mod mask;
 pub mod nodegraph;
+/// What Darkly says it is, loaded from `product.yaml`. Packaging metadata for
+/// the tooling that generates store listings and desktop entries, so it lives
+/// behind the same gate as `docs_md`: a browser ships no desktop entry.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod product;
 pub mod sdf;
 pub mod text;
 pub mod tool;
