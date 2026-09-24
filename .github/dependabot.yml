@@ -30,9 +30,9 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
-    # TypeScript moves by hand. tsconfig.json resolves modules the node10
-    # way, which TypeScript 7 removed, so a major bump fails the typecheck.
-    # The ceiling lives in desktop/package.json.
+    # TypeScript moves by hand, kept in step with the frontend, where
+    # svelte-check's peer range caps it at 6. The ceiling lives in
+    # desktop/package.json.
     ignore:
       - dependency-name: "typescript"
     groups:
