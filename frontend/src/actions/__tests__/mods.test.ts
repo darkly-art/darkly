@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 beforeEach(() => {
     vi.resetModules();
-    vi.unmock('../../platform');
+    vi.doUnmock('../../platform');
 });
 
 async function loadModsAs(os: 'linux' | 'windows' | 'macos') {
