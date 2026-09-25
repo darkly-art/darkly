@@ -37,15 +37,26 @@ vendored as a pinned source list rather than fetched at build time, and the
 manifest lives in the `flathub/art.darkly.Darkly` repository rather than here.
 
 The summary, description and desktop-entry fields in the two text files are
-generated from `crates/darkly/product.yaml`, and the metainfo's `<releases>`
-block from `crates/darkly/releases.json`; `cargo sync-docs` refills both, and
-[`docs/versioning.md`](../docs/versioning.md) has the release procedure that
-writes a new entry.
+generated from `crates/darkly/product.yaml`; `cargo sync-docs` refills them.
+The metainfo's `<releases>` block is generated from the `v*` tags, never edited
+by hand. The committed copy is refreshed after each release
+([`docs/versioning.md`](../docs/versioning.md)), so it lags a tag until that
+commit lands; a channel therefore refills it at build time from the tags
+reachable from its checkout, and installs the result:
+
+```bash
+scripts/metainfo-releases.sh packaging/art.darkly.Darkly.metainfo.xml > art.darkly.Darkly.metainfo.xml
+```
+
+The tags are the release record, so a channel that builds from a clone must
+fetch them. With no tags at all (a tarball) the script keeps the committed block
+as it is.
 
 Validate changes to the two text files in this directory the way CI does:
 
 ```bash
-appstreamcli validate --no-net packaging/art.darkly.Darkly.metainfo.xml
+scripts/metainfo-releases.sh packaging/art.darkly.Darkly.metainfo.xml > /tmp/art.darkly.Darkly.metainfo.xml
+appstreamcli validate --no-net /tmp/art.darkly.Darkly.metainfo.xml
 desktop-file-validate packaging/art.darkly.Darkly.desktop
 ```
 
