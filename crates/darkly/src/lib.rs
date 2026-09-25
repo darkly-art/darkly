@@ -27,10 +27,6 @@ pub mod nodegraph;
 /// behind the same gate as `docs_md`: a browser ships no desktop entry.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod product;
-/// The release history the store listing is generated from, loaded from
-/// `releases.json`. Lives behind the same gate as `product` for the same reason.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod releases;
 pub mod sdf;
 pub mod text;
 pub mod tool;
@@ -47,24 +43,24 @@ pub mod units;
 /// frontend twin that derives its display version from the same git tags.
 pub const VERSION: &str = env!("DARKLY_VERSION");
 
-/// Split a `git describe --tags --long` string into its tag, commit height
-/// and `g`-prefixed short SHA, or `None` for anything not of that shape. The
-/// one place the describe grammar is read on the Rust side; `build.rs` is
-/// where it is written. `v0.3.0-1-gf0c3ea9` gives `("v0.3.0", 1, "gf0c3ea9")`;
-/// a tag may itself contain dashes, so the split runs from the right.
-pub fn describe_parts(version: &str) -> Option<(&str, u32, &str)> {
-    let (rest, sha) = version.rsplit_once('-')?;
-    let (tag, height) = rest.rsplit_once('-')?;
-    if tag.is_empty() || !sha.starts_with('g') || sha.len() < 2 {
-        return None;
-    }
-    Some((tag, height.parse().ok()?, sha))
-}
-
 #[cfg(test)]
 mod version_tests {
-    use super::{describe_parts, VERSION};
+    use super::VERSION;
     use std::process::Command;
+
+    /// Split a `git describe --tags --long` string into its tag, commit height
+    /// and `g`-prefixed short SHA, or `None` for anything not of that shape. The
+    /// shape the version tests hold `VERSION` to; `build.rs` is where it is
+    /// written. `v0.3.0-1-gf0c3ea9` gives `("v0.3.0", 1, "gf0c3ea9")`;
+    /// a tag may itself contain dashes, so the split runs from the right.
+    fn describe_parts(version: &str) -> Option<(&str, u32, &str)> {
+        let (rest, sha) = version.rsplit_once('-')?;
+        let (tag, height) = rest.rsplit_once('-')?;
+        if tag.is_empty() || !sha.starts_with('g') || sha.len() < 2 {
+            return None;
+        }
+        Some((tag, height.parse().ok()?, sha))
+    }
 
     /// Does `s` have the `git describe --tags --long` shape `<tag>-<n>-g<sha>`?
     /// True for `v0.3.0-1-gf0c3ea9` and the `0.0.0-0-gunknown` fallback, but

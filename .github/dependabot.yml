@@ -15,10 +15,38 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    # TypeScript moves by hand. svelte-check's peer range accepts 5 and 6
+    # only, so a major bump fails `npm ci` before anything compiles. The
+    # ceiling lives in frontend/package.json.
+    ignore:
+      - dependency-name: "typescript"
     groups:
       npm:
         patterns:
           - "*"
+
+  - package-ecosystem: npm
+    directory: /desktop
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # TypeScript moves by hand, kept in step with the frontend, where
+    # svelte-check's peer range caps it at 6. The ceiling lives in
+    # desktop/package.json.
+    ignore:
+      - dependency-name: "typescript"
+    groups:
+      # Electron carries Chromium, which is Darkly's renderer: a major bump
+      # swaps out the WebGPU implementation the whole editor draws through.
+      # It gets its own PR so a WebGPU regression has exactly one suspect.
+      electron:
+        patterns:
+          - "electron"
+      desktop:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "electron"
 
   - package-ecosystem: github-actions
     directory: /

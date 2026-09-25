@@ -9,14 +9,13 @@ use quick_xml::events::{BytesText, Event};
 use quick_xml::{Reader, XmlVersion};
 use serde::Serialize;
 
-/// Decode a text event and resolve predefined XML entities (`&amp;`, `&lt;`, …).
+/// Resolve predefined XML entities (`&amp;`, `&lt;`, …) in a text event.
 ///
-/// quick-xml 0.40 removed `BytesText::unescape()`; the equivalent is to decode
-/// the raw bytes ([`BytesText::decode`]) and then run the standalone entity
-/// unescaper. Both error types fold into [`quick_xml::Error`].
+/// [`BytesText`] carries the text exactly as it appeared in the source, so
+/// entity resolution is the standalone unescaper's job. Its error folds into
+/// [`quick_xml::Error`].
 fn unescape_text(t: &BytesText<'_>) -> Result<String, quick_xml::Error> {
-    let decoded = t.decode()?;
-    Ok(quick_xml::escape::unescape(&decoded)?.into_owned())
+    Ok(quick_xml::escape::unescape(t)?.into_owned())
 }
 
 /// A node in a parsed XML tree. Used to surface structured contents of
@@ -83,7 +82,7 @@ pub fn parse_xml_node(xml: &str) -> Option<XmlNode> {
             }
             Event::CData(t) => {
                 if let Some(parent) = stack.last_mut() {
-                    let s = std::str::from_utf8(t.as_ref()).ok()?.trim().to_string();
+                    let s = t.trim().to_string();
                     if !s.is_empty() {
                         parent.text = match parent.text.take() {
                             Some(prev) => Some(format!("{prev}{s}")),
@@ -101,11 +100,11 @@ pub fn parse_xml_node(xml: &str) -> Option<XmlNode> {
 }
 
 fn node_from_start(e: &quick_xml::events::BytesStart<'_>) -> Option<XmlNode> {
-    let tag = std::str::from_utf8(e.name().as_ref()).ok()?.to_string();
+    let tag = e.name().into_inner().to_string();
     let mut attrs = Vec::new();
     for attr in e.attributes() {
         let attr = attr.ok()?;
-        let key = std::str::from_utf8(attr.key.as_ref()).ok()?.to_string();
+        let key = attr.key.into_inner().to_string();
         let val = attr
             .normalized_value(XmlVersion::Implicit1_0)
             .ok()?
@@ -155,8 +154,6 @@ pub enum XmlError {
     Read(#[from] quick_xml::Error),
     #[error("attribute error: {0}")]
     Attr(#[from] quick_xml::events::attributes::AttrError),
-    #[error("invalid utf-8 in preset xml: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
 }
 
 /// Parse a preset XML document into a typed representation.
@@ -180,13 +177,12 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) => {
-                let name = e.name();
-                let tag = std::str::from_utf8(name.as_ref())?.to_string();
+                let tag = e.name().into_inner().to_string();
                 match tag.as_str() {
                     "Preset" => {
                         for attr in e.attributes() {
                             let attr = attr?;
-                            let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
+                            let key = attr.key.into_inner().to_string();
                             let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "paintopid" => paintop_id = Some(val),
@@ -208,7 +204,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                         let mut md5sum = String::new();
                         for attr in e.attributes() {
                             let attr = attr?;
-                            let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
+                            let key = attr.key.into_inner().to_string();
                             let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "name" => name = val,
@@ -232,7 +228,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                         let mut raw_type: Option<String> = None;
                         for attr in e.attributes() {
                             let attr = attr?;
-                            let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
+                            let key = attr.key.into_inner().to_string();
                             let val = attr.normalized_value(XmlVersion::Implicit1_0)?.into_owned();
                             match key.as_str() {
                                 "name" => name = val,
@@ -251,7 +247,7 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                 }
             }
             Event::End(e) => {
-                let tag = std::str::from_utf8(e.name().as_ref())?.to_string();
+                let tag = e.name().into_inner().to_string();
                 match tag.as_str() {
                     "resources" => in_resources = false,
                     "resource" => {
@@ -277,9 +273,8 @@ pub fn parse_preset_xml(xml: &str) -> Result<ParsedPresetXml, XmlError> {
                 text_buf.push_str(&s);
             }
             Event::CData(t) => {
-                // CDATA preserves bytes verbatim: no entity unescaping.
-                let s = std::str::from_utf8(t.as_ref())?;
-                text_buf.push_str(s);
+                // CDATA content is verbatim: no entity unescaping.
+                text_buf.push_str(&t);
             }
             _ => {}
         }

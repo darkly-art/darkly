@@ -46,11 +46,9 @@ effects table is fixed on the registration in
 [`crates/darkly/src/gpu/effects/`](../crates/darkly/src/gpu/effects/), and the
 app's own summary, description, categories and keywords are fixed in
 [`crates/darkly/product.yaml`](../crates/darkly/product.yaml). The metainfo's
-`<releases>` block renders [`crates/darkly/releases.json`](../crates/darkly/releases.json),
-which is itself generated: `cargo releases --fetch X.Y.Z` writes an entry from
-the tag graph and the titles of the PRs merged in it (see
-[`docs/versioning.md`](versioning.md)), so a release line is fixed on the PR
-title on GitHub and re-fetched.
+`<releases>` block is not a region: it is generated from the `v*` tags by
+`scripts/metainfo-releases.sh`, refreshed and committed after each release, and
+refilled at build time (see [`docs/versioning.md`](versioning.md)).
 
 ```bash
 cargo sync-docs              # refill every region
