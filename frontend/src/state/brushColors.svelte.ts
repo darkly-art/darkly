@@ -19,7 +19,7 @@
  * module never consults it, so the policy stays at the one call site and the
  * memory stays a plain map.
  */
-import type { Color } from './app.svelte';
+import type { Color } from '../lib/color';
 
 export interface ColorPair {
     foreground: Color;

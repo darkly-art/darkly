@@ -1,7 +1,8 @@
 <script lang="ts">
     import { exposedDragSpeed } from '../state/brush_graph.svelte';
     import { app } from '../state/app.svelte';
-    import { beginScrubDrag } from '../lib/scrubDrag';
+    import { beginScrubDrag, type ScrubDrag } from '../lib/scrubDrag';
+    import { pointerDrag } from '../lib/pointerDrag';
     import Icon from '../icons/Icon.svelte';
 
     type DragProps = {
@@ -45,18 +46,20 @@
             : props.valueLabel,
     );
 
-    function startDrag(e: PointerEvent) {
-        if (props.mode !== 'drag') return;
-        e.preventDefault();
+    // `pointerDrag` owns capture and event plumbing; `beginScrubDrag` owns
+    // preview-versus-commit. The scrub lives for one gesture, held here so
+    // `onMove` and `onEnd` can reach it.
+    let drag: ScrubDrag | null = null;
+
+    function startDrag(e: PointerEvent): boolean | void {
+        if (props.mode !== 'drag') return false;
         const { min, max, onChange, onCommit } = props;
         const startX = e.clientX;
         const startVal = props.value;
         const speed = exposedDragSpeed(min, max);
-        const el = e.currentTarget as HTMLElement;
-        el.setPointerCapture(e.pointerId);
         dragging = true;
         app.beginInteraction();
-        const drag = beginScrubDrag({
+        drag = beginScrubDrag({
             toValue: (clientX) =>
                 Math.min(max, Math.max(min, startVal + (clientX - startX) * speed)),
             onPreview: onChange,
@@ -64,16 +67,9 @@
             onFinish: () => {
                 dragging = false;
                 app.endInteraction();
-                el.removeEventListener('pointermove', onMove);
-                el.removeEventListener('pointerup', onEnd);
-                el.removeEventListener('lostpointercapture', onEnd);
+                drag = null;
             },
         });
-        const onMove = (ev: PointerEvent) => drag.move(ev.clientX, ev.clientY);
-        const onEnd = () => drag.end();
-        el.addEventListener('pointermove', onMove);
-        el.addEventListener('pointerup', onEnd);
-        el.addEventListener('lostpointercapture', onEnd);
     }
 
     /** Double-click restores the default: one discrete change, so it previews
@@ -99,7 +95,11 @@
         class="scrub bar-control"
         class:dragging
         title={props.title}
-        onpointerdown={startDrag}
+        use:pointerDrag={{
+            onStart: startDrag,
+            onMove: (_dx, _dy, e) => drag?.move(e.clientX, e.clientY),
+            onEnd: () => drag?.end(),
+        }}
         ondblclick={resetDefault}
     >
         {@render body()}

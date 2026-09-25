@@ -9,8 +9,6 @@
  * Superseded when the pack-management push lands: the affordance moves onto
  * the pack row and this goes away.
  */
-class PackExportState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const packExport = new PackExportState();
+export const packExport = dialogState();

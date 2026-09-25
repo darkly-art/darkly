@@ -58,9 +58,10 @@ struct ShapeParams {
     n1: f32,
     n2: f32,
     n3: f32,
-    /// Anisotropy: squash the tip into an ellipse. `1.0` = round; `< 1.0`
-    /// narrows the silhouette along its local x-axis and (area-preservingly)
-    /// lengthens it along y. Applied after rotation so the ellipse co-rotates
+    /// Anisotropy: squash the tip into an ellipse inscribed in the dab
+    /// radius. `1.0` = round; `< 1.0` narrows the silhouette along its local
+    /// x-axis and leaves y at the radius, so the nominal size is always the
+    /// tip's semi-major axis. Applied after rotation so the ellipse co-rotates
     /// with the shape (the basis of the calligraphy nib).
     aspect: f32,
 }
@@ -145,12 +146,16 @@ fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
         case 2u: { r_base = shape_r_superformula(p, phased); }
         default: { r_base = shape_r_sine(p, phased); }
     }
-    // Area-preserving elliptical squash about the (rotated) local axes.
-    // Semi-axes a = aspect (x), b = 1/aspect (y); the polar boundary of that
-    // ellipse is `1 / sqrt((cos/a)^2 + (sin/b)^2)`. `aspect = 1` ⇒ factor 1.
+    // Elliptical squash about the (rotated) local axes, inscribed in the
+    // disc: semi-axes a = aspect (x), b = 1 (y), whose polar boundary is
+    // `1 / sqrt((cos/a)^2 + sin^2)`. `aspect = 1` ⇒ factor 1, and since
+    // `aspect <= 1` the map is a contraction, so `r <= r_base` at every angle
+    // and the nominal radius bounds the silhouette. An area-preserving
+    // `b = 1/aspect` would instead stretch y by up to 100x, making a shape
+    // knob change the dab's size (see `docs/brush/node-system.md`).
     let c = cos(phased);
     let s = sin(phased);
-    let inv = sqrt((c / p.aspect) * (c / p.aspect) + (s * p.aspect) * (s * p.aspect));
+    let inv = sqrt((c / p.aspect) * (c / p.aspect) + s * s);
     return r_base / inv;
 }
 

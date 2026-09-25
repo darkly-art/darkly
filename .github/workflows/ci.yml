@@ -39,6 +39,18 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  package:
+    name: cargo package (crates.io manifests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Catches manifest defects that only surface at release time, when a `v*`
+      # tag runs .github/workflows/publish.yml: a dependency published without
+      # a version requirement, a missing readme, an unpackageable path. Manifest
+      # checks only, so --no-verify skips the compile the real publish does.
+      - run: cargo package -p darkly-macros -p darkly --no-verify
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
@@ -68,7 +80,12 @@ jobs:
     name: cargo test + coverage
     runs-on: ubuntu-latest
     steps:
+      # Full history so build.rs's `git describe --tags` resolves and the
+      # version tests compare against a real tag instead of the fallback
+      # (docs/versioning.md: any CI job that builds needs fetch-depth 0).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Install Mesa Vulkan software renderer (lavapipe) + fontconfig
         run: |
           sudo apt-get update
@@ -98,6 +115,28 @@ jobs:
           # surfaces it as a job-level warning instead of a failure.
           fail_ci_if_error: false
           flags: rust
+
+  protocol-ts:
+    name: generated TS client in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Mesa Vulkan software renderer (lavapipe) + fontconfig
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1 libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # `frontend/src/engine/protocol_gen.ts` is generated from the request
+      # registry, and the test that asserts it matches what is checked in is
+      # behind `ts-export` (ts-rs is off the production and wasm path, so no
+      # other job enables it). Without this job that assertion never runs
+      # anywhere, and a handler can drift from the frontend's typed client
+      # unnoticed. The feature flags match the regeneration command the test
+      # prints on failure, so a red X here is directly actionable.
+      - name: cargo test --test protocol (ts-export)
+        env:
+          WGPU_BACKEND: vulkan
+        run: cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
 
   wasm-build:
     name: wasm-pack build
@@ -144,3 +183,57 @@ jobs:
       - name: vite build (includes svelte-check via tsc)
         working-directory: frontend
         run: npm run build
+
+  desktop:
+    name: desktop host typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: desktop
+        run: npm ci
+
+      - name: tsc
+        working-directory: desktop
+        run: npx tsc --noEmit
+
+      - name: vitest
+        working-directory: desktop
+        run: npm test
+
+  packaging:
+    name: desktop integration metadata
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the release block is rendered from the v* tags.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      # Validates the metainfo as committed, then as a channel installs it,
+      # with the <releases> block refilled from the tags. On a release PR the
+      # merge ref already reaches the tag just cut, so a tag body the store
+      # cannot carry fails here, before the merge, rather than on Flathub's
+      # builder. Freshness of the committed block is deliberately not checked:
+      # it lags each tag until the maintainer commits the refresh.
+      - name: Validate AppStream metainfo
+        run: |
+          appstreamcli validate --no-net packaging/art.darkly.Darkly.metainfo.xml
+          scripts/metainfo-releases.sh packaging/art.darkly.Darkly.metainfo.xml \
+            > "$RUNNER_TEMP/art.darkly.Darkly.metainfo.xml"
+          appstreamcli validate --no-net "$RUNNER_TEMP/art.darkly.Darkly.metainfo.xml"
+
+      - name: Validate desktop entry
+        run: desktop-file-validate packaging/art.darkly.Darkly.desktop

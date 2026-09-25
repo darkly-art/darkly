@@ -3,8 +3,6 @@
  * action dispatches into this; the modal reads the active tab's recording
  * info and drives the MP4 / GIF export + download once the artist confirms.
  */
-class ExportTimelapseState {
-    open = $state(false);
-}
+import { dialogState } from './dialogState.svelte';
 
-export const exportTimelapse = new ExportTimelapseState();
+export const exportTimelapse = dialogState();

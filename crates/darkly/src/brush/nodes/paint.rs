@@ -55,18 +55,55 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// Maximum uniform buffer size we'll allocate per brush pipeline.
 const MAX_UNIFORM_BYTES: usize = 1024;
 
+/// The accumulation the stacking half of a dab goes into when the brush sits
+/// strictly inside the dial. Its law is the one the original terminal always
+/// had: every dab composites over the last, so the dabs of a pass compound
+/// and a stroke builds on itself.
+///
+/// Declared only between the ends, where both halves exist. At either end the
+/// single scratch carries everything and no channel is allocated.
+const BUILD_CHANNEL: crate::brush::scratch::StrokeChannel = crate::brush::scratch::StrokeChannel {
+    name: "build",
+    format: wgpu::TextureFormat::Rgba8Unorm,
+    blend: crate::brush::node::PREMULTIPLIED_SOURCE_OVER,
+};
+
+/// How much of each dab goes to each half, from the `buildup` dial.
+///
+/// `(wash, build)`. At `0` the whole dab washes, at `1` the whole dab stacks,
+/// and between it splits. A share of exactly zero means that half does not
+/// exist for this brush: no channel, no colour target, no commit slot.
+/// The upstream graph's premultiplied RGBA expression for one dab.
+///
+/// Unwired, it falls back to opaque white modulated by the soft disc the
+/// wrapper's `local_dist` gives us, so a graph of just pen to paint still
+/// produces something visible.
+fn rgba_expr(cctx: &CompileWgslCtx) -> String {
+    match cctx.inputs.get("rgba") {
+        Some(InputBinding::Wired(expr)) => expr.clone(),
+        _ => "vec4<f32>(1.0, 1.0, 1.0, 1.0) * max(1.0 - local_dist, 0.0)".into(),
+    }
+}
+
+fn shares(buildup: f32) -> (f32, f32) {
+    let b = buildup.clamp(0.0, 1.0);
+    (1.0 - b, b)
+}
+
 // ── Per-brush pipeline ──────────────────────────────────────────────────
 
 /// Per-brush resources built on the first `flush_dabs` call for a
 /// brush with a given `topology_hash`. Cached on [`PaintPipeline`].
 struct PerBrushPipeline {
-    /// Per-dab pipeline. Always premultiplied source-over: the scratch
-    /// is a coverage accumulator and only paints alpha *up*. Engine-level
-    /// paint-vs-erase is a stroke decision applied at commit by
-    /// `commit_brush_dab`, not here. (Branching the per-dab pass on
-    /// `blend_mode` to a destination-out blend was a regression: the
-    /// scratch starts at (0,0,0,0), so `dst*(1-src.a)` stays zero and
-    /// the commit's `destination_out` then sees zero alpha and no-ops.)
+    /// Per-dab pipeline. The scratch is a coverage accumulator and only
+    /// paints alpha *up*; which law it accumulates under is the brush's
+    /// `buildup` choice, baked in here at build time from
+    /// [`CompiledBrush::dab_blend`]. Engine-level paint-vs-erase is a
+    /// stroke decision applied at commit by `commit_brush_dab`, not here.
+    /// (Branching the per-dab pass on `blend_mode` to a destination-out
+    /// blend was a regression: the scratch starts at (0,0,0,0), so
+    /// `dst*(1-src.a)` stays zero and the commit's `destination_out` then
+    /// sees zero alpha and no-ops.)
     paint_pipeline: wgpu::RenderPipeline,
     uniform_ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
@@ -158,21 +195,11 @@ impl PerBrushPipeline {
                 }),
         };
 
-        // Premultiplied source-over: scratch accumulates coverage. See
-        // the `paint_pipeline` field doc above for why there's no erase
-        // variant at this stage.
-        let paint_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
+        // What the per-dab pass writes: the scratch under the brush's
+        // accumulation law, then one target per declared channel, all from
+        // the compile output. See the `paint_pipeline` field doc above for
+        // why there's no erase variant at this stage.
+        let paint_targets = compiled.color_targets(wgpu::TextureFormat::Rgba8Unorm);
 
         let paint_pipeline = ctx
             .device
@@ -188,11 +215,7 @@ impl PerBrushPipeline {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: Some(paint_blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &paint_targets,
                     compilation_options: Default::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -378,22 +401,54 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Per-touch size multiplier (wire pressure here for pressure-sensitive size). Multiplies onto the brush's base size, owned by pen_input.",
                     ),
-                PortDef::input("flow", BrushWireType::Scalar)
+                PortDef::input("wash_flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Flow")
+                    .with_label("Flow (Wash)")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:droplet")
                     .exposed()
-                    .with_description("Stroke-level flow cap (folded into rgba alpha)"),
+                    .with_description(
+                        "Per-dab strength of the Wash half. Inactive at Build-up 100%.",
+                    ),
+                PortDef::input("build_flow", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Flow (Build-up)")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa6-solid:droplet")
+                    .exposed()
+                    .with_description(
+                        "Per-dab strength of the Build-up half. Inactive at Build-up 0%.",
+                    ),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:fill-drip")
+                    .with_icon("mdi:texture-box")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
+                // A share of each dab, not an interpolated blend state.
+                // Fixed-function blending offers one equation per attachment
+                // with no interpolation between `Add` and `Max`, and WebGPU
+                // has no framebuffer fetch, so no single attachment can be
+                // made to accumulate part-way between the two laws. What is
+                // continuous is the *input*: the dab is split between two
+                // accumulations, each running its own law untouched, and the
+                // commit lays one over the other. Both halves ride the one
+                // instanced draw, so 1px spacing stays affordable.
+                PortDef::input("buildup", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Build-up")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa6-solid:layer-group")
+                    .stroke_constant()
+                    .exposed()
+                    .with_description(
+                        "How much repeated passes build: 0% = a mark never darkens, 100% = toward opaque.",
+                    ),
                 // Typed as `Texture` to match the upstream `stamp.dab`
                 // output's wire type; the wire-type label is shared
                 // with the per-dab dispatch model where it'd be a
@@ -581,21 +636,15 @@ impl BrushNodeEvaluator for PaintEvaluator {
             gpu.queue
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
-            // Always source-over at per-dab. Paint-vs-erase routes through
-            // `gpu.blend_mode` in `commit_brush_dab`; see `paint_pipeline`'s
-            // doc on `PerBrushPipeline`.
+            // The accumulation law is baked into this pipeline at build
+            // time. Paint-vs-erase routes through `gpu.blend_mode` in
+            // `commit_brush_dab`; see `paint_pipeline`'s doc on
+            // `PerBrushPipeline`.
             let pipeline = &per_brush.paint_pipeline;
+            let attachments = scratch.color_attachments(wgpu::LoadOp::Load);
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("paint-flush"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: scratch.write_view(),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &attachments,
                 ..Default::default()
             });
             pass.set_viewport(
@@ -631,16 +680,34 @@ impl BrushNodeEvaluator for PaintEvaluator {
             return;
         };
         let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
+        // Each half this brush accumulated goes in the slot that commits
+        // under its law. At either end the scratch is the only
+        // accumulation and fills its own slot; between, the scratch is the
+        // wash half and the declared channel is the build half.
+        let (wash_share, build_share) = shares(ctx.input_f32("buildup"));
+        let scratch = stroke.scratch.write_bind_group();
+        let wash = (wash_share > 0.0).then_some(scratch);
+        let build = if build_share <= 0.0 {
+            None
+        } else if wash_share <= 0.0 {
+            Some(scratch)
+        } else {
+            Some(
+                stroke
+                    .scratch
+                    .channel_bind_group(BUILD_CHANNEL.name)
+                    .expect("a brush inside the dial declares its build channel"),
+            )
+        };
         stroke.paint_target.commit_brush_dab(
             &mut gpu.encoder,
             gpu.pipelines,
             gpu.queue,
-            stroke.scratch.write_bind_group(),
-            gpu.selection_bind_group,
+            wash,
+            build,
             stroke.pre_stroke_bind_group,
             opacity,
             gpu.blend_mode,
-            /* fg_premultiplied */ true,
         );
     }
 
@@ -668,28 +735,71 @@ impl BrushNodeEvaluator for PaintEvaluator {
     /// `local_uv`, `local_dist`, `theta`, `target_pos`, and `sel`.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
-        let rgba_expr = match cctx.inputs.get("rgba") {
-            Some(InputBinding::Wired(expr)) => expr.clone(),
-            _ => {
-                // Unwired rgba: fall back to opaque white modulated
-                // by the soft-disc that the wrapper's `local_dist`
-                // gives us. This makes a graph with just
-                // pen → paint still produce something
-                // visible, mirroring `paint`'s procedural-disc
-                // fallback.
-                "vec4<f32>(1.0, 1.0, 1.0, 1.0) * max(1.0 - local_dist, 0.0)".into()
-            }
-        };
-        // Stroke-/dab-level flow cap. Matches the `paint` terminal's
-        // `color[3] *= flow` step, folded directly into the
-        // premultiplied rgba (multiply all four components). Wired
-        // values flow through their dab-record field; unwired uses
-        // the port default literal (1.0 by default).
-        let flow_expr = cctx.input("flow").as_f32();
+        let rgba_expr = rgba_expr(cctx);
+        // Per-dab flow, one per half, folded into the premultiplied rgba
+        // (multiply all four components) the way the original terminal's
+        // `color[3] *= flow` was. Wired values flow through their dab-record
+        // field; unwired ones are the port default literal.
+        //
+        // The dial is stroke-constant, so it is always a literal here, and
+        // the shares it yields decide the shape of the pass: which blend
+        // state the scratch runs under, whether a second accumulation
+        // exists, and what the body returns.
+        let buildup = cctx.input("buildup").as_f32_literal().ok_or_else(|| {
+            "paint.buildup picks the pass's blend states and colour targets when the              brush compiles, so a per-dab wire cannot drive it"
+                .to_string()
+        })?;
+        let (wash_share, build_share) = shares(buildup);
+        let mut body = format!("    let rgba = {rgba_expr};\n");
+        if wash_share > 0.0 {
+            let expr = cctx.input("wash_flow").as_f32();
+            body.push_str(&format!("    let wash_flow = clamp({expr}, 0.0, 1.0);\n"));
+        }
+        if build_share > 0.0 {
+            let expr = cctx.input("build_flow").as_f32();
+            body.push_str(&format!("    let build_flow = clamp({expr}, 0.0, 1.0);\n"));
+        }
+        if build_share <= 0.0 {
+            // Wash alone: the scratch takes the strongest dab.
+            body.push_str("    return rgba * wash_flow * sel;\n");
+            wgsl.dab_blend = Some(crate::brush::node::COVERAGE_CEILING);
+        } else if wash_share <= 0.0 {
+            // Build-up alone: the scratch composites every dab over the last.
+            body.push_str("    return rgba * build_flow * sel;\n");
+            wgsl.dab_blend = Some(crate::brush::node::PREMULTIPLIED_SOURCE_OVER);
+        } else {
+            // Both: one instanced draw writes each half into the
+            // accumulation that runs its law, scaled by its share.
+            body.push_str(&format!(
+                "    return FsOut(rgba * wash_flow * sel * {wash_share:.6}, rgba * build_flow * sel * {build_share:.6});\n"
+            ));
+            wgsl.dab_blend = Some(crate::brush::node::COVERAGE_CEILING);
+            wgsl.channels = vec![BUILD_CHANNEL];
+        }
+        wgsl.body = body;
+        Ok(wgsl)
+    }
+
+    /// Hover-cursor preview body.
+    ///
+    /// The preview skeleton renders one dab to a thumbnail and keeps the
+    /// single-output signature, so it cannot take the two-accumulation
+    /// return the stroke body uses inside the dial. It shows the one dab as
+    /// the stroke would deposit it on blank ground, blending the two flows
+    /// by the dial: exact at either end, and to first order between (it
+    /// drops the cross term of compositing a dab's own two halves).
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        let rgba_expr = rgba_expr(cctx);
+        let buildup = cctx.input("buildup").as_f32_literal().unwrap_or(1.0);
+        let (_, build_share) = shares(buildup);
+        let wash_expr = cctx.input("wash_flow").as_f32();
+        let build_expr = cctx.input("build_flow").as_f32();
         wgsl.body = format!(
             "    let rgba = {rgba_expr};\n\
-             \x20   let flow = clamp({flow_expr}, 0.0, 1.0);\n\
-             \x20   return rgba * flow * sel;\n"
+             \x20   let wash_flow = clamp({wash_expr}, 0.0, 1.0);\n\
+             \x20   let build_flow = clamp({build_expr}, 0.0, 1.0);\n\
+             \x20   return rgba * mix(wash_flow, build_flow, {build_share:.6}) * sel;\n"
         );
         Ok(wgsl)
     }

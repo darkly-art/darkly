@@ -16,7 +16,9 @@ const { engine, fakeApp, fakeConfig, fakeBrushGraph, fakeToast } = vi.hoisted(()
         activeToolId: 'brush',
         docW: 100,
         docH: 100,
-        onCopyResult: vi.fn(),
+        // Never settles: these tests assert on what was *sent*, and a
+        // readback that resolves would drive the clipboard write too.
+        awaitReadback: vi.fn(() => new Promise(() => {})),
         requestFrame: vi.fn(),
         selectLayer: vi.fn(),
         refreshLayerTree: vi.fn().mockResolvedValue(undefined),
@@ -57,7 +59,7 @@ import { registerClipboardActions } from '../clipboard';
 beforeEach(() => {
     engine.post.mockClear();
     engine.send.mockClear();
-    fakeApp.onCopyResult.mockClear();
+    fakeApp.awaitReadback.mockClear();
     fakeApp.activeLayerId = 42;
     fakeConfig.get.mockReturnValue(false);
     // `mockClear` keeps the implementation, so restore the default response

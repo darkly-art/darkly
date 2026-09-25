@@ -6,7 +6,8 @@
  * the next stroke through the existing `consumeForeground()` hook, which is
  * the one owner of the recency rule.
  */
-import { app, type Color } from '../../../state/app.svelte';
+import { app } from '../../../state/app.svelte';
+import type { Color } from '../../../lib/color';
 import { recentColors } from '../../../state/recents.svelte';
 import { colorToHex, hexToColor } from '../../../lib/color';
 import { NEUTRAL_PALETTE } from '../../../lib/packPalette';

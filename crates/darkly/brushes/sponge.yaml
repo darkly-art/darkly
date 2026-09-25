@@ -75,7 +75,7 @@ connections:
 - add.result -> levels.input
 - brush_settings.size -> multiply.a
 - curve.output -> levels.in_low
-- curve_2.output -> paint.flow
+- curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.b
 - levels.output -> stamp.tip
 - multiply.result -> noise.scale
@@ -93,7 +93,7 @@ connections:
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
-  paint.flow: {}
+  paint.build_flow: {}
   paint.opacity: {}
   polygon.softness: {}
   polygon.rounding: {}

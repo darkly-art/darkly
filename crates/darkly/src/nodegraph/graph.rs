@@ -90,12 +90,14 @@ pub struct PortDef<W: WireKind> {
     /// random's `mode`). Empty for every other input kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enum_options: Vec<String>,
-    /// Whether an upstream wire may drive this input per-dab. Computed from
-    /// `wire_type.is_wirable()` at construction and carried as data so the
-    /// frontend reads it directly rather than re-deriving the rule; the
-    /// single source of truth is [`WireKind::is_wirable`]. Every port built
-    /// from a registration (`PortDef::input`/`output`, and the clones in
-    /// `add_node` / portable import) sets it correctly; serde round-trips it.
+    /// Whether an upstream wire may drive this input per-dab. Seeded from
+    /// `wire_type.is_wirable()` at construction, and cleared by
+    /// [`PortDef::stroke_constant`] for an otherwise-wirable type whose value
+    /// is read before any dab exists. Carried as data so `connect` and the
+    /// frontend read the port's own answer rather than re-deriving a rule
+    /// from the type. Every port built from a registration
+    /// (`PortDef::input`/`output`, and the clones in `add_node` / portable
+    /// import) sets it correctly; serde round-trips it.
     #[serde(default)]
     pub wirable: bool,
     /// Whether an artist may *expose* this input as a brush-bar control.
@@ -400,6 +402,19 @@ impl<W: WireKind> PortDef<W> {
         self
     }
 
+    /// Mark this input as stroke-constant: its value is read once when the
+    /// brush compiles, so a per-dab wire could not drive it even if one were
+    /// allowed. Clears [`PortDef::wirable`], which is what `connect` and the
+    /// node editor's wire dot both read.
+    ///
+    /// Use it for a scalar whose value selects shader text, a blend state or
+    /// a pipeline. A type that is never wirable (enum, string, curve) already
+    /// says so through its wire type and needs no call.
+    pub fn stroke_constant(mut self) -> Self {
+        self.wirable = false;
+        self
+    }
+
     /// Mark this input port as a settable-source: its resolved value is also
     /// available as a wire source. See [`PortDef::source`] / [`PortDef::is_source`].
     pub fn source(mut self) -> Self {
@@ -472,6 +487,17 @@ pub struct NodeInstance<W: WireKind> {
     /// node's single, unified input/output list: the per-instance authored
     /// value of every input lives on its [`PortDef::value`].
     pub ports: Vec<PortDef<W>>,
+    /// Author-chosen display name for this node instance, shown in place of
+    /// the registration's display name ("Add pressure and tilt" rather than
+    /// "Add"). Empty means none, and the UI falls back to the type's own
+    /// name. Purely a label: [`id`](Self::id) remains the node's identity,
+    /// because ids are emitted verbatim as WGSL symbols (see
+    /// `brush::wgsl::context::CompileWgslCtx::ident`) where an arbitrary
+    /// author string is neither a valid identifier nor guaranteed unique.
+    /// Inert w.r.t. compilation and render output. Serializable graph state
+    /// (survives save/load through both the portable YAML and the bundle).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     /// Free-form author annotation on this node instance. Empty means none.
     /// Inert w.r.t. compilation and render output; carried purely so a brush
     /// author can leave explanatory notes on a node. Serializable graph state
@@ -631,6 +657,7 @@ impl std::error::Error for FindTerminalError {}
 /// (map iteration order is the brush-bar order) and gives the
 /// brush-author editor one canonical place to read and write.
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ExposedPortMeta {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
@@ -638,6 +665,40 @@ pub struct ExposedPortMeta {
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub icon: String,
+    /// Present the brush-bar control mirrored: the number the artist sees
+    /// runs the opposite way from the value the port stores, so a port
+    /// carrying softness can be exposed as a "Hardness" knob without a
+    /// `1 - x` helper node in the graph.
+    ///
+    /// Display-space only, exactly like `PortDef::min`/`max`: the stored
+    /// value and everything downstream of it (shader, wire remapping,
+    /// dab extent, thumbnails) are untouched.
+    ///
+    /// The mirror reflects about the control's own bounds (`min + max`), so
+    /// it equals the complement `1 - x` only when those bounds sum to 1. A
+    /// port narrowed to `0.0..0.5` and labelled "Hardness" reads 0% to 50%,
+    /// not 0% to 100%.
+    ///
+    /// Meaningful only for scalar ports; a toggle or a dropdown has no
+    /// travel to reverse, and the resolver that builds the display mapping
+    /// declines to produce one for them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
+    /// Show the brush-bar control in a unit of the author's choosing rather
+    /// than the one the port's registration declares. `None` inherits.
+    ///
+    /// Display-space only, like `invert` and `PortDef::min`/`max`: the unit
+    /// converts (percent is x100, degrees is radians to degrees), so the
+    /// number the artist reads and types changes while the stored value and
+    /// everything downstream of it do not. Switching to a unit and back
+    /// restores the original reading exactly.
+    ///
+    /// `Option` rather than a plain `UnitType` because the resolver has to
+    /// tell "the author chose this" from "nobody chose anything": a plain
+    /// field would default to `Normalized` and silently strip the declared
+    /// unit from every entry that never picked one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<UnitType>,
 }
 
 /// Format the canonical key for an exposed-port entry. Keys are
@@ -707,6 +768,7 @@ impl<W: WireKind> Graph<W> {
                 id: id.clone(),
                 type_id,
                 ports,
+                name: String::new(),
                 comment: String::new(),
             },
         );
@@ -796,22 +858,32 @@ impl<W: WireKind> Graph<W> {
             .contains_key(&exposed_port_key(id, port_name))
     }
 
-    /// Overwrite all three meta fields on a brush-bar entry in one call.
+    /// Overwrite every meta field on a brush-bar entry in one call.
     /// The icon field is restricted to FontAwesome-friendly characters
     /// (`[a-zA-Z0-9- ]*`): keeps the value safe to bind directly into
     /// an HTML `class=` attribute on the frontend without further
     /// sanitization. Out-of-shape icon strings are rejected loudly so
     /// the caller learns about the constraint rather than seeing the
     /// icon silently dropped.
+    ///
+    /// `invert` and `unit` are stored as given even on a non-scalar port.
+    /// Neither is an invariant of the entry the way a safe icon is: the
+    /// author can swap the node or wire the port at any time, so whatever
+    /// reads them has to tolerate a stale one regardless, and rejecting
+    /// them here would only add a failure mode without removing that
+    /// obligation.
+    ///
+    /// Takes the whole [`ExposedPortMeta`] rather than one parameter per
+    /// field: every field is overwritten anyway (a caller that omits one
+    /// clears it), so the struct says that outright and a new field costs
+    /// no call-site churn.
     pub fn set_exposed_port_meta(
         &mut self,
         key: &str,
-        label: String,
-        description: String,
-        icon: String,
+        meta: ExposedPortMeta,
     ) -> Result<(), GraphError> {
-        if !icon.bytes().all(is_safe_icon_byte) {
-            return Err(GraphError::InvalidIcon { icon });
+        if !meta.icon.bytes().all(is_safe_icon_byte) {
+            return Err(GraphError::InvalidIcon { icon: meta.icon });
         }
         let entry =
             self.exposed_ports
@@ -819,9 +891,7 @@ impl<W: WireKind> Graph<W> {
                 .ok_or_else(|| GraphError::ExposedPortNotFound {
                     key: key.to_string(),
                 })?;
-        entry.label = label;
-        entry.description = description;
-        entry.icon = icon;
+        *entry = meta;
         Ok(())
     }
 
@@ -842,22 +912,28 @@ impl<W: WireKind> Graph<W> {
 
     /// Connect an output port to an input port, checking types and cycles.
     pub fn connect(&mut self, from: PortRef, to: PortRef) -> Result<(), GraphError> {
-        // Resolve port defs.
-        let from_def = self.find_port(&from, PortDir::Output)?;
-        let to_def = self.find_port(&to, PortDir::Input)?;
+        // Resolve port defs. Copied out of the borrow so the connection
+        // list below can be mutated.
+        let (from_type, to_type, to_wirable) = {
+            let from_def = self.find_port(&from, PortDir::Output)?;
+            let to_def = self.find_port(&to, PortDir::Input)?;
+            (from_def.wire_type, to_def.wire_type, to_def.wirable)
+        };
 
         // Type check.
-        if !W::compatible(from_def, to_def) {
+        if !W::compatible(from_type, to_type) {
             return Err(GraphError::TypeMismatch {
-                from_type: format!("{:?}", from_def),
-                to_type: format!("{:?}", to_def),
+                from_type: format!("{:?}", from_type),
+                to_type: format!("{:?}", to_type),
             });
         }
 
-        // Wirability check: a compile-time input (enum, string, curve) can
-        // never accept a per-dab wire. Type-owned: asks the wire type, not
-        // a consumer-side classifier.
-        if !to_def.is_wirable() {
+        // Wirability check: an input whose value is read before any dab
+        // exists can never accept a per-dab wire, whether because its type
+        // is never wirable (enum, string, curve) or because it is declared
+        // stroke-constant. The port carries the answer; this asks it rather
+        // than classifying by type.
+        if !to_wirable {
             return Err(GraphError::InputNotWirable {
                 node: to.node.clone(),
                 port: to.port.clone(),
@@ -977,6 +1053,18 @@ impl<W: WireKind> Graph<W> {
         Ok(())
     }
 
+    /// Set (or clear, with an empty string) a node's author-chosen display
+    /// name. Names are labels, not identity: they are neither unique-checked
+    /// nor referenced by connections, so any string is acceptable.
+    pub fn set_node_name(&mut self, id: &NodeId, name: String) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
+        node.name = name;
+        Ok(())
+    }
+
     /// Set (or clear, with an empty string) a node's author comment.
     pub fn set_node_comment(&mut self, id: &NodeId, comment: String) -> Result<(), GraphError> {
         let node = self
@@ -1084,7 +1172,7 @@ impl<W: WireKind> Graph<W> {
     /// names the *role* the endpoint plays on a wire: `Output` = the source
     /// end (resolved by [`PortDef::is_source`], so settable-source inputs
     /// qualify), `Input` = the sink end.
-    fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<W, GraphError> {
+    fn find_port(&self, pr: &PortRef, expected_dir: PortDir) -> Result<&PortDef<W>, GraphError> {
         let node = self
             .nodes
             .get(&pr.node)
@@ -1096,15 +1184,13 @@ impl<W: WireKind> Graph<W> {
                     PortDir::Input => p.dir == PortDir::Input,
                 }
         };
-        let def = node
-            .ports
+        node.ports
             .iter()
             .find(matches)
             .ok_or_else(|| GraphError::PortNotFound {
                 node: pr.node.clone(),
                 port: pr.port.clone(),
-            })?;
-        Ok(def.wire_type)
+            })
     }
 
     /// DFS reachability: can we get from `start` to `target` following
@@ -1338,6 +1424,48 @@ mod tests {
         matches!(err, GraphError::TypeMismatch { .. });
     }
 
+    /// A stroke-constant input refuses a wire even though its type is
+    /// wirable, and the refusal reads the port's flag rather than its type,
+    /// so a plain scalar beside it still accepts one.
+    #[test]
+    fn connect_rejects_a_stroke_constant_input() {
+        let mut g = Graph::<TestWireKind>::new();
+        let src = g.add_node("src", vec![scalar_out("out")]);
+        let sink = g.add_node(
+            "sink",
+            vec![
+                PortDef::input("fixed", TestWireKind::Scalar).stroke_constant(),
+                scalar_in("driven"),
+            ],
+        );
+
+        let err = g
+            .connect(
+                PortRef {
+                    node: src.clone(),
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: sink.clone(),
+                    port: "fixed".into(),
+                },
+            )
+            .expect_err("a stroke-constant input must refuse a wire");
+        assert!(matches!(err, GraphError::InputNotWirable { .. }), "{err:?}");
+
+        g.connect(
+            PortRef {
+                node: src,
+                port: "out".into(),
+            },
+            PortRef {
+                node: sink,
+                port: "driven".into(),
+            },
+        )
+        .expect("a plain scalar input beside it still accepts one");
+    }
+
     #[test]
     fn connect_rejects_non_wirable_input() {
         // A type-compatible wire into a non-wirable input is refused
@@ -1452,6 +1580,72 @@ mod tests {
         let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.nodes.len(), 2);
         assert_eq!(g2.connections.len(), 1);
+    }
+
+    #[test]
+    fn set_node_name_sets_and_clears_without_touching_identity() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        assert_eq!(g.nodes[&a].name, "");
+
+        g.set_node_name(&a, "roughness source".into()).unwrap();
+        assert_eq!(g.nodes[&a].name, "roughness source");
+        // The name is a label: the id it is keyed by is untouched, which is
+        // what keeps connections and the emitted WGSL symbols valid.
+        assert_eq!(g.nodes[&a].id, a);
+        assert!(g.nodes.contains_key(&a));
+
+        g.set_node_name(&a, String::new()).unwrap();
+        assert_eq!(g.nodes[&a].name, "");
+    }
+
+    /// Names are labels, not identity, so two nodes may share one and an
+    /// arbitrary author string is acceptable. Neither is rejected.
+    #[test]
+    fn node_names_need_not_be_unique_or_identifier_shaped() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("source", vec![scalar_out("out")]);
+        assert_ne!(a, b);
+
+        g.set_node_name(&a, "Add pressure and tilt".into()).unwrap();
+        g.set_node_name(&b, "Add pressure and tilt".into()).unwrap();
+        assert_eq!(g.nodes[&a].name, g.nodes[&b].name);
+        assert_ne!(g.nodes[&a].id, g.nodes[&b].id);
+    }
+
+    #[test]
+    fn set_node_name_unknown_node_errors() {
+        let mut g = Graph::<TestWireKind>::new();
+        let err = g
+            .set_node_name(&NodeId("ghost".into()), "hi".into())
+            .unwrap_err();
+        assert_eq!(err, GraphError::NodeNotFound(NodeId("ghost".into())));
+    }
+
+    /// A name is inert but must survive the raw-`Graph` serde that backs the
+    /// `.darkly-brush` bundle. Empty names are elided from the JSON.
+    #[test]
+    fn name_survives_serde_and_elides_when_empty() {
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node("source", vec![scalar_out("out")]);
+        let b = g.add_node("sink", vec![scalar_in("in")]);
+        g.set_node_name(&a, "keep me".into()).unwrap();
+
+        let json = serde_json::to_string(&g).unwrap();
+        // Inspect the node objects rather than counting `"name"` in the whole
+        // document: every `PortDef` carries a `name` of its own.
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let node_obj = |id: &NodeId| doc["nodes"][&id.0].as_object().unwrap().clone();
+        assert_eq!(node_obj(&a)["name"], "keep me");
+        assert!(
+            !node_obj(&b).contains_key("name"),
+            "an unnamed node must elide the key entirely"
+        );
+
+        let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(g2.nodes[&a].name, "keep me");
+        assert_eq!(g2.nodes[&b].name, "");
     }
 
     #[test]
@@ -1663,22 +1857,95 @@ mod tests {
         let key = exposed_port_key(&id, "val");
 
         // Safe icon class: accepted.
-        g.set_exposed_port_meta(&key, "Label".into(), "Desc".into(), "fa6-solid:sun".into())
-            .unwrap();
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                label: "Label".into(),
+                description: "Desc".into(),
+                icon: "fa6-solid:sun".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
 
         // Unsafe icon (contains `<`): rejected; previous value retained.
         let err = g
             .set_exposed_port_meta(
                 &key,
-                "Label2".into(),
-                "Desc2".into(),
-                "<script>x</script>".into(),
+                ExposedPortMeta {
+                    label: "Label2".into(),
+                    description: "Desc2".into(),
+                    icon: "<script>x</script>".into(),
+                    ..Default::default()
+                },
             )
             .unwrap_err();
         assert!(matches!(err, GraphError::InvalidIcon { .. }));
         assert_eq!(g.exposed_ports[&key].icon, "fa6-solid:sun");
         assert_eq!(g.exposed_ports[&key].label, "Label");
+    }
+
+    #[test]
+    fn set_exposed_port_meta_carries_invert() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.expose_port(&id, "val").unwrap();
+        let key = exposed_port_key(&id, "val");
+        assert!(!g.exposed_ports[&key].invert, "entries start uninverted");
+
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                label: "Label".into(),
+                invert: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(g.exposed_ports[&key].invert);
+
+        // Every field is overwritten, invert included: that is what lets the
+        // authoring modal save the whole bundle in one call, and why it has
+        // to seed its checkbox from the current value.
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                label: "Label".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!g.exposed_ports[&key].invert);
+    }
+
+    /// The unit override stores, survives, and clears. `None` is a real
+    /// value here (inherit), not an absence, which is why the modal has to
+    /// seed its selector the same way it seeds the invert checkbox.
+    #[test]
+    fn set_exposed_port_meta_carries_unit_override() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+        g.expose_port(&id, "val").unwrap();
+        let key = exposed_port_key(&id, "val");
+        assert_eq!(
+            g.exposed_ports[&key].unit, None,
+            "entries start inheriting their port's unit"
+        );
+
+        g.set_exposed_port_meta(
+            &key,
+            ExposedPortMeta {
+                unit: Some(UnitType::Degrees),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(g.exposed_ports[&key].unit, Some(UnitType::Degrees));
+
+        g.set_exposed_port_meta(&key, ExposedPortMeta::default())
+            .unwrap();
+        assert_eq!(g.exposed_ports[&key].unit, None);
     }
 
     #[test]

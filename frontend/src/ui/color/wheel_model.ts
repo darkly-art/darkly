@@ -21,8 +21,9 @@
  * paint. `ui/palette_popup/wheel_geometry.ts` uses the same polar convention.
  */
 import { angularOffset } from '../../lib/angle';
+import { clamp01 } from '../../lib/clamp';
 import { hsvToRgb, rgbToHsv, type Hsv } from '../../lib/color';
-import type { Color } from '../../state/app.svelte';
+import type { Color } from '../../lib/color';
 
 export interface Pt {
     x: number;
@@ -168,7 +169,6 @@ function isInTriangle(g: WheelGeometry, h: number, x: number, y: number): boolea
     return w.hue >= -EDGE_EPS && w.white >= -EDGE_EPS && w.hue + w.white <= 1 + EDGE_EPS;
 }
 
-const clamp01 = (t: number) => Math.max(0, Math.min(1, t));
 
 /** Parameter of the projection of a point onto segment `a`→`b` (0 at `a`, 1 at `b`). */
 function project(a: Pt, b: Pt, px: number, py: number): number {

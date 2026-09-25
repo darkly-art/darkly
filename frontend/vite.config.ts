@@ -13,7 +13,7 @@ import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
 import { wasmWatchPlugin } from './scripts/wasm-watch.mjs';
 
 // Darkly's version is the latest git tag plus the commit height since it, the
-// same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
+// same v* tags the deploy pipeline builds releases from.
 // `--long` always emits `TAG-COMMITS-gSHA` (height 0 when HEAD *is* the tag).
 // No `--always`: on a tagless/shallow checkout we want describe to THROW so the
 // catch yields the parseable fallback, not a bare SHA. Surfaced to the app as

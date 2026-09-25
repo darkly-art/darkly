@@ -18,7 +18,7 @@ vi.mock('../../config/store.svelte', async (importOriginal) => ({
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
 import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
 import { brushColors, type ColorPair } from '../brushColors.svelte';
-import type { Color } from '../app.svelte';
+import type { Color } from '../../lib/color';
 
 const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
 

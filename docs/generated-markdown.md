@@ -12,7 +12,7 @@ mechanism and the commands. The code side is documented at the top of
 
 ## Regions
 
-A file opts a span of itself in by bracketing it with HTML comments, which render
+A file opts a span of itself in by bracketing it with comments, which render
 as nothing:
 
 ```markdown
@@ -21,10 +21,34 @@ as nothing:
 <!-- /darkly:catalog-table -->
 ```
 
+Markdown is not the only target. AppStream metainfo is XML and its comments are
+the same `<!-- -->`, so `packaging/art.darkly.Darkly.metainfo.xml` needed no
+grammar of its own. A desktop entry has no such syntax and uses `#` instead:
+
+```
+# darkly:app-desktop-entry
+Comment=…
+# /darkly:app-desktop-entry
+```
+
+Markdown is never read with the `#` form, or every heading would be a comment
+body. `Syntax::of` in `crates/darkly/src/docs_md/mod.rs` decides by extension,
+and is the one place to edit to admit a new file type.
+
+`packaging/app.json` is generated too, and is the exception to all of this: JSON
+has no comment syntax to hide a marker in, so the whole file is written rather
+than a span of it. It exists because `desktop/forge.config.js` is JavaScript with no
+YAML parser, and so cannot read the source everything else renders from.
+
 **Never edit inside a region**: the next sync overwrites it. Every name and
-description in one is a `&'static str` on the registration that owns it, so a
-typo in the README's effects table is fixed in
-[`crates/darkly/src/gpu/effects/`](../crates/darkly/src/gpu/effects/).
+description in one belongs to the thing that owns it, so a typo in the README's
+effects table is fixed on the registration in
+[`crates/darkly/src/gpu/effects/`](../crates/darkly/src/gpu/effects/), and the
+app's own summary, description, categories and keywords are fixed in
+[`crates/darkly/product.yaml`](../crates/darkly/product.yaml). The metainfo's
+`<releases>` block is not a region: it is generated from the `v*` tags by
+`scripts/metainfo-releases.sh`, refreshed and committed after each release, and
+refilled at build time (see [`docs/versioning.md`](versioning.md)).
 
 ```bash
 cargo sync-docs              # refill every region

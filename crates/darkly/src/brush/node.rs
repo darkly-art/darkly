@@ -82,6 +82,55 @@ pub struct BrushNodeRegistration {
 /// what every terminal but `liquify` uses.
 pub const COLOR_SCRATCH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// Per-dab write law for a colour stroke scratch: premultiplied
+/// source-over. Coverage accumulates as `1 - prod(1 - a_i)`, so a pixel's
+/// density rises with the number of dabs the spacing happened to stack
+/// over it. Order-invariant, and so unaffected by how dabs group into
+/// draws.
+pub const PREMULTIPLIED_SOURCE_OVER: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+/// Per-dab write law that takes the greatest coverage instead of
+/// accumulating: the stroke's density is set by its strongest dab, not by
+/// how many dabs landed on the pixel. A stroke cannot darken itself by
+/// crossing back over its own path, and its density stops depending on
+/// `spacing`.
+///
+/// Valid only for a stroke whose dabs share one chroma. Every graph whose
+/// `stamp.color` comes from the stroke-constant `paint_color` uniform
+/// satisfies that: all four channels then scale by the same per-dab
+/// factor, and since rounding to 8 bits is monotone, all four take their
+/// maximum from the *same* dab. That same-dab agreement is the property
+/// this relies on; it is not a claim that the stored premultiplied chroma
+/// is exact, since at the low stored alphas a light pass produces, 8-bit
+/// premultiplied chroma carries a few percent of error. A graph that
+/// varies dab colour per dab would take per-channel maxima from different
+/// dabs and must stay on [`PREMULTIPLIED_SOURCE_OVER`].
+///
+/// WebGPU requires both factors to be `One` under a `Max` operation.
+pub const COVERAGE_CEILING: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    },
+};
+
 impl BrushNodeRegistration {
     /// Construct a compute-only node (no GPU pipelines, no lifecycle).
     pub fn compute(

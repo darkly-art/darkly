@@ -8,6 +8,8 @@
     --text-muted:  #999999;
     --text-dim:    #bbbbbb;
     --accent:      #878787;
+    /* Legible foreground on an --accent fill (near-black: white reaches only ~3.5:1 on the lighter accent). */
+    --on-accent:   #1a1a1a;
     --danger:      #747474;
     --thumb-bg:    #cccccc;
     --canvas-bg:   #cfcfcf;

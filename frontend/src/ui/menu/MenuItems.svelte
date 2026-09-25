@@ -60,6 +60,9 @@
                 onmouseenter={() => (openSubmenu = entry.title)}
                 onclick={() => (openSubmenu = openSubmenu === entry.title ? null : entry.title)}
             >
+                <!-- Empty gutter: a submenu has no icon of its own, but its
+                     label has to line up with the action rows beside it. -->
+                <span class="icon"></span>
                 <span class="label">{entry.title}</span>
                 <Icon name="fa6-solid:chevron-right" class="chevron" />
                 {#if openSubmenu === entry.title}
@@ -157,8 +160,12 @@
         margin: 4px 0;
     }
 
-    /* Submenu flyout: opens to the right of its parent row. The hamburger
-       lives at the far left, so there's always room rightward. */
+    /* Submenu flyout: opens to the right of its parent row. Overflow stays
+       `visible` so a flyout nested in a flyout isn't clipped by it: scrolling
+       one axis computes the other to `auto` as well, which would make every
+       flyout a scroll container cutting off its own children. Menus here are
+       short enough not to need their own scroll, which is the same call
+       `HamburgerMenu`'s root list and `MenuBar`'s dropdown already make. */
     .submenu-row {
         position: relative;
     }
@@ -168,8 +175,6 @@
         left: 100%;
         z-index: 10;
         margin-left: 2px;
-        max-height: 80vh;
-        overflow-y: auto;
         background: var(--bg-surface, var(--bg));
         border: 1px solid var(--bg-hover);
         border-radius: 6px;

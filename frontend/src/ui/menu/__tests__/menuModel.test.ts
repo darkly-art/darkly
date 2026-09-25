@@ -49,6 +49,78 @@ describe('buildTopMenus', () => {
     });
 });
 
+describe('nested menuPath', () => {
+    // Two adjustment rows and two veils under one submenu: the shape the
+    // Filters menu actually takes.
+    const NESTED = [
+        reg('bw', 'Black and White', ['Filters:10']),
+        reg('invert', 'Invert', ['Filters:10']),
+        reg('grain', 'Grain', ['Filters:20', 'Veils']),
+        reg('vhs', 'VHS', ['Filters:20', 'Veils']),
+    ];
+
+    it('collects a deeper segment into a submenu entry', () => {
+        const filters = buildTopMenus(NESTED).find(m => m.title === 'Filters')!;
+        expect(filters.entries.map(e => e.kind)).toEqual(['action', 'action', 'submenu']);
+        const veils = filters.entries[2] as Extract<MenuEntry, { kind: 'submenu' }>;
+        expect(veils.title).toBe('Veils');
+        expect(veils.entries.flatMap(e => (e.kind === 'action' ? [e.actionId] : []))).toEqual([
+            'grain',
+            'vhs',
+        ]);
+    });
+
+    it('positions the submenu among the rows by the order naming their shared menu', () => {
+        const hoisted = [
+            reg('bw', 'Black and White', ['Filters:10']),
+            reg('grain', 'Grain', ['Filters:5', 'Veils']),
+        ];
+        const filters = buildTopMenus(hoisted).find(m => m.title === 'Filters')!;
+        expect(filters.entries.map(e => e.kind)).toEqual(['submenu', 'action']);
+    });
+
+    it('orders rows within a submenu by the order on its own segment', () => {
+        const inner = [
+            reg('vhs', 'VHS', ['Filters:20', 'Veils:20']),
+            reg('grain', 'Grain', ['Filters:20', 'Veils:10']),
+        ];
+        const filters = buildTopMenus(inner).find(m => m.title === 'Filters')!;
+        const veils = filters.entries[0] as Extract<MenuEntry, { kind: 'submenu' }>;
+        expect(veils.entries.flatMap(e => (e.kind === 'action' ? [e.actionId] : []))).toEqual([
+            'grain',
+            'vhs',
+        ]);
+    });
+
+    it('nests arbitrarily deep', () => {
+        const deep = buildTopMenus([reg('x', 'X', ['File:10', 'B', 'C'])]);
+        const b = deep[0].entries[0] as Extract<MenuEntry, { kind: 'submenu' }>;
+        expect(b.title).toBe('B');
+        const c = b.entries[0] as Extract<MenuEntry, { kind: 'submenu' }>;
+        expect(c.kind).toBe('submenu');
+        expect(c.title).toBe('C');
+        expect(c.entries).toEqual([{ kind: 'action', actionId: 'x' }]);
+    });
+
+    it('places Filters between Layer and View', () => {
+        const menus = buildTopMenus([
+            reg('v', 'V', ['View']),
+            reg('grain', 'Grain', ['Filters:20', 'Veils']),
+            reg('l', 'L', ['Layer']),
+        ]);
+        expect(menus.map(m => m.title)).toEqual(['Layer', 'Filters', 'View']);
+    });
+
+    it('carries the nesting into the hamburger', () => {
+        const root = buildHamburgerEntries(NESTED);
+        const filters = root.find(
+            (e): e is Extract<MenuEntry, { kind: 'submenu' }> =>
+                e.kind === 'submenu' && e.title === 'Filters',
+        )!;
+        expect(filters.entries.some(e => e.kind === 'submenu' && e.title === 'Veils')).toBe(true);
+    });
+});
+
 describe('buildHamburgerEntries', () => {
     const entries = buildHamburgerEntries(SAMPLE);
 

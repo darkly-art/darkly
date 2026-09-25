@@ -7,13 +7,20 @@
  * `nodePositions` here, populated by `autoLayout` after every structural
  * change, and never travel back to Rust.
  */
+import { rgbaToBitmap } from '../lib/rgba';
 import { app, getActiveInstance } from './app.svelte';
 import { brushColors } from './brushColors.svelte';
 import { config } from '../config/store.svelte';
 import { freshDocument } from './freshDocument';
 import { recentBrushes } from './recents.svelte';
 import { brushLibrary } from './brush_library.svelte';
-import type { BrushInfo, JsonValue, ExposedValue, ExposedPortInfo } from '../engine/protocol_gen';
+import type {
+    BrushInfo,
+    JsonValue,
+    ExposedValue,
+    ExposedPortInfo,
+    ExposedPortMeta,
+} from '../engine/protocol_gen';
 
 export type { BrushInfo };
 
@@ -83,6 +90,10 @@ export interface NodeInstance {
     id: string;
     type_id: string;
     ports: PortDef[];   // the node's single, unified input/output list
+    /** Author-chosen display name, shown in place of the node type's own
+     *  name. Optional: Rust elides it when empty, so the JSON snapshot omits
+     *  it for unnamed nodes and the UI falls back to the type's name. */
+    name?: string;
     /** Free-form author annotation. Optional: Rust elides it when empty, so
      *  the JSON snapshot omits it for un-annotated nodes. */
     comment?: string;
@@ -492,30 +503,28 @@ export class BrushGraphState {
         );
     }
 
-    /** Overwrite a brush-bar entry's label / description / icon. */
-    async setExposedPortMeta(
-        key: string,
-        label: string,
-        description: string,
-        icon: string,
-    ) {
+    /** Overwrite a brush-bar entry's meta (label, description, icon, invert,
+     *  unit). Every field is overwritten, so pass the entry's current values
+     *  for the ones the caller isn't changing. */
+    async setExposedPortMeta(key: string, meta: ExposedPortMeta) {
         if (!app.engine) return;
         await this.applyResult(
-            await app.engine.api.brushGraphSetExposedPortMeta({ key, label, description, icon }),
+            await app.engine.api.brushGraphSetExposedPortMeta({ key, meta }),
         );
     }
 
     /** Override an input port's slider bounds on one node instance.
-     *  `min`/`max` are display-space: hand back the numbers the control
-     *  was rendered with. Rejected by the engine unless ascending. */
+     *  `min`/`max` are port-space: the space the bounds are stored and saved
+     *  in, so the engine needs no unit logic and this call is independent of
+     *  the entry's unit. Rejected by the engine unless ascending. */
     async setPortRange(nodeId: string, portName: string, min: number, max: number) {
         if (!app.engine) return;
         await this.applyResult(
             await app.engine.api.brushGraphSetPortRange({
                 node_id: nodeId,
                 port_name: portName,
-                display_min: min,
-                display_max: max,
+                min,
+                max,
             }),
         );
     }
@@ -713,6 +722,20 @@ export class BrushGraphState {
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: inputName, kind, value }));
     }
 
+    /** Update a node's display name locally (for responsive typing). */
+    setNodeNameLocal(nodeId: string, name: string) {
+        if (!this.graph) return;
+        const node = this.graph.nodes[nodeId];
+        if (node) node.name = name;
+    }
+
+    /** Commit a node's display name via Rust. Bumps no version: the name is
+     *  a label, inert w.r.t. render output and preset identity. */
+    async setNodeName(nodeId: string, name: string) {
+        if (!app.engine) return;
+        await this.applyResult(await app.engine.api.brushGraphSetNodeName({ node_id: nodeId, name }));
+    }
+
     /** Update a node's author comment locally (for responsive typing). */
     setNodeCommentLocal(nodeId: string, comment: string) {
         if (!this.graph) return;
@@ -771,10 +794,7 @@ export class BrushGraphState {
         await this.applyResult(await app.engine.api.brushGraphSetInput({ node_id: nodeId, input_name: 'texture_name', kind: 'string', value: resourceName }));
 
         // Cache a thumbnail for canvas rendering.
-        const clamped = new Uint8ClampedArray(rgba.length);
-        clamped.set(rgba);
-        const imageData = new ImageData(clamped, width, height);
-        const bitmap = await createImageBitmap(imageData);
+        const bitmap = await rgbaToBitmap(rgba, width, height);
         this.imageThumbnails.set(resourceName, bitmap);
     }
 

@@ -74,6 +74,24 @@ describe('buildTabs', () => {
         expect(titles).toEqual(['Normal', 'Filters', 'Veils', 'Voids']);
     });
 
+    it('orders by the top-level segment when an action’s path is nested', () => {
+        // The rail mirrors the Layer menu, so a deeper segment positions the
+        // action inside a submenu and must not reorder the rail. Sorting on
+        // the last segment would hoist this source to the front.
+        const nested = deps({
+            action: id =>
+                id === 'newVoid'
+                    ? {
+                          displayName: id,
+                          description: undefined,
+                          icon: 'fa6-solid:square-plus',
+                          menuPath: ['Layer:16', 'Generated:1'],
+                      }
+                    : deps().action(id),
+        });
+        expect(buildTabs(nested).map(t => t.title)).toEqual(['Normal', 'Filters', 'Veils', 'Voids']);
+    });
+
     it('merges two sources that name the same tab, in rail order', () => {
         // A group is document structure rather than a kind of effect, so it
         // sits beside the plain layer instead of in a rail entry of its own.

@@ -51,6 +51,11 @@
                 <span>GitHub</span>
                 <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />
             </a>
+            <a class="link" href={links.discord} target="_blank" rel="noopener noreferrer">
+                <Icon name="fa6-brands:discord" />
+                <span>Discord</span>
+                <Icon name="fa6-solid:arrow-up-right-from-square" class="external" />
+            </a>
         </div>
 
         <p class="license">Licensed under AGPL-3.0-or-later</p>
@@ -116,6 +121,8 @@
 
     .links {
         display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
         gap: 10px;
         margin-top: 4px;
     }

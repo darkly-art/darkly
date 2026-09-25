@@ -1,5 +1,6 @@
 import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
+import { catalogs } from '../state/catalogs.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { newDocument } from '../state/newDocument.svelte';
@@ -119,14 +120,11 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // nudge it so the strip re-derives.
             const name = await engine.api.documentName();
             shell.setName(inst.id, name);
-            // The loaded manifest's dimensions override whatever the tab
-            // was seeded with; refresh the JS mirror so coord transforms
-            // recenter around the real canvas size.
-            // Sync the full canvas window (dims + plane origin): a loaded
-            // `.darkly` may carry a non-zero `canvas_origin` from a crop.
-            await inst.syncCanvasRect();
-            await app.refreshLayerTree();
-            app.requestFrame();
+            // The loaded document's canvas window (its dimensions, and a
+            // plane origin a saved crop may have moved) reaches the JS mirror
+            // on the next frame's snapshot, which the refresh below schedules.
+            await inst.refreshLayerTree();
+            inst.requestFrame();
         } catch (e) {
             loadError.show(parseLoadErrorMessage(e));
             shell.close(inst.id);
@@ -217,6 +215,18 @@ export async function handleDroppedFile(file: File, altKey = false): Promise<voi
     toast.show('error', `Unsupported file type: ${file.name}`);
 }
 
+/**
+ * Top-level menu the destructive applies live in, named for the effect
+ * category whose effects are its own rows: an effect declaring any other
+ * category lands in a submenu named for that category instead.
+ *
+ * This string must equal one of the categories the core declares
+ * (`crates/darkly/tests/effect_categories.rs` holds the closed list). Rename
+ * that category and this has to follow, or the adjustments quietly demote
+ * themselves into a submenu of their own menu.
+ */
+const EFFECT_MENU = 'Filters';
+
 export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
@@ -236,7 +246,6 @@ export function registerActions() {
         handler: async () => {
             app.engine?.api.undo();
             await app.refreshLayerTree({ adoptAppeared: true });
-            await app.syncCanvasRect();
         },
     });
     actions.register({
@@ -245,19 +254,20 @@ export function registerActions() {
         handler: async () => {
             app.engine?.api.redo();
             await app.refreshLayerTree({ adoptAppeared: true });
-            await app.syncCanvasRect();
         },
     });
 
     // -- Colors --
+    // No `menuPath` on either: the pair is the two glyphs on the
+    // foreground/background swatches, where the tooltip names the binding, and
+    // both stay in the command palette. A menu row would be a third way to
+    // reach what is already the most visible control in the editor.
     actions.register({
         id: 'resetColors',
-        menuPath: ['Colors:20'],
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
-        menuPath: ['Colors:10'],
         handler: () => app.swapColors(),
     });
 
@@ -380,54 +390,48 @@ export function registerActions() {
         // the `engineState` mirror (refreshed from render's snapshot) rather
         // than a live query.
         enabled: () => app.engineState?.hasSelection || 'No active selection',
-        handler: async () => {
+        handler: () => {
             app.engine?.api.cropToSelection();
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
     actions.register({
         id: 'flipCanvasH',
         menuPath: ['Image:30'],
-        handler: async () => {
+        handler: () => {
             app.engine?.api.flipCanvas({ axis: 'h' });
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
     actions.register({
         id: 'flipCanvasV',
         menuPath: ['Image:31'],
-        handler: async () => {
+        handler: () => {
             app.engine?.api.flipCanvas({ axis: 'v' });
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
     actions.register({
         id: 'rotateCanvasCW',
         menuPath: ['Image:40'],
-        handler: async () => {
+        handler: () => {
             app.engine?.api.rotateCanvas({ dir: 'cw' });
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
     actions.register({
         id: 'rotateCanvasCCW',
         menuPath: ['Image:41'],
-        handler: async () => {
+        handler: () => {
             app.engine?.api.rotateCanvas({ dir: 'ccw' });
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
     actions.register({
         id: 'rotateCanvas180',
         menuPath: ['Image:42'],
-        handler: async () => {
+        handler: () => {
             app.engine?.api.rotateCanvas({ dir: '180' });
-            await app.syncCanvasRect();
             app.requestFrame();
         },
     });
@@ -528,7 +532,7 @@ export function registerActions() {
     for (const tool of toolRegistry.all()) {
         // A descriptor the core has no registration for would select a tool that
         // does not exist, so it gets no action.
-        const entry = app.entry('tools', tool.id);
+        const entry = catalogs.entry('tools', tool.id);
         if (!entry?.hotkeyAction) continue;
         const name = entry.displayName;
         actions.register({
@@ -537,7 +541,7 @@ export function registerActions() {
                 displayName: name,
                 category: 'tools',
                 description: `Switch to ${name} tool`,
-                icon: app.toolGlyph(tool.id),
+                icon: catalogs.toolGlyph(tool.id),
             },
             handler: () => { app.activeToolId = tool.id; },
         });
@@ -744,12 +748,11 @@ export function registerActions() {
         },
     });
     // Destructive applies (invert, …) are registered dynamically from the
-    // Rust effect registry (the `effects` catalog fetched during
-    // `loadRegistries`), so a new effect in the core surfaces a Colors-menu
-    // entry with no frontend edit. The target is the active *node*
+    // Rust effect registry (the `effects` catalog), so a new effect in the
+    // core surfaces a menu entry with no frontend edit. The target is the active *node*
     // (`activeLayerId` is the mask filter id when a mask is selected), which
     // is what makes "invert the mask" reachable from the same entry.
-    for (const flt of app.entries?.('effects') ?? []) {
+    for (const flt of catalogs.entries('effects')) {
         const filterType = flt.type;
         if (!flt.hotkeyAction) continue;
         // A parametric filter (curves/levels/hsv) can't apply in one click: its
@@ -772,7 +775,16 @@ export function registerActions() {
                 description: `${flt.description ?? ''} Applies to the active layer or mask (respecting any selection).`.trim(),
                 icon: flt.icon ?? '',
             },
-            menuPath: ['Colors:10'],
+            // Placement follows the effect's own declared category rather
+            // than being assigned here: the menu is named for the category
+            // whose effects are its direct rows, and an effect of any other
+            // category lands in a submenu named for that category. A new
+            // category in the core therefore grows a submenu with no edit
+            // on this side.
+            menuPath:
+                flt.category && flt.category !== EFFECT_MENU
+                    ? [`${EFFECT_MENU}:20`, flt.category]
+                    : [`${EFFECT_MENU}:10`],
             enabled: () => app.activeLayerId !== null || 'No active layer',
             handler: async () => {
                 const engine = app.engine;
@@ -948,6 +960,12 @@ export function registerActions() {
         id: 'openGithub',
         menuPath: ['Help:40'],
         handler: () => openExternal(links.github),
+    });
+
+    actions.register({
+        id: 'openDiscord',
+        menuPath: ['Help:45'],
+        handler: () => openExternal(links.discord),
     });
 
     actions.register({

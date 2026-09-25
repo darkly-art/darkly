@@ -1,0 +1,185 @@
+name: Pencil
+description: "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure does not darken it, pressing harder does."
+nodes:
+  add:
+    type: add
+    name: Add pen pressure + tilt
+    comment: Combine a little pen pressure with tilt to get the brush size
+  add_2:
+    type: add
+  brush_settings:
+    type: brush_settings
+    inputs:
+      size: 0.07
+      spacing: 0.03
+  circle:
+    type: circle
+    name: Brush tip circle
+    inputs:
+      algorithm: 1
+      amplitude: 0.5
+      frequency: 10.0
+      rotation: 5.75
+      softness: 1.0
+  curve:
+    type: curve
+    name: Contrast pen tip
+    comment: Crank up the contrast on the pencil tip for a rougher look
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.26743346
+        - 0.0
+      - - 0.76097316
+        - 1.0
+      - - 1.0
+        - 1.0
+  curve_2:
+    type: curve
+    name: Squash pen pressure
+    comment: factor a little pen pressure into the size
+    inputs:
+      curve:
+      - - 0.0
+        - 0.12476328
+      - - 1.0
+        - 0.41776323
+  curve_3:
+    type: curve
+    name: Select only high tilt
+    comment: on high tilt, increase the size of the brush to mimic pencil shading
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.53058755
+        - 0.0
+      - - 1.0
+        - 1.0
+  curve_4:
+    type: curve
+    name: High pen pressure on grain
+    comment: lessen the grain effect during high pen pressure
+    inputs:
+      curve:
+      - - 0.0
+        - 1.0
+      - - 0.79033375
+        - 0.8797826
+      - - 1.0
+        - 0.25908843
+  curve_5:
+    type: curve
+    name: Curve pen pressure for flow
+    comment: makes pencil a little lighter to the touch
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.56401765
+        - 0.42231566
+      - - 1.0
+        - 1.0
+  curve_6:
+    type: curve
+    name: Curve roughness for paper grain
+    comment: Preserve paper rain even on lower roughness settings
+    inputs:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.71057105
+        - 0.42465276
+      - - 1.0
+        - 1.0
+  invert:
+    type: invert
+    name: Invert roughness setting for paper grain
+  levels:
+    type: levels
+    name: Grain intensity
+    comment: Pen tilt determines intensity of the paper grain texture
+    inputs:
+      in_high: 0.40818285942077637
+  multiply:
+    type: multiply
+    name: Combine grain with tip
+    comment: Multiply paper grain texture (canvas space) with pencil tip texture (dab space)
+  multiply_2:
+    type: multiply
+    name: Pen tip - noise x circle
+    comment: create tip texture from circle x noise
+  noise:
+    type: noise
+    name: Brush tip texture
+    inputs:
+      roughness: 0.7344781160354614
+      scale: 10.0
+      space: 1
+  noise_2:
+    type: noise
+    name: Paper grain texture
+    inputs:
+      roughness: 0.548843264579773
+      scale: 2.5
+  paint:
+    type: paint
+    inputs:
+      build_flow: 0.4
+      buildup: 0.1
+  paint_color:
+    type: paint_color
+  pen_input:
+    type: pen_input
+  random:
+    type: random
+  stamp:
+    type: stamp
+  user_input:
+    type: user_input
+    name: Grain user input
+    inputs:
+      value: 0.5
+connections:
+- add.result -> paint.size
+- add_2.result -> levels.input
+- circle.mask -> multiply_2.b
+- curve.output -> multiply.b
+- curve_2.output -> add.a
+- curve_3.output -> add.b
+- curve_4.output -> levels.in_high
+- curve_5.output -> paint.build_flow
+- curve_5.output -> paint.wash_flow
+- curve_6.output -> add_2.b
+- invert.output -> curve_6.input
+- levels.output -> multiply.a
+- multiply.result -> stamp.tip
+- multiply_2.result -> curve.input
+- noise.value -> multiply_2.a
+- noise_2.value -> add_2.a
+- paint_color.color -> stamp.color
+- pen_input.position -> paint.position
+- pen_input.pressure -> curve_2.input
+- pen_input.pressure -> curve_4.input
+- pen_input.pressure -> curve_5.input
+- pen_input.tilt_magnitude -> curve_3.input
+- random.value -> circle.seed
+- stamp.dab -> paint.rgba
+- user_input.value -> circle.amplitude
+- user_input.value -> invert.input
+exposed_ports:
+  brush_settings.stabilize: {}
+  brush_settings.size: {}
+  paint.buildup:
+    label: Strength
+    description: How much graphite gets left by the pencil
+    icon: fa6-solid:pen
+  user_input.value:
+    label: Roughness
+    description: Roughness of edges and paper grain texture
+    icon: tabler:grain
+  paint.opacity:
+    label: Opacity
+    description: Transparency of the whole stroke
+    icon: mdi:texture-box

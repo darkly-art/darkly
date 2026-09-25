@@ -10,6 +10,7 @@ pub mod clone_source;
 pub mod curve;
 pub mod divide;
 pub mod image;
+pub mod invert;
 pub mod levels;
 pub mod liquify;
 pub mod multiply;
@@ -24,6 +25,7 @@ pub mod split_color;
 pub mod stamp;
 pub mod subtract;
 pub mod switch;
+pub mod user_input;
 pub mod watercolor;
 
 use crate::brush::BrushNodeRegistration;
@@ -39,6 +41,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         curve::register(),
         divide::register(),
         image::register(),
+        invert::register(),
         levels::register(),
         liquify::register(),
         multiply::register(),
@@ -53,6 +56,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         stamp::register(),
         subtract::register(),
         switch::register(),
+        user_input::register(),
         watercolor::register(),
     ]
 }

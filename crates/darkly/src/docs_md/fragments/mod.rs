@@ -2,6 +2,9 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::docs_md::FragmentRegistration`.
 
+pub mod app_description;
+pub mod app_desktop_entry;
+pub mod app_summary;
 pub mod catalog_graphic;
 pub mod catalog_table;
 
@@ -10,6 +13,9 @@ use crate::docs_md::FragmentRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<FragmentRegistration> {
     vec![
+        app_description::register(),
+        app_desktop_entry::register(),
+        app_summary::register(),
         catalog_graphic::register(),
         catalog_table::register(),
     ]

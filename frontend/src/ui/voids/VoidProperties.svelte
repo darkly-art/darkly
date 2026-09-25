@@ -1,45 +1,28 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { catalogs } from '../../state/catalogs.svelte';
     import Icon from '../../icons/Icon.svelte';
-    import Slider from '../settings/widgets/Slider.svelte';
+    import ParamRow from '../params/ParamRow.svelte';
+    import type { ParamInfo, ParamValue } from '../params/paramSchema';
 
-    interface VoidParam {
-        kind: 'float' | 'int' | 'bool' | 'string';
-        name: string;
-        min?: number;
-        max?: number;
-        default: number | boolean | string;
-        value?: number | boolean | string;
-    }
-
+    // A void's params are `ParamInfo[]` on the wire, the same type a filter
+    // carries, so they render through the same row.
     let { node }: {
-        node: { id: number; voidType: string; params: VoidParam[] };
+        node: { id: number; voidType: string; params: ParamInfo[] };
     } = $props();
 
     function pushParams() {
         if (!app.engine) return;
-        const params: Record<string, number | boolean | string> = {};
+        // `ParamValue`, not a narrowed scalar union: a void's params go through
+        // the shared row now, so a color or vec2 param is renderable and has to
+        // survive the push.
+        const params: Record<string, ParamValue> = {};
         for (const p of node.params) {
             params[p.name] = p.value ?? p.default;
         }
         app.engine.api.setVoidParams({ id: node.id, params });
         app.refreshLayerTree();
         app.requestFrame();
-    }
-
-    function onSliderChange(param: VoidParam, v: number) {
-        param.value = v;
-        pushParams();
-    }
-
-    function onBoolChange(param: VoidParam, e: Event) {
-        param.value = (e.target as HTMLInputElement).checked;
-        pushParams();
-    }
-
-    function onStringChange(param: VoidParam, e: Event) {
-        param.value = (e.target as HTMLInputElement).value;
-        pushParams();
     }
 
     function randomizeSeed() {
@@ -49,12 +32,12 @@
         pushParams();
     }
 
-    const voidLabel = $derived(app.displayName('voids', node.voidType));
+    const voidLabel = $derived(catalogs.displayName('voids', node.voidType));
 
     // Capture kind (camera / screenshare / Blender stream) for this void, or
     // undefined for procedural voids: the single signal that gates every
     // stream-related affordance below.
-    const captureKind = $derived(app.voidCaptureKind.get(node.voidType));
+    const captureKind = $derived(catalogs.voidCaptureKind.get(node.voidType));
 
     // Stream-backed voids surface source-level errors here so the artist sees a
     // human-readable reason ("Camera access was denied", "Could not connect to
@@ -98,7 +81,7 @@
               : 'Resume camera',
     );
 
-    function isFrozen(params: VoidParam[]): boolean {
+    function isFrozen(params: ParamInfo[]): boolean {
         const f = params.find((p) => p.name === 'freeze');
         return (f?.value ?? f?.default) === true;
     }
@@ -150,34 +133,8 @@
 {#if node.params.length === 0}
     <div class="empty">No parameters</div>
 {:else}
-    {#each node.params as param}
-        <div class="row">
-            <span class="label">{param.name}</span>
-            {#if param.kind === 'float' || param.kind === 'int'}
-                <Slider
-                    value={(param.value ?? param.default) as number}
-                    min={param.min ?? 0}
-                    max={param.max ?? 1}
-                    integer={param.kind === 'int'}
-                    onchange={(v) => onSliderChange(param, v)}
-                    format={(v) => (param.kind === 'int' ? String(v) : v.toFixed(2))}
-                />
-            {:else if param.kind === 'bool'}
-                <input
-                    type="checkbox"
-                    class="checkbox"
-                    checked={(param.value ?? param.default) as boolean}
-                    onchange={(e) => onBoolChange(param, e)}
-                />
-            {:else if param.kind === 'string'}
-                <input
-                    type="text"
-                    class="text-input"
-                    value={(param.value ?? param.default) as string}
-                    onchange={(e) => onStringChange(param, e)}
-                />
-            {/if}
-        </div>
+    {#each node.params as param (param.name)}
+        <ParamRow {param} oninput={pushParams} onchange={pushParams} />
     {/each}
 {/if}
 
@@ -220,41 +177,6 @@
     .randomize-btn:disabled {
         opacity: 0.4;
         cursor: default;
-    }
-
-    .row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 22px;
-    }
-
-    .label {
-        font-size: 11px;
-        color: var(--text-muted);
-        min-width: 76px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .checkbox {
-        accent-color: var(--accent);
-    }
-
-    .text-input {
-        flex: 1;
-        min-width: 0;
-        padding: 3px 6px;
-        background: var(--bg);
-        border: 1px solid var(--bg-hover);
-        border-radius: var(--radius-sm);
-        color: var(--text);
-        font-size: 11px;
-    }
-    .text-input:focus {
-        outline: none;
-        border-color: var(--accent);
     }
 
     .empty {

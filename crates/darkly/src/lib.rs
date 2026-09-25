@@ -22,6 +22,11 @@ pub mod gpu;
 pub mod layer;
 pub mod mask;
 pub mod nodegraph;
+/// What Darkly says it is, loaded from `product.yaml`. Packaging metadata for
+/// the tooling that generates store listings and desktop entries, so it lives
+/// behind the same gate as `docs_md`: a browser ships no desktop entry.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod product;
 pub mod sdf;
 pub mod text;
 pub mod tool;
@@ -43,17 +48,44 @@ mod version_tests {
     use super::VERSION;
     use std::process::Command;
 
+    /// Split a `git describe --tags --long` string into its tag, commit height
+    /// and `g`-prefixed short SHA, or `None` for anything not of that shape. The
+    /// shape the version tests hold `VERSION` to; `build.rs` is where it is
+    /// written. `v0.3.0-1-gf0c3ea9` gives `("v0.3.0", 1, "gf0c3ea9")`;
+    /// a tag may itself contain dashes, so the split runs from the right.
+    fn describe_parts(version: &str) -> Option<(&str, u32, &str)> {
+        let (rest, sha) = version.rsplit_once('-')?;
+        let (tag, height) = rest.rsplit_once('-')?;
+        if tag.is_empty() || !sha.starts_with('g') || sha.len() < 2 {
+            return None;
+        }
+        Some((tag, height.parse().ok()?, sha))
+    }
+
     /// Does `s` have the `git describe --tags --long` shape `<tag>-<n>-g<sha>`?
     /// True for `v0.3.0-1-gf0c3ea9` and the `0.0.0-0-gunknown` fallback, but
     /// false for a bare semver like `0.1.0`.
     fn is_describe_shape(s: &str) -> bool {
-        // rsplitn(3) -> [g<sha>, <n>, <tag-possibly-with-dashes>]
-        let parts: Vec<&str> = s.rsplitn(3, '-').collect();
-        parts.len() == 3
-            && parts[0].starts_with('g')
-            && parts[0].len() > 1
-            && parts[1].parse::<u32>().is_ok()
-            && !parts[2].is_empty()
+        describe_parts(s).is_some()
+    }
+
+    #[test]
+    fn describe_parts_reads_tag_height_and_sha() {
+        assert_eq!(
+            describe_parts("v0.8.0-3-gabc1234"),
+            Some(("v0.8.0", 3, "gabc1234"))
+        );
+        assert_eq!(
+            describe_parts("0.0.0-0-gunknown"),
+            Some(("0.0.0", 0, "gunknown"))
+        );
+        assert_eq!(
+            describe_parts("my-tag-2-gdeadbee"),
+            Some(("my-tag", 2, "gdeadbee"))
+        );
+        assert_eq!(describe_parts("0.1.0"), None);
+        assert_eq!(describe_parts("v0.8.0-x-gabc"), None);
+        assert_eq!(describe_parts("v0.8.0-3-abc"), None);
     }
 
     /// Feature test: the baked version really is the live `git describe` value

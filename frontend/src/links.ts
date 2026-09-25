@@ -5,6 +5,7 @@ export const links = {
     website: 'https://darkly.art',
     docs: 'https://darkly.art/docs',
     github: 'https://github.com/darkly-art/darkly',
+    discord: 'https://discord.gg/kFz2FGhbpu',
 } as const;
 
 /** Open an external URL in a new tab, severing the opener reference. */

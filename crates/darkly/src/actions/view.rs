@@ -62,6 +62,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-brands:github",
     },
     ActionDef {
+        id: "openDiscord",
+        display_name: "Discord Community",
+        description: "Open Darkly's Discord server in a new tab.",
+        icon: "fa6-brands:discord",
+    },
+    ActionDef {
         id: "aboutDarkly",
         display_name: "About Darkly",
         description: "Show version and credits.",

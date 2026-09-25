@@ -1,0 +1,9 @@
+# Shapes the notes GitHub generates for a release page (`gh release create
+# --generate-notes`, in docs-artifact.yml and the deploy pipeline). It affects
+# that page only: the tag body and the release PR body come from
+# scripts/release.sh, which drops bot PRs itself.
+changelog:
+  exclude:
+    authors:
+      - dependabot
+      - dependabot[bot]

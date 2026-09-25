@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Snippet } from 'svelte';
     import { backdropDismiss } from '../lib/backdropDismiss';
-    import { pointerDrag } from './workspace/pointerDrag';
+    import { pointerDrag } from '../lib/pointerDrag';
 
     type Props = {
         open: boolean;
@@ -204,11 +204,13 @@
     dialog.modal.size-sm { width: min(90vw, 420px); }
     dialog.modal.size-md { width: min(92vw, 560px); }
     dialog.modal.size-lg { width: min(90vw, 720px); }
-    /* The one size that also fixes a height: browsing dialogs need a stable
-     * box, not one that resizes as the result set changes. */
+    /* Fixes a height as well as a width: browsing dialogs need a stable box,
+     * not one that resizes as the result set changes. */
     dialog.modal.size-xl { width: min(92vw, 960px); height: min(82vh, 720px); }
-    /* Near-fullscreen, for a view whose whole point is room to browse. */
-    dialog.modal.size-full { width: 92vw; height: 88vh; max-height: 88vh; }
+    /* Tall, for a view whose whole point is room to browse, but capped
+     * horizontally: past about this width the browse grid just stretches its
+     * columns instead of showing more of them. */
+    dialog.modal.size-full { width: min(92vw, 960px); height: 88vh; max-height: 88vh; }
 
     /* Anchored below the top edge rather than centered. The margin replaces
      * the centering `auto` on the top side only, so it stays horizontally
@@ -224,21 +226,20 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 14px;
+        gap: 16px;
         padding: var(--header-pad-y) var(--header-pad-x);
         border-bottom: 1px solid var(--bg-hover);
         flex-shrink: 0;
-        gap: 16px;
     }
 
-    /* Takes the slack so the title stays left and the close button stays
-       right, whatever the controls are. */
+    /* Takes the room between the title and the close button, which is the
+       whole point of putting anything here. */
     .header-controls {
-        flex: 1;
-        min-width: 0;
         display: flex;
         align-items: center;
         justify-content: flex-end;
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     header h2 {
@@ -247,15 +248,6 @@
         font-weight: 600;
         /* The title states its size; the controls take what is left. */
         flex: none;
-    }
-
-    /* Takes the room between the title and the close button, which is the whole
-     * point of putting anything here. */
-    .header-controls {
-        display: flex;
-        align-items: center;
-        flex: 1 1 auto;
-        min-width: 0;
     }
 
     .close {

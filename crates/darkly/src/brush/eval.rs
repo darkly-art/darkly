@@ -1080,6 +1080,28 @@ impl BrushGraphRunner {
     /// line per terminal.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
         gpu.dab_batch.clear();
+
+        // Realize the terminal's declared accumulation channels before the
+        // lifecycle prologue, so a channel is allocated and cleared for
+        // every stroke rather than for every stroke that places a dab, and
+        // so `ClearScratchToTransparent` below clears it with the write
+        // side. A terminal that declares none frees what the last brush
+        // left: a `Scratch` outlives one brush (the preview renderer keeps
+        // one across them), and a surviving channel would be read by
+        // whatever ran next, at the wrong format and holding the wrong
+        // brush's accumulation.
+        let channels = self
+            .compiled
+            .as_ref()
+            .map(|c| c.channels.clone())
+            .unwrap_or_default();
+        let device = gpu.device;
+        if let Some(stroke) = gpu.stroke.as_mut() {
+            stroke
+                .scratch
+                .ensure_channels(device, &mut gpu.encoder, &channels);
+        }
+
         let registry = crate::brush::registry();
         self.dispatch_lifecycle(gpu, false, |type_id, ev, ctx, gpu| {
             let lifecycle = registry
