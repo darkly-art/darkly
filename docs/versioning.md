@@ -45,59 +45,48 @@ the store listing. Nothing is committed before the tag. One commit follows it:
 the metainfo keeps a copy of the release history, generated from the tags, and
 that copy is refreshed and committed once the new tag exists.
 
-You need: a clean `dev` checkout in sync with `origin/dev`, and an
-authenticated `gh` with access to `darkly-art/darkly` and
-`darkly-art/darkly-deploy`.
+You need: a clean `dev` checkout in sync with `origin/dev`, an authenticated
+`gh`, and the open `dev` into `master` release PR green on that commit.
 
-1. **Choose the version.** `X.Y.Z`, above the last tag
-   (`git describe --tags --abbrev=0`).
-2. **Tag.** `scripts/release.sh X.Y.Z`. It lists the PRs merged since the last
-   tag, bots excluded, one `Title (#N)` per line, and asks before doing
-   anything. On `y` it tags `vX.Y.Z` with those lines as the body, pushes the
-   tag, and retitles the open `dev` into `master` PR to `Dev -> Master X.Y.Z`
-   with the same lines as its body, or opens that PR if none is open. Last, it
-   refreshes the `<releases>` block in
-   `packaging/art.darkly.Darkly.metainfo.xml` from the tags and prints the
-   commit to make. If a line reads badly, answer `n`, fix that PR's title on
-   GitHub, and run it again. It refuses a title carrying a URL, which the store
-   listing cannot carry.
-3. **Commit the release history.**
+1. **Tag.** `scripts/release.sh X.Y.Z`, with `X.Y.Z` above the last tag
+   (`git describe --tags --abbrev=0`). It refuses unless the release PR's
+   checks have passed on the commit being tagged; if no release PR is open, it
+   opens one and stops, so run it again once that PR is green. It then lists
+   the PRs merged since the last tag, bots excluded, one `Title (#N)` per line,
+   and asks. On `y` it tags `vX.Y.Z` with those lines as the body, pushes the
+   tag, retitles the release PR `Dev -> Master X.Y.Z` with the same lines as its
+   body, merges it, and refreshes the `<releases>` block in
+   `packaging/art.darkly.Darkly.metainfo.xml`. If a line reads badly, answer
+   `n`, fix that PR's title on GitHub, and run it again. It refuses a title
+   carrying a URL, which the store listing cannot carry.
+2. **Commit the release history.**
 
    ```bash
    git commit packaging/art.darkly.Darkly.metainfo.xml -m "Release history for vX.Y.Z"
    git push origin dev
    ```
 
-   The commit lands on `dev` after the tag, so it rides the release PR into
-   `master`. CI validates the file but never fails for it being behind the
-   tags; channels refill the block from the tags at build time regardless.
-4. **What fires on its own.** The tag push runs `publish.yml` (publishes
-   `darkly-macros` and `darkly` to crates.io at `X.Y.Z`) and
-   `docs-artifact.yml` (creates the draft pre-release `vX.Y.Z` with GitHub's
-   generated notes and attaches the documentation tarball). Watch both with
-   `gh run list --limit 4`.
-5. **Build the desktop bundles.** The deploy pipeline is not scheduled; start
-   it with
-   `gh workflow run build-electron.yml -R darkly-art/darkly-deploy -f tag=vX.Y.Z`.
-   It builds Linux, macOS and Windows bundles, smoke-tests each, and uploads
-   them to the draft. On failure it removes whatever it uploaded, so a re-run
-   starts clean. Watch it with `gh run list -R darkly-art/darkly-deploy`.
-6. **Merge the release PR.** Once step 3's commit is on it and its checks are
-   green. `master`'s merge commit then contains the tag. Merge promptly:
-   anything merged into `dev` after the tag rides this PR into `master`
-   without being in the release.
-7. **Publish.** When the bundles are on the draft,
-   `gh release edit vX.Y.Z --draft=false --prerelease=false`. The metainfo's
-   `<url type="details">` points at this page, so it is a 404 until now.
+   The commit reaches `master` with the next release PR. CI validates the file
+   but never fails for it being behind the tags; channels refill the block from
+   the tags at build time regardless.
+
+Everything else happens on its own. The tag push runs `publish.yml`
+(publishes `darkly-macros` and `darkly` to crates.io at `X.Y.Z`) and
+`docs-artifact.yml` (creates the draft pre-release `vX.Y.Z` with GitHub's
+generated notes and attaches the documentation tarball). A separate, private
+pipeline that holds the signing keys picks up the new tag within a few hours,
+builds and smoke-tests the signed desktop bundles, attaches them to the draft,
+and publishes the release once every platform has passed. Until then the
+metainfo's `<url type="details">` points at a draft, and is a 404 to users.
 
 Flathub is not live yet. When it is, its manifest pins the tag and commit and
-is bumped after step 7.
+is bumped after the release is published.
 
 **Notes by hand.** The tag body is what users read in the store, and PR titles
 are commit language. To write it yourself, skip the script: `git tag -a
 vX.Y.Z`, subject `vX.Y.Z`, then a blank line and one change per line; `git
-push origin vX.Y.Z`; open the release PR with the same lines; then refresh the
-metainfo and carry on from step 3:
+push origin vX.Y.Z`; merge the release PR with the same lines as its body;
+then refresh the metainfo and carry on from step 2:
 
 ```bash
 scripts/metainfo-releases.sh packaging/art.darkly.Darkly.metainfo.xml > /tmp/metainfo.xml
@@ -106,9 +95,9 @@ cat /tmp/metainfo.xml > packaging/art.darkly.Darkly.metainfo.xml
 
 A tag with no body still releases, with no description in the store.
 
-**A bad tag.** Before step 7 only: `git tag -d vX.Y.Z && git push origin
+**A bad tag.** Before the release is published only: `git tag -d vX.Y.Z && git push origin
 :refs/tags/vX.Y.Z`, discard the refresh if it is not committed yet (`git
-checkout packaging/art.darkly.Darkly.metainfo.xml`), then steps 2 and 3 again.
+checkout packaging/art.darkly.Darkly.metainfo.xml`), then steps 1 and 2 again.
 The re-push is safe: `publish.yml` skips a version already on crates.io, and
 `docs-artifact.yml` re-attaches to the existing draft.
 
@@ -141,7 +130,7 @@ Both fall back to `0.0.0-0-gunknown` when describe fails.
   from the two homes above. A test fails if the crate reverts to it.
 - **`desktop/package.json`'s version is written by the release build, not by
   hand.** Electron's packager stamps installer metadata from it and reads no
-  other source, so `build.sh` overwrites it from the same describe, builds, and
+  other source, so the release build overwrites it from the same describe, builds, and
   restores the file. Packaging the desktop host directly, without that script,
   therefore produces installers labelled `0.0.0`: that is the tell, not a bug to
   work around by typing a real-looking number into the file. It sat at `0.6.0`

@@ -6,7 +6,7 @@ use std::process::Command;
 /// Bake Darkly's version into the crate as the `DARKLY_VERSION` compile-time
 /// env, read through `crate::VERSION`. The value is the latest git tag plus the
 /// commit height since it (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`),
-/// the same v* tags the deploy pipeline (darkly-deploy/) releases from.
+/// the same v* tags the deploy pipeline releases from.
 ///
 /// CANONICAL TWIN: frontend/vite.config.ts derives the frontend's version with
 /// the identical command and the identical `"0.0.0-0-gunknown"` fallback. The

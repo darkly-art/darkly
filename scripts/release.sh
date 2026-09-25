@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Cut a release: tag vX.Y.Z on dev with its changes as the tag body, push it,
-# and point the dev -> master release PR at it.
+# and merge the dev -> master release PR.
 #
 #   scripts/release.sh 0.9.0          # shows the changes, asks, then tags
 #   scripts/release.sh 0.9.0 --yes    # no prompt
 #
 # The annotated tag is the release record (docs/versioning.md). Every check
 # runs before the tag push, which is the irreversible step: it fires
-# publish.yml (crates.io) and docs-artifact.yml. Afterwards the checked-in
-# metainfo's <releases> block is refreshed from the tags; this script never
-# commits, so it ends by printing the commit to make.
+# publish.yml (crates.io) and docs-artifact.yml. That includes CI: the release
+# PR's checks must have passed on the exact commit being tagged. Afterwards the
+# PR is merged and the checked-in metainfo's <releases> block is refreshed from
+# the tags; this script never commits, so it ends by printing the commit to make.
 #
 # Needs git and an authenticated gh. Writing the tag by hand with `git tag -a`
 # is equally valid; this script only saves typing and adds the refusals.
@@ -31,7 +32,7 @@ tag="v$version"
 # Checks. Tags are synced from origin, overwriting local ones that differ:
 # GitHub holds the real tags, and the range below must agree with it.
 [ "$(git rev-parse --abbrev-ref HEAD)" = dev ] || die "not on dev"
-[ -z "$(git status --porcelain)" ] || die "working tree is not clean"
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked files have uncommitted changes"
 git fetch --quiet origin dev '+refs/tags/*:refs/tags/*'
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)" ] \
   || die "HEAD is not origin/dev; push or pull first"
@@ -75,6 +76,23 @@ if bad=$(printf '%s\n' "$notes" | grep -F '://'); then
 $bad"
 fi
 
+# The release PR: its CI is the gate on what gets tagged. With none open, open
+# one and stop; its checks run on this commit and the next run can proceed.
+title="Dev -> Master $version"
+pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number // empty')
+if [ -z "$pr" ]; then
+  printf '%s\n' "$notes" | gh pr create --base master --head dev --title "$title" --body-file -
+  die "opened the release PR; run this again once its checks pass"
+fi
+[ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$(git rev-parse HEAD)" ] \
+  || die "release PR #$pr is not at HEAD yet; wait for GitHub to catch up"
+if ! pending=$(gh pr checks "$pr" --json name,bucket \
+                 --jq '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name): \(.bucket)"'); then
+  die "could not read the checks of release PR #$pr"
+fi
+[ -z "$pending" ] || die "release PR #$pr is not green:
+$pending"
+
 echo "Release $tag, ${prev:-first release}..HEAD ($(git rev-parse --short HEAD)):"
 echo
 printf '%s\n' "$notes" | sed 's/^/  /'
@@ -87,14 +105,11 @@ fi
 printf '%s\n\n%s\n' "$tag" "$notes" | git tag -a "$tag" -F -
 git push origin "$tag"
 
-# The release PR's body is the tag body verbatim; GitHub links each (#N).
-title="Dev -> Master $version"
-open=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number // empty')
-if [ -n "$open" ]; then
-  printf '%s\n' "$notes" | gh pr edit "$open" --title "$title" --body-file -
-else
-  printf '%s\n' "$notes" | gh pr create --base master --head dev --title "$title" --body-file -
-fi
+# The release PR carries the tag body verbatim (GitHub links each (#N)) and is
+# merged as a merge commit, so master contains the tag. A failure here does not
+# undo the release; it is reported and the PR can be merged by hand.
+printf '%s\n' "$notes" | gh pr edit "$pr" --title "$title" --body-file -
+gh pr merge "$pr" --merge || echo "release: could not merge release PR #$pr; merge it by hand" >&2
 
 # The checked-in copy of the release history, refreshed now that the tag exists.
 refreshed=$(mktemp)
@@ -104,7 +119,8 @@ rm -f "$refreshed"
 
 cat <<DONE
 
-Tagged and pushed $tag. Next (docs/versioning.md, "Cutting a release"):
+Tagged and pushed $tag, merged the release PR. The last step
+(docs/versioning.md, "Cutting a release"):
 
   git commit $metainfo -m "Release history for $tag"
   git push origin dev

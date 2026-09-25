@@ -281,12 +281,13 @@ fn refuses_without_a_closing_component() {
 
 // ---- release.sh ----------------------------------------------------------
 
-/// Answers `gh pr list --state merged` from `prs.json` through the `--jq`
-/// expression the script passes, the way gh itself would; answers the
-/// open-PR query with `open.json`. Logs every call and the body of
-/// `pr create` / `pr edit`.
 const METAINFO_PATH: &str = "packaging/art.darkly.Darkly.metainfo.xml";
 
+/// Answers each query from a JSON fixture through the `--jq` expression the
+/// script passes, the way gh itself would: merged PRs from `prs.json`, the
+/// open release PR from `open.json`, its checks from `checks.json`, and its
+/// head commit from `head` (the work tree's HEAD when absent). Logs every call
+/// and the body of `pr create` / `pr edit`.
 const GH_SHIM: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 echo "$*" >> "$SHIM_DIR/log"
@@ -298,6 +299,11 @@ done
 case "$*" in
   "pr list --state merged"*) jq -r "$jq_expr" "$SHIM_DIR/prs.json" ;;
   "pr list --base master"*)  jq -r "$jq_expr" "$SHIM_DIR/open.json" ;;
+  "pr view"*)
+    head=$(cat "$SHIM_DIR/head" 2>/dev/null || git rev-parse HEAD)
+    jq -rn --arg h "$head" '{headRefOid: $h}' | jq -r "$jq_expr" ;;
+  "pr checks"*)              jq -r "$jq_expr" "$SHIM_DIR/checks.json" ;;
+  "pr merge"*)               : ;;
   "pr create"*|"pr edit"*)   cat > "$SHIM_DIR/body"; echo "https://example.invalid/pull/1" ;;
   *) echo "gh shim: unexpected: $*" >&2; exit 2 ;;
 esac
@@ -341,7 +347,12 @@ impl Release {
             .arg(shim.join("gh"))
             .status()
             .unwrap();
-        fs::write(shim.join("open.json"), "[]").unwrap();
+        fs::write(shim.join("open.json"), r#"[{"number":42}]"#).unwrap();
+        fs::write(
+            shim.join("checks.json"),
+            r#"[{"name":"test","bucket":"pass"},{"name":"docs","bucket":"skipping"}]"#,
+        )
+        .unwrap();
         fs::write(shim.join("log"), "").unwrap();
         (
             Release {
@@ -423,9 +434,10 @@ fn tags_from_merged_prs_and_writes_the_pr_body() {
     assert_eq!(fmt("%(contents:subject)"), "v0.2.0");
     assert_eq!(fmt("%(contents:body)"), "Human change (#5)");
 
-    assert!(r
-        .log()
-        .contains("pr create --base master --head dev --title Dev -> Master 0.2.0 --body-file -"));
+    let log = r.log();
+    assert!(log.contains("pr edit 42 --title Dev -> Master 0.2.0 --body-file -"));
+    assert!(log.contains("pr merge 42 --merge"));
+    assert!(!log.contains("pr create"));
     assert_eq!(
         fs::read_to_string(r.shim.join("body")).unwrap(),
         "Human change (#5)\n"
@@ -444,20 +456,45 @@ fn tags_from_merged_prs_and_writes_the_pr_body() {
 }
 
 #[test]
-fn an_open_release_pr_is_retitled_rather_than_duplicated() {
-    let (r, shas, _) = Release::new("edit", &["human pr"]);
+fn opens_a_release_pr_and_stops_when_none_is_open() {
+    let (r, shas, _) = Release::new("nopr", &["human pr"]);
     r.prs(&[(5, "Human change", false, &shas[0])]);
-    fs::write(r.shim.join("open.json"), r#"[{"number":42}]"#).unwrap();
+    fs::write(r.shim.join("open.json"), "[]").unwrap();
 
     let out = r.run("0.2.0");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let log = r.log();
-    assert!(log.contains("pr edit 42 --title Dev -> Master 0.2.0 --body-file -"));
-    assert!(!log.contains("pr create"));
+    assert!(!out.status.success());
+    assert!(!r.origin_has("v0.2.0"));
+    assert!(r
+        .log()
+        .contains("pr create --base master --head dev --title Dev -> Master 0.2.0 --body-file -"));
+}
+
+#[test]
+fn refuses_while_the_release_pr_is_not_green() {
+    let (r, shas, _) = Release::new("red", &["human pr"]);
+    r.prs(&[(5, "Human change", false, &shas[0])]);
+    fs::write(
+        r.shim.join("checks.json"),
+        r#"[{"name":"test","bucket":"pass"},{"name":"clippy","bucket":"pending"}]"#,
+    )
+    .unwrap();
+
+    let out = r.run("0.2.0");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("clippy: pending"));
+    assert!(!r.origin_has("v0.2.0"));
+    assert!(!r.log().contains("pr merge"));
+}
+
+#[test]
+fn refuses_when_the_release_pr_is_not_at_head() {
+    let (r, shas, _) = Release::new("stale", &["human pr"]);
+    r.prs(&[(5, "Human change", false, &shas[0])]);
+    fs::write(r.shim.join("head"), "0".repeat(40)).unwrap();
+
+    let out = r.run("0.2.0");
+    assert!(!out.status.success());
+    assert!(!r.origin_has("v0.2.0"));
 }
 
 #[test]
@@ -481,10 +518,10 @@ fn refuses_before_anything_irreversible() {
     assert!(!r.origin_has("v0.0.9"));
     assert_eq!(r.log(), "");
 
-    // A dirty working tree.
+    // An uncommitted change to a tracked file.
     let (r, shas, _) = Release::new("dirty", &["human pr"]);
     r.prs(&[(5, "Human change", false, &shas[0])]);
-    fs::write(r.work.join("stray"), "x").unwrap();
+    fs::write(r.work.join(METAINFO_PATH), "edited").unwrap();
     assert!(!r.run("0.2.0").status.success());
     assert!(!r.origin_has("v0.2.0"));
     assert_eq!(r.log(), "");
@@ -496,6 +533,20 @@ fn refuses_before_anything_irreversible() {
     assert!(!r.run("0.2.0").status.success());
     assert!(!r.origin_has("v0.2.0"));
     assert_eq!(r.log(), "");
+}
+
+#[test]
+fn untracked_files_do_not_block_a_release() {
+    let (r, shas, _) = Release::new("untracked", &["human pr"]);
+    r.prs(&[(5, "Human change", false, &shas[0])]);
+    fs::write(r.work.join("notes.md"), "scratch").unwrap();
+    let out = r.run("0.2.0");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(r.origin_has("v0.2.0"));
 }
 
 #[test]
