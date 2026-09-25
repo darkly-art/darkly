@@ -10,6 +10,14 @@
     --accent:      #878787;
     /* Legible foreground on an --accent fill (near-black: white reaches only ~3.5:1 on the lighter accent). */
     --on-accent:   #1a1a1a;
+    /* Darkly's brand purple: the one saturated colour in an otherwise
+     * greyscale palette, reserved for the rare element that has to be seen
+     * before anything else on screen. It does not re-tint per theme, because
+     * a brand colour that shifts is not one; white clears 4.5:1 on it in
+     * either theme. */
+    --brand:       #9500ff;
+    --brand-hover: #a929ff;
+    --on-brand:    #ffffff;
     --danger:      #747474;
     --thumb-bg:    #cccccc;
     --canvas-bg:   #cfcfcf;

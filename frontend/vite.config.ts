@@ -40,6 +40,17 @@ export default defineConfig(({ mode }) => ({
         // Every other mode (production default, dev server, --mode demo) stays
         // 'demo', so `npm run dev` keeps the decorative demo experience.
         __DARKLY_APP_MODE__: JSON.stringify(mode === 'app' ? 'app' : 'demo'),
+        // Announcement HTML for this build, empty when the builder set none.
+        // An explicit one-identifier allowlist rather than an `envPrefix`:
+        // `loadEnv` would sweep in whatever `DARKLY_*` the build machine
+        // happens to hold (DARKLY_DEVTOOLS, the code-signing switches) and
+        // inline it into the client bundle. `JSON.stringify` covers quotes,
+        // backslashes and newlines in the markup; the app is emitted as
+        // external chunks, never inline in index.html, so a `</script>` in
+        // the string cannot break out. Read it through
+        // src/state/announcement.svelte.ts.
+        // @ts-ignore: Node global; no @types/node dependency.
+        __DARKLY_BANNER_HTML__: JSON.stringify(process.env.DARKLY_BANNER ?? ''),
     },
     resolve: {
         // Component tests run in jsdom and must load Svelte's browser runtime;

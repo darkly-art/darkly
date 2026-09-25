@@ -73,8 +73,8 @@
 
     .toast-action {
         flex-shrink: 0;
-        background: #9500ff;
-        color: #fff;
+        background: var(--brand);
+        color: var(--on-brand);
         border: none;
         border-radius: 4px;
         padding: 4px 12px;
@@ -84,6 +84,6 @@
     }
 
     .toast-action:hover {
-        background: #a929ff;
+        background: var(--brand-hover);
     }
 </style>

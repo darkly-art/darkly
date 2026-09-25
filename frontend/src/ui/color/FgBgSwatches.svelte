@@ -77,8 +77,8 @@
         <Icon name="fa6-solid:arrow-right-arrow-left" />
     </button>
     <button class="glyph reset" onclick={() => app.resetColors()} title={tooltipForAction('Reset colors', 'resetColors')}>
-        <span class="mini bg"></span>
-        <span class="mini fg"></span>
+        <span class="mini bg" style:background={css(app.defaultColors.background)}></span>
+        <span class="mini fg" style:background={css(app.defaultColors.foreground)}></span>
     </button>
 </div>
 
@@ -162,12 +162,10 @@
     .mini.fg {
         top: 0;
         left: 0;
-        background: #000;
         z-index: 1;
     }
     .mini.bg {
         right: 0;
         bottom: 0;
-        background: #fff;
     }
 </style>

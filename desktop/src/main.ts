@@ -8,10 +8,11 @@
  * - Wires up the storage IPC handlers that back window.electronAPI.storage
  *   on the renderer side.
  */
-import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createStorageHost } from './storage-host';
+import { externalLinkHandler } from './external-links';
 
 // On Windows, handle Squirrel install/uninstall events at startup. If we
 // were launched as part of one, quit and let Squirrel do its thing.
@@ -106,6 +107,12 @@ function createWindow() {
         console.error(`Darkly: frontend not found at ${indexPath}`);
         console.error('Run ./build.sh from the repo root to stage the frontend.');
     }
+    // A link out of Darkly belongs in the reader's browser, not in a second
+    // chromeless Electron window (Electron's default). See external-links.ts.
+    mainWindow.webContents.setWindowOpenHandler(
+        externalLinkHandler((url) => void shell.openExternal(url)),
+    );
+
     mainWindow.loadFile(indexPath);
 
     if (process.env.DARKLY_DEVTOOLS) {
