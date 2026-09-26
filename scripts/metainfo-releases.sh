@@ -15,6 +15,12 @@
 # repository or no tags (a tarball, a shallow clone) it leaves an existing block
 # as committed rather than emptying it, and inserts an empty one otherwise.
 #
+# A release tarball is the tag commit, which predates that release's refresh,
+# so its committed block lists every release but its own. The tarball's
+# crates/darkly/version.txt, filled in by git archive, names that release and
+# its date; with no tags, a release it names that the block lacks is added on
+# top of the block.
+#
 # Offline, git and POSIX tools only: it runs unchanged in CI, locally, and in
 # the Flathub build sandbox, which compiles no native Rust.
 #
@@ -27,6 +33,7 @@ set -euo pipefail
 repo_url="https://github.com/darkly-art/darkly"
 
 metainfo="${1:?usage: $0 <metainfo.xml>}"
+version_file="$(dirname "$0")/../crates/darkly/version.txt"
 
 die() { echo "metainfo-releases: $metainfo $*" >&2; exit 1; }
 
@@ -56,32 +63,62 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
          | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' || true; })
 fi
 
-if [ -z "$tags" ] && [ "$opens" -eq 1 ]; then
-  cat "$metainfo"
-  exit 0
-fi
+# One <release>: tag, `tag` or `commit` for the tag's object type (only an
+# annotated tag has a body to describe the release with), and date.
+render_release() {
+  local tag=$1 type=$2 date=$3 body=""
+  echo "    <release version=\"${tag#v}\" date=\"$date\">"
+  echo "      <url type=\"details\">$repo_url/releases/tag/$tag</url>"
+  if [ "$type" = tag ]; then
+    body=$(git for-each-ref --format='%(contents:body)' "refs/tags/$tag" \
+             | sed '/^[[:space:]]*$/d')
+  fi
+  if [ -n "$body" ]; then
+    echo "      <description>"
+    echo "        <ul>"
+    printf '%s\n' "$body" | xml_escape | sed 's|.*|          <li>&</li>|'
+    echo "        </ul>"
+    echo "      </description>"
+  fi
+  echo "    </release>"
+}
 
 render_releases() {
   echo "  <releases>"
   [ -n "$tags" ] && printf '%s\n' "$tags" | while read -r tag type date; do
-    echo "    <release version=\"${tag#v}\" date=\"$date\">"
-    echo "      <url type=\"details\">$repo_url/releases/tag/$tag</url>"
-    body=""
-    if [ "$type" = tag ]; then
-      body=$(git for-each-ref --format='%(contents:body)' "refs/tags/$tag" \
-               | sed '/^[[:space:]]*$/d')
-    fi
-    if [ -n "$body" ]; then
-      echo "      <description>"
-      echo "        <ul>"
-      printf '%s\n' "$body" | xml_escape | sed 's|.*|          <li>&</li>|'
-      echo "        </ul>"
-      echo "      </description>"
-    fi
-    echo "    </release>"
+    render_release "$tag" "$type" "$date"
   done
   echo "  </releases>"
 }
+
+# The release version.txt names, as `<tag> <date>`, when the file is filled in
+# at a release tag (git's %(describe) gives the bare tag there) and the
+# committed block does not list it yet. Nothing otherwise.
+archive_release() {
+  [ -f "$version_file" ] || return 0
+  local line describe rest tag date
+  line=$(grep -v -e '^#' -e '^[[:space:]]*$' "$version_file" | tail -n 1 || true)
+  case "$line" in *'$Format'*) return 0 ;; esac
+  describe=${line%% *}
+  rest=${line#* }
+  date=${rest#* }
+  [[ "$describe" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)(-0-g[0-9a-f]+)?$ ]] || return 0
+  tag=${BASH_REMATCH[1]}
+  [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 0
+  grep -qF "<release version=\"${tag#v}\"" "$metainfo" && return 0
+  echo "$tag $date"
+}
+
+if [ -z "$tags" ] && [ "$opens" -eq 1 ]; then
+  entry=$(archive_release)
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "$line"
+    if [ -n "$entry" ] && [[ "$line" =~ ^[[:space:]]*\<releases\>[[:space:]]*$ ]]; then
+      render_release "${entry%% *}" commit "${entry#* }"
+    fi
+  done < "$metainfo"
+  exit 0
+fi
 
 block=$(render_releases)
 in_block=""

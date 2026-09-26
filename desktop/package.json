@@ -6,6 +6,9 @@
     "description": "Darkly desktop bundle",
     "author": "Darkly <info@darkly.art>",
     "main": "dist/main.js",
+    "engines": {
+        "node": ">=22"
+    },
     "scripts": {
         "tsc": "tsc",
         "start": "npm run tsc && electron-forge start",
