@@ -695,7 +695,11 @@ fn flathub_manifest_from_a_checkout() {
         .env("FLATPAK_NODE_GENERATOR", &node_gen)
         .output()
         .unwrap();
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     let mut files: Vec<String> = fs::read_dir(&out)
         .unwrap()
@@ -704,11 +708,19 @@ fn flathub_manifest_from_a_checkout() {
     files.sort();
     assert_eq!(
         files,
-        ["README.md", "art.darkly.Darkly.yaml", "cargo-sources.json", "generated-sources.json"]
+        [
+            "README.md",
+            "art.darkly.Darkly.yaml",
+            "cargo-sources.json",
+            "generated-sources.json"
+        ]
     );
     let manifest = fs::read_to_string(out.join("art.darkly.Darkly.yaml")).unwrap();
     assert!(manifest.contains(&format!("commit: {head}")));
-    assert!(!manifest.contains("tag:"), "commit only; the tags arrive with the full clone");
+    assert!(
+        !manifest.contains("tag:"),
+        "commit only; the tags arrive with the full clone"
+    );
     assert!(manifest.contains("rust-1.98.0-x86_64-unknown-linux-gnu.tar.xz"));
     assert!(manifest.contains("rust-std-1.98.0-wasm32-unknown-unknown.tar.xz"));
     assert!(manifest.contains("wasm-bindgen-0.2.114-aarch64-unknown-linux-musl.tar.gz"));
@@ -717,7 +729,9 @@ fn flathub_manifest_from_a_checkout() {
     // A surviving `@NAME@`: some text between two `@` that is all caps.
     let between: Vec<&str> = manifest.split('@').collect();
     let unfilled = between[1..between.len() - 1].iter().any(|p| {
-        !p.is_empty() && p.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        !p.is_empty()
+            && p.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
     });
     assert!(!unfilled, "unfilled placeholder in the manifest");
 }
