@@ -3,8 +3,8 @@
  *
  * - Sets up the platform-appropriate userData path (~/.config/Darkly/,
  *   etc.), with DARKLY_DATA_DIR as an override for portable installs.
- * - Creates a BrowserWindow that loads the packaged frontend (a static
- *   build of the public Darkly repo) from process.resourcesPath/app/.
+ * - Creates a BrowserWindow that loads the frontend (a static build of
+ *   frontend/), staged by `make app` into resources/app/.
  * - Wires up the storage IPC handlers that back window.electronAPI.storage
  *   on the renderer side.
  */
@@ -14,9 +14,11 @@ import * as fs from 'fs';
 import { createStorageHost } from './storage-host';
 
 // On Windows, handle Squirrel install/uninstall events at startup. If we
-// were launched as part of one, quit and let Squirrel do its thing.
+// were launched as part of one, quit and let Squirrel do its thing. Required
+// only there, so an install tree run by a system Electron (`make install`)
+// needs no node_modules.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-if (require('electron-squirrel-startup')) {
+if (process.platform === 'win32' && require('electron-squirrel-startup')) {
     app.quit();
 }
 
@@ -92,8 +94,10 @@ function createWindow() {
     });
 
     // Locate the frontend resources.
-    // - Packaged: process.resourcesPath/app/ (set via Forge's extraResource).
-    // - electron-forge start: read from ../resources/app/ relative to dist/.
+    // - A forge bundle: process.resourcesPath/app/ (Forge's extraResource).
+    // - Everything else reads ../resources/app/ relative to dist/:
+    //   `electron-forge start`, and the tree `make install` lays out under
+    //   $(LIBDIR)/darkly, which a system Electron runs directly.
     const packagedResources = path.join(process.resourcesPath, 'app');
     const localResources = path.join(__dirname, '..', 'resources', 'app');
     const resourcesDir = fs.existsSync(packagedResources)
@@ -104,7 +108,7 @@ function createWindow() {
     if (!fs.existsSync(indexPath)) {
         // Helpful error if the frontend wasn't built/staged.
         console.error(`Darkly: frontend not found at ${indexPath}`);
-        console.error('Run ./build.sh from the repo root to stage the frontend.');
+        console.error("Run 'make app' from the repo root to stage the frontend.");
     }
     mainWindow.loadFile(indexPath);
 

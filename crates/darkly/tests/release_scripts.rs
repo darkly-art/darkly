@@ -250,6 +250,67 @@ fn keeps_the_committed_block_when_there_are_no_tags() {
     assert_eq!(stdout(&out), WITH_BLOCK);
 }
 
+/// A release tarball: no `.git`, the committed block from before its own
+/// release, and a `version.txt` git archive filled in at the release tag.
+#[test]
+fn adds_a_tarballs_own_release_from_its_version_file() {
+    let s = Scratch::new("tarball");
+    let d = &s.0;
+    fs::create_dir_all(d.join("scripts")).unwrap();
+    fs::create_dir_all(d.join("crates/darkly")).unwrap();
+    fs::copy(
+        repo_root().join("scripts/metainfo-releases.sh"),
+        d.join("scripts/metainfo-releases.sh"),
+    )
+    .unwrap();
+    let version_file = d.join("crates/darkly/version.txt");
+    let file = d.join("in.metainfo.xml");
+    fs::write(&file, WITH_BLOCK).unwrap();
+    let run = || {
+        isolated("bash", d)
+            .arg(d.join("scripts/metainfo-releases.sh"))
+            .arg(&file)
+            .output()
+            .unwrap()
+    };
+
+    fs::write(&version_file, "# filled in\nv0.2.0 abc1234 2026-03-04\n").unwrap();
+    let out = run();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout(&out),
+        "\
+<component>
+  <id>art.example.App</id>
+  <!-- kept -->
+  <releases>
+    <release version=\"0.2.0\" date=\"2026-03-04\">
+      <url type=\"details\">https://github.com/darkly-art/darkly/releases/tag/v0.2.0</url>
+    </release>
+    <release version=\"0.0.1\" date=\"2025-01-01\">
+    </release>
+  </releases>
+
+</component>
+"
+    );
+
+    // Placeholders (a checkout), a build past a tag, and a release the block
+    // already lists all leave it as committed.
+    for line in [
+        "$Format:%(describe:tags)$ $Format:%h$ $Format:%cs$",
+        "v0.2.0-3-gabc1234 abc1234 2026-03-04",
+        "v0.0.1 abc1234 2025-01-01",
+    ] {
+        fs::write(&version_file, format!("# filled in\n{line}\n")).unwrap();
+        assert_eq!(stdout(&run()), WITH_BLOCK, "{line}");
+    }
+}
+
 #[test]
 fn refuses_a_malformed_releases_block() {
     let s = Scratch::new("malformed");

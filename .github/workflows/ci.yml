@@ -138,21 +138,6 @@ jobs:
           WGPU_BACKEND: vulkan
         run: cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
 
-  wasm-build:
-    name: wasm-pack build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: latest
-      - name: wasm-pack build (release)
-        working-directory: frontend/wasm
-        run: wasm-pack build --release --target web --out-dir pkg
-
   frontend:
     name: frontend typecheck + build
     runs-on: ubuntu-latest
@@ -164,19 +149,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: latest
+      - name: Install wasm-bindgen CLI + binaryen
+        run: |
+          make tools
+          sudo apt-get update
+          sudo apt-get install -y binaryen
       - name: npm ci
         working-directory: frontend
         run: npm ci
-      - name: wasm:build
-        working-directory: frontend
+      - name: make wasm
         # Run before vitest so test files that transitively import the
-        # config store (which loads `wasm/pkg/darkly_wasm`) can resolve.
-        # `npm run build` would also rebuild the pkg, but doing it once
-        # explicitly here keeps the test step independent.
-        run: npm run wasm:build
+        # config store (which loads `wasm/pkg/darkly_wasm`) can resolve, and
+        # before `npm run build`, which builds the frontend over it.
+        run: make wasm
       - name: vitest
         working-directory: frontend
         run: npm test
@@ -208,6 +193,47 @@ jobs:
         working-directory: desktop
         run: npm test
 
+  install:
+    name: make app + install on an unbundled Electron
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: install-data renders the release block from the v* tags.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-bindgen CLI, binaryen, xvfb
+        run: |
+          make tools
+          sudo apt-get update
+          sudo apt-get install -y binaryen xvfb
+      - run: make deps
+      - run: make app
+
+      # The lines a distro recipe runs, staged the way a package build stages.
+      - name: make install (staged)
+        run: |
+          make install DESTDIR="$RUNNER_TEMP/pkg" PREFIX=/usr ELECTRON=electron
+          grep -qx 'exec "electron" "/usr/lib/darkly" "\$@"' "$RUNNER_TEMP/pkg/usr/bin/darkly"
+          test -f "$RUNNER_TEMP/pkg/usr/lib/darkly/resources/app/index.html"
+
+      # A runnable install: the launcher names its LIBDIR, so it has to be
+      # installed where it runs. ELECTRON is the Electron binary itself, not
+      # node_modules/.bin/electron, a Node wrapper that would spawn Electron as
+      # a child and leave Playwright attached to the wrong process.
+      - name: make install (runnable)
+        run: make install PREFIX="$RUNNER_TEMP/usr" ELECTRON="$PWD/desktop/node_modules/electron/dist/electron"
+      - name: Smoke test through the installed launcher
+        working-directory: desktop
+        env:
+          DARKLY_EXECUTABLE: ${{ runner.temp }}/usr/bin/darkly
+        run: xvfb-run -a npm run test:e2e
+
   packaging:
     name: desktop integration metadata
     runs-on: ubuntu-latest
@@ -222,18 +248,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils
 
-      # Validates the metainfo as committed, then as a channel installs it,
-      # with the <releases> block refilled from the tags. On a release PR the
-      # merge ref already reaches the tag just cut, so a tag body the store
-      # cannot carry fails here, before the merge, rather than on Flathub's
-      # builder. Freshness of the committed block is deliberately not checked:
+      # Validates the metainfo as committed, then as `make install-data`
+      # installs it, with the <releases> block refilled from the tags. On a
+      # release PR the merge ref already reaches the tag just cut, so a tag
+      # body the store cannot carry fails here, before the merge, rather than
+      # on Flathub's builder. Freshness of the committed block is deliberately not checked:
       # it lags each tag until the maintainer commits the refresh.
+      - name: make install-data
+        run: make install-data DESTDIR="$RUNNER_TEMP/data" PREFIX=/usr
+
       - name: Validate AppStream metainfo
         run: |
           appstreamcli validate --no-net packaging/art.darkly.Darkly.metainfo.xml
-          scripts/metainfo-releases.sh packaging/art.darkly.Darkly.metainfo.xml \
-            > "$RUNNER_TEMP/art.darkly.Darkly.metainfo.xml"
-          appstreamcli validate --no-net "$RUNNER_TEMP/art.darkly.Darkly.metainfo.xml"
+          appstreamcli validate --no-net "$RUNNER_TEMP/data/usr/share/metainfo/art.darkly.Darkly.metainfo.xml"
 
       - name: Validate desktop entry
-        run: desktop-file-validate packaging/art.darkly.Darkly.desktop
+        run: |
+          desktop-file-validate packaging/art.darkly.Darkly.desktop
+          desktop-file-validate "$RUNNER_TEMP/data/usr/share/applications/art.darkly.Darkly.desktop"

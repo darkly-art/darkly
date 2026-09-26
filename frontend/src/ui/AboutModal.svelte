@@ -2,12 +2,17 @@
     import Modal from './Modal.svelte';
     import Icon from '../icons/Icon.svelte';
     import { about } from '../state/about.svelte';
-    import { darklyVersion } from '../version';
+    import { version } from '../../wasm/pkg/darkly_wasm';
     import { links } from '../links';
 
     // Relative to Vite's base ('./') so it resolves both at a web root and from
     // file:// in the packaged desktop bundle.
     const bannerSrc = `${import.meta.env.BASE_URL}darkly-banner.png`;
+
+    // The engine's version, read from the bridge. App mounts this modal before
+    // the bridge is initialized, but it can only be opened from a loaded
+    // editor, so the read waits until it is open.
+    const darklyVersion = $derived(about.open ? version() : '');
 
     let copied = $state(false);
     let copyTimer: ReturnType<typeof setTimeout> | null = null;
