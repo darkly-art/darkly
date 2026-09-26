@@ -46,10 +46,6 @@ struct IntrinsicUniforms {
     // `theta` in the per-fragment skeleton so brush stamp orientation
     // counteracts the view rotation that the present shader applies on top.
     view_rotation:   f32,
-    // Pad the struct to 64 bytes (a multiple of 16) so the node-contributed
-    // uniforms that follow `intrinsic` in the generated `Uniforms` struct keep
-    // their 16-byte alignment. Adding `canvas_origin` above pushed the size to
-    // 56; without this pad the node params would misalign and read garbage.
     // How many dabs land on a given texel as the brush passes over it
     // once: `diameter / spacing`. Stroke-constant, published by the stroke
     // engine, which owns the spacing that produced it. A terminal
@@ -57,6 +53,15 @@ struct IntrinsicUniforms {
     // per *pass* rather than per dab, otherwise the knob's meaning moves
     // with the spacing setting and with pressure. 1.0 when unset.
     dabs_per_pass:   f32,
+    // Canvas pixels per reference pixel for this document
+    // (`Document::dpi / REFERENCE_DPI`), 1.0 for previews. Port values
+    // declared in pixels are reference-pixel lengths baked as literals at
+    // compile time, and a compiled brush is cached across documents, so the
+    // sample-coordinate expression multiplies by this at use.
+    dpi_factor:      f32,
+    // Pad the struct to 64 bytes (a multiple of 16) so the node-contributed
+    // uniforms that follow `intrinsic` in the generated `Uniforms` struct keep
+    // their 16-byte alignment; without this pad the node params would
+    // misalign and read garbage.
     _pad1:           u32,
-    _pad2:           u32,
 };

@@ -40,10 +40,11 @@ use darkly::gpu::test_utils::bench_device;
 
 // ── Matrix axes ─────────────────────────────────────────────────────────
 
-/// Mirrors `crates/darkly/src/brush/DAB_REFERENCE_SIZE`.
 /// `radius_px = size_port * DAB_REFERENCE_SIZE_PX * 0.5`, so
-/// `size_port = 2 * radius_px / DAB_REFERENCE_SIZE_PX`.
-const DAB_REFERENCE_SIZE_PX: f32 = 512.0;
+/// `size_port = 2 * radius_px / DAB_REFERENCE_SIZE_PX`. This bin runs
+/// reference-DPI engines, so a reference pixel is a canvas pixel and the
+/// requested radii need no conversion.
+const DAB_REFERENCE_SIZE_PX: f32 = darkly::brush::DAB_REFERENCE_SIZE as f32;
 
 const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 2000.0];
 

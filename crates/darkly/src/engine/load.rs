@@ -785,7 +785,7 @@ mod tests {
                 height: 8,
                 origin_x: 0,
                 origin_y: 0,
-                dpi: crate::document::DEFAULT_DPI,
+                dpi: crate::document::REFERENCE_DPI,
             },
             requires: ManifestRequires {
                 layer_kind: vec!["group".to_string(), "raster".to_string()],

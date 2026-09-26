@@ -155,6 +155,8 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
                 canvas_origin: p.origin,
                 blend_mode,
                 view_rotation: 0.0,
+                // Tests construct reference-DPI engines, so a reference pixel is a canvas pixel.
+                dpi_factor: 1.0,
                 perf: BrushPerfCounters::default(),
                 stroke: Some(StrokeResources {
                     scratch,

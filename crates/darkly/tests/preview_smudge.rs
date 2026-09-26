@@ -85,6 +85,8 @@ fn smudge_preview_shows_neutral_gray_footprint() {
         canvas_origin: [0, 0],
         blend_mode: 0,
         view_rotation: 0.0,
+        // Tests construct reference-DPI engines, so a reference pixel is a canvas pixel.
+        dpi_factor: 1.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
         preview: Some(CursorPreviewState {

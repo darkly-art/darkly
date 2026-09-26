@@ -119,8 +119,12 @@
                 const dims = providedInstance.pendingDims;
                 const docW = dims?.width ?? (config.get('canvas.width') as number);
                 const docH = dims?.height ?? (config.get('canvas.height') as number);
+                const dpi = dims?.dpi ?? null;
                 providedInstance.pendingDims = null;
-                await createInstance(canvas, docW, docH, providedInstance, { seedBackground });
+                await createInstance(canvas, docW, docH, providedInstance, {
+                    seedBackground,
+                    dpi,
+                });
                 if (seedBackground) {
                     await seedFreshDocument(providedInstance, docW, docH);
                 }

@@ -83,7 +83,7 @@ fn feature_centroid_scales_after_2x() {
     let before = engine.test_readback_canvas();
     let (cx0, cy0) = red_centroid(&before, w, h);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     assert_eq!(engine.canvas_dimensions(), (2 * w, 2 * h));
 
     let after = engine.test_readback_canvas();
@@ -107,7 +107,7 @@ fn rescale_downscale_025x() {
     let before = engine.test_readback_canvas();
     let (cx0, cy0) = red_centroid(&before, w, h);
 
-    engine.rescale_image(w / 4, h / 4);
+    engine.rescale_image(w / 4, h / 4, None);
     assert_eq!(engine.canvas_dimensions(), (w / 4, h / 4));
 
     let after = engine.test_readback_canvas();
@@ -134,7 +134,7 @@ fn two_layers_undo_restores_all_pixels() {
     let before1 = engine.test_readback_layer(l1);
     let before2 = engine.test_readback_layer(l2);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
 
     let after1 = engine.test_readback_layer(l1);
@@ -161,7 +161,7 @@ fn rescale_undo_then_redo_pixels() {
     paint_feature(&mut engine, layer, 10.0, 10.0);
 
     let before = engine.test_readback_layer(layer);
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     let scaled = engine.test_readback_layer(layer);
     assert_eq!(
         scaled.len(),
@@ -201,7 +201,7 @@ fn mask_scales_with_layer() {
         Some(CanvasRect::from_xywh(0, 0, w, h))
     );
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
 
     assert_eq!(
         engine.test_node_pixel_bounds(mask),
@@ -228,7 +228,7 @@ fn rescale_clears_active_selection() {
         "selection should be active before rescale"
     );
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     assert!(
         !engine.has_selection(),
         "rescale should clear the active selection"
@@ -244,7 +244,7 @@ fn rescale_noop_when_unchanged() {
     let (w, h) = (32u32, 32u32);
     let mut engine = test_engine(w, h);
     assert!(!engine.test_can_undo());
-    engine.rescale_image(w, h);
+    engine.rescale_image(w, h, None);
     assert!(
         !engine.test_can_undo(),
         "a same-dims rescale must not push an undo step"
@@ -361,20 +361,44 @@ fn flood_fill(
 
 /// Paint lands at the intended plane coordinate AFTER a rescale (the resampled
 /// canvas's paint frame is correct).
+///
+/// One dab at the target, on a canvas large enough to hold it whole. A
+/// rescale doubles the document's DPI (the artwork keeps its physical size
+/// and gains pixels), so the brush doubles both its canvas-pixel footprint
+/// and its spacing to keep its physical size. A clipped mark or a swept
+/// stroke shorter than one spacing step would both make the centroid measure
+/// something other than where the paint was aimed.
 #[test]
 fn paint_lands_at_plane_coords_after_rescale() {
-    let (w, h) = (32u32, 32u32);
+    let (w, h) = (96u32, 96u32);
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h); // 64×64, empty layer rescaled
-    paint_feature(&mut engine, layer, 40.0, 40.0);
+    engine.rescale_image(2 * w, 2 * h, None); // 192x192, empty layer rescaled
+    engine.begin_stroke(layer).unwrap();
+    for i in 0..2 {
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x: 120.0,
+            y: 120.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
 
     let px = engine.test_readback_layer(layer);
     let (cx, cy) = red_centroid(&px, 2 * w, 2 * h);
     assert!(
-        (cx - 40.0).abs() < 2.0 && (cy - 40.0).abs() < 2.0,
-        "post-rescale paint landed at ({cx}, {cy}), expected ~(40, 40)"
+        (cx - 120.0).abs() < 2.0 && (cy - 120.0).abs() < 2.0,
+        "post-rescale paint landed at ({cx}, {cy}), expected ~(120, 120)"
     );
 }
 
@@ -387,7 +411,7 @@ fn paint_lands_at_plane_coords_after_rescale_undo() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -409,8 +433,8 @@ fn marquee_masks_same_plane_pixels_after_rescale() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h); // 128×128
-                                        // Select a vertical band: plane x in [16, 64), full height.
+    engine.rescale_image(2 * w, 2 * h, None); // 128×128
+                                              // Select a vertical band: plane x in [16, 64), full height.
     engine.select_rect(
         16.0,
         0.0,
@@ -443,7 +467,7 @@ fn marquee_masks_same_plane_pixels_after_rescale_undo() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -471,7 +495,7 @@ fn marching_ants_track_selection_after_rescale() {
     let mut engine = test_engine(w, h);
     let _layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h); // 64×64
+    engine.rescale_image(2 * w, 2 * h, None); // 64×64
     engine.select_rect(20.0, 16.0, 12.0, 10.0, SelectionMode::Replace, false, 0.0);
 
     let (minx, miny, maxx, maxy) = ants_bbox(&engine.test_selection_overlay());
@@ -491,7 +515,7 @@ fn marching_ants_track_selection_after_rescale_undo() {
     let mut engine = test_engine(w, h);
     let _layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -519,8 +543,8 @@ fn flood_fill_fills_plane_region_after_rescale() {
     let rgba = rgba_with_red_square(w, h, 8, 8, 16, 16);
     let layer = engine.paste_image(w, h, &rgba, 0, 0, None);
 
-    engine.rescale_image(2 * w, 2 * h); // square scales to plane [16, 32)
-                                        // Seed inside the scaled square; recolor red → green.
+    engine.rescale_image(2 * w, 2 * h, None); // square scales to plane [16, 32)
+                                              // Seed inside the scaled square; recolor red → green.
     flood_fill(&mut engine, layer, 24.0, 24.0, [0, 255, 0, 255], 50);
     pump(&mut engine, 8);
 
@@ -547,7 +571,7 @@ fn flood_fill_fills_plane_region_after_rescale_undo() {
     let rgba = rgba_with_red_square(w, h, 8, 8, 16, 16);
     let layer = engine.paste_image(w, h, &rgba, 0, 0, None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -580,7 +604,7 @@ fn magic_wand_selects_plane_region_after_rescale() {
     let rgba = rgba_with_red_square(w, h, 8, 8, 16, 16);
     let layer = engine.paste_image(w, h, &rgba, 0, 0, None);
 
-    engine.rescale_image(2 * w, 2 * h); // square → plane [16, 32)
+    engine.rescale_image(2 * w, 2 * h, None); // square → plane [16, 32)
     engine.select_magic_wand(layer, CanvasPoint::new(24, 24), 50, SelectionMode::Replace);
     pump(&mut engine, 8);
 
@@ -607,7 +631,7 @@ fn magic_wand_selects_plane_region_after_rescale_undo() {
     let rgba = rgba_with_red_square(w, h, 8, 8, 16, 16);
     let layer = engine.paste_image(w, h, &rgba, 0, 0, None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -639,7 +663,7 @@ fn transform_from_selection_plane_origin_after_rescale() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h); // 64×64
+    engine.rescale_image(2 * w, 2 * h, None); // 64×64
     paint_feature(&mut engine, layer, 32.0, 28.0);
     engine.select_rect(24.0, 20.0, 16.0, 12.0, SelectionMode::Replace, false, 0.0);
 
@@ -663,7 +687,7 @@ fn transform_from_selection_plane_origin_after_rescale_undo() {
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
 
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -691,7 +715,7 @@ fn color_pick_reads_plane_pixel_after_rescale() {
 
     let (w, h) = (32u32, 32u32);
     let mut engine = test_engine(w, h);
-    engine.rescale_image(2 * w, 2 * h); // 64×64
+    engine.rescale_image(2 * w, 2 * h, None); // 64×64
 
     // Paste a 64×64 layer: red everywhere, green 4×4 at plane (40, 40).
     let mut rgba = vec![0u8; (2 * w * 2 * h * 4) as usize];
@@ -723,7 +747,7 @@ fn color_pick_reads_plane_pixel_after_rescale_undo() {
 
     let (w, h) = (32u32, 32u32);
     let mut engine = test_engine(w, h);
-    engine.rescale_image(2 * w, 2 * h);
+    engine.rescale_image(2 * w, 2 * h, None);
     engine.undo();
     assert_eq!(engine.canvas_dimensions(), (w, h));
 
@@ -769,7 +793,7 @@ fn screen_to_plane_tracks_dims_through_rescale_and_undo() {
         "pre-rescale center should map to (32, 32), got ({cx0}, {cy0})"
     );
 
-    engine.rescale_image(2 * w, 2 * h); // 128×128, center → (64, 64)
+    engine.rescale_image(2 * w, 2 * h, None); // 128×128, center → (64, 64)
     let (cx1, cy1) = engine.screen_to_plane(sw / 2.0, sh / 2.0);
     assert!(
         (cx1 - 64.0).abs() < 1e-2 && (cy1 - 64.0).abs() < 1e-2,

@@ -91,40 +91,49 @@ landing in, not the stroke and not the brush. It has one output today:
 
 | Port | Value | Use |
 | --- | --- | --- |
-| `dpi_scale` | the document's DPI divided by the 300 DPI reference | Multiply an authored pixel number by it and that number keeps its physical size on any canvas |
+| `dpi_scale` | the document's DPI divided by the reference DPI (100) | The same reference-to-canvas factor the runner applies at the boundary, exposed so a brush can undo it |
 
-Wire `dpi_scale` through a `multiply` whose other operand is the authored
-size, and feed the product into the pixel-valued port: `noise.scale`,
-`image.scale`, or a stamp size. A paper grain authored at 2.5 px is
-`2.5 x dpi_scale -> noise.scale`.
+**Every pixel-valued port is already a physical length.** The graph computes
+in **reference pixels**: pixels of the reference document, which is 1920x1080
+at 19.2 by 10.8 inches, so its DPI falls out as 100. `DAB_REFERENCE_SIZE` and
+every `UnitType::Pixels` port (`noise.scale`, `image.scale`,
+`brush_settings.spacing_min_px`) is a reference-pixel length, converted to
+canvas pixels exactly once: on the CPU by `BrushGraphRunner::dpi_factor` where
+a graph value becomes a dab footprint or a spacing distance, and in WGSL by
+`u.intrinsic.dpi_factor` where it becomes a sample coordinate. A brush
+therefore keeps its physical mark size on any document with **no wiring at
+all**, which is why no shipped brush wires this node.
+
+That makes the useful uses of `dpi_scale` the inverse ones:
+
+| Wire | The length is stable relative to |
+| --- | --- |
+| nothing (a literal) | the document's physical extent: the default, since a `Pixels` port is already physical |
+| `brush_settings.size` | the brush's own footprint, so it changes when the artist resizes the brush |
+| `literal / dpi_scale` | the canvas pixel grid, for a length that must stay a fixed number of texels |
+
+`dpi_scale` also scales a `Raw` quantity that carries no unit of its own and
+so never crosses the boundary.
 
 **What this means, precisely.** DPI is a statement about *physical* size, so
-"the same result at two resolutions" means: for two documents whose pixel
-dimensions and DPI describe the same physical extent, a quantity routed
-through `dpi_scale` occupies the same physical extent in both. A 1024 px
-document at 300 DPI and a 4096 px one at 1200 DPI are both 3.41 inches wide,
-and grain authored as "2.5 px at the reference DPI" renders at 2.5 px in the
-first and 10 px in the second. It does *not* mean pixel-identical output, and
-it does *not* mean "the same fraction of the canvas". Image Size scales DPI by
-the resample factor, so taking a document from 1K to 4K produces that matched
-pair with no artist action.
+"the same result on two documents" means: for two documents whose pixel
+dimensions and DPI describe the same physical extent, a brush's mark occupies
+the same physical extent on both. A 1920 px document at 100 DPI and a 7680 px
+one at 400 DPI are both 19.2 inches wide, and the stock brush paints a mark
+that is the same fraction of the artwork on each: 51.2 px on the first and
+204.8 px on the second. It does *not* mean pixel-identical output. Image Size
+scales the DPI by the resample factor, and new documents derive theirs from
+their pixel size, so that matched pair is what an artist gets without doing
+anything.
 
-Three different intents, three different wires, and the brush author picks:
-
-| Wire | Grain is stable relative to |
-| --- | --- |
-| `document_settings.dpi_scale` | the document's physical extent |
-| `brush_settings.size` | the brush's own footprint (so it changes when the artist resizes the brush) |
-| nothing (a literal) | the canvas pixel grid |
-
-**The 300 DPI reference is part of the brush format's contract.** It is
-`DEFAULT_DPI` in `crates/darkly/src/document/mod.rs`, and it is also the
-resolution a fresh document starts at, so `dpi_scale` is exactly 1.0 until the
-artist changes the DPI and adding the node moves no shipped brush. The
-reference is deliberately that constant rather than the artist's `canvas.dpi`
-preference: a brush file is portable content, and a preference would make the
-same file paint differently on two machines. Moving `DEFAULT_DPI` would
-silently rescale every brush that reads `dpi_scale`.
+**The reference is part of the brush format's contract.** It is
+`REFERENCE_DPI` in `crates/darkly/src/document/mod.rs`, derived from the
+reference document rather than chosen, and it is the system's one physical
+anchor. Moving it would rescale every shipped brush. The reference is
+deliberately not the artist's `canvas.dpi` preference: a brush file is
+portable content, and a preference would make the same file paint differently
+on two machines. `canvas.dpi` prefills the manual DPI field in New Document
+and nothing in the brush system reads it.
 
 `document_settings` is not a `constant` node in disguise (see below): a port
 default cannot read the document, which is the whole point.

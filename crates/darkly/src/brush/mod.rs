@@ -45,17 +45,23 @@ use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
 
-/// Reference dab dimension (width = height), in canvas pixels: the
-/// UI/UX convention that defines what `brush size = 1.0` means in
-/// canvas-pixel terms. Used by:
+/// Reference dab dimension (width = height), in **reference pixels**:
+/// pixels of the reference document ([`crate::document::REFERENCE_DPI`]).
+/// The UI/UX convention that defines what `brush size = 1.0` means. Used by:
 ///
 /// - `stamp`: the rendered dab's longer axis at `effective_size = 1.0`
-///   is `DAB_REFERENCE_SIZE` canvas pixels (the slider's "100%" mark).
+///   is `DAB_REFERENCE_SIZE` reference pixels (the slider's "100%" mark).
 /// - `liquify`: `radius = size * DAB_REFERENCE_SIZE * 0.5`.
 /// - `paint` / `watercolor`: same `effective_size *
 ///   DAB_REFERENCE_SIZE / 2` formula for `effective_radius`.
 /// - `StrokeEngine::default_diameter() = DAB_REFERENCE_SIZE * 0.5`:
 ///   spacing fallback before any dab has reported its own size.
+///
+/// Every one of those multiplies by the document's reference-to-canvas
+/// factor at the boundary, so the dab keeps its *physical* size on any
+/// document. This constant is not a physical claim on its own: it says how
+/// many reference pixels a full-size dab spans, and the reference document
+/// alone says how big a reference pixel is.
 ///
 /// **Not a hard cap on dab footprint.** `effective_size` (= the
 /// `pen_input.size` base knob × the terminal's per-touch `size`

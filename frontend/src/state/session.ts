@@ -34,8 +34,12 @@ export async function createHandle(
     canvas: HTMLCanvasElement,
     docWidth: number,
     docHeight: number,
+    dpi: number | null = null,
 ): Promise<Engine> {
     const session = await getSession();
-    const handle = await session.createHandle(canvas, docWidth, docHeight);
+    // `null` means auto DPI: the engine derives it from the pixel size so the
+    // document has the reference's physical area. wasm-bindgen types the
+    // Rust `Option<f32>` as `number | null | undefined`.
+    const handle = await session.createHandle(canvas, docWidth, docHeight, dpi ?? undefined);
     return new Engine(handle);
 }

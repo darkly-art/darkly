@@ -69,14 +69,14 @@ pub fn register() -> BrushNodeRegistration {
                     .with_value(InputValue::String(String::new()))
                     .with_label("Texture")
                     .with_description("Name of the picture in the brush bundle to sample."),
-                // Feature size in canvas pixels. A per-dab-computable scalar,
+                // Feature size in reference pixels. A per-dab-computable scalar,
                 // so it's wirable (drive it from pressure, a curve, etc.).
                 PortDef::input("scale", BrushWireType::Scalar)
                     .with_range(1.0, 4096.0, 512.0)
                     .with_natural_range(1.0, 4096.0)
                     .with_label("Scale")
                     .with_unit(UnitType::Pixels)
-                    .with_description("Base feature size in canvas pixels."),
+                    .with_description("Base feature size in reference pixels."),
                 // A tip picture rides the stamp, so Dab is the default; Canvas
                 // is offered for tiling a picture as a fixed canvas texture.
                 PortDef::input("space", BrushWireType::Enum)

@@ -17,11 +17,11 @@ const PREFS: &[Pref] = &[
     },
     Pref {
         key: "canvas.dpi",
-        display_name: "Default resolution (DPI)",
+        display_name: "Default DPI",
         description: Some(
-            "Pixels per inch for new documents: how big the canvas is meant to be in print. \
-             Brushes read it through the Document Settings node, so grain and texture keep \
-             their physical size across resolutions.",
+            "Pixels per inch prefilled when a new document's DPI is set by hand. Auto DPI, \
+             the default, derives it from the pixel size instead, so nothing else reads \
+             this value.",
         ),
         kind: PrefKind::Float {
             min: 1.0,
@@ -42,7 +42,7 @@ pub fn register() -> SchemaSection {
     SchemaSection {
         id: "canvas",
         display_name: "Canvas",
-        description: Some("Default dimensions, resolution and background for new documents."),
+        description: Some("Default dimensions, DPI and background for new documents."),
         icon: Some("fa6-solid:vector-square"),
         order: 10,
         prefs: PREFS,

@@ -1,7 +1,7 @@
 //! Undo action for canvas-geometry edits that resample or permute every
 //! pixel-bearing node: **image rescale** (Photoshop "Image Size") and **canvas
-//! flip / rotate**. It also carries the document's resolution, which rides the
-//! rescale factor and is swapped in the same step, so a resolution change is
+//! flip / rotate**. It also carries the document's DPI, which rides the
+//! rescale factor and is swapped in the same step, so a DPI change is
 //! never a second undo entry: both reference editors bundle the two the same
 //! way (Krita applies `KisImageSetResolutionCommand` inside `scaleImage`'s
 //! applicator; GIMP's Scale Image opens one undo group around both).
@@ -45,10 +45,10 @@ pub struct CanvasGeometryAction {
     /// (which keep the window put); recentred by rotate-90 (GIMP offset rule).
     old_origin: CanvasPoint,
     new_origin: CanvasPoint,
-    /// Document resolution in pixels per inch. Equal old/new for flips and
-    /// rotates (which change no physical extent) and for a bare
-    /// `set_document_dpi` (which changes nothing else); scaled by the
-    /// resample factor for image rescale.
+    /// Document DPI in pixels per inch. Equal old/new for flips and rotates
+    /// (which change no physical extent); scaled by the resample factor for
+    /// image rescale, or installed outright by a DPI-only `rescale_image`
+    /// (which changes nothing else).
     old_dpi: f32,
     new_dpi: f32,
     /// Per pixel-bearing node: `(id, old_extent, new_extent)`. The bounds swap

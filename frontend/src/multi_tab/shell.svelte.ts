@@ -73,8 +73,14 @@ class MultiTabShell {
      *  for this tab only; it's used by the Open flow when the source file
      *  has its own intrinsic dimensions (a `.png` opens as a new tab
      *  sized to the image; a `.darkly` ignores this and lets the
-     *  loader's internal resize take over). */
-    open(name?: string, dims?: { width: number; height: number }): DarklyInstance {
+     *  loader's internal resize take over).
+     *
+     *  `dims.dpi` is the artist's DPI from the New Document dialog; omitted
+     *  or `null` derives it from the pixel size. */
+    open(
+        name?: string,
+        dims?: { width: number; height: number; dpi?: number | null },
+    ): DarklyInstance {
         const inst = new DarklyInstance();
         inst.pendingName = name ?? `Untitled ${this.nextSerial++}`;
         if (dims) inst.pendingDims = dims;

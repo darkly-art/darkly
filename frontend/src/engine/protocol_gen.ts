@@ -884,7 +884,7 @@ export type RemoveLayersReq = { ids: Array<number>, };
 
 export type RemoveMaskReq = { id: number, };
 
-export type RescaleImageReq = { new_width: number, new_height: number, };
+export type RescaleImageReq = { new_width: number, new_height: number, dpi: number | null, };
 
 export type ResizeCanvasRectReq = { origin_x: number, origin_y: number, w: number, h: number, };
 
@@ -911,8 +911,6 @@ export type SetBlendModeReq = { id: number, type_id: string, };
 export type SetBrushBlendModeReq = { mode: number, };
 
 export type SetCloneSourceReq = { x: number, y: number, layer: number | null, };
-
-export type SetDocumentDpiReq = { dpi: number, };
 
 export type SetDocumentNameReq = { name: string, };
 
@@ -1164,7 +1162,6 @@ export type RequestKind =
     | 'set_brush_blend_mode'
     | 'set_clone_overlay'
     | 'set_clone_source'
-    | 'set_document_dpi'
     | 'set_document_name'
     | 'set_filter_params'
     | 'set_group_collapsed'
@@ -1365,7 +1362,6 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_brush_blend_mode',
     'set_clone_overlay',
     'set_clone_source',
-    'set_document_dpi',
     'set_document_name',
     'set_filter_params',
     'set_group_collapsed',
@@ -1574,7 +1570,6 @@ export interface EngineApi {
     setBrushBlendMode(req: SetBrushBlendModeReq): void;
     setCloneOverlay(req: SetOverlayReq): void;
     setCloneSource(req: SetCloneSourceReq): void;
-    setDocumentDpi(req: SetDocumentDpiReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setFilterParams(req: SetFilterParamsReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
@@ -1777,7 +1772,6 @@ export function makeApi(t: Transport): EngineApi {
         setBrushBlendMode: (req) => t.postFF('set_brush_blend_mode', req),
         setCloneOverlay: (req) => t.postFF('set_clone_overlay', req),
         setCloneSource: (req) => t.postFF('set_clone_source', req),
-        setDocumentDpi: (req) => t.postFF('set_document_dpi', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setFilterParams: (req) => t.postFF('set_filter_params', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),

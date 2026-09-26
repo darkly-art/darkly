@@ -12,6 +12,7 @@ use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::coord::CanvasRect;
+use crate::document::canvas_per_reference_px;
 use crate::gpu::layer_readback;
 use crate::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use crate::gpu::region_store::UndoRegionEntry;
@@ -48,7 +49,10 @@ impl DarklyEngine {
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        crate::brush::nodes::brush_settings::spacing_config(&brush.graph)
+        crate::brush::nodes::brush_settings::spacing_config(
+            &brush.graph,
+            canvas_per_reference_px(self.doc.dpi),
+        )
     }
 
     /// Read the active brush's base size from its `brush_settings.size` knob
@@ -1208,6 +1212,7 @@ impl DarklyEngine {
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
                         view_rotation: self.view_params.rotation,
+                        dpi_factor: canvas_per_reference_px(self.doc.dpi),
                         perf: BrushPerfCounters::default(),
                         stroke: Some(StrokeResources {
                             scratch,
@@ -1416,6 +1421,7 @@ impl DarklyEngine {
                     canvas_origin: [self.doc.canvas_origin.x, self.doc.canvas_origin.y],
                     blend_mode: self.brush_blend_mode,
                     view_rotation: self.view_params.rotation,
+                    dpi_factor: canvas_per_reference_px(self.doc.dpi),
                     perf: BrushPerfCounters::default(),
                     // No stroke buffer in this defensive fallback: `move_to`
                     // only updates stabilizer state and never reaches into

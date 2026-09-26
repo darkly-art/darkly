@@ -112,24 +112,64 @@ impl Entity {
     }
 }
 
-/// Resolution a fresh document starts at, and the reference
-/// [`Document::dpi`] divides by to produce the `document_settings` node's
-/// `dpi_scale`, so a default document reports a scale of exactly 1.0 and no
-/// brush changes appearance until the artist changes the DPI.
+/// Physical area of the **reference document**, the one physical anchor in
+/// the system: 1920x1080 pixels shown on a 22-inch 16:9 monitor, so 19.2 by
+/// 10.8 inches, 207.36 square inches.
 ///
-/// Because a brush file can wire `dpi_scale`, this constant is part of the
-/// brush format's contract: moving it silently rescales every brush that
-/// reads it. 300 matches GIMP (`app/core/gimptemplate.c` DEFAULT_RESOLUTION)
-/// and Krita (`libs/ui/kis_config.cc` defImageResolution), so there is no
-/// reason to move it.
-pub const DEFAULT_DPI: f32 = 300.0;
+/// Every other physical quantity is derived from this. A 1080p document is,
+/// physically, a monitor, and a monitor-sized image doubles as a
+/// poster-sized print, so the default document's feel is what anchors the
+/// system rather than a paper convention.
+pub const REFERENCE_AREA_SQ_IN: f32 = 19.2 * 10.8;
+
+/// DPI of the reference document: `sqrt(1920 * 1080 / REFERENCE_AREA_SQ_IN)`,
+/// which is exactly 100. Not chosen; it falls out of [`REFERENCE_AREA_SQ_IN`].
+///
+/// A **reference pixel** is a pixel of that document, and it is the unit the
+/// brush graph computes in: [`crate::brush::DAB_REFERENCE_SIZE`] and every
+/// `UnitType::Pixels` port is a reference-pixel length, converted to canvas
+/// pixels once by [`canvas_per_reference_px`] at the boundary where a graph
+/// value becomes a dab footprint, a spacing distance or a sample coordinate.
+///
+/// Written as the literal rather than computed: an `f32` square root of that
+/// quotient is not bit-exact, so a computed constant would make the factor at
+/// the reference `1.0` plus or minus an ulp instead of exactly `1.0`. The
+/// derivation is pinned by a test.
+pub const REFERENCE_DPI: f32 = 100.0;
+
+/// Rounding grid for [`auto_dpi`], and its floor (one step). Rounding moves a
+/// document's physical size by a few percent at most, which is invisible in
+/// the brush, and the floor keeps very small documents off zero.
+const AUTO_DPI_STEP: f32 = 50.0;
+
+/// DPI a new document of this pixel size gets when the artist has not named
+/// one: the value that gives it the reference document's physical area,
+/// rounded to the nearest [`AUTO_DPI_STEP`] and floored at one step.
+///
+/// This is what makes a brush behave the same on any document without the
+/// artist thinking about DPI: every auto document is the same physical size,
+/// so the ratio of mark to artwork is the same on all of them.
+pub fn auto_dpi(width: u32, height: u32) -> f32 {
+    let derived = ((width as f32 * height as f32) / REFERENCE_AREA_SQ_IN).sqrt();
+    ((derived / AUTO_DPI_STEP).round() * AUTO_DPI_STEP).max(AUTO_DPI_STEP)
+}
+
+/// Canvas pixels per reference pixel for a document at `dpi`: the one
+/// reference-to-canvas factor, and the only place the ratio is written.
+///
+/// Applied at the boundary sites (dab footprint, spacing distance, shader
+/// sample coordinate) and nowhere else: inside the graph a length is a
+/// reference pixel, past the boundary it is a canvas pixel.
+pub fn canvas_per_reference_px(dpi: f32) -> f32 {
+    dpi / REFERENCE_DPI
+}
 
 /// Lower bound on [`Document::dpi`]. Both reference editors reject rather
-/// than clamp an out-of-band resolution (`gimp_image_set_resolution` returns
+/// than clamp an out-of-band DPI (`gimp_image_set_resolution` returns
 /// early, `KisImage::setResolution` warns and ignores), and so does
-/// `set_document_dpi`. Our band is narrower than GIMP's `5e-3 .. 1048576`
-/// because GIMP has a unit system in which sub-1 resolutions are meaningful
-/// and Darkly does not.
+/// `rescale_image` for an explicitly passed value. Our band is narrower than
+/// GIMP's `5e-3 .. 1048576` because GIMP has a unit system in which sub-1
+/// DPIs are meaningful and Darkly does not.
 pub const MIN_DPI: f32 = 1.0;
 
 /// Upper bound on [`Document::dpi`]. See [`MIN_DPI`].
@@ -157,17 +197,16 @@ pub struct Document {
     /// Serialized beside `width`/`height`; undoable via `CanvasResizeAction`.
     pub canvas_origin: CanvasPoint,
 
-    /// Canvas resolution in pixels per inch: how many pixels of this
-    /// document make up one physical inch. Describes the document's intended
-    /// physical size; it never resamples pixels and nothing in the
-    /// compositor mirrors it. Serialized beside `width`/`height`; undoable
-    /// through the shared [`CanvasGeometryAction`], alongside dims and
-    /// origin, and carried by image rescale so resampling preserves the
-    /// document's physical extent.
+    /// Pixels per inch: how many pixels of this document make up one
+    /// physical inch. Describes the document's intended physical size; it
+    /// never resamples pixels and nothing in the compositor mirrors it.
+    /// Serialized beside `width`/`height`; undoable through the shared
+    /// [`CanvasGeometryAction`], alongside dims and origin, and carried by
+    /// image rescale so resampling preserves the document's physical extent.
     ///
-    /// Read by the brush graph through the `document_settings` node, so a
-    /// brush can size grain, spacing or a stamp in physical terms and have
-    /// it hold across canvas resolutions.
+    /// Read by the brush runner as the reference-to-canvas factor
+    /// ([`canvas_per_reference_px`]), so every brush keeps its physical size
+    /// on this document whatever its pixel dimensions.
     ///
     /// [`CanvasGeometryAction`]: crate::undo::CanvasGeometryAction
     pub dpi: f32,
@@ -232,6 +271,10 @@ pub struct Document {
 }
 
 impl Document {
+    /// A bare document at the reference DPI, so its reference-to-canvas
+    /// factor is exactly 1.0 and brush constants read in canvas pixels
+    /// unchanged. The engine constructors install the artist's DPI or the
+    /// derived one ([`auto_dpi`]); the loader installs the manifest's.
     pub fn new(width: u32, height: u32) -> Self {
         let mut entities: SlotMap<LayerId, Entity> = SlotMap::with_key();
         // Allocate the root with a placeholder id, then patch the id after
@@ -245,7 +288,7 @@ impl Document {
             width,
             height,
             canvas_origin: CanvasPoint::new(0, 0),
-            dpi: DEFAULT_DPI,
+            dpi: REFERENCE_DPI,
             dirty: false,
             revision: 0,
             entities,
@@ -2026,5 +2069,43 @@ mod tests {
         assert!(doc.find_filter(mask).is_none());
         assert!(doc.filters_of(host).is_empty());
         assert!(doc.find_node(host).is_some());
+    }
+
+    #[test]
+    fn auto_dpi_rounds_to_the_step_with_a_floor() {
+        assert_eq!(auto_dpi(1920, 1080), 100.0);
+        assert_eq!(auto_dpi(2480, 3508), 200.0);
+        assert_eq!(auto_dpi(3840, 2160), 200.0);
+        assert_eq!(auto_dpi(5000, 5000), 350.0);
+        assert_eq!(auto_dpi(4096, 4096), 300.0);
+        // Below the floor the "same physical area" rule bends rather than
+        // handing a tiny document a DPI near zero.
+        assert_eq!(auto_dpi(500, 500), AUTO_DPI_STEP);
+        assert_eq!(auto_dpi(100, 100), AUTO_DPI_STEP);
+        assert_eq!(auto_dpi(1, 1), AUTO_DPI_STEP);
+    }
+
+    #[test]
+    fn reference_document_derives_the_reference_dpi() {
+        // The literal is pinned to the one physical anchor: the reference
+        // document's own pixel count over its area is the reference DPI.
+        let derived = ((1920.0 * 1080.0) / REFERENCE_AREA_SQ_IN).sqrt();
+        assert!(
+            (derived - REFERENCE_DPI).abs() < 1e-3,
+            "derived {derived} should be the reference DPI"
+        );
+        assert_eq!(auto_dpi(1920, 1080), REFERENCE_DPI);
+    }
+
+    #[test]
+    fn factor_is_one_at_the_reference() {
+        assert_eq!(canvas_per_reference_px(REFERENCE_DPI), 1.0);
+        assert_eq!(canvas_per_reference_px(200.0), 2.0);
+        assert_eq!(canvas_per_reference_px(25.0), 0.25);
+    }
+
+    #[test]
+    fn a_fresh_document_is_a_reference_pixel_document() {
+        assert_eq!(Document::new(64, 64).dpi, REFERENCE_DPI);
     }
 }

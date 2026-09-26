@@ -184,7 +184,9 @@ impl BrushStrokePreviewRenderer {
         // Spacing comes from the graph's brush_settings node (same source
         // the real stroke uses) so scrubbing the spacing slider actually
         // moves the dabs in the preview.
-        let spacing = brush_settings::spacing_config(graph);
+        // Previews render at the reference, so the authored spacing floor
+        // needs no conversion.
+        let spacing = brush_settings::spacing_config(graph, 1.0);
         // Dab previews render at a fixed, larger canonical size than the brush's
         // own `brush_settings.size` so the rasterized tip carries enough detail
         // to survive the crop-and-downscale to the thumbnail. The stroke
@@ -213,13 +215,13 @@ impl BrushStrokePreviewRenderer {
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),
-            // Previews show brush identity, not momentary document state, so
-            // they render at the reference resolution whatever the focused
+            // Previews show brush identity, not momentary document state,
+            // and a brush's identity is its reference-pixel tuning, so they
+            // render at the reference (factor 1.0) whatever the focused
             // document's DPI is. Same reasoning that pins `view_rotation` to
             // 0.0 below, and it keeps the global brush library's thumbnail
-            // cache independent of which tab is focused. Krita's
-            // `KisImageResolutionProxy::identity()` exists for this.
-            crate::document::DEFAULT_DPI,
+            // cache independent of which tab is focused.
+            crate::document::REFERENCE_DPI,
         );
         if clone_source_anchor.is_some() {
             // The snapshot being sampled is the pre-stroke, which covers the
@@ -262,6 +264,10 @@ impl BrushStrokePreviewRenderer {
                     // S-curve preview shouldn't shift orientation when the
                     // artist happens to rotate the canvas while editing.
                     view_rotation: 0.0,
+                    // Previews show brush identity, which is its
+                    // reference-pixel tuning, so they render at the
+                    // reference whatever the focused document's DPI.
+                    dpi_factor: 1.0,
                     perf: BrushPerfCounters::default(),
                     // Preview render target is canvas-aligned RGBA8.
                     stroke: Some(StrokeResources {

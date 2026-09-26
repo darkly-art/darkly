@@ -2,14 +2,18 @@
 //! landing in, so a brush can size itself against the artwork rather than the
 //! pixel grid.
 //!
-//! The one member today is `dpi_scale`, the document's resolution relative to
-//! [`DEFAULT_DPI`]. Multiply an authored pixel number by it and that number
-//! keeps its *physical* size on any canvas: a paper grain authored as 2.5 px
-//! at the reference resolution renders 2.5 px on a 300 DPI document and 10 px
-//! on a 1200 DPI one, and the two print identically. Because the denominator
-//! is the same constant a fresh document starts at, `dpi_scale` is exactly
-//! 1.0 until the artist changes the DPI, so wiring this node into a shipped
-//! brush changes nothing about how it currently paints.
+//! The one member today is `dpi_scale`: the document's DPI over
+//! [`REFERENCE_DPI`], which is the same reference-to-canvas factor the brush
+//! runner applies at the boundary. It is exactly 1.0 on a reference-sized
+//! document.
+//!
+//! Because every `UnitType::Pixels` port is *already* a reference-pixel
+//! length that the runner converts, an authored pixel number already keeps
+//! its physical size with no wiring at all. So the useful uses of this port
+//! are the inverse ones: divide a reference length by `dpi_scale` to pin it
+//! to the canvas pixel grid instead of the artwork, or scale a `Raw`
+//! quantity that carries no unit of its own and therefore never crosses the
+//! boundary.
 //!
 //! **Admission rule**, so this does not become a junk drawer: a port belongs
 //! here if and only if it is (a) a scalar derived from [`Document`] state
@@ -17,7 +21,9 @@
 //! brush without the brush knowing which document it is in. Canvas width and
 //! height pass, and are the obvious next members; when they land they must
 //! read [`crate::brush::wgsl::IntrinsicUniforms::canvas_size`], which already
-//! carries them to the shader, rather than packing a second copy. Layer
+//! carries them to the shader, rather than packing a second copy. That is
+//! exactly what `dpi_scale` does with
+//! [`crate::brush::wgsl::IntrinsicUniforms::dpi_factor`]. Layer
 //! count, active layer id and selection bounds all fail (b) or (c).
 //!
 //! Unlike [`super::paint_color`] and [`super::brush_settings`], this node is
@@ -27,15 +33,13 @@
 //! uniform packer with no central edit.
 //!
 //! [`Document`]: crate::document::Document
-
-use std::sync::Arc;
+//! [`REFERENCE_DPI`]: crate::document::REFERENCE_DPI
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl, UniformField, WgslType};
+use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
-use crate::document::DEFAULT_DPI;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub const TYPE_ID: &str = "document_settings";
@@ -58,8 +62,9 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dpi_scale", BrushWireType::Scalar)
                     .with_unit(UnitType::Raw)
                     .with_description(
-                        "Document resolution relative to the 300 DPI reference. Multiply a \
-                         pixel-sized value by this and it keeps its physical size on any canvas.",
+                        "The document's DPI divided by the reference DPI (100). Pixel-sized \
+                         ports already keep their physical size on any document; divide by \
+                         this to pin a length to the canvas pixel grid instead.",
                     ),
             ],
             is_gpu: false,
@@ -78,33 +83,22 @@ impl BrushNodeEvaluator for DocumentSettingsEvaluator {
     /// load-bearing, not decorative: a DPI-driven size reaches `dab_size`,
     /// which the stroke engine reads for spacing and save-point bboxes.
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        vec![(
-            "dpi_scale".into(),
-            ScalarValue::Scalar(ctx.dpi() / DEFAULT_DPI),
-        )]
+        vec![("dpi_scale".into(), ScalarValue::Scalar(ctx.dpi_factor()))]
     }
 
-    /// The document's resolution is constant for every dab, so it goes into
-    /// the uniform buffer (one copy per stroke), not the per-dab record. Only
-    /// emitted if a downstream node consumes it, so an unwired node costs
-    /// nothing.
+    /// The shader already carries this number: the sample-coordinate emitter
+    /// needs it at the GPU boundary, so it rides in
+    /// [`crate::brush::wgsl::IntrinsicUniforms::dpi_factor`]. This node reads
+    /// that field rather than packing a parallel uniform of its own, which
+    /// would be the same fact in two places. Nothing to emit, so an unwired
+    /// node costs nothing either way.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("dpi_scale") {
             return Ok(wgsl);
         }
-        let field_name = cctx.uniform_field_name("dpi_scale");
-        let key = field_name.clone();
-        wgsl.uniform_fields.push(UniformField {
-            name: field_name.clone(),
-            ty: WgslType::F32,
-            pack: Arc::new(move |outputs, bytes| {
-                let v = outputs.get(&key).map(|s| s.as_f32()).unwrap_or(1.0);
-                bytes.extend_from_slice(bytemuck::bytes_of(&v));
-            }),
-        });
         wgsl.outputs
-            .insert("dpi_scale".into(), format!("u.{field_name}"));
+            .insert("dpi_scale".into(), "u.intrinsic.dpi_factor".into());
         Ok(wgsl)
     }
 }

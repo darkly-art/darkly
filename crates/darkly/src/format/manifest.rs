@@ -138,15 +138,15 @@ pub struct ManifestCanvas {
     pub origin_x: i32,
     #[serde(default)]
     pub origin_y: i32,
-    /// Canvas resolution in pixels per inch (`Document::dpi`). Pre-release:
-    /// no migration; older files without this field load at
-    /// [`crate::document::DEFAULT_DPI`].
+    /// Canvas DPI in pixels per inch (`Document::dpi`). Pre-release: no
+    /// migration; older files without this field load at
+    /// [`crate::document::REFERENCE_DPI`].
     #[serde(default = "default_dpi")]
     pub dpi: f32,
 }
 
 fn default_dpi() -> f32 {
-    crate::document::DEFAULT_DPI
+    crate::document::REFERENCE_DPI
 }
 
 /// Inventory of every modular `type_id` the file uses, keyed by registry.
@@ -280,7 +280,7 @@ mod tests {
                 height: 2048,
                 origin_x: 0,
                 origin_y: 0,
-                dpi: crate::document::DEFAULT_DPI,
+                dpi: crate::document::REFERENCE_DPI,
             },
             requires: ManifestRequires {
                 effect: vec!["grain".into()],

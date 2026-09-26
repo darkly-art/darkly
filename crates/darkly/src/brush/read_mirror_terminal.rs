@@ -342,9 +342,17 @@ pub fn read_mirror_pipeline_reg(id: &'static str) -> BrushPipelineRegistration {
 /// positive area. Shared by every terminal: `paint` and `watercolor`
 /// delegate to it, and the read-mirror terminals (blur/smudge/liquify) call
 /// it through this module.
+///
+/// This product is **the** reference-to-canvas boundary for the dab
+/// footprint. `SIZE_REFERENCE_PX` is a reference-pixel length, so
+/// [`EvalContext::dpi_factor`] converts it here, once, for every terminal;
+/// the lengths terminals derive from the result (blur's `blur_px`,
+/// liquify's read half-width) are canvas pixels and scale for free. The
+/// 0.5 floor sits outside the product because it is a raster constant: half
+/// a pixel is half a pixel at any DPI.
 pub fn effective_radius(ctx: &EvalContext) -> f32 {
     let modulation = ctx.input_f32("size").max(0.0);
-    (ctx.base_size() * modulation * SIZE_REFERENCE_PX * 0.5).max(0.5)
+    (ctx.base_size() * modulation * SIZE_REFERENCE_PX * ctx.dpi_factor() * 0.5).max(0.5)
 }
 
 /// Insert a per-dab value into `dab_batch.slot_outputs` under this node's
@@ -720,6 +728,14 @@ mod tests {
     use crate::nodegraph::{NodeId, PortDef};
 
     fn ctx_with<'a>(port_defs: &'a [PortDef<BrushWireType>], base_size: f32) -> EvalContext<'a> {
+        ctx_at_dpi(port_defs, base_size, crate::document::REFERENCE_DPI)
+    }
+
+    fn ctx_at_dpi<'a>(
+        port_defs: &'a [PortDef<BrushWireType>],
+        base_size: f32,
+        dpi: f32,
+    ) -> EvalContext<'a> {
         static TEST_NODE_ID: std::sync::OnceLock<NodeId> = std::sync::OnceLock::new();
         EvalContext {
             input_slots: &[],
@@ -730,7 +746,7 @@ mod tests {
             dab_index: 0,
             base_size,
             dabs_per_pass: 1.0,
-            dpi: crate::document::DEFAULT_DPI,
+            dpi,
             node_id: TEST_NODE_ID.get_or_init(|| NodeId("test".into())),
         }
     }
@@ -763,5 +779,43 @@ mod tests {
         // Floor at 0.5 px so a zero-size dab still has positive area.
         let mod_zero = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0)];
         assert_eq!(effective_radius(&ctx_with(&mod_zero, 0.0)), 0.5);
+    }
+
+    /// The dab footprint is the reference-to-canvas boundary: the same brush
+    /// on a document at twice the reference DPI must cover twice as many
+    /// canvas pixels, so it keeps its physical size. The 0.5 floor is a
+    /// raster constant and stays put, because half a pixel is half a pixel
+    /// at any DPI.
+    #[test]
+    fn effective_radius_applies_the_dpi_factor_before_the_floor() {
+        let ref_px = crate::brush::DAB_REFERENCE_SIZE as f32;
+        let ports = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 1.0)];
+        let reference = crate::document::REFERENCE_DPI;
+
+        for base in [0.1_f32, 0.3, 2.0] {
+            let at_reference = effective_radius(&ctx_at_dpi(&ports, base, reference));
+            let doubled = effective_radius(&ctx_at_dpi(&ports, base, reference * 2.0));
+            let quartered = effective_radius(&ctx_at_dpi(&ports, base, reference / 4.0));
+            assert!(
+                (at_reference - base * ref_px * 0.5).abs() < 1e-3,
+                "base {base}: the reference document must be unchanged, got {at_reference}"
+            );
+            assert!(
+                (doubled - 2.0 * at_reference).abs() < 1e-3,
+                "base {base}: twice the DPI must be twice the radius, got {doubled}"
+            );
+            assert!(
+                (quartered - at_reference / 4.0).abs() < 1e-3,
+                "base {base}: a quarter the DPI must be a quarter the radius, got {quartered}"
+            );
+        }
+
+        // The floor does not scale: it is a raster constant, not an artwork
+        // length.
+        let zero = [PortDef::input("size", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0)];
+        assert_eq!(
+            effective_radius(&ctx_at_dpi(&zero, 0.0, reference * 12.0)),
+            0.5
+        );
     }
 }

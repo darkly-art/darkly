@@ -423,9 +423,11 @@ use crate::layer::LayerId;
 /// the new variant.
 fn populate_kitchen_sink(engine: &mut DarklyEngine) {
     engine.set_document_name("Kitchen Sink".to_string());
-    // A non-default resolution, so the round trip proves the field is written
-    // and read rather than both ends landing on the same default.
-    engine.set_document_dpi(150.0);
+    // A non-default DPI, so the round trip proves the field is written and
+    // read rather than both ends landing on the same default. Dimensions
+    // unchanged, which makes this a DPI-only edit.
+    let (w, h) = (engine.doc.width, engine.doc.height);
+    engine.rescale_image(w, h, Some(150.0));
 
     // One raster layer per blend mode, named after the mode for
     // diagnosability if a single mode regresses.
@@ -576,7 +578,7 @@ fn assert_documents_equivalent(a: &Document, b: &Document) {
 }
 
 /// A manifest written before `dpi` existed has no `dpi` key, and must load at
-/// the reference resolution rather than 0. Pre-release: a serde field default,
+/// the reference DPI rather than 0. Pre-release: a serde field default,
 /// not a migration.
 #[test]
 fn manifest_canvas_without_dpi_defaults_to_the_reference() {
@@ -584,7 +586,7 @@ fn manifest_canvas_without_dpi_defaults_to_the_reference() {
         serde_json::from_str(r#"{"width":64,"height":48}"#).expect("legacy canvas block parses");
     assert_eq!(canvas.width, 64);
     assert_eq!(canvas.height, 48);
-    assert_eq!(canvas.dpi, crate::document::DEFAULT_DPI);
+    assert_eq!(canvas.dpi, crate::document::REFERENCE_DPI);
 }
 
 #[test]
@@ -1060,7 +1062,7 @@ fn synth_minimal_manifest() -> Manifest {
             height: 4,
             origin_x: 0,
             origin_y: 0,
-            dpi: crate::document::DEFAULT_DPI,
+            dpi: crate::document::REFERENCE_DPI,
         },
         requires: ManifestRequires {
             layer_kind: vec!["group".to_string()],

@@ -120,7 +120,7 @@ impl DarklyEngine {
             old_origin,
             new_origin,
             // A flip or rotate permutes pixels without changing how many
-            // cover an inch, so the resolution rides through unchanged.
+            // cover an inch, so the DPI rides through unchanged.
             self.doc.dpi,
             self.doc.dpi,
             bounds,

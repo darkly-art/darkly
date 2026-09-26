@@ -58,10 +58,11 @@ pub struct EvalContext<'a> {
     /// per *pass* rather than per dab; see
     /// [`super::wgsl::IntrinsicUniforms::dabs_per_pass`].
     pub dabs_per_pass: f32,
-    /// The document's resolution in pixels per inch, so a brush can size
-    /// itself against the document's physical extent rather than the pixel
-    /// grid. Stroke-constant, seeded from `Document::dpi` by
-    /// [`BrushGraphRunner::set_dpi`]; read by the `document_settings` node.
+    /// The document's DPI, so a brush can size itself against the
+    /// document's physical extent rather than the pixel grid.
+    /// Stroke-constant, seeded from `Document::dpi` by
+    /// [`BrushGraphRunner::set_dpi`]; the runner converts graph lengths to
+    /// canvas pixels with it at the boundary sites.
     pub dpi: f32,
     /// This node instance's ID (used to salt PRNG for independence).
     pub node_id: &'a NodeId,
@@ -103,9 +104,16 @@ impl EvalContext<'_> {
         self.dabs_per_pass.max(1.0)
     }
 
-    /// The document's resolution in pixels per inch (see the field).
+    /// The document's DPI (see the field).
     pub fn dpi(&self) -> f32 {
         self.dpi
+    }
+
+    /// Canvas pixels per reference pixel for this stroke's document: the
+    /// factor a reference-pixel graph length is multiplied by at the
+    /// boundary where it becomes a canvas-pixel quantity.
+    pub fn dpi_factor(&self) -> f32 {
+        crate::document::canvas_per_reference_px(self.dpi)
     }
 
     /// O(1) curve lookup using the precomputed LUT.
@@ -496,9 +504,11 @@ pub struct BrushGraphRunner {
     paint_color_slot: Option<usize>,
     /// Pre-resolved slot index of `brush_settings.size`'s source output.
     /// Seeded per dab in `seed_sensors` with the base size projected to
-    /// canvas pixels (`base_size * DAB_REFERENCE_SIZE`, the brush
-    /// *diameter*), so the graph signal is a pixel-domain quantity like
-    /// `pen_input.position`. This is why `brush_settings` is skipped in
+    /// **reference** pixels (`base_size * DAB_REFERENCE_SIZE`, the brush
+    /// *diameter*), so the graph signal is a pixel-domain quantity like the
+    /// `Pixels` ports it is wired into; the conversion to canvas pixels
+    /// happens once, past the graph, at the boundary sites. This is why
+    /// `brush_settings` is skipped in
     /// `execute_cpu`'s generic settable-source republish (which would
     /// otherwise overwrite it with the raw normalized knob value): the
     /// projection lives here, at the one seeding point, keeping the CPU
@@ -537,12 +547,12 @@ pub struct BrushGraphRunner {
     /// by [`Self::set_dabs_per_pass`]. Threaded into every `EvalContext`;
     /// terminals read it via [`EvalContext::dabs_per_pass`].
     dabs_per_pass: f32,
-    /// The document's resolution in pixels per inch, set once per stroke by
-    /// [`Self::set_dpi`]. Threaded into every `EvalContext`, where the
-    /// `document_settings` node divides it by
-    /// [`crate::document::DEFAULT_DPI`] to publish `dpi_scale`. Defaults to
-    /// that same constant, so a runner built outside a document (the brush
-    /// editor preview, tests) renders at a scale of exactly 1.0.
+    /// The document's DPI, set once per stroke by [`Self::set_dpi`].
+    /// Threaded into every `EvalContext`, and divided by
+    /// [`crate::document::REFERENCE_DPI`] to give the reference-to-canvas
+    /// factor. Defaults to the reference, so a runner built outside a
+    /// document (the brush editor preview, tests) works at a factor of
+    /// exactly 1.0.
     dpi: f32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
     /// the graph terminates in `paint`. `None` for per-dab
@@ -713,7 +723,7 @@ impl BrushGraphRunner {
             // per stroke via `set_base_size`.
             base_size: brush_settings::base_size(graph),
             dabs_per_pass: 1.0,
-            dpi: crate::document::DEFAULT_DPI,
+            dpi: crate::document::REFERENCE_DPI,
             compiled: None,
         })
     }
@@ -735,13 +745,21 @@ impl BrushGraphRunner {
         self.dabs_per_pass = dabs_per_pass;
     }
 
-    /// Publish the document's resolution in pixels per inch. Call once before
-    /// the first dab; the `document_settings` node divides it by
-    /// [`crate::document::DEFAULT_DPI`] to publish `dpi_scale`. Left at that
-    /// constant when nobody calls it, so a runner with no document behind it
-    /// (the brush editor preview, tests) renders at a scale of 1.0.
+    /// Publish the document's DPI. Call once before the first dab; the
+    /// factor derived from it ([`Self::dpi_factor`]) is applied at the
+    /// boundary sites where a graph length becomes a canvas-pixel quantity.
+    /// Left at [`crate::document::REFERENCE_DPI`] when nobody calls it, so a
+    /// runner with no document behind it (the brush editor preview, tests)
+    /// works at a factor of 1.0.
     pub fn set_dpi(&mut self, dpi: f32) {
         self.dpi = dpi;
+    }
+
+    /// Canvas pixels per reference pixel for this stroke's document. The
+    /// boundary sites multiply by this to leave the graph's reference-pixel
+    /// domain; nothing inside the graph sees it.
+    pub fn dpi_factor(&self) -> f32 {
+        crate::document::canvas_per_reference_px(self.dpi)
     }
 
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
@@ -892,11 +910,13 @@ impl BrushGraphRunner {
             self.slots[slot] = Some(ScalarValue::Vec4(color));
         }
 
-        // Seed the `brush_settings.size` graph signal in canvas pixels: the
-        // stroke's base size projected to the brush diameter. Downstream nodes
-        // (noise.scale, math) then operate in the same pixel domain as their
-        // sinks, so a `× 1` gain is a true no-op and feature size tracks the
-        // brush directly.
+        // Seed the `brush_settings.size` graph signal in **reference**
+        // pixels: the stroke's base size projected to the brush diameter.
+        // No DPI factor belongs here. Downstream nodes (noise.scale, math)
+        // operate in the same reference-pixel domain as their sinks, so a
+        // `× 1` gain is a true no-op and feature size tracks the brush
+        // directly; the single conversion to canvas pixels happens past the
+        // graph, at the boundary sites.
         if let Some(slot) = self.brush_settings_size_slot {
             let size_px = self.base_size * DAB_REFERENCE_SIZE as f32;
             self.slots[slot] = Some(ScalarValue::Scalar(size_px));
