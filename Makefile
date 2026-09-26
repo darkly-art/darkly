@@ -5,6 +5,7 @@
 #
 #   make tools deps     # once: the wasm-bindgen CLI, then node_modules
 #   make                # build the desktop app bundle
+#   make frontend       # or only the web app, into frontend/dist
 #   make install DESTDIR="$pkgdir" PREFIX=/usr
 #
 # Offline except `tools`, `deps`, and `bundle`, which fetches the Electron zip
@@ -13,6 +14,7 @@
 # command line.
 
 PROFILE      ?= release
+MODE         ?= app
 FEATURES     ?=
 WASM_BINDGEN ?= wasm-bindgen
 WASM_OPT     ?= wasm-opt
@@ -44,6 +46,16 @@ else
   $(error PROFILE must be release or dev, not '$(PROFILE)')
 endif
 
+# The frontend's deploy flavor, Vite's `--mode`: `app` is the plain editor,
+# `demo` the decorative demo.darkly.art build (frontend/src/state/freshDocument.ts).
+# Vite would build any other name as `demo` without a word, so a typo is
+# refused here instead.
+ifneq ($(MODE),app)
+  ifneq ($(MODE),demo)
+    $(error MODE must be app or demo, not '$(MODE)')
+  endif
+endif
+
 # The CLI must match the `wasm-bindgen` crate exactly. The pin lives in the
 # root Cargo.toml; this reads the version Cargo.lock resolved from it.
 WASM_BINDGEN_VERSION = $(shell sed -n '/^name = "wasm-bindgen"$$/{n;s/^version = "\(.*\)"$$/\1/p;}' Cargo.lock)
@@ -63,7 +75,7 @@ ifeq ($(PROFILE),release)
 endif
 
 frontend: wasm
-	cd frontend && npx vite build --mode app
+	cd frontend && npx vite build --mode $(MODE)
 
 desktop: frontend
 	rm -rf desktop/resources/app

@@ -59,6 +59,7 @@ Electron package lists the same set, e.g. `pacman -Qi electron44`).
 | --- | --- |
 | `app` (default) | `wasm`, `frontend`, `desktop`, `bundle` in order: the wasm bridge, the frontend in app mode, the frontend staged into `desktop/resources/app` and the Electron host compiled, then `electron-forge package` into `desktop/out/Darkly-linux-<arch>/` |
 | `wasm` | `cargo build` of `darkly-wasm`, `wasm-bindgen` into `frontend/wasm/pkg`, and `wasm-opt -O` in the release profile |
+| `frontend` | `wasm`, then `vite build` into `frontend/dist`: the web app, a static site on its own |
 | `install` | `install-app` and `install-data` |
 | `install-app` | the bundle under `$(LIBDIR)/darkly`, `chrome-sandbox` setuid, and a relative symlink at `$(BINDIR)/darkly` |
 | `install-data` | the desktop entry, the metainfo with its release history rendered from the tags, the icon, the license |
@@ -69,6 +70,7 @@ Electron package lists the same set, e.g. `pacman -Qi electron44`).
 | Variable | Default |
 | --- | --- |
 | `PROFILE` | `release`; `dev` skips `wasm-opt` |
+| `MODE` | `app`, the plain editor; `demo`, the decorative build demo.darkly.art serves. Anything else is refused |
 | `FEATURES` | none; cargo features for `darkly-wasm` |
 | `WASM_BINDGEN`, `WASM_OPT` | `wasm-bindgen`, `wasm-opt` |
 | `DESTDIR` | none |
@@ -123,6 +125,24 @@ electron-forge), so on npm 12 add `--allow-git=all` there. When the distro's
 `wasm-bindgen` is not the pinned version (Arch ships a newer one), install the
 pinned CLI with `cargo install wasm-bindgen-cli --locked --version <pin>`, or
 `make tools`, and put it first on `PATH`.
+
+**A web deploy.** The web app is `make frontend`, served as static files from
+`frontend/dist`; only `frontend/` needs `node_modules`. `npm run build` in
+`frontend/` is the Vite step alone and fails without the wasm bridge `make wasm`
+leaves in `frontend/wasm/pkg`. From a bare Linux image with Node.js, as a hosted
+static build starts:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+. "$HOME/.cargo/env"
+curl -sSfL https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz | tar xz -C "$HOME"
+make tools
+(cd frontend && npm ci)
+make frontend MODE=demo WASM_OPT="$HOME/binaryen-version_133/bin/wasm-opt"
+```
+
+`wasm-opt` is not optional here: the unoptimized bridge is over the service
+worker's 16 MiB precache limit, and `vite build` fails on it.
 
 **The version.** A release tarball has no `.git`, so the build reads its version
 from `crates/darkly/version.txt`, which `git archive` fills in; see

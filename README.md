@@ -214,7 +214,7 @@ npm --prefix frontend run dev
 npm --prefix frontend run dev -- --host
 ```
 
-Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
+The dev server builds the decorative demo that demo.darkly.art serves; add `-- --mode app` for the plain editor the app ships. Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
 
 **GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. Launch Chromium with GPU and Vulkan support:
 
