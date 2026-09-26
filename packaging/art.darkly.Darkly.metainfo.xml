@@ -64,6 +64,10 @@
       <caption>Hair brush</caption>
     </screenshot>
     <screenshot>
+      <video container="webm" codec="av1" width="1920" height="1012">https://darkly.art/flathub/void-demo.webm</video>
+      <caption>Streaming Blender into a void</caption>
+    </screenshot>
+    <screenshot>
       <image width="1920" height="970">https://darkly.art/flathub/brush-builder.png</image>
       <caption>Node-based brush builder</caption>
     </screenshot>
