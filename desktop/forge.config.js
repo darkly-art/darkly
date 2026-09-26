@@ -40,65 +40,17 @@ const macSign = process.env.DARKLY_MAC_SIGN === '1'
     : {};
 
 // Windows Authenticode signing, enabled only when the CI signing step has
-// provisioned credentials (see the "Sign setup (Windows)" job step). Same
+// provisioned a signing hook (see the "Sign setup (Windows)" job step). Same
 // gating rationale as macSign above: PR / fork builds with no secrets still
 // produce an unsigned bundle instead of failing the whole job.
 //
-// Signing is necessary but not sufficient for a clean install. SmartScreen
-// weighs two signals, the file hash's reputation and the publisher
-// certificate's, and a brand-new binary has neither, so the first downloads
-// still get "unrecognized app". What signing buys is that reputation ACCRUES:
-// a consistent publisher identity carries trust forward to the next release,
-// whereas unsigned files start from zero every single time and never stop
-// warning. EV certificates used to bypass the prompt outright; Microsoft
-// removed that in 2024, so there is no longer any certificate you can buy
-// that skips the ramp. A self-signed certificate is worth exactly nothing
-// here: SmartScreen treats it identically to no signature at all.
-//
-// Deliberately provider-agnostic. Everything specific to the CA lives in the
-// CI step, which hands this block raw signtool arguments; today that is
-// SSL.com eSigner CKA, which loads the cloud-held certificate into the
-// Windows certificate store so signtool can select it by thumbprint:
-//
-//   DARKLY_WIN_SIGN_PARAMS   e.g. "/sha1 <thumbprint>"
-//   DARKLY_WIN_TIMESTAMP_URL e.g. "http://ts.ssl.com"
-//   SIGNTOOL_PATH            Windows SDK signtool.exe
-//
-// @electron/windows-sign also reads WINDOWS_CERTIFICATE_FILE and
-// WINDOWS_CERTIFICATE_PASSWORD from the environment on its own, which is the
-// escape hatch for signing locally against a throwaway self-signed .pfx to
-// prove the pipeline works. Since the 2023 CA/Browser Forum rules put every
-// issued code-signing key on hardware, a real certificate will never arrive
-// as a .pfx you can commit to a secret.
-//
-// hashes is pinned to sha256 deliberately. windows-sign's default when the
-// option is omitted is ['sha1', 'sha256']: it signs twice and appends, and the
-// SHA-1 pass fails against any certificate issued today. SHA-1 has been
-// untrusted on Windows since 2016 anyway, so there is nothing to lose.
-const winSign = process.env.DARKLY_WIN_SIGN === '1'
-    ? {
-          windowsSign: {
-              hashes: ['sha256'],
-              // RFC 3161 timestamp, so signatures stay valid past certificate
-              // expiry. Non-negotiable now that CA/Browser Forum ballot CSC-31
-              // caps certificate lifetime at 460 days: without a countersigned
-              // timestamp every release would go untrusted within ~15 months.
-              timestampServer:
-                  process.env.DARKLY_WIN_TIMESTAMP_URL
-                  || 'http://ts.ssl.com',
-              // signtool /d and /du: shown in the UAC elevation dialog.
-              description: 'Darkly',
-              website: 'https://darkly.art',
-              // Windows SDK signtool. Without this, windows-sign falls back to
-              // a vendored copy too old to drive a cloud-held key.
-              ...(process.env.SIGNTOOL_PATH
-                  ? { signToolPath: process.env.SIGNTOOL_PATH }
-                  : {}),
-              ...(process.env.DARKLY_WIN_SIGN_PARAMS
-                  ? { signWithParams: process.env.DARKLY_WIN_SIGN_PARAMS }
-                  : {}),
-          },
-      }
+// WINDOWS_SIGN_HOOK_MODULE_PATH is @electron/windows-sign's own variable. It
+// names a CommonJS module exporting `async (file) => void` that signs one PE
+// file in place; windows-sign calls it for every .exe/.dll/.node in the
+// packaged app, and the Squirrel maker calls it again for the installer. Which
+// CA, which tool, and why are the CI step's business, not this file's.
+const winSign = process.env.WINDOWS_SIGN_HOOK_MODULE_PATH
+    ? { windowsSign: { hookModulePath: process.env.WINDOWS_SIGN_HOOK_MODULE_PATH } }
     : {};
 
 // Architecture this `make` is producing for. Forge builds for the host arch
@@ -126,6 +78,15 @@ module.exports = {
     packagerConfig: {
         name: 'Darkly',
         executableName: 'darkly',
+        // Offline builds (Flathub, distro packagers) point this at a directory
+        // holding electron-v<version>-<platform>-<arch>.zip and the packager
+        // unpacks that instead of asking @electron/get. A seeded @electron/get
+        // cache is not enough: since v3 it refetches SHASUMS256.txt from
+        // GitHub on every run, cache hit or not, so a sandbox with no network
+        // fails at "Copying files" even with the zip already on disk.
+        ...(process.env.DARKLY_ELECTRON_ZIP_DIR
+            ? { electronZipDir: process.env.DARKLY_ELECTRON_ZIP_DIR }
+            : {}),
         // Base path (no extension); packager appends .icns on macOS and .ico on
         // Windows. Linux packaging ignores this: the AppImage/deb makers below
         // take the .png explicitly.

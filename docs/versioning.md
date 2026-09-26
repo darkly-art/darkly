@@ -54,8 +54,8 @@ You need: a clean `dev` checkout in sync with `origin/dev`, an authenticated
    opens one and stops, so run it again once that PR is green. It then lists
    the PRs merged since the last tag, bots excluded, one `Title (#N)` per line,
    and asks. On `y` it tags `vX.Y.Z` with those lines as the body, pushes the
-   tag, retitles the release PR `Dev -> Master X.Y.Z` with the same lines as its
-   body, merges it, and refreshes the `<releases>` block in
+   tag, retitles the release PR `Dev -> Master X.Y.Z` with a link to each of
+   those PRs as its body, merges it, and refreshes the `<releases>` block in
    `packaging/art.darkly.Darkly.metainfo.xml`. If a line reads badly, answer
    `n`, fix that PR's title on GitHub, and run it again. It refuses a title
    carrying a URL, which the store listing cannot carry.
@@ -85,7 +85,7 @@ is bumped after the release is published.
 **Notes by hand.** The tag body is what users read in the store, and PR titles
 are commit language. To write it yourself, skip the script: `git tag -a
 vX.Y.Z`, subject `vX.Y.Z`, then a blank line and one change per line; `git
-push origin vX.Y.Z`; merge the release PR with the same lines as its body;
+push origin vX.Y.Z`; merge the release PR with the PR links as its body;
 then refresh the metainfo and carry on from step 2:
 
 ```bash
@@ -106,10 +106,17 @@ else, which keeps a release PR's own merge out of the next range.
 
 ### The release PR
 
-Its body is the tag body: one `Title (#N)` line per change, which GitHub links,
-and nothing else. It is the one exception to the two-part PR description in
-CONTRIBUTING.md, because nothing reads this body; the release's record is the
-tag. `scripts/release.sh` writes it.
+Its body is an unordered list of the release's PR links, one per line,
+numerically sorted, and nothing else:
+
+```markdown
+- https://github.com/darkly-art/darkly/pull/117
+- https://github.com/darkly-art/darkly/pull/119
+```
+
+It is the one exception to the two-part PR description in CONTRIBUTING.md,
+because nothing reads this body; the release's record is the tag.
+`scripts/release.sh` writes it.
 
 ## Where it comes from
 

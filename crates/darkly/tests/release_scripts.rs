@@ -371,7 +371,7 @@ impl Release {
             .iter()
             .map(|(n, title, bot, oid)| {
                 format!(
-                    r#"{{"number":{n},"title":"{title}","author":{{"is_bot":{bot},"login":"x"}},"mergeCommit":{{"oid":"{oid}"}}}}"#
+                    r#"{{"number":{n},"title":"{title}","author":{{"is_bot":{bot},"login":"x"}},"mergeCommit":{{"oid":"{oid}"}},"url":"https://github.com/o/r/pull/{n}"}}"#
                 )
             })
             .collect();
@@ -440,7 +440,7 @@ fn tags_from_merged_prs_and_writes_the_pr_body() {
     assert!(!log.contains("pr create"));
     assert_eq!(
         fs::read_to_string(r.shim.join("body")).unwrap(),
-        "Human change (#5)\n"
+        "- https://github.com/o/r/pull/5\n"
     );
 
     // The checked-in release history is refreshed and left for the maintainer

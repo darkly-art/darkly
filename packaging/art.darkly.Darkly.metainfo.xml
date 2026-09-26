@@ -37,6 +37,17 @@
 
   <!-- Filled from the v* tags by scripts/metainfo-releases.sh; do not edit by hand. -->
   <releases>
+    <release version="0.9.0" date="2026-09-25">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.9.0</url>
+      <description>
+        <ul>
+          <li>Dry media brush work (#117)</li>
+          <li>Customizable tool strip (#120)</li>
+          <li>Electron ci, publishing, packaging machinery (#121)</li>
+          <li>Dry media polish (#119)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-09-10">
       <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.8.0</url>
       <description>
