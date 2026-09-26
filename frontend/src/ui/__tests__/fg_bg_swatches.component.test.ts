@@ -107,6 +107,34 @@ describe('foreground/background swatches', () => {
         expect(inst.background).toEqual(RECIPES[deployMode].background);
     });
 
+    it('the_reset_glyph_previews_the_defaults_it_will_apply', () => {
+        // Asymmetric colors, so a glyph that paints the pair the wrong way
+        // round cannot pass by coincidence.
+        fakeConfig.set('colors.defaultForeground', '#112233');
+        fakeConfig.set('colors.defaultBackground', '#445566');
+        const target = render();
+
+        expect(target.querySelector<HTMLElement>('.reset .mini.fg')!.style.background).toBe(
+            'rgb(17, 34, 51)',
+        );
+        expect(target.querySelector<HTMLElement>('.reset .mini.bg')!.style.background).toBe(
+            'rgb(68, 85, 102)',
+        );
+    });
+
+    it('the_reset_glyph_shows_white_over_black_on_this_build_s_shipped_defaults', () => {
+        fakeConfig.set('colors.defaultForeground', '#ffffff');
+        fakeConfig.set('colors.defaultBackground', '#000000');
+        const target = render();
+
+        expect(target.querySelector<HTMLElement>('.reset .mini.fg')!.style.background).toBe(
+            'rgb(255, 255, 255)',
+        );
+        expect(target.querySelector<HTMLElement>('.reset .mini.bg')!.style.background).toBe(
+            'rgb(0, 0, 0)',
+        );
+    });
+
     it('a_swatch_opens_the_popup_for_that_swatch_and_an_outside_press_closes_it', () => {
         const target = render();
         expect(target.querySelector('.color-popup')).toBeNull();

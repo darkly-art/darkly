@@ -18,8 +18,19 @@ import type { PackPalette } from '../../lib/packPalette';
 
 export type WheelVisual =
     | { kind: 'swatch'; color: string }
+    | { kind: 'spectrum' }
     | { kind: 'brush'; name: string; icon: string | null }
     | { kind: 'icon'; icon: string };
+
+/** Whether a visual paints its own sector rather than standing a mark on one.
+ *
+ *  Such a sector carries no name (it is its own identity), costs the label run
+ *  no arc, and is the one thing that may grow under the pen. Three questions
+ *  with one answer, asked in three places, so the answer is declared once
+ *  beside the union rather than spelled as a kind test at each of them. */
+export function paintsSector(v: WheelVisual): boolean {
+    return v.kind === 'swatch' || v.kind === 'spectrum';
+}
 
 /** The colours a node is drawn in: its pack's, or `NEUTRAL_PALETTE` for one
  *  no pack stands behind (Recent, Library, a color swatch).
@@ -41,8 +52,12 @@ export interface WheelLeaf extends WheelPainted {
     label: string;
     visual: WheelVisual;
     /** The committed action. Closes over its own stores; the machine only
-     *  ever calls it, never inspects it. */
-    select(): void;
+     *  ever calls it, never inspects it.
+     *
+     *  `at` is where on screen the gesture committed, for the leaves that open
+     *  something there. A leaf with nothing to place declares `select()` with
+     *  no parameters and ignores it. */
+    select(at: { x: number; y: number }): void;
 }
 
 export interface WheelBranch extends WheelPainted {
@@ -65,10 +80,11 @@ export type WheelNode = WheelLeaf | WheelBranch;
  *  know how much arc a sector wants and the component needs it to draw one,
  *  and those two must never disagree about which sectors carry text. */
 export function wheelLabel(node: WheelNode): string | null {
-    // A swatch is its own colour and has nothing a name would add. Everything
-    // else is named: a pack because its mark is generic, a brush because one
-    // miniature stroke among a fan of miniature strokes is not an identity.
-    return node.visual.kind === 'swatch' ? null : node.label;
+    // A painted sector is its own colour and has nothing a name would add.
+    // Everything else is named: a pack because its mark is generic, a brush
+    // because one miniature stroke among a fan of miniature strokes is not an
+    // identity.
+    return paintsSector(node.visual) ? null : node.label;
 }
 
 /** An arc of ring 0: spans `[a0, a0 + span)` in increasing screen theta

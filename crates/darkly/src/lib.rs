@@ -27,10 +27,6 @@ pub mod nodegraph;
 /// behind the same gate as `docs_md`: a browser ships no desktop entry.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod product;
-/// The release history the store listing is generated from, loaded from
-/// `releases.json`. Lives behind the same gate as `product` for the same reason.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod releases;
 pub mod sdf;
 pub mod text;
 pub mod tool;
@@ -41,66 +37,35 @@ pub mod units;
 
 /// Darkly's version: the latest git tag plus the commit height since it
 /// (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`), baked in by
-/// build.rs as `DARKLY_VERSION`. The single crate-side home for the version;
-/// consumers read this, never `env!("CARGO_PKG_VERSION")` (which is the stale
-/// hardcoded `Cargo.toml` value). See `frontend/src/version.ts` for the
-/// frontend twin that derives its display version from the same git tags.
+/// build.rs as `DARKLY_VERSION`. The single home for the version; consumers
+/// read this, never `env!("CARGO_PKG_VERSION")` (which is the stale hardcoded
+/// `Cargo.toml` value). The frontend reads it through the wasm bridge.
 pub const VERSION: &str = env!("DARKLY_VERSION");
 
-/// Split a `git describe --tags --long` string into its tag, commit height
-/// and `g`-prefixed short SHA, or `None` for anything not of that shape. The
-/// one place the describe grammar is read on the Rust side; `build.rs` is
-/// where it is written. `v0.3.0-1-gf0c3ea9` gives `("v0.3.0", 1, "gf0c3ea9")`;
-/// a tag may itself contain dashes, so the split runs from the right.
-pub fn describe_parts(version: &str) -> Option<(&str, u32, &str)> {
-    let (rest, sha) = version.rsplit_once('-')?;
-    let (tag, height) = rest.rsplit_once('-')?;
-    if tag.is_empty() || !sha.starts_with('g') || sha.len() < 2 {
-        return None;
-    }
-    Some((tag, height.parse().ok()?, sha))
-}
+/// The version grammar `build.rs` bakes [`VERSION`] with. `build.rs` includes
+/// the same file by path, so the library compiles it only to test it.
+#[cfg(test)]
+mod version;
 
 #[cfg(test)]
 mod version_tests {
-    use super::{describe_parts, VERSION};
+    use super::version::{describe_parts, from_archive, FALLBACK};
+    use super::VERSION;
     use std::process::Command;
 
-    /// Does `s` have the `git describe --tags --long` shape `<tag>-<n>-g<sha>`?
-    /// True for `v0.3.0-1-gf0c3ea9` and the `0.0.0-0-gunknown` fallback, but
-    /// false for a bare semver like `0.1.0`.
-    fn is_describe_shape(s: &str) -> bool {
-        describe_parts(s).is_some()
-    }
-
-    #[test]
-    fn describe_parts_reads_tag_height_and_sha() {
-        assert_eq!(
-            describe_parts("v0.8.0-3-gabc1234"),
-            Some(("v0.8.0", 3, "gabc1234"))
-        );
-        assert_eq!(
-            describe_parts("0.0.0-0-gunknown"),
-            Some(("0.0.0", 0, "gunknown"))
-        );
-        assert_eq!(
-            describe_parts("my-tag-2-gdeadbee"),
-            Some(("my-tag", 2, "gdeadbee"))
-        );
-        assert_eq!(describe_parts("0.1.0"), None);
-        assert_eq!(describe_parts("v0.8.0-x-gabc"), None);
-        assert_eq!(describe_parts("v0.8.0-3-abc"), None);
-    }
-
-    /// Feature test: the baked version really is the live `git describe` value
-    /// when git + tags are available. Only asserts equality when the command
-    /// succeeds, so it actually exercises the pipeline rather than passing
-    /// vacuously on the fallback in a shallow/git-less CI checkout.
+    /// The baked version is whichever source `build.rs` gives precedence: a
+    /// filled-in `version.txt`, else live `git describe`, else the fallback.
+    /// Asserting against the source that applies exercises the pipeline in a
+    /// checkout, a tarball and a git-less tree alike.
     ///
     /// (Build-time vs. test-time describe could differ if the repo mutates
     /// mid-run, though that's negligible within a single `cargo test`.)
     #[test]
-    fn version_matches_live_git_describe() {
+    fn version_matches_its_source() {
+        if let Some(archive) = from_archive(include_str!("../version.txt")) {
+            assert_eq!(VERSION, archive, "baked version should equal version.txt");
+            return;
+        }
         let live = Command::new("git")
             .args(["describe", "--tags", "--long"])
             .output()
@@ -113,8 +78,8 @@ mod version_tests {
         match live {
             Some(desc) => assert_eq!(VERSION, desc, "baked version should equal live describe"),
             None => assert_eq!(
-                VERSION, "0.0.0-0-gunknown",
-                "no git/tags → fallback expected"
+                VERSION, FALLBACK,
+                "no archive, git or tags: fallback expected"
             ),
         }
     }
@@ -126,7 +91,7 @@ mod version_tests {
     fn version_is_not_cargo_pkg_version() {
         assert_ne!(VERSION, env!("CARGO_PKG_VERSION"));
         assert!(
-            is_describe_shape(VERSION),
+            describe_parts(VERSION).is_some(),
             "unexpected version shape: {VERSION}"
         );
     }

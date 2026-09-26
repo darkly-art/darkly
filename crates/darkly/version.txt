@@ -1,0 +1,2 @@
+# Filled in by git archive (export-subst). A checkout holds the placeholders.
+$Format:%(describe:tags)$ $Format:%h$ $Format:%cs$

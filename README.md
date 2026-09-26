@@ -143,9 +143,9 @@ For a feature to count, it must be:
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
 - [x] Smart objects
-- [ ] Recent colors
+- [x] Recent colors
 - [ ] Saved swatches / palettes
-- [ ] Palette popup
+- [x] Palette popup
 - [ ] Navigator / overview window
 - [ ] History panel UI
 - [x] Process recording
@@ -196,15 +196,16 @@ For a feature to count, it must be:
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- [Node.js](https://nodejs.org/) >= 18
+- [Node.js](https://nodejs.org/) >= 22
+- `make` (on Windows, install it: Git Bash does not ship one)
+- `wasm-opt`, from [binaryen](https://github.com/WebAssembly/binaryen) (your package manager's `binaryen`)
 
 ```sh
-# Install all workspace dependencies (frontend + website + shared styles)
-npm install
+# Install the wasm32 target, the wasm-bindgen CLI, and npm dependencies
+make tools deps
 
 # Build the WASM package
-wasm-pack build frontend/wasm --target web
+make wasm
 
 # Start the frontend dev server
 npm --prefix frontend run dev

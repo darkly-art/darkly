@@ -1,5 +1,5 @@
 /**
- * State for the destructive-apply filter dialog. A parametric Colors-menu filter
+ * State for the destructive-apply filter dialog. A parametric Filters-menu filter
  * (Curves / Levels / Hue-Saturation) can't apply in one click: it needs its
  * params authored first. The action calls `show(...)` with the target node and
  * the filter's schema; `FilterModal` seeds scratch params from the schema

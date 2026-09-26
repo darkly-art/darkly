@@ -2,10 +2,9 @@
 //!
 //! Maps `input` linearly from `[in_low, in_high]` onto `[0, 1]`, clamping
 //! to the unit range. Simpler than [`super::curve`] (no spline LUT, no
-//! UI editor) and complements [`super::remap`] (which has arbitrary
-//! output ranges but always treats `[in_low, in_high]` as a window):
-//! `levels` is the right tool when the *meaning* of the operation is
-//! "open the shadow / blowout the highlight," not "general affine map."
+//! UI editor): `levels` is the right tool when the *meaning* of the
+//! operation is "open the shadow / blowout the highlight," not "general
+//! affine map."
 //!
 //! Squeezing `in_low` and `in_high` together gives a soft threshold:
 //! the `1e-6` floor on the denominator keeps the divide stable even

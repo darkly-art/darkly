@@ -43,8 +43,15 @@ export type MachineEvent =
     | { kind: 'up'; pointerId: number }
     | { kind: 'cancel' };
 
-/** `commit` carries the tree path of the leaf to select. */
-export type MachineEffect = { kind: 'commit'; path: number[] };
+/** `commit` carries the tree path of the leaf to select, and where on screen
+ *  the gesture committed, for the leaves that open something there. The point
+ *  rides the effect because this is what knows it: by the time the store has
+ *  run the reduction, its own state is the closed one. */
+export type MachineEffect = {
+    kind: 'commit';
+    path: number[];
+    at: { x: number; y: number };
+};
 
 export const CLOSED: MachineState = { kind: 'closed' };
 
@@ -105,7 +112,10 @@ export function reduce(
             if (event.pointerId !== state.pointerId) return { state };
             const h = state.highlight;
             if (h.kind === 'sector' && h.sector.node.kind === 'leaf') {
-                return { state: CLOSED, effect: { kind: 'commit', path: h.sector.path } };
+                return {
+                    state: CLOSED,
+                    effect: { kind: 'commit', path: h.sector.path, at: state.cursor },
+                };
             }
             return { state: CLOSED };
         }

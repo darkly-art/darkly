@@ -1,8 +1,3 @@
-// vite.config runs under esbuild/node at build time and is outside the
-// `tsc --noEmit` scope (tsconfig only includes src/**), so we don't pull
-// @types/node into the project just to type one Node builtin here.
-// @ts-ignore: Node builtin; no @types/node dependency.
-import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import basicSsl from '@vitejs/plugin-basic-ssl';
@@ -12,34 +7,26 @@ import { iconBundlePlugin } from './scripts/gen-icon-bundle.mjs';
 // @ts-ignore: plain .mjs build tooling, outside the tsc src scope.
 import { wasmWatchPlugin } from './scripts/wasm-watch.mjs';
 
-// Darkly's version is the latest git tag plus the commit height since it, the
-// same v* tags the deploy pipeline (darkly-deploy/) builds releases from.
-// `--long` always emits `TAG-COMMITS-gSHA` (height 0 when HEAD *is* the tag).
-// No `--always`: on a tagless/shallow checkout we want describe to THROW so the
-// catch yields the parseable fallback, not a bare SHA. Surfaced to the app as
-// the `__DARKLY_VERSION__` compile-time constant; parsed in src/version.ts.
-//
-// CANONICAL TWIN: crates/darkly/build.rs bakes the Rust crate's version with the
-// identical command and identical "0.0.0-0-gunknown" fallback (a documented DRY
-// exception: Cargo and Vite share no runtime). Change one, change the other.
-function gitVersion(): string {
-    try {
-        return execSync('git describe --tags --long', { encoding: 'utf8' }).trim();
-    } catch {
-        return '0.0.0-0-gunknown';
-    }
-}
-
 export default defineConfig(({ mode }) => ({
     // Relative asset paths so the same dist/ works when served from a web root
     // ("/") and when loaded via file:// from a packaged desktop bundle.
     base: './',
     define: {
-        __DARKLY_VERSION__: JSON.stringify(gitVersion()),
         // Deploy flavor: 'app' only for an explicit `vite build --mode app`.
         // Every other mode (production default, dev server, --mode demo) stays
         // 'demo', so `npm run dev` keeps the decorative demo experience.
         __DARKLY_APP_MODE__: JSON.stringify(mode === 'app' ? 'app' : 'demo'),
+        // Announcement HTML for this build, empty when the builder set none.
+        // An explicit one-identifier allowlist rather than an `envPrefix`:
+        // `loadEnv` would sweep in whatever `DARKLY_*` the build machine
+        // happens to hold (DARKLY_DEVTOOLS, the code-signing switches) and
+        // inline it into the client bundle. `JSON.stringify` covers quotes,
+        // backslashes and newlines in the markup; the app is emitted as
+        // external chunks, never inline in index.html, so a `</script>` in
+        // the string cannot break out. Read it through
+        // src/state/announcement.svelte.ts.
+        // @ts-ignore: Node global; no @types/node dependency.
+        __DARKLY_BANNER_HTML__: JSON.stringify(process.env.DARKLY_BANNER ?? ''),
     },
     resolve: {
         // Component tests run in jsdom and must load Svelte's browser runtime;

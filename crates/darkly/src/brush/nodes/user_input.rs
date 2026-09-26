@@ -8,9 +8,9 @@
 //! it directly.
 //!
 //! It carries no params. Everything an author would want to author about the
-//! dial (its label, description, icon, slider range, inversion) is already
-//! per-instance state on the brush-bar entry, reachable from the entry modal,
-//! so putting any of it here would store the same fact twice.
+//! dial (its label, description, icon, slider range, inversion, display unit)
+//! is already per-instance state on the brush-bar entry, reachable from the
+//! entry modal, so putting any of it here would store the same fact twice.
 //!
 //! The whole node is one settable-source input. `PortDef::source` lets an
 //! input keep its scrubbable authored value while other nodes wire *from* it,
@@ -51,7 +51,9 @@ pub fn register() -> BrushNodeRegistration {
                 // a generic dial has no unit, and once the author re-ranges it
                 // for a pixel or angle sink a percentage reads as nonsense
                 // (0..64 would display as 0% to 6400%). Raw is never wrong,
-                // only plain.
+                // only plain. An author wiring the dial to an angle or pixel
+                // sink says so with the entry's unit override, which is where
+                // a choice that belongs to one placement belongs.
                 //
                 // No `natural_range` for the same reason: `apply_wire_remap`
                 // rescales only when both ends declare one, and a dial that

@@ -1,4 +1,5 @@
-import { parseMenuSegment, type Action } from '../../actions/registry';
+import { parseMenuSegment, UNORDERED, type Action } from '../../actions/registry';
+import { groupByCategory } from '../../lib/groupByCategory';
 
 /**
  * A menu is a tree of entries rendered by `MenuItems.svelte`. An entry is one
@@ -25,29 +26,53 @@ export interface TopMenu {
 /** Fixed ordering for the known top-level menus. Any group not in this list
  *  (forward-compat for a new `menuPath[0]`) is appended after, in first-seen
  *  order. */
-const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Colors', 'View', 'Window', 'Help'];
+const MENU_ORDER = ['File', 'Edit', 'Select', 'Image', 'Layer', 'Filters', 'View', 'Window', 'Help'];
 
-function groupByTop(regs: Action[]): Map<string, Action[]> {
-    const m = new Map<string, Action[]>();
+/** One slot in a menu under construction: an action's own row, or a submenu
+ *  collecting the actions that descend into it. `order` is the lowest order
+ *  any member declared at this depth, so two members disagreeing about where
+ *  their shared submenu sits cannot make it jump. */
+type Slot = { order: number } & ({ action: Action } | { title: string; children: Action[] });
+
+/**
+ * Entries of one menu, built from the actions that live in or below it: every
+ * `reg` shares the first `depth` segments of its `menuPath` and has at least
+ * one more. An action whose path ends at `depth` is a row here; one with more
+ * segments descends into the submenu named by `menuPath[depth + 1]`, whose own
+ * entries are this function one level down.
+ *
+ * Slots accumulate in first-appearance order across both kinds (a submenu
+ * takes the position of its first member) and `Array.prototype.sort` is
+ * stable, so equal orders keep registration order with no tiebreak field.
+ */
+function buildEntries(regs: Action[], depth: number): MenuEntry[] {
+    const slots: Slot[] = [];
+    const submenus = new Map<string, Extract<Slot, { children: Action[] }>>();
     for (const reg of regs) {
-        const seg = reg.menuPath?.[0];
-        if (!seg) continue;
-        const { title } = parseMenuSegment(seg);
-        let arr = m.get(title);
-        if (!arr) {
-            arr = [];
-            m.set(title, arr);
+        const path = reg.menuPath!;
+        const order = parseMenuSegment(path[depth]).order ?? UNORDERED;
+        if (path.length === depth + 1) {
+            slots.push({ order, action: reg });
+            continue;
         }
-        arr.push(reg);
+        const title = parseMenuSegment(path[depth + 1]).title;
+        let slot = submenus.get(title);
+        if (!slot) {
+            slot = { order, title, children: [] };
+            submenus.set(title, slot);
+            slots.push(slot);
+        }
+        slot.order = Math.min(slot.order, order);
+        slot.children.push(reg);
     }
-    return m;
-}
-
-/** An action's position within its top-level menu, parsed from the order
- *  suffix on `menuPath[0]` (e.g. `'Edit:10'` → 10). Unordered actions sort
- *  to the end. */
-function menuOrder(reg: Action): number {
-    return parseMenuSegment(reg.menuPath?.[0] ?? '').order ?? Infinity;
+    return slots
+        .slice()
+        .sort((a, b) => a.order - b.order)
+        .map((slot): MenuEntry =>
+            'action' in slot
+                ? { kind: 'action', actionId: slot.action.id }
+                : { kind: 'submenu', title: slot.title, entries: buildEntries(slot.children, depth + 1) },
+        );
 }
 
 function orderedTitles(present: Map<string, unknown>): string[] {
@@ -66,24 +91,25 @@ function orderedTitles(present: Map<string, unknown>): string[] {
 }
 
 /**
- * Build the ordered top-level menus from the action registry. Action grouping
- * is FLAT (by `menuPath[0]`'s title); within each menu items sort by the
- * order suffix on `menuPath[0]` (e.g. `'Edit:10'`; lower first, unordered
- * actions fall to the end in registration order). The
- * resulting `entries` are all leaf action rows, except the View menu which
- * also carries the theme switcher widget (the theme control isn't an action).
- * Used directly by the pinned MenuBar and composed into the hamburger's root
- * list.
+ * Build the ordered top-level menus from the action registry. Actions group by
+ * `menuPath[0]`'s title into the fixed `MENU_ORDER`; everything below that is
+ * `buildEntries`, so a multi-segment path renders as a submenu flyout at any
+ * depth. The resulting `entries` are action rows and submenus, except the View
+ * menu which also carries the theme switcher widget (the theme control isn't
+ * an action). Used directly by the pinned MenuBar and composed into the
+ * hamburger's root list.
  */
 export function buildTopMenus(regs: Action[]): TopMenu[] {
-    const grouped = groupByTop(regs);
+    const grouped = new Map(
+        groupByCategory(
+            regs.filter(r => r.menuPath?.[0]),
+            r => parseMenuSegment(r.menuPath![0]).title,
+            '',
+        ).map(g => [g.category, g.items] as const),
+    );
     const result: TopMenu[] = [];
     for (const title of orderedTitles(grouped)) {
-        const entries: MenuEntry[] = grouped
-            .get(title)!
-            .slice()
-            .sort((a, b) => menuOrder(a) - menuOrder(b))
-            .map((r): MenuEntry => ({ kind: 'action', actionId: r.id }));
+        const entries = buildEntries(grouped.get(title)!, 0);
         if (title === 'View') entries.push({ kind: 'widget', widget: 'theme' });
         result.push({ title, entries });
     }

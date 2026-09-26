@@ -1,7 +1,9 @@
 /**
- * Packaged-binary smoke test. Runs against the unpacked output of
- * `electron-forge package` (which `make` also produces): the
- * electron/out/Darkly-<platform>-<arch>/ directory.
+ * Desktop smoke test. Runs against the unpacked output of
+ * `electron-forge package` (which `electron-forge make` also produces): the
+ * desktop/out/Darkly-<platform>-<arch>/ directory. With DARKLY_EXECUTABLE set
+ * it runs that binary instead: CI points it at the `darkly` symlink
+ * `make install` stages, so the installed tree is what boots.
  *
  * Scope: verify that the desktop wrapper boots, a window opens with the
  * expected title, and the preload bridge exposes window.electronAPI.storage.
@@ -28,7 +30,7 @@ function packagedBinary(): string {
         throw new Error(
             `expected exactly one packaged Darkly-* directory under ${outDir}, ` +
             `found ${candidates.length}: ${JSON.stringify(candidates)}. ` +
-            `Run ./build.sh (or electron-forge package) first.`,
+            `Run 'make app' and then 'npx electron-forge package' first.`,
         );
     }
     const base = path.join(outDir, candidates[0]);
@@ -53,7 +55,7 @@ test('packaged app launches, renders, and exposes the storage bridge', async () 
     let app: ElectronApplication | undefined;
     try {
         app = await electron.launch({
-            executablePath: packagedBinary(),
+            executablePath: process.env.DARKLY_EXECUTABLE || packagedBinary(),
             // --no-sandbox: the packaged binary's chrome-sandbox is not setuid
             //   root when run from arbitrary user paths (CI runners, /tmp, etc.).
             //   Disabling Chromium's setuid sandbox lets Playwright spawn the
@@ -67,11 +69,9 @@ test('packaged app launches, renders, and exposes the storage bridge', async () 
 
         const win = await app.firstWindow({ timeout: 30_000 });
 
-        // Match a prefix, not the exact string: the upstream app's <title>
-        // carries a tagline (e.g. "Darkly - Entropic Editor for Artists") that
-        // changes independently of this deploy repo. We only care that the
-        // packaged bundle booted the right app.
-        await expect(win).toHaveTitle(/^Darkly\b/, { timeout: 30_000 });
+        // The window title is the frontend's <title>: the app's name alone,
+        // with no tagline.
+        await expect(win).toHaveTitle('Darkly', { timeout: 30_000 });
 
         // Intentionally no canvas/render check here. CI runners on Linux
         // (xvfb, no GPU) and the Intel-mac runner have no working WebGPU

@@ -1,0 +1,63 @@
+name: Analytic Disc
+description: >-
+  A test vehicle, not a brush. A hard-edged, perfectly round, unmodulated disc
+  stamped through the paint terminal, with every knob stated rather than
+  inherited. Nothing in it is random and nothing is noise, so two strokes place
+  bit-identical dabs and a measurement taken through it reads the engine alone.
+  Engine tests own this file. It is not shipped, it is not a builtin, and no
+  artist tunes it: change a value here only to change what a test measures.
+nodes:
+  pen_input:
+    type: pen_input
+  brush_settings:
+    type: brush_settings
+    inputs:
+      # The fixture's own base size, deliberately not any shipped brush's.
+      size: 0.1
+      # Each test that cares overrides this; stated so the default is visible.
+      spacing: 0.1
+      # Stroke samples reach the engine unsmoothed.
+      stabilize: 0.0
+  paint_color:
+    type: paint_color
+  circle:
+    type: circle
+    inputs:
+      # Sine. Perlin (1) would pull in `seed` and reintroduce a random input.
+      algorithm: 0
+      # Zero amplitude on Sine is a plain disc.
+      amplitude: 0.0
+      # Hard edge, so interior pixels are fully covered by one dab.
+      softness: 0.0
+      # Round, so there is no orientation dependence.
+      aspect: 1.0
+  stamp:
+    type: stamp
+  multiply:
+    type: multiply
+    inputs:
+      # Flow per dab is `pressure * b`. Driving both halves from one
+      # expression keeps them equal at any pressure, so a ladder across
+      # `buildup` walks the accumulation law and never a flow difference,
+      # while pressure still changes what a dab deposits. A test pins the
+      # effective flow exactly by setting `b` and choosing its pressure.
+      # At the ladder's pressure of 0.5 this is 0.05: small enough that
+      # neither half saturates, which is what keeps the ladder monotonic.
+      b: 0.1
+  paint:
+    type: paint
+    inputs:
+      # No stroke-level cap in the way of what the law does.
+      opacity: 1.0
+      # `buildup` is deliberately absent. A brush that never writes the port is
+      # what lets a test compare the registration default against a literal,
+      # and what gives the compile-shape test its untouched case. Tests that
+      # want a specific law set it at runtime.
+connections:
+- pen_input.position -> paint.position
+- paint_color.color -> stamp.color
+- circle.mask -> stamp.tip
+- stamp.dab -> paint.rgba
+- pen_input.pressure -> multiply.a
+- multiply.result -> paint.wash_flow
+- multiply.result -> paint.build_flow

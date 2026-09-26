@@ -15,7 +15,8 @@ jobs:
     name: cargo publish darkly + darkly-macros
     runs-on: ubuntu-latest
     steps:
-      # Full checkout (with .git) so build.rs's `git describe --tags` resolves.
+      # Full history, so the tag is there for version.txt's `%(describe:tags)`
+      # below to find.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -34,7 +35,13 @@ jobs:
           cargo set-version -p darkly-macros "$VERSION"
           cargo set-version -p darkly "$VERSION"
 
-      # --allow-dirty: the version lines above are rewritten but not committed.
+      # A crate built from crates.io has no .git to describe, so build.rs reads
+      # the version from version.txt instead. git's archive writer fills in its
+      # placeholders (export-subst), exactly as it does for a release tarball.
+      - name: Fill in version.txt
+        run: git archive HEAD crates/darkly/version.txt | tar -xO > crates/darkly/version.txt
+
+      # --allow-dirty: the files above are rewritten but not committed.
       # cargo publish compiles each crate as its verification step (no GPU
       # needed). darkly-macros goes first: `darkly` pins it to this exact
       # version, so it must exist on the index before `darkly` is published,

@@ -10,4 +10,4 @@ Keywords=art;draw;paint;image;photo;picture;editor;
 Exec=darkly
 Icon=art.darkly.Darkly
 Terminal=false
-StartupWMClass=Darkly
+StartupWMClass=art.darkly.Darkly

@@ -1509,6 +1509,45 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
     naga_validate(&compiled.cursor_preview_wgsl, "noise wired-scale preview");
 }
 
+/// An `invert` upstream of a compiled terminal emits its complement inline.
+/// `noise.scale` declares `natural_range(1, 512)`, so the wire remap wraps the
+/// complement rather than replacing it, and the literal default is gone.
+#[test]
+fn invert_wired_emits_complement_and_validates() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node("pen_input", reg.get("pen_input").unwrap().ports.clone());
+    let inv = graph.add_node("invert", reg.get("invert").unwrap().ports.clone());
+    let noise = graph.add_node("noise", reg.get("noise").unwrap().ports.clone());
+    apply_noise_inputs(&mut graph, &noise, 0);
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone());
+    wire(
+        &mut graph,
+        &[
+            (pen.clone(), "position", term.clone(), "position"),
+            (pen.clone(), "pressure", inv.clone(), "input"),
+            (inv.clone(), "output", noise.clone(), "scale"),
+            (noise.clone(), "color", term.clone(), "rgba"),
+        ],
+    );
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    assert!(
+        !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
+        "wired scale must not fall back to the literal default",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("(1.0 - ("),
+        "invert must emit its complement expression",
+    );
+    assert!(
+        compiled.stroke_wgsl.contains("_pressure"),
+        "the complement must be of the upstream pressure expression",
+    );
+    naga_validate(&compiled.stroke_wgsl, "invert wired stroke");
+    naga_validate(&compiled.cursor_preview_wgsl, "invert wired preview");
+}
+
 /// A wired `octaves` input must emit the `clamp(i32(round(..)), 1, 8)` guard
 /// (i32, not u32, since `fbm_tile`'s octave arg is i32) and validate on both
 /// variants: the naga-riskiest arm of the subsumed conversion.
@@ -2006,46 +2045,82 @@ fn the_buildup_port_cannot_be_wired() {
         .expect("a wirable scalar beside it still takes one");
 }
 
-/// The shipped Pencil authors a `buildup` strictly inside the dial, so it
-/// compiles to the two-accumulation shape: a `Max` scratch for the washing
-/// half and a declared source-over channel for the stacking one. A stray
-/// `buildup` edit in its YAML collapses that to one accumulation and fails
-/// here, without a GPU.
+/// A brush's authored `buildup` decides which accumulation shape it compiles
+/// to, and all three shapes are reachable from YAML. Checked without a GPU.
 ///
-/// The Ink Pen is the other side of the same guard. It never mentions the
-/// port, so it must keep the registration default and stay on the law every
-/// brush had before the dial existed.
+/// The three cases are the whole of the compile-time read. At the top of the
+/// dial the scratch composites and is the only accumulation. Strictly inside
+/// it, the scratch carries the washing half with `Max` and the stacking half
+/// gets a declared channel of its own. At the bottom there is no stacking
+/// half to declare. A brush that never mentions the port must land on the
+/// registration default, which is the top.
+///
+/// Driven from a fixture rather than from shipped brushes: which law a given
+/// brush is tuned to is art, and pinning it here would mean an artist could
+/// not change their mind without a test failing. The shapes are engine.
 #[test]
-fn shipped_brushes_compile_on_the_law_their_yaml_authors() {
+fn authored_buildup_picks_the_accumulation_shape() {
     use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+    use darkly::brush::portable::PortableBrush;
 
-    let compiled_builtin = |name: &str| {
-        let brush = darkly::brush::builtin_brushes::all()
-            .into_iter()
-            .find(|b| b.metadata.name == name)
-            .unwrap_or_else(|| panic!("{name} brush registered"));
-        let plan = compile(&brush.metadata.graph, registry().as_map()).unwrap();
-        compile_brush_to_wgsl(&brush.metadata.graph, &plan, &evals()).expect("compiles")
+    const ANALYTIC_DISC: &str = include_str!("fixtures/analytic_disc.yaml");
+
+    // Compile the fixture with `buildup` authored into its yaml, or absent.
+    let compiled_at = |buildup: Option<f32>| {
+        let yaml = match buildup {
+            Some(v) => ANALYTIC_DISC.replace(
+                "  paint:\n    type: paint\n    inputs:\n",
+                &format!("  paint:\n    type: paint\n    inputs:\n      buildup: {v}\n"),
+            ),
+            None => ANALYTIC_DISC.to_string(),
+        };
+        let portable: PortableBrush = serde_yaml_ng::from_str(&yaml).expect("fixture parses");
+        let graph = portable
+            .into_graph(darkly::brush::registry())
+            .expect("fixture builds");
+        let plan = compile(&graph, registry().as_map()).unwrap();
+        compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles")
     };
 
-    let pencil = compiled_builtin("Pencil");
+    let top = compiled_at(Some(1.0));
     assert_eq!(
-        pencil.dab_blend, COVERAGE_CEILING,
+        top.dab_blend, PREMULTIPLIED_SOURCE_OVER,
+        "at the top of the dial the scratch composites"
+    );
+    assert!(
+        top.channels.is_empty(),
+        "at the top of the dial the scratch is the only accumulation"
+    );
+
+    let middle = compiled_at(Some(0.5));
+    assert_eq!(
+        middle.dab_blend, COVERAGE_CEILING,
         "inside the dial the scratch carries the washing half"
     );
     assert_eq!(
-        pencil.channels.iter().map(|c| c.name).collect::<Vec<_>>(),
+        middle.channels.iter().map(|c| c.name).collect::<Vec<_>>(),
         ["build"],
         "inside the dial the stacking half needs its own accumulation"
     );
 
-    let ink_pen = compiled_builtin("Ink Pen");
+    let bottom = compiled_at(Some(0.0));
     assert_eq!(
-        ink_pen.dab_blend, PREMULTIPLIED_SOURCE_OVER,
-        "a brush that never mentions the port keeps the original law"
+        bottom.dab_blend, COVERAGE_CEILING,
+        "at the bottom of the dial the scratch is the washing half"
     );
     assert!(
-        ink_pen.channels.is_empty(),
-        "at the top of the dial the scratch is the only accumulation"
+        bottom.channels.is_empty(),
+        "at the bottom of the dial there is no stacking half to declare"
+    );
+
+    let unset = compiled_at(None);
+    assert_eq!(
+        unset.dab_blend, top.dab_blend,
+        "a brush that never mentions the port keeps the registration default"
+    );
+    assert_eq!(
+        unset.channels.len(),
+        top.channels.len(),
+        "a brush that never mentions the port keeps the registration default"
     );
 }

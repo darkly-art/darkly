@@ -133,9 +133,12 @@ describe('release', () => {
         s = reduce(s, moveAt(RECENT_MID, RING0_MID), tree).state;
         s = reduce(s, moveAt(RECENT_MID, RING1_MID), tree).state;
         const leafPath = (engaged(s).highlight as any).sector.path;
+        const cursor = engaged(s).cursor;
         const r = reduce(s, up(), tree);
         expect(r.state).toBe(CLOSED);
-        expect(r.effect).toEqual({ kind: 'commit', path: leafPath });
+        // The commit carries where the gesture ended, which is the last MOVE's
+        // sample: UP has no coordinates of its own to offer.
+        expect(r.effect).toEqual({ kind: 'commit', path: leafPath, at: cursor });
     });
 
     it('commit derives from the last-MOVE highlight: DOWN then UP with zero movement cancels over the hub', () => {
@@ -148,8 +151,9 @@ describe('release', () => {
     it('UP over a ring-0 color leaf commits it', () => {
         let s = reduce(CLOSED, down(), tree).state;
         s = reduce(s, moveAt(COLOR_MID, RING0_MID), tree).state;
+        const cursor = engaged(s).cursor;
         const r = reduce(s, up(), tree);
-        expect(r.effect).toEqual({ kind: 'commit', path: [0] });
+        expect(r.effect).toEqual({ kind: 'commit', path: [0], at: cursor });
     });
 
     it('UP over a branch cancels', () => {

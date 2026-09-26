@@ -426,7 +426,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa6-solid:fill-drip")
+                    .with_icon("mdi:texture-box")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
                 // A share of each dab, not an interpolated blend state.

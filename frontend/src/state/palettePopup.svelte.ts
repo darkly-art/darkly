@@ -53,6 +53,23 @@ class PalettePopupStore {
      *  it belongs with. */
     labelWidths = new SvelteMap<string, number>();
 
+    /** Where the color wheel the spectrum leaf summons sits, or null when it
+     *  is closed.
+     *
+     *  It deliberately outlives the gesture: the gesture is how it was asked
+     *  for, and a wheel that vanished as the pen lifted could never be used.
+     *  That is a consequence of the press-drag-release chord, and the reason
+     *  the component mounts it outside the gesture's own overlay. */
+    colorWheelAt = $state<{ x: number; y: number } | null>(null);
+
+    openColorWheel(at: { x: number; y: number }): void {
+        this.colorWheelAt = at;
+    }
+
+    closeColorWheel(): void {
+        this.colorWheelAt = null;
+    }
+
     get isOpen(): boolean {
         return this.state.kind === 'engaged';
     }
@@ -95,7 +112,7 @@ class PalettePopupStore {
         if (!equivalent(this.state, state)) this.state = state;
         if (effect?.kind === 'commit') {
             const node = nodeAt(this.tree, effect.path);
-            if (node?.kind === 'leaf') node.select();
+            if (node?.kind === 'leaf') node.select(effect.at);
         }
     }
 }

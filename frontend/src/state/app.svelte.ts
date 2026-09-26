@@ -857,12 +857,24 @@ export class DarklyInstance {
         this.background = tmp;
     }
 
-    /** Return both swatches to the painter's configured defaults; a pref that
-     *  is unset or malformed falls back to this build's fresh-document pair. */
-    resetColors() {
+    /** The pair "reset colors" returns to: the painter's configured defaults,
+     *  with this build's fresh-document pair standing in for a pref that is
+     *  unset or malformed. A getter rather than a constant so the reset glyph
+     *  can preview the colors it is about to apply instead of carrying its own
+     *  idea of what they are. */
+    get defaultColors(): { foreground: Color; background: Color } {
         const pref = (key: string) => hexToColor((config.get(key) as string | undefined) ?? '');
-        this.foreground = pref('colors.defaultForeground') ?? { ...freshDocument.foreground };
-        this.background = pref('colors.defaultBackground') ?? { ...freshDocument.background };
+        return {
+            foreground: pref('colors.defaultForeground') ?? { ...freshDocument.foreground },
+            background: pref('colors.defaultBackground') ?? { ...freshDocument.background },
+        };
+    }
+
+    /** Return both swatches to {@link defaultColors}. */
+    resetColors() {
+        const { foreground, background } = this.defaultColors;
+        this.foreground = foreground;
+        this.background = background;
     }
 
     /** Re-read the layer tree and reconcile session state against it.

@@ -1,15 +1,15 @@
 // Rebuild the WASM bridge when Rust sources change, and reload the page.
 //
-// `npm run start` builds the bridge once (`wasm:build-dev`) and then hands off
-// to Vite, which watches only `frontend/`. So every edit under `crates/` (a
-// shader, a veil's `preview_at`, a registration) needed a manual `npm run
-// wasm:build-dev` and a manual reload before it showed up in the editor,
+// `npm run start` builds the bridge once (`make wasm PROFILE=dev`) and then
+// hands off to Vite, which watches only `frontend/`. So every edit under
+// `crates/` (a shader, a veil's `preview_at`, a registration) needed a manual
+// rebuild and a manual reload before it showed up in the editor,
 // and a dev server left running silently served stale WASM. This closes
 // that: the same watch-and-regenerate shape `iconBundlePlugin` uses for
 // the icon bundle, applied to the thing the whole editor is compiled from.
 //
-// Dev only (`apply: 'serve'`). Production `npm run build` runs `wasm:build`
-// ahead of Vite, so there is nothing to watch.
+// Dev only (`apply: 'serve'`). A production build runs `make wasm` ahead of
+// Vite (the root Makefile's `frontend` target), so there is nothing to watch.
 
 // @ts-nocheck: plain .mjs build tooling, outside the tsc src scope.
 import { spawn } from 'node:child_process';
@@ -18,9 +18,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = path.join(FRONTEND, '..');
 const WASM_CRATE = path.join(FRONTEND, 'wasm');
 const PKG_ENTRY = path.join(WASM_CRATE, 'pkg', 'darkly_wasm.js');
-const CRATES = path.join(FRONTEND, '..', 'crates');
+const CRATES = path.join(ROOT, 'crates');
 
 // The bridge's whole input surface. `crates/` covers the engine, its shaders
 // (`include_str!`), and its baked resources (`include_bytes!`); `wasm/` covers
@@ -30,7 +31,7 @@ const WATCH_ROOTS = [CRATES, path.join(WASM_CRATE, 'src'), path.join(WASM_CRATE,
 
 const SOURCE_RE = /\.(rs|wgsl|toml|yaml|yml|jpg|jpeg|png|webp)$/;
 
-// `target/` is cargo's output and `pkg/` is wasm-pack's: watching either
+// `target/` is cargo's output and `pkg/` is wasm-bindgen's: watching either
 // would make every build trigger the next one.
 const IGNORED = [`${path.sep}target${path.sep}`, `${path.sep}pkg${path.sep}`];
 
@@ -45,20 +46,14 @@ function isSource(file) {
 
 /// Run the dev bridge build, resolving `{ ok, output }`. Never rejects,
 /// because a failed build is a normal state during editing, and the watcher
-/// has to survive it to pick up the fix.
-///
-/// Goes through `npm run wasm:build-dev` rather than invoking `wasm-pack`
-/// directly, for two reasons. The flags (`--dev --target web --out-dir pkg`)
-/// are already defined once in `package.json` and should not be restated here.
-/// And a bare `wasm-pack` spawned from Vite's process fails where the npm
-/// script succeeds: `npm run` establishes the environment wasm-pack expects,
-/// which spawning it out of a dev-server process does not.
-function wasmPack() {
+/// has to survive it to pick up the fix. The recipe is the root Makefile's
+/// `wasm` target, the same one `npm run start` runs.
+function buildWasm() {
     return new Promise((resolve) => {
         const child = spawn(
-            'npm',
-            ['run', '--silent', 'wasm:build-dev'],
-            { cwd: FRONTEND, stdio: ['ignore', 'pipe', 'pipe'] },
+            'make',
+            ['--no-print-directory', 'wasm', 'PROFILE=dev'],
+            { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
         );
         let output = '';
         child.stdout.on('data', (d) => { output += d; });
@@ -94,7 +89,7 @@ export function wasmWatchPlugin() {
                 building = true;
                 logger.info(`[wasm] ${reason}: rebuilding…`);
                 const started = Date.now();
-                const { ok, output } = await wasmPack();
+                const { ok, output } = await buildWasm();
                 building = false;
 
                 if (ok) {

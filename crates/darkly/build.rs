@@ -3,31 +3,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The version grammar, shared with the library, which unit-tests it.
+#[path = "src/version.rs"]
+mod version;
+
 /// Bake Darkly's version into the crate as the `DARKLY_VERSION` compile-time
 /// env, read through `crate::VERSION`. The value is the latest git tag plus the
 /// commit height since it (`git describe --tags --long`, e.g. `v0.3.0-1-gf0c3ea9`),
-/// the same v* tags the deploy pipeline (darkly-deploy/) releases from.
+/// the same v* tags the deploy pipeline releases from.
 ///
-/// CANONICAL TWIN: frontend/vite.config.ts derives the frontend's version with
-/// the identical command and the identical `"0.0.0-0-gunknown"` fallback. The
-/// two build systems (Cargo vs. Vite) share no runtime, so this is a documented
-/// DRY exception: if you change the command or fallback here, change it there.
+/// Precedence: `version.txt` when `git archive` has filled it in, else live
+/// `git describe`, else `version::FALLBACK`. The file wins because it names
+/// the exact commit the tree came from, whereas `git describe` in an unpacked
+/// tarball or a crates.io build directory describes whatever repository
+/// happens to enclose it (a git-tracked home, a distro's packaging repository).
 ///
 /// Note: baking the commit SHA makes the crate's output non-deterministic across
-/// commits (as is already true for the frontend bundle). Best-effort and never
-/// panics: a tagless/git-less build just gets the fallback.
+/// commits. Best-effort and never panics: a tagless/git-less build just gets
+/// the fallback.
 fn emit_darkly_version() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!("cargo:rerun-if-changed=version.txt");
+    let archive = fs::read_to_string(manifest_dir.join("version.txt"))
+        .ok()
+        .and_then(|text| version::from_archive(&text));
+
     // No `--always`: on a tagless/shallow checkout we want this to FAIL so the
     // fallback kicks in, rather than emit a bare SHA that isn't `TAG-N-gSHA`.
-    let version = Command::new("git")
-        .args(["describe", "--tags", "--long"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "0.0.0-0-gunknown".to_string());
+    let version = archive
+        .or_else(|| {
+            Command::new("git")
+                .args(["describe", "--tags", "--long"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| version::FALLBACK.to_string());
 
     println!("cargo:rustc-env=DARKLY_VERSION={version}");
 
@@ -37,7 +51,7 @@ fn emit_darkly_version() {
     // hints only reduce dev staleness; release correctness comes from the
     // deploy pipeline's fresh clone-at-tag, not from here. Tag-at-HEAD and
     // `git gc` repacks are imperfectly covered by design.
-    let git_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../.git");
+    let git_dir = manifest_dir.join("../../.git");
     let mut candidates = vec![
         git_dir.join("HEAD"),
         git_dir.join("packed-refs"),

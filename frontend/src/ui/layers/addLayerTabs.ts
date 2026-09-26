@@ -1,5 +1,5 @@
 import type { CatalogEntry, Catalog } from '../../engine/protocol_gen';
-import { parseMenuSegment, type Action } from '../../actions/registry';
+import { parseMenuSegment, UNORDERED, type Action } from '../../actions/registry';
 import { groupByCategory, matchesQuery } from '../../lib/groupByCategory';
 import type { AddSource } from './addSources';
 
@@ -27,13 +27,14 @@ export interface TabDeps {
 }
 
 /** Sort key for a source: the order declared on its action's `Layer:N` segment.
- *  Sources whose action declares no order fall to the end, in declaration
- *  order, which is what `parseMenuSegment` already means everywhere else. */
+ *  The rail mirrors the top-level Layer menu, so it reads the first segment,
+ *  the one naming that menu; a later segment would position the action inside
+ *  a submenu instead. Sources whose action declares no order fall to the end,
+ *  in declaration order, which is what `parseMenuSegment` already means
+ *  everywhere else. */
 function railOrder(source: AddSource, deps: TabDeps): number {
-    const path = deps.action(source.action)?.menuPath;
-    const last = path?.[path.length - 1];
-    const order = last ? parseMenuSegment(last).order : undefined;
-    return order ?? Number.MAX_SAFE_INTEGER;
+    const top = deps.action(source.action)?.menuPath?.[0];
+    return (top ? parseMenuSegment(top).order : undefined) ?? UNORDERED;
 }
 
 /** The one card a catalog-less source contributes, built from its action so the

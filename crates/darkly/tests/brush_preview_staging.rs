@@ -8,10 +8,16 @@
 //! painted under the stroke; these tests are what holds it.
 
 use darkly::brush::builtin_brushes;
+use darkly::brush::portable::PortableBrush;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::preview::{pixel_centre, PreviewBackdrop};
 use darkly::gpu::test_utils::test_device;
+
+/// A brush authored strictly inside the accumulation dial, so it declares a
+/// `build` channel. A fixture rather than a shipped brush: this needs any
+/// mid-dial graph, and which brushes are tuned that way is art.
+const ANALYTIC_DISC_MID_DIAL: &str = include_str!("fixtures/analytic_disc_buildup_half.yaml");
 
 /// Brushes whose graphs sample the canvas, and the glyph each declares.
 const STAGED: [(&str, &str); 4] = [
@@ -214,8 +220,12 @@ fn the_preview_pin_is_what_makes_blur_read() {
     );
 }
 
-/// Every brush that deposits pigment keeps the flat clear, so nothing about its
-/// preview changes. Eleven of the fifteen shipped brushes.
+/// Every brush that deposits pigment keeps the flat clear, so nothing about
+/// its preview changes, and every brush that samples the canvas is staged.
+///
+/// The partition is asserted, not the size of either half: which brushes ship
+/// is a product decision, so counting them would break on a brush being added
+/// or retired without anything being wrong.
 #[test]
 fn depositing_brushes_stage_nothing() {
     let staged: Vec<&str> = STAGED.iter().map(|(n, _)| *n).collect();
@@ -238,7 +248,10 @@ fn depositing_brushes_stage_nothing() {
             flat += 1;
         }
     }
-    assert_eq!(flat, 10, "ten shipped brushes deposit pigment");
+    assert!(
+        flat > 0,
+        "at least one shipped brush must deposit pigment, or this test is vacuous"
+    );
 }
 
 /// A `Flat` backdrop is the theme background at every position, which is what
@@ -399,12 +412,7 @@ fn channels_do_not_outlive_the_brush_that_declared_them() {
 
     // Watercolor declares a deposit channel, the Ink Pen declares none:
     // the second must free the first's rather than inherit it.
-    for name in [
-        "Smooth Watercolor",
-        "Pencil",
-        "Ink Pen",
-        "Smooth Watercolor",
-    ] {
+    for name in ["Smooth Watercolor", "Ink Pen", "Smooth Watercolor"] {
         let (pixels, _, _) = stroke_thumbnail(&mut engine, name);
         assert!(
             luminance_sd(&pixels) > 0.0,
@@ -416,41 +424,35 @@ fn channels_do_not_outlive_the_brush_that_declared_them() {
     // accumulation dial: watercolor's channel is `deposit` at `R8Unorm`,
     // a mid-dial paint brush's is `build` at `Rgba8Unorm`. Reading either
     // by position would bind the wrong one here.
+    //
+    // The mid-dial brush is the test's own fixture rather than a shipped one
+    // mutated in place: what this needs is any graph inside the dial, and
+    // borrowing art would make the case depend on that art staying inside it.
     let watercolor = builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == "Smooth Watercolor")
         .expect("Smooth Watercolor registered");
-    let mut pencil = builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Pencil")
-        .expect("Pencil registered");
-    let paint_id = pencil
-        .metadata
-        .graph
-        .nodes()
-        .values()
-        .find(|n| n.type_id == "paint")
-        .expect("paint terminal")
-        .id
-        .clone();
-    pencil
-        .metadata
-        .graph
-        .set_port_value(
-            &paint_id,
-            "buildup",
-            darkly::brush::input_value::InputValue::Scalar(0.5),
-        )
-        .expect("paint buildup port");
+    let watercolor_json =
+        serde_json::to_string(&watercolor.metadata.graph).expect("serialize graph");
+    let mid_dial: PortableBrush =
+        serde_yaml_ng::from_str(ANALYTIC_DISC_MID_DIAL).expect("fixture parses");
+    let mid_dial_json = serde_json::to_string(
+        &mid_dial
+            .into_graph(darkly::brush::registry())
+            .expect("fixture builds"),
+    )
+    .expect("serialize graph");
 
-    for brush in [&watercolor, &pencil, &watercolor] {
-        let json = serde_json::to_string(&brush.metadata.graph).expect("serialize graph");
-        engine.set_brush_graph(&json).expect("graph compiles");
+    for (label, json) in [
+        ("Smooth Watercolor", &watercolor_json),
+        ("the mid-dial fixture", &mid_dial_json),
+        ("Smooth Watercolor", &watercolor_json),
+    ] {
+        engine.set_brush_graph(json).expect("graph compiles");
         let (pixels, _, _) = engine.test_render_stroke_preview_canvas();
         assert!(
             luminance_sd(&pixels) > 0.0,
-            "'{}' rendered a flat preview on a scratch the brush before it used",
-            brush.metadata.name
+            "'{label}' rendered a flat preview on a scratch the brush before it used"
         );
     }
 }

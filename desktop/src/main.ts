@@ -3,15 +3,16 @@
  *
  * - Sets up the platform-appropriate userData path (~/.config/Darkly/,
  *   etc.), with DARKLY_DATA_DIR as an override for portable installs.
- * - Creates a BrowserWindow that loads the packaged frontend (a static
- *   build of the public Darkly repo) from process.resourcesPath/app/.
+ * - Creates a BrowserWindow that loads the frontend (a static build of
+ *   frontend/), staged by `make app` into resources/app/.
  * - Wires up the storage IPC handlers that back window.electronAPI.storage
  *   on the renderer side.
  */
-import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createStorageHost } from './storage-host';
+import { externalLinkHandler } from './external-links';
 
 // On Windows, handle Squirrel install/uninstall events at startup. If we
 // were launched as part of one, quit and let Squirrel do its thing.
@@ -24,6 +25,11 @@ if (require('electron-squirrel-startup')) {
 // package.json "name" (which is "darkly-desktop"). This must happen before
 // any app.getPath('userData') call.
 app.setName('Darkly');
+
+// The installed desktop entry's name, so Linux desktops pair the window with
+// it: Electron derives the X11 WM_CLASS and the Wayland app_id from this, and
+// the entry's StartupWMClass matches. The id is also APP_ID in the Makefile.
+app.setDesktopName('art.darkly.Darkly.desktop');
 
 // Allow overriding the userData path entirely for portable / sandboxed installs.
 const dataDirOverride = process.env.DARKLY_DATA_DIR;
@@ -104,8 +110,14 @@ function createWindow() {
     if (!fs.existsSync(indexPath)) {
         // Helpful error if the frontend wasn't built/staged.
         console.error(`Darkly: frontend not found at ${indexPath}`);
-        console.error('Run ./build.sh from the repo root to stage the frontend.');
+        console.error("Run 'make app' from the repo root to stage the frontend.");
     }
+    // A link out of Darkly belongs in the reader's browser, not in a second
+    // chromeless Electron window (Electron's default). See external-links.ts.
+    mainWindow.webContents.setWindowOpenHandler(
+        externalLinkHandler((url) => void shell.openExternal(url)),
+    );
+
     mainWindow.loadFile(indexPath);
 
     if (process.env.DARKLY_DEVTOOLS) {

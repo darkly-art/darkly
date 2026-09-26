@@ -63,6 +63,22 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Float { min: 0.0, max: 1.0 },
         widget: WidgetHint::Hidden,
     },
+    // The colors section of the radial palette popup owns a 120 degree arc
+    // split evenly among its nodes, so every added swatch narrows all of them:
+    // at 12, plus the spectrum leaf that opens the color wheel, each sector is
+    // 9.2 degrees, still a landable target at the innermost ring. Twelve is
+    // also exactly Krita's color-history depth (MAX_RECENT_COLOR,
+    // libs/ui/kis_favorite_resource_manager.cpp). The floor is 2 rather than 1
+    // because the section seeds the current foreground/background pair when
+    // the recents run short, and a section that could hold only one of them
+    // would be a number the widget promises and the builder cannot honour.
+    Pref {
+        key: "ui.palettePopup.recentColors",
+        display_name: "Recent colors in the palette popup",
+        description: Some("How many recently used colors are in the radial palette popup."),
+        kind: PrefKind::Int { min: 2, max: 12 },
+        widget: WidgetHint::Auto,
+    },
     Pref {
         key: "ui.toolStrip.autoHide",
         display_name: "Hide the tool strip until the pointer nears it",
