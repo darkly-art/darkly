@@ -1,0 +1,148 @@
+# Flathub manifest for Darkly. This is a template: scripts/flathub.sh fills
+# the tokens between at signs from the commit at HEAD and writes the manifest
+# next to the vendored source lists it generates. Edit this file, never the
+# output.
+#
+# Darkly is built from source by the root Makefile, the one recipe every
+# channel calls (packaging/README.md). Flathub builds with no network, so the
+# build tools the SDK lacks are pinned tarballs from their publishers, and
+# every crate and npm package is a pinned source in cargo-sources.json and
+# generated-sources.json.
+app-id: art.darkly.Darkly
+
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+
+base: org.electronjs.Electron2.BaseApp
+base-version: '26.08'
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node22
+
+command: darkly
+
+# No debuginfo split anywhere. Observed with flatpak-builder 1.4.9: after a
+# cache checkout, a later module's post-processing stripped the prebuilt Rust
+# toolchain an earlier module had installed, and two passes over libLLVM
+# through hardlinked paths left it with no loadable segments, so rustc failed
+# to start. A per-module flag on the toolchain cannot stop a later module.
+# Nothing is lost: Electron ships stripped.
+build-options:
+  no-debuginfo: true
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+
+modules:
+  # Rust with a wasm32 std, the version `rust-version` in Cargo.toml names.
+  # The rust-stable SDK extension carries no wasm32 component and is mounted
+  # read-only, so the target cannot be added to it.
+  - name: rust-toolchain
+    buildsystem: simple
+    cleanup: ['*']
+    build-commands:
+      # llvm-tools carries a second copy of libLLVM that nothing here uses;
+      # the IDE tooling is dead weight in a build sandbox.
+      - cd rust-host && ./install.sh --prefix=/app/rust --disable-ldconfig
+        --without=rust-docs,rust-docs-json-preview,llvm-tools-preview,rust-analyzer-preview,clippy-preview,rustfmt-preview
+      - cd rust-std-wasm && ./install.sh --prefix=/app/rust --disable-ldconfig
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        dest: rust-host
+        url: https://static.rust-lang.org/dist/rust-@RUST_VERSION@-x86_64-unknown-linux-gnu.tar.xz
+        sha256: @RUST_X86_64_SHA256@
+      - type: archive
+        only-arches: [aarch64]
+        dest: rust-host
+        url: https://static.rust-lang.org/dist/rust-@RUST_VERSION@-aarch64-unknown-linux-gnu.tar.xz
+        sha256: @RUST_AARCH64_SHA256@
+      - type: archive
+        dest: rust-std-wasm
+        url: https://static.rust-lang.org/dist/rust-std-@RUST_VERSION@-wasm32-unknown-unknown.tar.xz
+        sha256: @RUST_WASM_SHA256@
+
+  # The wasm-bindgen CLI, at exactly the version Cargo.lock pins for the
+  # wasm-bindgen crate (it refuses to run otherwise). Prebuilt and static, as
+  # the toolchain above is; wasm-pack cannot be used because it downloads this
+  # binary at build time.
+  - name: wasm-bindgen
+    buildsystem: simple
+    cleanup: ['*']
+    build-commands:
+      - install -Dm755 wasm-bindgen /app/bin/wasm-bindgen
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/wasm-bindgen/wasm-bindgen/releases/download/@WASM_BINDGEN_VERSION@/wasm-bindgen-@WASM_BINDGEN_VERSION@-x86_64-unknown-linux-musl.tar.gz
+        sha256: @WASM_BINDGEN_X86_64_SHA256@
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/wasm-bindgen/wasm-bindgen/releases/download/@WASM_BINDGEN_VERSION@/wasm-bindgen-@WASM_BINDGEN_VERSION@-aarch64-unknown-linux-musl.tar.gz
+        sha256: @WASM_BINDGEN_AARCH64_SHA256@
+
+  # binaryen's wasm-opt, which the Makefile runs over the release wasm. A
+  # constant here: Darkly pins no binaryen version. Bump the four lines
+  # together; the .sha256 sidecars sit next to the tarballs on the release.
+  - name: binaryen
+    buildsystem: simple
+    cleanup: ['*']
+    build-commands:
+      - install -Dm755 bin/wasm-opt /app/bin/wasm-opt
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz
+        sha256: 2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-aarch64-linux.tar.gz
+        sha256: 89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8
+
+  - name: darkly
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node22/bin:/app/rust/bin
+      env:
+        CARGO_HOME: /run/build/darkly/cargo
+        CARGO_NET_OFFLINE: 'true'
+        XDG_CACHE_HOME: /run/build/darkly/flatpak-node/cache
+        npm_config_cache: /run/build/darkly/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+        # Read by desktop/forge.config.js: hands @electron/packager the
+        # vendored Electron zip. @electron/get 3 refetches SHASUMS256.txt from
+        # GitHub on every run, cache or not, so seeding its cache is not enough.
+        DARKLY_ELECTRON_ZIP_DIR: /run/build/darkly/flatpak-node/cache/electron
+    build-commands:
+      # The Makefile's `deps` target is `npm ci` with the network; this is the
+      # same against the vendored cache.
+      - cd frontend && npm ci --offline --ignore-scripts
+      - cd desktop && npm ci --offline --ignore-scripts
+      - make app
+      - make install PREFIX=/app LIBDIR=/app
+        LICENSEDIR=/app/share/licenses/art.darkly.Darkly
+      # `install` leaves a symlink at /app/bin/darkly and Chromium's setuid
+      # sandbox helper. zypak, from org.electronjs.Electron2.BaseApp, bridges
+      # Chromium's sandbox to the flatpak one, so the launcher goes through it
+      # and the helper is dropped.
+      - rm /app/bin/darkly /app/darkly/chrome-sandbox
+      - install -Dm755 darkly.sh /app/bin/darkly
+    sources:
+      # The commit only, with full history: the version is `git describe
+      # --tags --long`, and `make install-data` renders the metainfo's release
+      # block from every reachable tag, so the tags must arrive with the clone.
+      - type: git
+        url: https://github.com/darkly-art/darkly.git
+        commit: @COMMIT@
+        disable-shallow-clone: true
+      - cargo-sources.json
+      - generated-sources.json
+      - type: script
+        dest-filename: darkly.sh
+        commands:
+          - exec zypak-wrapper /app/darkly/darkly "$@"

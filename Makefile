@@ -50,7 +50,7 @@ WASM_BINDGEN_VERSION = $(shell sed -n '/^name = "wasm-bindgen"$$/{n;s/^version =
 
 # `frontend` and `desktop` are also directory names: without .PHONY, make
 # would answer "is up to date" and build nothing.
-.PHONY: app wasm frontend desktop bundle install install-app install-data tools deps clean
+.PHONY: app wasm frontend desktop bundle install install-app install-data tools deps clean wasm-bindgen-version
 
 app: bundle
 
@@ -107,6 +107,10 @@ tools:
 	rustup target add $(WASM_TARGET)
 	@test -n "$(WASM_BINDGEN_VERSION)" || { echo "wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
 	cargo install --locked wasm-bindgen-cli --version $(WASM_BINDGEN_VERSION)
+
+# The pin, for a recipe that fetches the CLI itself (scripts/flathub.sh).
+wasm-bindgen-version:
+	@echo $(WASM_BINDGEN_VERSION)
 
 # Packagers substitute their own vendoring (Flathub's generated sources, a
 # PKGBUILD's prepare()).

@@ -83,9 +83,11 @@ pipeline that holds the signing keys picks up the new tag within a few hours,
 builds and smoke-tests the signed desktop bundles, attaches them to the draft,
 and publishes the release once every platform has passed. Until then the
 metainfo's `<url type="details">` points at a draft, and is a 404 to users.
-
-Flathub is not live yet. When it is, its manifest pins the tag and commit and
-is bumped after the release is published.
+The same pipeline then runs `scripts/flathub.sh` at the tag and pushes its
+output to `flathub/art.darkly.Darkly`, whose buildbot builds and publishes it.
+That output is a function of the commit (`packaging/flathub/`): CI generates
+and lints it on every PR and builds it on the release PR, so a change that
+would break Flathub cannot be tagged.
 
 **Notes by hand.** The tag body is what users read in the store, and PR titles
 are commit language. To write it yourself, skip the script: `git tag -a

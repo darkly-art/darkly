@@ -12,6 +12,7 @@ packaging target.
 | `icon.icns` | macOS `.dmg` and `.zip` |
 | `icon.ico` | Windows installer |
 | `app.json` | `desktop/forge.config.js` (generated from `product.yaml`) |
+| `flathub/` | `scripts/flathub.sh`: the Flathub manifest template and the README shipped with its output |
 
 The icons keep the plain `icon` stem rather than the app ID. Electron's packager
 derives the platform icon by stripping the extension and appending its own, and
@@ -25,10 +26,13 @@ on install, which `make install-data` does.
 Anything specific to a single packaging target. The Flathub launcher, which
 wraps the binary in `zypak-wrapper`, is the worked example: zypak exists only
 inside `org.electronjs.Electron2.BaseApp`, so the launcher is meaningless to
-every other channel and belongs with the Flathub manifest rather than here,
-whether it is carried as its own file or declared inline in that manifest. The
-same rule applies to any future snapcraft or winget file: shared facts here,
-per-channel recipes with their channel.
+every other channel and lives inline in the Flathub manifest template, not
+among the shared files. The same rule applies to any future snapcraft or
+winget file: shared facts here, per-channel recipes with their channel. The
+Flathub template is the one recipe kept in this repository (under `flathub/`)
+rather than with its channel, because it is coupled to `Cargo.toml`,
+`Cargo.lock`, both npm lockfiles and the Makefile, and here is the only place
+an upstream change can be checked against it.
 
 ## Building and installing
 
@@ -137,8 +141,21 @@ tarball too: the version tests accept either the placeholders or a filled-in
 
 Darkly is published to Flathub as `art.darkly.Darkly`. Flathub builds from
 source on its own infrastructure with no network access, so every dependency is
-vendored as a pinned source list rather than fetched at build time, and the
-manifest lives in the `flathub/art.darkly.Darkly` repository rather than here.
+vendored as a pinned source list. The Flathub repository
+(`flathub/art.darkly.Darkly`) holds generated output only: `scripts/flathub.sh`
+fills `flathub/art.darkly.Darkly.yaml.in` from the commit at HEAD (the commit,
+`rust-version`, the `wasm-bindgen` pin, `Cargo.lock` and the two npm lockfiles)
+and the release pipeline pushes the result on every tag
+([`docs/versioning.md`](../docs/versioning.md)). CI runs the script and the
+Flathub linter on every PR and builds the manifest on the release PR, so an
+upstream change that would break Flathub cannot be tagged.
+
+The manifest runs `make app` and `make install PREFIX=/app LIBDIR=/app
+LICENSEDIR=/app/share/licenses/art.darkly.Darkly`, then replaces the
+`bin/darkly` symlink with its zypak launcher and removes `chrome-sandbox`,
+since zypak bridges Chromium's sandbox to the flatpak one. `rust-version` in
+`Cargo.toml` is exact (`X.Y.Z`) because it names the toolchain Flathub
+downloads; cargo enforces it as a floor, so a build on an older rustc says so.
 
 The summary, description and desktop-entry fields in the two text files are
 generated from `crates/darkly/product.yaml`; `cargo sync-docs` refills them.
@@ -147,13 +164,7 @@ by hand. The committed copy is refreshed after each release
 ([`docs/versioning.md`](../docs/versioning.md)), so it lags a tag until that
 commit lands; `make install-data` therefore refills it at build time from the
 tags reachable from the checkout (`scripts/metainfo-releases.sh`), and installs
-the result. Flathub installs the same bundle, then replaces the symlink with
-its zypak launcher and removes `chrome-sandbox`, since zypak bridges Chromium's
-sandbox to the flatpak one:
-
-```bash
-make install PREFIX=/app LIBDIR=/app LICENSEDIR=/app/share/licenses/art.darkly.Darkly
-```
+the result.
 
 The tags are the release record, so a channel that builds from a clone must
 fetch them. With no tags at all (a tarball) the committed block is kept, plus
@@ -167,6 +178,15 @@ appstreamcli validate --no-net /tmp/darkly-data/usr/share/metainfo/art.darkly.Da
 desktop-file-validate /tmp/darkly-data/usr/share/applications/art.darkly.Darkly.desktop
 ```
 
-The full manifest build and lint recipe is documented alongside the manifest in
-the Flathub repository, since it needs the multi-gigabyte Freedesktop SDK and
-the Electron base app.
+To build the generated manifest the way Flathub does, with `org.flatpak.Builder`
+installed from Flathub (it needs the multi-gigabyte Freedesktop SDK and the
+Electron base app):
+
+```bash
+scripts/flathub.sh /tmp/flathub && cd /tmp/flathub
+flatpak run org.flatpak.Builder --force-clean --sandbox --user --install-deps-from=flathub \
+  --ccache --compose-url-policy=full --mirror-screenshots-url=https://dl.flathub.org/media/ \
+  --repo=repo --install builddir art.darkly.Darkly.yaml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest art.darkly.Darkly.yaml
+flatpak run art.darkly.Darkly
+```

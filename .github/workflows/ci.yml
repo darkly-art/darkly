@@ -262,3 +262,46 @@ jobs:
         run: |
           desktop-file-validate packaging/art.darkly.Darkly.desktop
           desktop-file-validate "$RUNNER_TEMP/data/usr/share/applications/art.darkly.Darkly.desktop"
+
+  # The Flathub packaging is a function of the commit (packaging/flathub/,
+  # scripts/flathub.sh): generate it and run Flathub's linter on it, so an
+  # upstream change that would break Flathub fails here.
+  flathub:
+    name: flathub manifest
+    runs-on: ubuntu-latest
+    steps:
+      # The PR head, not the merge ref: release.sh tags the head, so that is
+      # the commit Flathub builds. Empty on push, where checkout takes the
+      # pushed commit.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: scripts/flathub.sh "$RUNNER_TEMP/flathub"
+      - name: flatpak-builder-lint manifest
+        run: docker run --rm -v "$RUNNER_TEMP/flathub:/mnt" ghcr.io/flathub-infra/flatpak-builder-lint:latest manifest /mnt/art.darkly.Darkly.yaml
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flathub
+          path: ${{ runner.temp }}/flathub
+
+  # A real offline build of exactly what Flathub will build, on the release
+  # PR only: release.sh refuses to tag until the PR is green, so a change that
+  # breaks Flathub cannot become a release. About half an hour cold; the
+  # action restores the toolchain modules from cache after that.
+  flathub-build:
+    name: flathub build
+    needs: flathub
+    if: github.base_ref == 'master'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: flathub
+          path: flathub
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flathub/art.darkly.Darkly.yaml
+          build-bundle: false

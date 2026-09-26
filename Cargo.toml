@@ -11,8 +11,10 @@ resolver = "2"
 
 [workspace.package]
 license = "AGPL-3.0-or-later"
-# The toolchain releases are built with, not a measured minimum.
-rust-version = "1.98"
+# The exact toolchain releases are built with, not a measured minimum. It is
+# X.Y.Z because scripts/flathub.sh downloads that toolchain for Flathub; cargo
+# enforces it as a floor.
+rust-version = "1.98.0"
 repository = "https://github.com/darkly-art/darkly"
 
 [workspace.dependencies]

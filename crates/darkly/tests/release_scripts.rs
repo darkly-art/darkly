@@ -636,3 +636,88 @@ fn refuses_when_the_pr_list_is_truncated() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("truncated"));
     assert!(!r.origin_has("v0.2.0"));
 }
+
+// ---- flathub.sh ----------------------------------------------------------
+
+/// Fills the real template from a scratch repository, with the network and
+/// both generators shimmed: every sidecar answers one fixed hash, and the
+/// generators write empty lists. Pins the contract between the template's
+/// placeholders and the script's substitutions; the real generators, network
+/// and linter run in the `flathub` CI job.
+#[test]
+fn flathub_manifest_from_a_checkout() {
+    const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let s = Scratch::new("flathub");
+    let work = s.0.join("work");
+    let shim = s.0.join("shim");
+    let out = s.0.join("out");
+    fs::create_dir_all(work.join("packaging/flathub")).unwrap();
+    fs::create_dir_all(&shim).unwrap();
+    for f in ["art.darkly.Darkly.yaml.in", "README.md"] {
+        fs::copy(
+            repo_root().join("packaging/flathub").join(f),
+            work.join("packaging/flathub").join(f),
+        )
+        .unwrap();
+    }
+    fs::write(
+        work.join("Cargo.toml"),
+        "[workspace.package]\nrust-version = \"1.98.0\"\n",
+    )
+    .unwrap();
+    fs::write(work.join("Cargo.lock"), "").unwrap();
+    fs::write(
+        work.join("Makefile"),
+        "wasm-bindgen-version:\n\t@echo 0.2.114\n",
+    )
+    .unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["add", "."]);
+    let head = commit(&work, "tree");
+
+    let write_shim = |name: &str, body: &str| {
+        let path = shim.join(name);
+        fs::write(&path, format!("#!/usr/bin/env bash\nset -eu\n{body}\n")).unwrap();
+        Command::new("chmod").arg("+x").arg(&path).status().unwrap();
+        path
+    };
+    let curl = write_shim("curl", &format!("echo '{HASH}  file'"));
+    // Both generators: find `-o <path>` and write an empty list there.
+    let gen = "while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done; echo '[]' > \"$out\"";
+    let cargo_gen = write_shim("cargo-gen", gen);
+    let node_gen = write_shim("node-gen", gen);
+
+    let run = isolated("bash", &work)
+        .arg(repo_root().join("scripts/flathub.sh"))
+        .arg(&out)
+        .env("CURL", &curl)
+        .env("FLATPAK_CARGO_GENERATOR", &cargo_gen)
+        .env("FLATPAK_NODE_GENERATOR", &node_gen)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+
+    let mut files: Vec<String> = fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        ["README.md", "art.darkly.Darkly.yaml", "cargo-sources.json", "generated-sources.json"]
+    );
+    let manifest = fs::read_to_string(out.join("art.darkly.Darkly.yaml")).unwrap();
+    assert!(manifest.contains(&format!("commit: {head}")));
+    assert!(!manifest.contains("tag:"), "commit only; the tags arrive with the full clone");
+    assert!(manifest.contains("rust-1.98.0-x86_64-unknown-linux-gnu.tar.xz"));
+    assert!(manifest.contains("rust-std-1.98.0-wasm32-unknown-unknown.tar.xz"));
+    assert!(manifest.contains("wasm-bindgen-0.2.114-aarch64-unknown-linux-musl.tar.gz"));
+    // Three Rust tarballs and two wasm-bindgen tarballs take a fetched hash.
+    assert_eq!(manifest.matches(HASH).count(), 5);
+    // A surviving `@NAME@`: some text between two `@` that is all caps.
+    let between: Vec<&str> = manifest.split('@').collect();
+    let unfilled = between[1..between.len() - 1].iter().any(|p| {
+        !p.is_empty() && p.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    });
+    assert!(!unfilled, "unfilled placeholder in the manifest");
+}
