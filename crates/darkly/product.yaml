@@ -31,7 +31,9 @@ description: "Darkly is a GPU-native paint program built for artists. It has a p
 
 # The long description, taken from the README: its intro, pledges, and the
 # Veils and Voids sections, word for word minus the links and Markdown
-# emphasis (AppStream allows neither links nor bold here). Each entry is a
+# emphasis (AppStream allows neither links nor bold here), then a closing beta
+# notice. The notice goes last because a store has no way to mark it as
+# temporary; its Discord link is the metainfo's `contact` URL. Each entry is a
 # paragraph, a list of strings for a bulleted list, or `heading:` for a
 # section title. Keep it in step with the README by hand.
 long_description:
@@ -52,3 +54,4 @@ long_description:
   - "Voids are a type of layer that specializes in pulling inspiration from outside sources."
   - "You can use the Noise void to generate entropy, or Screenshare to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over."
   - "Voids support masks and blend modes. They are the natural complement to veils, and a natural integration point for other art programs like Blender, which has its own dedicated void 🧡"
+  - "Darkly is in beta. Please report bugs and suggest features in Discord!"

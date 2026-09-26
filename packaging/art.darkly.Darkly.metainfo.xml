@@ -37,6 +37,7 @@
     <p>Voids are a type of layer that specializes in pulling inspiration from outside sources.</p>
     <p>You can use the Noise void to generate entropy, or Screenshare to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.</p>
     <p>Voids support masks and blend modes. They are the natural complement to veils, and a natural integration point for other art programs like Blender, which has its own dedicated void 🧡</p>
+    <p>Darkly is in beta. Please report bugs and suggest features in Discord!</p>
   </description>
   <!-- /darkly:app-description -->
 
@@ -45,6 +46,7 @@
   <url type="homepage">https://darkly.art</url>
   <url type="bugtracker">https://github.com/darkly-art/darkly/issues</url>
   <url type="vcs-browser">https://github.com/darkly-art/darkly</url>
+  <url type="contact">https://discord.gg/kFz2FGhbpu</url>
 
   <screenshots>
     <screenshot type="default">
