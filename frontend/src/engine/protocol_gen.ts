@@ -941,7 +941,7 @@ export type RemoveLayersReq = { ids: Array<number>, };
 
 export type RemoveMaskReq = { id: number, };
 
-export type RescaleImageReq = { new_width: number, new_height: number, };
+export type RescaleImageReq = { new_width: number, new_height: number, dpi: number | null, };
 
 export type ResizeCanvasRectReq = { origin_x: number, origin_y: number, w: number, h: number, };
 
@@ -1135,6 +1135,7 @@ export type RequestKind =
     | 'copy_layer_rich'
     | 'crop_to_selection'
     | 'cut'
+    | 'document_dpi'
     | 'document_name'
     | 'duplicate_node'
     | 'duplicate_nodes'
@@ -1334,6 +1335,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'copy_layer_rich',
     'crop_to_selection',
     'cut',
+    'document_dpi',
     'document_name',
     'duplicate_node',
     'duplicate_nodes',
@@ -1541,6 +1543,7 @@ export interface EngineApi {
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
     cut(req: CutReq): Promise<ClipboardExport | null>;
+    documentDpi(): Promise<number>;
     documentName(): Promise<string>;
     duplicateNode(req: DuplicateNodeReq): Promise<number | null>;
     duplicateNodes(req: DuplicateNodesReq): Promise<Array<number>>;
@@ -1742,6 +1745,7 @@ export function makeApi(t: Transport): EngineApi {
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),
         cut: (req) => t.request('cut', req),
+        documentDpi: () => t.request('document_dpi'),
         documentName: () => t.request('document_name'),
         duplicateNode: (req) => t.request('duplicate_node', req),
         duplicateNodes: (req) => t.request('duplicate_nodes', req),

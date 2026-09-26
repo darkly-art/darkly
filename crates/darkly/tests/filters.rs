@@ -323,7 +323,7 @@ fn invert_layer_with_selection_after_rescale() {
     let layer = e.paste_image(w, h, &distinct_rgba(w, h), 0, 0, None);
 
     // Content-scaling resize to 2×: layer pixels are resampled to the new dims.
-    e.rescale_image(2 * w, 2 * h);
+    e.rescale_image(2 * w, 2 * h, None);
     let nw = 2 * w;
     let before = e.test_readback_layer(layer);
     assert_eq!(

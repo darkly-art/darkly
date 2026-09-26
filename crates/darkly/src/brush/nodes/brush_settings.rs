@@ -12,10 +12,12 @@
 //! `size` is additionally a **settable-source** (`.source()`): any node can
 //! wire from `brush_settings.size` to read the stroke's base size as a graph
 //! signal, and the editor hides the source handle once the port is driven.
-//! The signal is published **in canvas pixels**: the brush *diameter*
+//! The signal is published **in reference pixels**: the brush *diameter*
 //! (`base_size * DAB_REFERENCE_SIZE`), not the raw `0..4` normalized knob, so
 //! it lands in the same pixel domain as its sinks (e.g. `noise.scale`) and a
-//! `× 1` gain wired between them is a true no-op. Like `pen_input`, the runner
+//! `× 1` gain wired between them is a true no-op on any document, because
+//! both sides cross the reference-to-canvas boundary through the same
+//! factor. Like `pen_input`, the runner
 //! seeds this slot bespoke (in `seed_sensors`, where the base size and the
 //! pixel projection live) rather than through the generic settable-source
 //! republish; [`Self::compile_wgsl`] then packs the already-projected slot
@@ -88,12 +90,19 @@ pub fn base_size(graph: &Graph<BrushWireType>) -> f32 {
 /// defaults. Falls back to `SpacingConfig::default()` for graphs that predate
 /// either port. A `spacing_min_px` of 0 (the registration default) also falls
 /// back: it means "use the ratio alone, with the absolute floor".
-pub fn spacing_config(graph: &Graph<BrushWireType>) -> SpacingConfig {
+///
+/// This is a boundary: `spacing_min_px` is an authored reference-pixel
+/// length, while the `SpacingConfig` it lands in is consumed in canvas
+/// pixels, so `dpi_factor` (canvas pixels per reference pixel) converts it
+/// at readout. The `ABSOLUTE_MIN_SPACING_PX` fallback does **not** convert:
+/// it is a raster constant that exists because pixels are discrete, and a
+/// high-DPI document must not inherit a multi-pixel spacing floor.
+pub fn spacing_config(graph: &Graph<BrushWireType>, dpi_factor: f32) -> SpacingConfig {
     let default = SpacingConfig::default();
     let ratio = read_scalar_input(graph, "spacing").unwrap_or(default.ratio);
     let min_px_raw = read_scalar_input(graph, "spacing_min_px").unwrap_or(0.0);
     let min_px = if min_px_raw > 0.0 {
-        min_px_raw
+        min_px_raw * dpi_factor
     } else {
         default.min_px
     };
@@ -167,8 +176,9 @@ pub fn register() -> BrushNodeRegistration {
                 // Absolute-pixel spacing floor. Effective spacing per dab is
                 // `max(diameter × ratio, spacing_min_px, ABSOLUTE_MIN_SPACING_PX)`.
                 // Set this above zero (and ratio small) to pin dab spacing in
-                // canvas pixels regardless of brush size (liquify uses this so
-                // its per-dab displacement stays size-invariant).
+                // reference pixels regardless of brush size (liquify uses
+                // this so its per-dab displacement stays size-invariant).
+                // Converted to canvas pixels once, by `spacing_config`.
                 PortDef::input("spacing_min_px", BrushWireType::Scalar)
                     .with_range(0.0, 64.0, 0.0)
                     .with_natural_range(0.0, 32.0)
@@ -178,7 +188,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Absolute-pixel floor for dab spacing. 0 = use the \
                          ratio above; non-zero pins spacing to at least \
-                         this many canvas pixels regardless of brush size.",
+                         this many reference pixels regardless of brush size.",
                     ),
                 // How fast the stamp may pivot to follow the stroke, per brush
                 // diameter of travel, so the limit is the same whether the
@@ -213,7 +223,7 @@ pub fn register() -> BrushNodeRegistration {
 }
 
 /// No-op evaluator. `size` is published on its slot by the runner's bespoke
-/// `seed_sensors` seeding (in canvas pixels); `stabilize`/`spacing`/
+/// `seed_sensors` seeding (in reference pixels); `stabilize`/`spacing`/
 /// `spacing_min_px` are read out-of-band and never flow through the graph.
 pub struct BrushSettingsEvaluator;
 
@@ -301,7 +311,7 @@ mod tests {
     #[test]
     fn spacing_config_reads_scrubbed_value() {
         let graph = graph_with_settings(&[("spacing", 0.5)]);
-        let cfg = spacing_config(&graph);
+        let cfg = spacing_config(&graph, 1.0);
         assert!((cfg.ratio - 0.5).abs() < 1e-6);
         assert!((cfg.distance(100.0) - 50.0).abs() < 1e-6);
     }
@@ -309,14 +319,14 @@ mod tests {
     #[test]
     fn spacing_config_zero_min_px_falls_back_to_default() {
         let graph = graph_with_settings(&[("spacing", 0.1), ("spacing_min_px", 0.0)]);
-        let cfg = spacing_config(&graph);
+        let cfg = spacing_config(&graph, 1.0);
         assert!(cfg.min_px >= ABSOLUTE_MIN_SPACING_PX);
     }
 
     #[test]
     fn spacing_config_honors_min_px_override() {
         let graph = graph_with_settings(&[("spacing", 0.05), ("spacing_min_px", 8.0)]);
-        let cfg = spacing_config(&graph);
+        let cfg = spacing_config(&graph, 1.0);
         assert!((cfg.ratio - 0.05).abs() < 1e-6);
         assert!((cfg.min_px - 8.0).abs() < 1e-6);
         assert!((cfg.distance(50.0) - 8.0).abs() < 1e-6);
@@ -325,9 +335,31 @@ mod tests {
     #[test]
     fn spacing_config_falls_back_when_settings_missing() {
         let graph = Graph::<BrushWireType>::new();
-        let cfg = spacing_config(&graph);
+        let cfg = spacing_config(&graph, 1.0);
         let default = SpacingConfig::default();
         assert!((cfg.ratio - default.ratio).abs() < 1e-6);
         assert!((cfg.min_px - default.min_px).abs() < 1e-6);
+    }
+
+    /// `spacing_min_px` is an authored reference-pixel length, so readout is
+    /// its boundary: on a document at twice the reference DPI an 8 px floor
+    /// is 16 canvas pixels, and the dab interval it pins doubles with it.
+    #[test]
+    fn spacing_min_px_is_converted_at_readout() {
+        let graph = graph_with_settings(&[("spacing", 0.05), ("spacing_min_px", 8.0)]);
+        let cfg = spacing_config(&graph, 2.0);
+        assert!((cfg.ratio - 0.05).abs() < 1e-6, "the ratio is unitless");
+        assert!((cfg.min_px - 16.0).abs() < 1e-6);
+        assert!((cfg.distance(100.0) - 16.0).abs() < 1e-6);
+    }
+
+    /// The absolute floor is a raster constant: it exists because pixels are
+    /// discrete, so a 1200 DPI document must not inherit a multi-pixel
+    /// spacing floor along with its finer grid.
+    #[test]
+    fn absolute_spacing_floor_does_not_scale() {
+        let graph = graph_with_settings(&[("spacing", 0.1), ("spacing_min_px", 0.0)]);
+        let cfg = spacing_config(&graph, 4.0);
+        assert!((cfg.min_px - ABSOLUTE_MIN_SPACING_PX).abs() < 1e-6);
     }
 }

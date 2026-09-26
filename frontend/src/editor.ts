@@ -97,6 +97,12 @@ export interface CreateInstanceOptions {
      *  `app.engine` sees a fully-bootstrapped engine: no
      *  refresh-after-mutation race for consumers like `LayerPanel`. */
     seedBackground?: boolean;
+
+    /** The new document's DPI in pixels per inch. `null`/omitted derives it
+     *  from the pixel size (auto DPI), which is what gives every new document
+     *  the same physical size and so the same brush scale. A number is the
+     *  artist's own value, from the New Document dialog. */
+    dpi?: number | null;
 }
 
 /** Create + initialise a `DarklyInstance` bound to `canvas`. Constructs a
@@ -123,7 +129,7 @@ export async function createInstance(
 ): Promise<DarklyInstance> {
     await ensureProcessInit();
 
-    const engine = await createHandle(canvas, docWidth, docHeight);
+    const engine = await createHandle(canvas, docWidth, docHeight, options.dpi ?? null);
 
     // The registries are process-global and identical for every handle, so
     // they load once for the process rather than once per tab. Any handle can

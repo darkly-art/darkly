@@ -64,8 +64,12 @@ export class DarklyInstance {
      *  fresh tabs default to. Set by `shell.open(name, dims)` for
      *  Opens-as-new-tab where the content has its own intrinsic size
      *  (e.g. opening a PNG: canvas matches the image). Consumed once
-     *  by `CanvasView.onMount`. */
-    pendingDims: { width: number; height: number } | null = null;
+     *  by `CanvasView.onMount`.
+     *
+     *  `dpi` rides along for the same reason: the New Document dialog is the
+     *  only place an artist names one, and it is the same hop. Omitted or
+     *  `null` means auto DPI, derived from the pixel size. */
+    pendingDims: { width: number; height: number; dpi?: number | null } | null = null;
 
     /** Per-tab cached `.darkly` file handle from the FS Access API.
      *  Set after a successful Save As or after opening a file via

@@ -148,6 +148,8 @@ fn render_liquify_dabs_on(
                 canvas_origin: [0, 0],
                 blend_mode: 0,
                 view_rotation: 0.0,
+                // Tests construct reference-DPI engines, so a reference pixel is a canvas pixel.
+                dpi_factor: 1.0,
                 perf: BrushPerfCounters::default(),
                 stroke: Some(StrokeResources {
                     scratch,
@@ -533,7 +535,7 @@ fn shipped_liquify_spacing_matches_the_declared_ratio() {
         .expect("Liquify is shipped")
         .metadata
         .graph;
-    let spacing = darkly::brush::nodes::brush_settings::spacing_config(&graph);
+    let spacing = darkly::brush::nodes::brush_settings::spacing_config(&graph, 1.0);
 
     assert!(
         (spacing.ratio - LIQUIFY_SPACING_RATIO).abs() < 1e-6,

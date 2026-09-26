@@ -112,7 +112,10 @@ impl StrokeEngine {
     /// stroke passes [`Self::random_seed`], a render that has to be
     /// reproducible passes a constant. It does **not** reach `noise`, which
     /// seeds from its own compile-time `seed` port and so is identical from
-    /// stroke to stroke.
+    /// stroke to stroke.  `dpi` is the owning document's DPI, from which the
+    /// runner derives the reference-to-canvas factor; a render with no
+    /// document behind it passes [`crate::document::REFERENCE_DPI`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mut runner: BrushGraphRunner,
         color: [f32; 4],
@@ -122,6 +125,7 @@ impl StrokeEngine {
         clone_source_anchor: Option<[f32; 2]>,
         stroke_seed: u32,
         stamp_angle_rate: f32,
+        dpi: f32,
     ) -> Self {
         // Base brush size is stroke-constant, read out-of-band from
         // `pen_input.size` at stroke start. Injected as ambient state so every
@@ -129,17 +133,25 @@ impl StrokeEngine {
         // see one consistent value.
         runner.set_base_size(base_size);
 
+        // The document's DPI is stroke-constant too. Seeded here beside the
+        // other two so a stroke engine that forgot to publish it is
+        // unrepresentable, and before the diameters below, which convert
+        // through the factor it implies.
+        runner.set_dpi(dpi);
+
         // How many dabs land on one texel as the brush passes over it once.
         // A texel is inside every dab whose centre is within a radius of it,
         // so that is one diameter of travel divided by the step, at the
         // default 10% spacing, ten. Terminals accumulating a per-dab
         // quantity divide their rate by this so the knob means "per pass"
-        // and stops moving when the spacing setting does.
-        let diameter = base_size * DAB_REFERENCE_SIZE as f32;
+        // and stops moving when the spacing setting does. Both the diameter
+        // and the spacing distance are canvas pixels, so the reference-pixel
+        // dab reference crosses the boundary here.
+        let diameter = base_size * DAB_REFERENCE_SIZE as f32 * runner.dpi_factor();
         let step = spacing.distance(diameter);
         runner.set_dabs_per_pass((diameter / step).max(1.0));
 
-        let d = Self::default_diameter();
+        let d = Self::default_diameter(runner.dpi_factor());
         Self {
             runner,
             record: StrokeRecord::new(color, "default".into()),
@@ -188,9 +200,12 @@ impl StrokeEngine {
         self.clone_source_frame = Some(frame);
     }
 
-    /// Default dab diameter for initial spacing (before the first dab is evaluated).
-    fn default_diameter() -> f32 {
-        DAB_REFERENCE_SIZE as f32 * 0.5
+    /// Default dab diameter in canvas pixels for initial spacing (before the
+    /// first dab is evaluated). `DAB_REFERENCE_SIZE` is a reference-pixel
+    /// length, so the caller passes the document's reference-to-canvas
+    /// factor.
+    fn default_diameter(dpi_factor: f32) -> f32 {
+        DAB_REFERENCE_SIZE as f32 * 0.5 * dpi_factor
     }
 
     /// The effective canvas-space diameter for spacing and bounding rect.
@@ -249,7 +264,7 @@ impl StrokeEngine {
         self.last_point = None;
         self.accumulated_distance = 0.0;
         self.leftover_distance = 0.0;
-        let d = Self::default_diameter();
+        let d = Self::default_diameter(self.runner.dpi_factor());
         self.last_dab_size = [d, d];
         self.last_dab_pos = None;
         self.dab_count = 0;

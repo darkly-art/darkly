@@ -45,10 +45,17 @@ pub struct IntrinsicUniforms {
     /// whenever spacing or pressure changes the overlap count. 1.0 when
     /// unset, which makes the normalisation a no-op.
     pub dabs_per_pass: f32,
+    /// Canvas pixels per reference pixel for this stroke's document
+    /// (`Document::dpi / REFERENCE_DPI`), 1.0 for previews. The graph works
+    /// in reference pixels, so the sample-coordinate emitter multiplies a
+    /// feature size by this to reach canvas pixels; it cannot be folded into
+    /// the baked port literal because a compiled brush is cached across
+    /// documents.
+    pub dpi_factor: f32,
     /// Pads `IntrinsicUniforms` to 64 bytes (a multiple of 16) so the
     /// node-contributed uniforms packed after `intrinsic` keep 16-byte
     /// alignment. See the matching note in `_prelude.wgsl`.
-    pub _pad: [u32; 2],
+    pub _pad: [u32; 1],
 }
 
 /// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by

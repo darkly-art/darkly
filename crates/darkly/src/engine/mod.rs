@@ -53,7 +53,7 @@ use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::brush::wire::BrushWireType;
 use crate::clipboard::Clipboard;
-use crate::document::Document;
+use crate::document::{auto_dpi, Document, MAX_DPI, MIN_DPI, REFERENCE_DPI};
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::diff_rect::DiffRectPass;
@@ -697,23 +697,44 @@ impl DarklyEngine {
     /// `BrushState`. Multi-tab hosts use `new_with_tool_session`
     /// instead, passing a `DarklySession`-owned handle so every engine
     /// reads the same tool state.
+    /// The test and tooling constructor: an engine whose document sits at
+    /// [`REFERENCE_DPI`], so its reference-to-canvas factor is 1.0 and brush
+    /// constants read in canvas pixels unchanged. Its callers are tests, the
+    /// stroke-replay bins, `docs_render` (README stills, which must stay
+    /// deterministic at the reference) and the format tests. Hosts that want
+    /// a real document's DPI use [`Self::standalone`] or
+    /// [`Self::new_with_tool_session`] with `None` for auto DPI.
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
+        Self::standalone(gpu, doc_width, doc_height, Some(REFERENCE_DPI))
+    }
+
+    /// An engine owning its tool session, with the document's DPI chosen the
+    /// same way every host-facing constructor chooses it: `None` derives it
+    /// from the pixel size ([`auto_dpi`]), `Some` installs the artist's value.
+    pub fn standalone(gpu: GpuContext, doc_width: u32, doc_height: u32, dpi: Option<f32>) -> Self {
         let session = crate::tool::SharedToolSession::new();
         session
             .write()
             .insert(crate::brush::state::BrushState::new());
-        Self::new_with_tool_session(gpu, session, doc_width, doc_height)
+        Self::new_with_tool_session(gpu, session, doc_width, doc_height, dpi)
     }
 
+    /// `dpi` of `None` is auto DPI, derived from the pixel size so the
+    /// document has the reference's physical area; `Some` is an
+    /// artist-chosen value, falling back to auto if out of band.
     pub fn new_with_tool_session(
         gpu: GpuContext,
         tool_session: crate::tool::SharedToolSession,
         doc_width: u32,
         doc_height: u32,
+        dpi: Option<f32>,
     ) -> Self {
         // Allocate the document first so the compositor can read its root id
         // (which replaces the legacy `ROOT_ID = 0` constant).
-        let doc = Document::new(doc_width, doc_height);
+        let mut doc = Document::new(doc_width, doc_height);
+        doc.dpi = dpi
+            .filter(|d| d.is_finite() && (MIN_DPI..=MAX_DPI).contains(d))
+            .unwrap_or_else(|| auto_dpi(doc_width, doc_height));
         let compositor = Compositor::new(
             &gpu.device,
             &gpu.queue,

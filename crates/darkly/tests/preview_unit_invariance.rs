@@ -109,6 +109,8 @@ fn render_big_disc() -> Out {
         canvas_origin: [0, 0],
         blend_mode: 0,
         view_rotation: 0.0,
+        // Tests construct reference-DPI engines, so a reference pixel is a canvas pixel.
+        dpi_factor: 1.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
         // Drive the test-fallback path on `ensure_cursor_preview_mask`: the

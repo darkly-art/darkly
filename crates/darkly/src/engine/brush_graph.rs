@@ -9,6 +9,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::brush::input_value::InputValue;
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
+use crate::document::canvas_per_reference_px;
 use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{
@@ -270,6 +271,11 @@ impl DarklyEngine {
             }
         };
 
+        // The hover cursor preview is document-scoped (unlike the brush
+        // editor's preview), so it renders at this document's DPI and the
+        // cursor matches what the stroke will actually do.
+        runner.set_dpi(self.doc.dpi);
+
         // Always dispatch `render_preview`: individual terminals decide
         // whether they produce output this frame. A graph with no
         // compiled-terminal hook fires nothing and `brush_cursor_preview_info`
@@ -310,6 +316,7 @@ impl DarklyEngine {
             canvas_origin: [0, 0],
             blend_mode: 0,
             view_rotation: self.view_params.rotation,
+            dpi_factor: canvas_per_reference_px(self.doc.dpi),
             perf: BrushPerfCounters::default(),
             // The preview pipeline doesn't touch the stroke scratch / paint
             // target: the terminal's `render_preview` writes to the

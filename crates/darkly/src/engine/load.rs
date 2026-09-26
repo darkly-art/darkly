@@ -208,6 +208,7 @@ fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), Load
     doc.name = manifest.name.clone();
     doc.canvas_origin =
         crate::coord::CanvasPoint::new(manifest.canvas.origin_x, manifest.canvas.origin_y);
+    doc.dpi = manifest.canvas.dpi;
 
     let mut id_map: IdMap = HashMap::with_capacity(manifest.nodes.len() + manifest.modifiers.len());
 
@@ -784,6 +785,7 @@ mod tests {
                 height: 8,
                 origin_x: 0,
                 origin_y: 0,
+                dpi: crate::document::REFERENCE_DPI,
             },
             requires: ManifestRequires {
                 layer_kind: vec!["group".to_string(), "raster".to_string()],

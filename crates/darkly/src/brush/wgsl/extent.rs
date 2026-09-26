@@ -51,6 +51,12 @@ pub enum ExtentContribution {
     /// displacement / warp nodes use this (e.g. warp by ±strength px).
     /// `passthrough` multiplies the upstream extent; `added_px` is the
     /// post-multiply additive padding in canvas pixels.
+    ///
+    /// `added_px` is the one additive term that does **not** scale with the
+    /// document's DPI: it is raster padding for a kernel that reaches a
+    /// fixed number of texels, not an artwork length. `passthrough` needs no
+    /// conversion either, because it multiplies a radius that already
+    /// crossed the boundary.
     AddCanvasPixels { passthrough: f32, added_px: f32 },
     /// Hard cap below upstream: `bbox_target_px` is min'd with
     /// `factor * radius`. For clip-to-circle style masks.

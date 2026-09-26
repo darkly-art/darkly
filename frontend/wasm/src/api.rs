@@ -118,12 +118,18 @@ impl DarklySession {
     /// Build a new `DarklyHandle` bound to `canvas`, sharing this session's GPU
     /// device with every other handle from this session. The first call
     /// allocates the device; subsequent calls reuse it.
+    ///
+    /// `dpi` of `null`/`undefined` derives the document's DPI from its pixel
+    /// size, so the new document has the reference's physical area and every
+    /// brush keeps its physical mark size on it. Pass a number only when the
+    /// artist named one.
     #[wasm_bindgen(js_name = createHandle)]
     pub async fn create_handle(
         &self,
         canvas: web_sys::HtmlCanvasElement,
         doc_width: u32,
         doc_height: u32,
+        dpi: Option<f32>,
     ) -> DarklyHandle {
         let initial_width = canvas.width();
         let initial_height = canvas.height();
@@ -166,6 +172,7 @@ impl DarklySession {
             self.tool_session.clone(),
             doc_width,
             doc_height,
+            dpi,
         ))
     }
 }
@@ -236,10 +243,14 @@ impl DarklyHandle {
 impl DarklyHandle {
     /// Create a stand-alone editor instance from a canvas (own device). Prefer
     /// `DarklySession.createHandle` for the multi-tab shared-device case.
+    ///
+    /// `dpi` behaves as it does for `createHandle`: `null`/`undefined`
+    /// derives it from the pixel size.
     pub async fn create(
         canvas: web_sys::HtmlCanvasElement,
         doc_width: u32,
         doc_height: u32,
+        dpi: Option<f32>,
     ) -> DarklyHandle {
         let initial_width = canvas.width();
         let initial_height = canvas.height();
@@ -263,7 +274,7 @@ impl DarklyHandle {
             )
             .await;
 
-        DarklyHandle::from_engine(DarklyEngine::new(gpu, doc_width, doc_height))
+        DarklyHandle::from_engine(DarklyEngine::standalone(gpu, doc_width, doc_height, dpi))
     }
 
     // =======================================================================

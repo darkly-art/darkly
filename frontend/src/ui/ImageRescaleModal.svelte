@@ -21,6 +21,16 @@
     let wInput = $state(1);
     let hInput = $state(1);
 
+    // The document's DPI when the modal opened, and the value in the field.
+    // Until the artist types in it, the field predicts what the engine will
+    // derive for `dpi: null` (the DPI rides the resample factor, keeping the
+    // artwork's physical size), so they can see the size being kept. Typing
+    // freezes it and sends the number instead. Krita's Image Size dialog
+    // updates the dependent quantity live the same way.
+    let oldDpi = $state(1);
+    let dpiInput = $state(1);
+    let dpiTouched = $state(false);
+
     function fromPxW(px: number): number {
         return unit === 'px' ? px : Math.round((px / oldW) * 1000) / 10;
     }
@@ -39,6 +49,9 @@
     function syncInputs() {
         wInput = fromPxW(pxW);
         hInput = fromPxH(pxH);
+        if (!dpiTouched) {
+            dpiInput = Math.round(oldDpi * (pxH / oldH) * 10) / 10;
+        }
     }
 
     let prevOpen = false;
@@ -50,7 +63,11 @@
             pxH = oldH;
             unit = 'px';
             linkAspect = true;
+            dpiTouched = false;
+            oldDpi = 1;
+            dpiInput = 1;
             syncInputs();
+            void loadDpi();
         }
         prevOpen = imageRescale.open;
     });
@@ -71,6 +88,20 @@
         syncInputs();
     }
 
+    // The engine query is async, so the field shows its seed for one
+    // microtask. Guarded against the modal having closed meanwhile, and
+    // against the artist having already typed a DPI.
+    async function loadDpi() {
+        const dpi = await app.engine?.api.documentDpi();
+        if (!imageRescale.open || typeof dpi !== 'number') return;
+        oldDpi = dpi;
+        if (!dpiTouched) syncInputs();
+    }
+
+    function onDpiInput() {
+        dpiTouched = true;
+    }
+
     function setUnit(u: 'px' | '%') {
         unit = u;
         syncInputs();
@@ -80,10 +111,21 @@
         imageRescale.open = false;
     }
 
+    function clampDpi(v: number): number {
+        return Number.isFinite(v) ? Math.max(1, Math.min(10000, v)) : oldDpi;
+    }
+
     function apply() {
         const w = clampDim(pxW);
         const h = clampDim(pxH);
-        app.engine?.api.rescaleImage({ new_width: w, new_height: h });
+        // `null` keeps the artwork's physical size by letting the DPI ride
+        // the resample factor; a touched field is the artist's own value.
+        // Unchanged dims with a touched DPI is the DPI-only edit.
+        app.engine?.api.rescaleImage({
+            new_width: w,
+            new_height: h,
+            dpi: dpiTouched ? clampDpi(dpiInput) : null,
+        });
         // The new dims reach the coordinate transforms on the next frame's
         // snapshot, which the refresh and the explicit request below schedule.
         app.refreshLayerTree();
@@ -141,6 +183,21 @@
             <LinkToggle linked={linkAspect} onchange={(v) => (linkAspect = v)} label="aspect ratio" />
         </div>
 
+        <label class="field dpi-field">
+            <span class="field-label">DPI</span>
+            <div class="field-num">
+                <input
+                    type="number"
+                    min="1"
+                    max="10000"
+                    step="1"
+                    bind:value={dpiInput}
+                    oninput={onDpiInput}
+                />
+                <span class="unit">dpi</span>
+            </div>
+        </label>
+
         <div class="dialog-actions">
             <div class="dims-readout">{clampDim(pxW)} × {clampDim(pxH)} px</div>
             <button type="button" class="btn" onclick={close}>Cancel</button>
@@ -167,6 +224,13 @@
         display: flex;
         align-items: center;
         gap: 10px;
+    }
+
+    /* Half width, matching the Width column above, rather than inheriting
+       the `flex: 1` the two dimension fields share. */
+    .dpi-field {
+        flex: 0 0 auto;
+        width: calc(50% - 6px);
     }
 
     .unit-toggle {
