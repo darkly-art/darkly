@@ -37,6 +37,16 @@
 
   <!-- Filled from the v* tags by scripts/metainfo-releases.sh; do not edit by hand. -->
   <releases>
+    <release version="0.10.0" date="2026-09-26">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.10.0</url>
+      <description>
+        <ul>
+          <li>Linux distro-friendly packaging and release automation (#126)</li>
+          <li>Small UI improvements (#124)</li>
+          <li>DPI and sensible DPI defaults (#118)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-09-25">
       <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.9.0</url>
       <description>
