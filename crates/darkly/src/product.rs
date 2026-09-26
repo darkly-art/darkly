@@ -33,8 +33,24 @@ pub struct Product {
     pub categories: Vec<String>,
     /// Desktop-entry search keywords.
     pub keywords: Vec<String>,
-    /// The long description.
+    /// The short description, one paragraph.
     pub description: String,
+    /// The long description, in reading order. What the store listing shows.
+    pub long_description: Vec<Block>,
+}
+
+/// One block of the long description: the subset of rich text every store
+/// renders, which is AppStream's `<p>`, `<ul>` and `<em>`.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum Block {
+    /// A paragraph, authored as a string.
+    Para(String),
+    /// A bulleted list, authored as a list of strings.
+    List(Vec<String>),
+    /// A section title, authored as `heading: "..."`. AppStream has no heading
+    /// element, so stores get it as an emphasized paragraph of its own.
+    Heading { heading: String },
 }
 
 /// [`SOURCE`], parsed once.
@@ -71,15 +87,27 @@ pub fn app_json() -> String {
             .join(", ")
     };
     let product = product();
+    let long_description = product
+        .long_description
+        .iter()
+        .map(|block| match block {
+            Block::Para(p) => format!("\"{}\"", esc(p)),
+            Block::List(items) => format!("[{}]", list(items)),
+            Block::Heading { heading } => format!("{{\"heading\": \"{}\"}}", esc(heading)),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "{{\n  \"_generated\": \"cargo sync-docs writes this from \
          crates/darkly/product.yaml; do not edit\",\n  \
          \"summary\": \"{}\",\n  \"categories\": [{}],\n  \
-         \"keywords\": [{}],\n  \"description\": \"{}\"\n}}\n",
+         \"keywords\": [{}],\n  \"description\": \"{}\",\n  \
+         \"long_description\": [{}]\n}}\n",
         esc(&product.summary),
         list(&product.categories),
         list(&product.keywords),
         esc(&product.description),
+        long_description,
     )
 }
 

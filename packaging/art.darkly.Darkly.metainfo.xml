@@ -16,7 +16,27 @@
 
   <!-- darkly:app-description -->
   <description>
-    <p>Darkly is a GPU-native paint program built for artists. It has a powerful brush engine and dark arts to help you commune with your imagination.</p>
+    <p>Do you suffer from the oppressive sanity of rulers, guides, and nondestructive workflows? Break free with Darkly, home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn&apos;t a bug, it&apos;s a feature.</p>
+    <p>Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and dark arts to help you commune with your imagination.</p>
+    <p>Darkly pledges to:</p>
+    <ul>
+      <li>🛐 Honor human imagination</li>
+      <li>⚛️ Run offline and without a login</li>
+      <li>☯️ Never steal or license your art</li>
+      <li>☮️ Stay free and open source forever</li>
+    </ul>
+    <p><em>Dark Arts</em></p>
+    <p>Veils are where Darkly gets its name; &quot;For now we see through a glass, darkly&quot;. They&apos;re a special layer that shrouds your canvas in a mysterious way, inviting you to see something that maybe wasn&apos;t there before.</p>
+    <p>Veils are nondestructive. You can paint as usual, behind the veil, and when you disable it, you&apos;ll see the full-res result.</p>
+    <p>Veils are essentially fancy shaders, and they are fun toys. But they have practical uses too:</p>
+    <ul>
+      <li>By hiding fine details, they can prevent premature fixation on detail, freeing you to focus on composition.</li>
+      <li>During the sketching / ideation phase, they can help with blank page syndrome and destructive self-criticism by giving you permission to be messy, and explore freely.</li>
+      <li>They can also help remedy art fatigue (losing eyes for a piece by staring at it for too long) by helping you see it through a fresh lens.</li>
+    </ul>
+    <p>Voids are a type of layer that specializes in pulling inspiration from outside sources.</p>
+    <p>You can use the Noise void to generate entropy, or Screenshare to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.</p>
+    <p>Voids support masks and blend modes. They are the natural complement to veils, and a natural integration point for other art programs like Blender, which has its own dedicated void 🧡</p>
   </description>
   <!-- /darkly:app-description -->
 
@@ -28,8 +48,24 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://darkly.art/editor-screenshot.png</image>
-      <caption>The Darkly editor</caption>
+      <image width="1920" height="973">https://darkly.art/flathub/editor.png</image>
+      <caption>Darkly editor</caption>
+    </screenshot>
+    <screenshot>
+      <video container="webm" codec="av1" width="1568" height="880">https://darkly.art/flathub/veils-demo.webm</video>
+      <caption>Painting behind veils</caption>
+    </screenshot>
+    <screenshot>
+      <image width="1472" height="802">https://raw.githubusercontent.com/darkly-art/darkly/dev/docs/images/graphics/effects-veils.jpg</image>
+      <caption>Veils</caption>
+    </screenshot>
+    <screenshot>
+      <video container="webm" codec="av1" width="1920" height="1080">https://darkly.art/flathub/hair-brush.webm</video>
+      <caption>Hair brush</caption>
+    </screenshot>
+    <screenshot>
+      <image width="1920" height="970">https://darkly.art/flathub/brush-builder.png</image>
+      <caption>Node-based brush builder</caption>
     </screenshot>
   </screenshots>
 
