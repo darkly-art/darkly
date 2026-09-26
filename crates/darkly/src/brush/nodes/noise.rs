@@ -13,7 +13,7 @@
 //! blocky cell noise), summed over `octaves` at doubling frequency, with a
 //! single-octave domain warp and a per-octave rotation that break the
 //! axis-aligned value-noise lattice. It never visibly repeats. `scale`
-//! sets the base feature size in canvas pixels; `warp` the domain
+//! sets the base feature size in reference pixels; `warp` the domain
 //! distortion; `roughness` the per-octave amplitude falloff.
 //!
 //! Coordinate frame is selectable via the `space` param, shared with
@@ -23,8 +23,9 @@
 //! the canvas. **Dab** samples the stamp's oriented unit frame (`local_uv`
 //! rotated by the `rotation` input, offset per dab by `variation`), so the
 //! grain rides the stamp instead of swimming under it. In both frames `scale`
-//! is a canvas-pixel feature size; to make the grain scale with the brush,
-//! drive `scale` from `brush_settings.size` (also canvas pixels).
+//! is a reference-pixel feature size, converted once by the document's
+//! reference-to-canvas factor; to make the grain scale with the brush,
+//! drive `scale` from `brush_settings.size` (also reference pixels).
 //!
 //! The math (`fbm_value_noise`, `fbm_seed_xform`, `fbm_tile`, hash, fade)
 //! lives in the shared `shaders/lib/fbm2d.wgsl`, concatenated into every
@@ -73,7 +74,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Per-dab decorrelation offset for Dab space. Wire random (Per-Dab) so overlapping dabs show independent grain.",
                     ),
-                // Base feature size in canvas pixels: `target_pos / scale`
+                // Base feature size in reference pixels: `target_pos / scale`
                 // sets the lowest octave's cell size. A per-dab-computable
                 // scalar: wirable (drive it from pressure, a curve, …).
                 PortDef::input("scale", BrushWireType::Scalar)
@@ -81,7 +82,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(1.0, 512.0)
                     .with_label("Scale")
                     .with_unit(UnitType::Pixels)
-                    .with_description("Base feature size in canvas pixels."),
+                    .with_description("Base feature size in reference pixels."),
                 // RNG seed. A compile-time integer baked into `{seed}u`
                 // literals (the per-channel/per-octave offsets are computed at
                 // compile time), so wiring it has no per-dab effect.

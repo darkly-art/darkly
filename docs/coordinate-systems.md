@@ -22,6 +22,18 @@ Top to bottom, with their authority:
 - **Layer-local**: `coord::LayerPoint` / `LayerRect`. A specific texture's own
   pixels, always non-negative. Converted only through its `LayerTexture`
   (`layer_to_canvas` / `canvas_to_layer_rect`).
+- **Reference pixels**: the brush graph's unit. A pixel of the reference
+  document (1920x1080 at 19.2 by 10.8 inches, so `REFERENCE_DPI` is 100), which
+  is the system's one physical anchor. Every **authored** length is one:
+  `DAB_REFERENCE_SIZE` and every `UnitType::Pixels` port. Converted to plane
+  pixels exactly once, by `BrushGraphRunner::dpi_factor` on the CPU and
+  `u.intrinsic.dpi_factor` in WGSL, never inside a node. **Sensed** inputs
+  (`pen_input.position`, `motion`, `distance`, `speed`,
+  `clone_source.position`) are plane pixels, not reference pixels; a brush
+  that wires a sensed length into an authored-length port mixes the two
+  frames, which is the author's choice to make. Raster constants (spacing
+  floors, sub-pixel radius floors, kernel padding) stay plane pixels too,
+  because they exist only because pixels are discrete.
 
 `GpuPaintTarget` keeps two plane-space rectangles with different roles: the
 target texture's extent locates its texels in the plane, while the canvas-window
@@ -38,6 +50,9 @@ The invariant: **`plane = window_local + canvas_origin`**.
 - screen ↔ plane: `ViewTransform::screen_to_plane` (Rust) / `app.viewMatrices` (JS, via
   `coordinates.ts`).
 - layer ↔ plane: `LayerTexture::layer_to_canvas` / `canvas_to_layer_rect`.
+- reference ↔ plane: `BrushGraphRunner::dpi_factor` / `EvalContext::dpi_factor`
+  (Rust), `u.intrinsic.dpi_factor` (WGSL), both
+  `document::canvas_per_reference_px(doc.dpi)`.
 
 **Pitfalls (each has bitten us):**
 

@@ -17,6 +17,7 @@
         barycentricFor,
         hsvFromColor,
         hueAt,
+        HUE_STOPS,
         pointForHue,
         pointForSv,
         regionAt,
@@ -147,6 +148,7 @@
     style:width="{size}px"
     style:height="{size}px"
     style:--ring="{geometry.ringWidth}px"
+    style:--hue-stops={HUE_STOPS.join(', ')}
     use:pointerDrag={{
         onStart: onPointerDown,
         onMove: (_dx, _dy, e) => { if (dragging) steer(dragging, e); },
@@ -183,7 +185,7 @@
     }
     .ring {
         border-radius: 50%;
-        background: conic-gradient(from 90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+        background: conic-gradient(from 90deg, var(--hue-stops));
         -webkit-mask: radial-gradient(
             circle,
             transparent calc(50% - var(--ring)),

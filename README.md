@@ -123,6 +123,7 @@ For a feature to count, it must be:
 - [x] Crop to selection
 - [x] Canvas resize
 - [x] Image rescale
+- [x] Document DPI (auto from pixel size; brushes keep their physical size)
 - [x] Select All / Deselect / Invert
 - [x] Command palette
 - [x] Application menu
@@ -142,9 +143,9 @@ For a feature to count, it must be:
 - [x] Rotate canvas 90° CW / CCW / 180°
 - [x] Flip layer / selection H / V
 - [x] Smart objects
-- [ ] Recent colors
+- [x] Recent colors
 - [ ] Saved swatches / palettes
-- [ ] Palette popup
+- [x] Palette popup
 - [ ] Navigator / overview window
 - [ ] History panel UI
 - [x] Process recording
@@ -195,15 +196,16 @@ For a feature to count, it must be:
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- [Node.js](https://nodejs.org/) >= 18
+- [Node.js](https://nodejs.org/) >= 22
+- `make` (on Windows, install it: Git Bash does not ship one)
+- `wasm-opt`, from [binaryen](https://github.com/WebAssembly/binaryen) (your package manager's `binaryen`)
 
 ```sh
-# Install all workspace dependencies (frontend + website + shared styles)
-npm install
+# Install the wasm32 target, the wasm-bindgen CLI, and npm dependencies
+make tools deps
 
 # Build the WASM package
-wasm-pack build frontend/wasm --target web
+make wasm
 
 # Start the frontend dev server
 npm --prefix frontend run dev
@@ -212,7 +214,7 @@ npm --prefix frontend run dev
 npm --prefix frontend run dev -- --host
 ```
 
-Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
+The dev server builds the decorative demo that demo.darkly.art serves; add `-- --mode app` for the plain editor the app ships. Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
 
 **GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. Launch Chromium with GPU and Vulkan support:
 

@@ -250,6 +250,67 @@ fn keeps_the_committed_block_when_there_are_no_tags() {
     assert_eq!(stdout(&out), WITH_BLOCK);
 }
 
+/// A release tarball: no `.git`, the committed block from before its own
+/// release, and a `version.txt` git archive filled in at the release tag.
+#[test]
+fn adds_a_tarballs_own_release_from_its_version_file() {
+    let s = Scratch::new("tarball");
+    let d = &s.0;
+    fs::create_dir_all(d.join("scripts")).unwrap();
+    fs::create_dir_all(d.join("crates/darkly")).unwrap();
+    fs::copy(
+        repo_root().join("scripts/metainfo-releases.sh"),
+        d.join("scripts/metainfo-releases.sh"),
+    )
+    .unwrap();
+    let version_file = d.join("crates/darkly/version.txt");
+    let file = d.join("in.metainfo.xml");
+    fs::write(&file, WITH_BLOCK).unwrap();
+    let run = || {
+        isolated("bash", d)
+            .arg(d.join("scripts/metainfo-releases.sh"))
+            .arg(&file)
+            .output()
+            .unwrap()
+    };
+
+    fs::write(&version_file, "# filled in\nv0.2.0 abc1234 2026-03-04\n").unwrap();
+    let out = run();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout(&out),
+        "\
+<component>
+  <id>art.example.App</id>
+  <!-- kept -->
+  <releases>
+    <release version=\"0.2.0\" date=\"2026-03-04\">
+      <url type=\"details\">https://github.com/darkly-art/darkly/releases/tag/v0.2.0</url>
+    </release>
+    <release version=\"0.0.1\" date=\"2025-01-01\">
+    </release>
+  </releases>
+
+</component>
+"
+    );
+
+    // Placeholders (a checkout), a build past a tag, and a release the block
+    // already lists all leave it as committed.
+    for line in [
+        "$Format:%(describe:tags)$ $Format:%h$ $Format:%cs$",
+        "v0.2.0-3-gabc1234 abc1234 2026-03-04",
+        "v0.0.1 abc1234 2025-01-01",
+    ] {
+        fs::write(&version_file, format!("# filled in\n{line}\n")).unwrap();
+        assert_eq!(stdout(&run()), WITH_BLOCK, "{line}");
+    }
+}
+
 #[test]
 fn refuses_a_malformed_releases_block() {
     let s = Scratch::new("malformed");
@@ -371,7 +432,7 @@ impl Release {
             .iter()
             .map(|(n, title, bot, oid)| {
                 format!(
-                    r#"{{"number":{n},"title":"{title}","author":{{"is_bot":{bot},"login":"x"}},"mergeCommit":{{"oid":"{oid}"}}}}"#
+                    r#"{{"number":{n},"title":"{title}","author":{{"is_bot":{bot},"login":"x"}},"mergeCommit":{{"oid":"{oid}"}},"url":"https://github.com/o/r/pull/{n}"}}"#
                 )
             })
             .collect();
@@ -440,7 +501,7 @@ fn tags_from_merged_prs_and_writes_the_pr_body() {
     assert!(!log.contains("pr create"));
     assert_eq!(
         fs::read_to_string(r.shim.join("body")).unwrap(),
-        "Human change (#5)\n"
+        "- https://github.com/o/r/pull/5\n"
     );
 
     // The checked-in release history is refreshed and left for the maintainer
@@ -574,4 +635,103 @@ fn refuses_when_the_pr_list_is_truncated() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("truncated"));
     assert!(!r.origin_has("v0.2.0"));
+}
+
+// ---- flathub.sh ----------------------------------------------------------
+
+/// Fills the real template from a scratch repository, with the network and
+/// both generators shimmed: every sidecar answers one fixed hash, and the
+/// generators write empty lists. Pins the contract between the template's
+/// placeholders and the script's substitutions; the real generators, network
+/// and linter run in the `flathub` CI job.
+#[test]
+fn flathub_manifest_from_a_checkout() {
+    const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let s = Scratch::new("flathub");
+    let work = s.0.join("work");
+    let shim = s.0.join("shim");
+    let out = s.0.join("out");
+    fs::create_dir_all(work.join("packaging/flathub")).unwrap();
+    fs::create_dir_all(&shim).unwrap();
+    for f in ["art.darkly.Darkly.yaml.in", "README.md"] {
+        fs::copy(
+            repo_root().join("packaging/flathub").join(f),
+            work.join("packaging/flathub").join(f),
+        )
+        .unwrap();
+    }
+    fs::write(
+        work.join("Cargo.toml"),
+        "[workspace.package]\nrust-version = \"1.98.0\"\n",
+    )
+    .unwrap();
+    fs::write(work.join("Cargo.lock"), "").unwrap();
+    fs::write(
+        work.join("Makefile"),
+        "wasm-bindgen-version:\n\t@echo 0.2.114\n",
+    )
+    .unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["add", "."]);
+    let head = commit(&work, "tree");
+
+    let write_shim = |name: &str, body: &str| {
+        let path = shim.join(name);
+        fs::write(&path, format!("#!/usr/bin/env bash\nset -eu\n{body}\n")).unwrap();
+        Command::new("chmod").arg("+x").arg(&path).status().unwrap();
+        path
+    };
+    let curl = write_shim("curl", &format!("echo '{HASH}  file'"));
+    // Both generators: find `-o <path>` and write an empty list there.
+    let gen = "while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done; echo '[]' > \"$out\"";
+    let cargo_gen = write_shim("cargo-gen", gen);
+    let node_gen = write_shim("node-gen", gen);
+
+    let run = isolated("bash", &work)
+        .arg(repo_root().join("scripts/flathub.sh"))
+        .arg(&out)
+        .env("CURL", &curl)
+        .env("FLATPAK_CARGO_GENERATOR", &cargo_gen)
+        .env("FLATPAK_NODE_GENERATOR", &node_gen)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let mut files: Vec<String> = fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "README.md",
+            "art.darkly.Darkly.yaml",
+            "cargo-sources.json",
+            "generated-sources.json"
+        ]
+    );
+    let manifest = fs::read_to_string(out.join("art.darkly.Darkly.yaml")).unwrap();
+    assert!(manifest.contains(&format!("commit: {head}")));
+    assert!(
+        !manifest.contains("tag:"),
+        "commit only; the tags arrive with the full clone"
+    );
+    assert!(manifest.contains("rust-1.98.0-x86_64-unknown-linux-gnu.tar.xz"));
+    assert!(manifest.contains("rust-std-1.98.0-wasm32-unknown-unknown.tar.xz"));
+    assert!(manifest.contains("wasm-bindgen-0.2.114-aarch64-unknown-linux-musl.tar.gz"));
+    // Three Rust tarballs and two wasm-bindgen tarballs take a fetched hash.
+    assert_eq!(manifest.matches(HASH).count(), 5);
+    // A surviving `@NAME@`: some text between two `@` that is all caps.
+    let between: Vec<&str> = manifest.split('@').collect();
+    let unfilled = between[1..between.len() - 1].iter().any(|p| {
+        !p.is_empty()
+            && p.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    });
+    assert!(!unfilled, "unfilled placeholder in the manifest");
 }

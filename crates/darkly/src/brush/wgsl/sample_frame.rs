@@ -10,9 +10,25 @@
 //!
 //! The frame is chosen at compile time: the emitter produces only the
 //! selected arm, never a runtime `switch`. The emitted WGSL references only
-//! skeleton-provided locals (`target_pos`, `local_uv`, `d`) and the caller's
-//! own `rotation`/`variation` input expressions, so it composes into both the
+//! skeleton-provided locals (`target_pos`, `local_uv`, `d`), the intrinsic
+//! uniforms (`u.intrinsic`, bound in both skeletons) and the caller's own
+//! `rotation`/`variation` input expressions, so it composes into both the
 //! stroke and cursor-preview shader variants without extra bindings.
+//!
+//! This is the one GPU-side reference-to-canvas boundary. A `scale` is an
+//! authored reference-pixel feature size, so both arms divide by
+//! `scale * u.intrinsic.dpi_factor`: the same document DPI that grows the
+//! dab grows the grain on it, and a brush keeps its character on any
+//! document. The factor cannot be folded into the baked `scale` literal,
+//! because a compiled brush is cached across documents and rendered at the
+//! reference for library previews.
+//!
+//! One caveat on "the graph works in reference pixels": authored lengths
+//! (`UnitType::Pixels` ports, `DAB_REFERENCE_SIZE`) are reference pixels,
+//! but sensed inputs (`pen_input.position`, `motion`, `distance`, `speed`,
+//! `clone_source.position`) are plane pixels. A brush that wires a sensed
+//! length into an authored-length port mixes the two frames; that is the
+//! author's choice, not something this module can decide for them.
 
 /// Coordinate frame a spatial node samples in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,10 +62,12 @@ impl SampleFrame {
 /// radians and a per-dab decorrelation scalar respectively).
 ///
 /// In [`SampleFrame::Dab`] the field is sampled in oriented dab-pixels, so
-/// `scale` is a canvas-pixel feature size exactly as in Canvas space, and grain
-/// density stays constant in pixels as the brush grows. To make the grain scale
-/// *with* the brush instead, drive `scale` from `brush_settings.size` (also in
-/// canvas pixels): the dab radius and the scale then grow together and cancel.
+/// `scale` is a reference-pixel feature size exactly as in Canvas space, and
+/// grain density stays constant in pixels as the brush grows. To make the
+/// grain scale *with* the brush instead, drive `scale` from
+/// `brush_settings.size` (also reference pixels): the dab radius and the
+/// scale then grow together and cancel, on any document, because both
+/// cross the boundary through the same `dpi_factor`.
 ///
 /// `scale_expr` is the caller's `scale` **input expression**: a `{:.6}`
 /// literal when the scale input is unwired, or an upstream WGSL expression
@@ -73,7 +91,12 @@ pub fn frame_sample_coord_expr(
     match space {
         // Grain pinned to the canvas; rotation/variation are meaningless
         // without a brush frame, so they're dropped.
-        SampleFrame::Canvas => (String::new(), format!("target_pos / ({scale_expr})")),
+        // `target_pos` is canvas pixels and `scale_expr` is reference
+        // pixels, so the factor converts the scale, not the position.
+        SampleFrame::Canvas => (
+            String::new(),
+            format!("target_pos / (({scale_expr}) * u.intrinsic.dpi_factor)"),
+        ),
         SampleFrame::Dab => {
             // Rotate the canvas-aligned unit-disc offset into the stamp's own
             // frame. `{rotation_expr}` is screen-relative radians, the same
@@ -96,16 +119,19 @@ pub fn frame_sample_coord_expr(
                 "    let {ident}_off = fbm_offset2(u32(max(({variation_expr}), 0.0) * 4096.0), {period:.6});\n"
             ));
             let offset = format!("{ident}_off");
-            // Multiply the unit-disc offset back to oriented dab-pixels, so
-            // `scale` is a canvas-pixel feature size and grain density stays
-            // constant in px as the brush grows. Wiring `brush_settings.size`
-            // (also px) into `scale` makes the radius and scale cancel, so the
-            // grain scales with the brush.
+            // Multiply the unit-disc offset back to oriented dab-pixels.
+            // The radius is canvas pixels (it crossed the boundary in
+            // `effective_radius`) and `scale` is reference pixels, so the
+            // factor converts the scale to match and grain density stays
+            // constant as the brush grows. Wiring `brush_settings.size`
+            // (also reference px) into `scale` makes the radius and scale
+            // cancel, so the grain scales with the brush.
             preamble.push_str(&format!(
                 "    let {ident}_radius_px = 1.0 / d.inv_radius_target_px;\n"
             ));
-            let coord =
-                format!("({ident}_dab_local * {ident}_radius_px) / ({scale_expr}) + {offset}");
+            let coord = format!(
+                "({ident}_dab_local * {ident}_radius_px) / (({scale_expr}) * u.intrinsic.dpi_factor) + {offset}"
+            );
             (preamble, coord)
         }
     }
@@ -127,8 +153,10 @@ mod tests {
         );
         assert!(pre.is_empty(), "Canvas emits no preamble");
         // The scale expression is interpolated parenthesized so a wired
-        // expression composes; the literal value is unchanged.
-        assert_eq!(coord, "target_pos / (32.000000)");
+        // expression composes; the literal value is unchanged, and the DPI
+        // factor multiplies the *scale*, never `target_pos` (which is
+        // already canvas pixels).
+        assert_eq!(coord, "target_pos / ((32.000000) * u.intrinsic.dpi_factor)");
         // Rotation/variation are dropped in Canvas mode.
         assert!(!coord.contains("dab_local"));
         assert!(!coord.contains("rotation"));
@@ -146,13 +174,37 @@ mod tests {
     }
 
     #[test]
-    fn dab_reconstructs_radius_so_scale_is_canvas_pixels() {
+    fn dab_reconstructs_radius_so_scale_is_reference_pixels() {
         let (pre, coord) =
             frame_sample_coord_expr(SampleFrame::Dab, "8.000000", "0.0", "0.0", 1.0, "img_5");
         // Dab space always multiplies the unit-disc offset back to oriented
-        // dab-pixels, so `scale` is a canvas-pixel feature size.
+        // dab-pixels. The radius is canvas pixels (it crossed the boundary
+        // in `effective_radius`), so the reference-pixel `scale` is
+        // converted with the same factor to match it.
         assert!(pre.contains("let img_5_radius_px = 1.0 / d.inv_radius_target_px;"));
-        assert!(coord.contains("(img_5_dab_local * img_5_radius_px) / (8.000000)"));
+        assert!(coord.contains(
+            "(img_5_dab_local * img_5_radius_px) / ((8.000000) * u.intrinsic.dpi_factor)"
+        ));
+        // The factor converts the scale, not the radius.
+        assert!(!coord.contains("img_5_radius_px * u.intrinsic.dpi_factor"));
+    }
+
+    /// Both frames convert at the same place and by the same factor, so a
+    /// brush that wires `brush_settings.size` (a reference-pixel length)
+    /// into `scale` cancels on any document: the dab radius and the feature
+    /// size cross the boundary together.
+    #[test]
+    fn both_frames_convert_the_scale_expression() {
+        for (frame, ident) in [
+            (SampleFrame::Canvas, "noise_1"),
+            (SampleFrame::Dab, "noise_2"),
+        ] {
+            let (_, coord) = frame_sample_coord_expr(frame, "d.n7_size", "0.0", "0.0", 16.0, ident);
+            assert!(
+                coord.contains("(d.n7_size) * u.intrinsic.dpi_factor"),
+                "{frame:?} must convert the wired scale expression, got {coord}"
+            );
+        }
     }
 
     #[test]

@@ -661,7 +661,7 @@ fn rescale_then_flip_mirrors_the_scaled_feature() {
     let mut e = test_engine(w, h);
     let _layer = e.paste_image(w, h, &rgba_with_marker(w, h, 8, 8, 4), 0, 0, None);
 
-    e.rescale_image(2 * w, 2 * h);
+    e.rescale_image(2 * w, 2 * h, None);
     e.transform_canvas(OrthoXform::FlipH);
 
     let after = e.test_readback_canvas();
@@ -681,7 +681,7 @@ fn flip_then_rescale_undo_undo_restores_original() {
     let original = e.test_readback_layer(layer);
 
     e.transform_canvas(OrthoXform::FlipH);
-    e.rescale_image(2 * w, 2 * h);
+    e.rescale_image(2 * w, 2 * h, None);
     e.undo(); // undo rescale
     e.undo(); // undo flip
 

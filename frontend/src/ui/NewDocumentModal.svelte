@@ -15,6 +15,15 @@
     let height = $state(1080);
     let color = $state('#000000');
 
+    // Auto DPI is the default because it is what makes a brush behave the
+    // same on every document: the DPI is derived from the pixel size so the
+    // artwork has a consistent physical size. Unchecking means "I know the
+    // DPI I want", which for print is 300, so the field is prefilled from
+    // `canvas.dpi` rather than from the derived value (an artist who wanted
+    // the derived value would have left the checkbox alone).
+    let autoDpi = $state(true);
+    let dpi = $state(300);
+
     // Reseed dimensions whenever the modal transitions to open. Reading
     // `config.get` requires the WASM module to be initialised: the modal is
     // gated on an artist click well after boot, so by the time the artist can open
@@ -24,8 +33,11 @@
         if (newDocument.open && !prevOpen) {
             const w = config.get('canvas.width') as number | undefined;
             const h = config.get('canvas.height') as number | undefined;
+            const d = config.get('canvas.dpi') as number | undefined;
             if (typeof w === 'number') width = w;
             if (typeof h === 'number') height = h;
+            if (typeof d === 'number') dpi = d;
+            autoDpi = true;
             color = '#000000';
             loadClipboardPeek();
         } else if (!newDocument.open && prevOpen) {
@@ -73,6 +85,10 @@
         newDocument.open = false;
     }
 
+    function clampDpi(v: number): number {
+        return Number.isFinite(v) ? Math.max(1, Math.min(10000, v)) : 300;
+    }
+
     function create() {
         const w = Math.max(1, Math.min(16384, Math.round(width)));
         const h = Math.max(1, Math.min(16384, Math.round(height)));
@@ -82,7 +98,11 @@
         // Fresh tab with the chosen canvas size. Setting `onHandleReady`
         // suppresses the default white-image bg seed in CanvasView, leaving
         // us free to seed our own raster layer in the chosen color.
-        const inst = shell.open(undefined, { width: w, height: h });
+        const inst = shell.open(undefined, {
+            width: w,
+            height: h,
+            dpi: autoDpi ? null : clampDpi(dpi),
+        });
         inst.onHandleReady = async (handle) => {
             const bg = await handle.api.addRaster({ anchor: null });
             handle.api.fillBackgroundColor({ id: bg, rgba });
@@ -106,7 +126,9 @@
             if (!clip) return;
             const w = Math.max(1, Math.min(16384, clip.width));
             const h = Math.max(1, Math.min(16384, clip.height));
-            const inst = shell.open(undefined, { width: w, height: h });
+            // A clipboard-sized document is auto: the artist picked no size,
+            // so they picked no DPI either.
+            const inst = shell.open(undefined, { width: w, height: h, dpi: null });
             inst.onHandleReady = async (handle) => {
                 const { id: bg } = await handle.api.pasteImage(
                     { width: w, height: h, offset_x: 0, offset_y: 0, active_layer_id: -1 },
@@ -159,6 +181,28 @@
             </label>
         </div>
 
+        <label class="row check-row">
+            <input type="checkbox" bind:checked={autoDpi} />
+            <span class="field-label">Auto DPI</span>
+            <span class="hint">Matches the physical size of the default document</span>
+        </label>
+
+        {#if !autoDpi}
+            <label class="field dpi-field">
+                <span class="field-label">DPI</span>
+                <div class="field-num">
+                    <input
+                        type="number"
+                        min="1"
+                        max="10000"
+                        step="1"
+                        bind:value={dpi}
+                    />
+                    <span class="unit">dpi</span>
+                </div>
+            </label>
+        {/if}
+
         <label class="row color-row">
             <span class="field-label">Background</span>
             <ColorInput value={color} oninput={(hex) => (color = hex)} onchange={(hex) => (color = hex)} />
@@ -209,6 +253,24 @@
     .field-num input::-webkit-inner-spin-button,
     .field-num input::-webkit-outer-spin-button {
         opacity: 0.6;
+    }
+
+    .check-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+    }
+
+    .check-row .hint {
+        color: var(--text-muted);
+        font-size: 0.85em;
+    }
+
+    /* Half width, so the revealed field lines up with the Width column
+       above it rather than stretching across the dialog. */
+    .dpi-field {
+        width: calc(50% - 6px);
     }
 
     .clipboard-preview {

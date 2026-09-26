@@ -492,6 +492,15 @@ pub struct BrushGpuContext<'a> {
     /// `IntrinsicUniforms.view_rotation` by `intrinsic_header` / `intrinsic_preview_header`
     /// so terminals never need to know about view rotation themselves.
     pub view_rotation: f32,
+    /// Canvas pixels per reference pixel for this stroke's document:
+    /// `canvas_per_reference_px(Document::dpi)`, 1.0 for previews (which
+    /// render a brush's identity, which is its reference-pixel tuning).
+    /// Threaded into `IntrinsicUniforms.dpi_factor` by `intrinsic_header` /
+    /// `intrinsic_preview_header`, where the sample-coordinate emitter
+    /// converts a reference-pixel feature size to canvas pixels: the GPU
+    /// half of the same boundary `BrushGraphRunner::dpi_factor` is the CPU
+    /// half of.
+    pub dpi_factor: f32,
     /// Host-side counters for this context's lifetime. Written by the
     /// stroke engine + compute terminals via `record_*` helpers; drained
     /// by `submit_final` so the engine can `+= ` the result into its own
@@ -532,7 +541,8 @@ impl<'a> BrushGpuContext<'a> {
             // `EvalContext::dabs_per_pass`; 1.0 leaves the normalisation a
             // no-op for those that don't.
             dabs_per_pass: 1.0,
-            _pad: [0, 0],
+            dpi_factor: self.dpi_factor,
+            _pad: [0],
         }
     }
 
@@ -561,7 +571,8 @@ impl<'a> BrushGpuContext<'a> {
             // `EvalContext::dabs_per_pass`; 1.0 leaves the normalisation a
             // no-op for those that don't.
             dabs_per_pass: 1.0,
-            _pad: [0, 0],
+            dpi_factor: self.dpi_factor,
+            _pad: [0],
         }
     }
 

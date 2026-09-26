@@ -9,6 +9,7 @@ pub mod circle;
 pub mod clone_source;
 pub mod curve;
 pub mod divide;
+pub mod document_settings;
 pub mod image;
 pub mod invert;
 pub mod levels;
@@ -40,6 +41,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         clone_source::register(),
         curve::register(),
         divide::register(),
+        document_settings::register(),
         image::register(),
         invert::register(),
         levels::register(),

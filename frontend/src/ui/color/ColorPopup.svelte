@@ -6,6 +6,11 @@
      * dialogs, scrolling preference lists) while staying in the trigger's
      * DOM subtree, which keeps it inside a `<dialog>`'s top layer.
      *
+     * The anchor is a rect rather than an element, so a host with no element
+     * to hang it off (the palette popup, which anchors at the pen) needs no
+     * invented DOM node. A thunk rather than a value, so the reads inside it
+     * are tracked and the surface follows an anchor that moves.
+     *
      * Dismissal is the `watchDismiss` rule: the host tags its trigger and this
      * surface tags itself with `data-keep-open={scope}`; a pointerdown anywhere
      * else closes it. Escape is window-level, since the popup never needs
@@ -30,7 +35,7 @@
         onchange: (c: Color) => void;
         onclose: () => void;
         scope: string;
-        anchor: HTMLElement;
+        anchor: () => DOMRect;
     } = $props();
 
     const WHEEL_SIZE = 200;
@@ -43,7 +48,7 @@
     // clamp into the viewport so a bottom-corner trigger still shows it whole.
     $effect(() => {
         if (!surface) return;
-        const a = anchor.getBoundingClientRect();
+        const a = anchor();
         const w = surface.offsetWidth, h = surface.offsetHeight;
         let x = a.right + MARGIN;
         if (x + w > window.innerWidth - MARGIN) x = a.left - MARGIN - w;

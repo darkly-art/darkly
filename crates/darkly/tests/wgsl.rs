@@ -1400,16 +1400,19 @@ fn noise_canvas_space_is_byte_identical() {
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
-    // `scale` is now a Scalar *input* read via `cctx.input("scale").as_f32()`,
-    // and `sample_frame` interpolates the scale expression parenthesized, so
-    // an unwired 32.0 default emits `target_pos / (32.000000)`. The numeric
-    // literal (`32.000000`) is unchanged; the surrounding parens are the only
-    // permitted textual delta, required so a *wired* scale expression composes.
-    // This pins the param→input migration for a value that was a `ParamDef`
-    // before this change.
+    // `scale` is a Scalar *input* read via `cctx.input("scale").as_f32()`, and
+    // `sample_frame` interpolates the scale expression parenthesized, so an
+    // unwired 32.0 default emits `(32.000000)`. The numeric literal is
+    // unchanged; the parens let a *wired* scale expression compose. The
+    // `dpi_factor` alongside it is the reference-to-canvas boundary: `scale`
+    // is an authored reference-pixel feature size and `target_pos` is canvas
+    // pixels, and the factor cannot be folded into the literal because a
+    // compiled brush is cached across documents.
     assert!(
-        compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
-        "Canvas mode must emit the parenthesized canvas-pixel coordinate; not found",
+        compiled
+            .stroke_wgsl
+            .contains("target_pos / ((32.000000) * u.intrinsic.dpi_factor)"),
+        "Canvas mode must emit the parenthesized reference-pixel coordinate; not found",
     );
     assert!(
         !compiled.stroke_wgsl.contains("dab_local"),

@@ -129,6 +129,7 @@ mod tests {
                     dab_index,
                     base_size: 1.0,
                     dabs_per_pass: 1.0,
+                    dpi: crate::document::REFERENCE_DPI,
                     node_id,
                 };
                 match RandomEvaluator.evaluate_cpu(&ctx).into_iter().next() {

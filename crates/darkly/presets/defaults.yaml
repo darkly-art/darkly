@@ -116,6 +116,9 @@ settings:
   # Canvas defaults.
   canvas.width: 1920
   canvas.height: 1080
+  # Prefill for the manual DPI field in New Document, nothing more: an auto
+  # document derives its DPI from its pixel size.
+  canvas.dpi: 300.0
   canvas.backgroundColor: "#000000"
   # Autosave / crash recovery. Darkly-original (no reference-editor analog).
   autosave.enabled: true
@@ -150,6 +153,7 @@ settings:
   ui.toolStrip.edge: left
   ui.toolStrip.offset: 0.5
   ui.toolStrip.autoHide: false
+  ui.palettePopup.recentColors: 5
   # Input.
   input.fingerPainting: true
   # Stroke prediction look-ahead in ms (0 = off). See config/sections/input.rs.

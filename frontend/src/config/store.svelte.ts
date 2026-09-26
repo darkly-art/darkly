@@ -138,6 +138,18 @@ class ConfigStore {
         return config_get(key);
     }
 
+    /** A numeric pref, or `fallback` where the store has no usable value for
+     *  it: before `init()` resolves, and for a key whose stored value has been
+     *  hand-edited into something that is not a finite number.
+     *
+     *  `get` returns `unknown`, so every numeric reader has to narrow it, and
+     *  narrowing it by hand is how one call site ends up validating while the
+     *  next one casts. This is the one place that does it. */
+    number(key: string, fallback: number): number {
+        const raw = this.get(key);
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
+    }
+
     /** Layer-below-user value (overlay → defaults). Used by the Settings
      *  UI to label the Reset button with what would be revealed. */
     baseValue(key: string): unknown {

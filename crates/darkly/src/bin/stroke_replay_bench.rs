@@ -37,11 +37,12 @@ use darkly::format::stroke_recording::{replay, EventTiming, ReplayPacing, Stroke
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 
-/// Kept in lockstep with `crates/darkly/src/brush/dab_pool.rs::DAB_REFERENCE_SIZE`.
 /// The `pen_input.size` base knob is the dab radius expressed as a fraction
-/// of this reference: `radius_px = size * DAB_REFERENCE_SIZE_PX * 0.5`,
+/// of the dab reference: `radius_px = size * DAB_REFERENCE_SIZE_PX * 0.5`,
 /// so `--dab-size <px>` inverts to `size = 2 * px / DAB_REFERENCE_SIZE_PX`.
-const DAB_REFERENCE_SIZE_PX: f32 = 512.0;
+/// This bin runs reference-DPI engines, so a reference pixel is a canvas
+/// pixel and the `--dab-size` argument needs no conversion.
+const DAB_REFERENCE_SIZE_PX: f32 = darkly::brush::DAB_REFERENCE_SIZE as f32;
 
 #[derive(Debug)]
 struct Args {

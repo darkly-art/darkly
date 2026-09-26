@@ -49,14 +49,22 @@ const session = new DarklySession();
 
 // 3. Bind a handle to a <canvas>, then wrap it in the typed Engine transport.
 const canvas = document.querySelector('canvas')!;
-const handle = await session.createHandle(canvas, /* docWidth */ 1920, /* docHeight */ 1080);
+const handle = await session.createHandle(
+    canvas,
+    /* docWidth */ 1920,
+    /* docHeight */ 1080,
+    /* dpi */ null, // null = auto, derived from the pixel size
+);
 const engine = new Engine(handle);
 ```
 
-`session.createHandle(canvas, w, h)` allocates the WebGPU device on the first
-call and **reuses it** for every later handle: that's how the multi-tab editor
-runs N documents (N handles) on one device. `docWidth`/`docHeight` are the
-document's pixel dimensions; the canvas's own CSS/backing size is independent.
+`session.createHandle(canvas, w, h, dpi)` allocates the WebGPU device on the
+first call and **reuses it** for every later handle: that's how the multi-tab
+editor runs N documents (N handles) on one device. `docWidth`/`docHeight` are
+the document's pixel dimensions; the canvas's own CSS/backing size is
+independent. `dpi` of `null` derives the document's DPI from its pixel size,
+which gives it the same physical size as any other auto document and so the
+same brush scale; pass a number only when your artist named one.
 
 In this repo the same flow is exposed as a one-call helper:
 
@@ -67,7 +75,7 @@ const engine = await createHandle(canvas, 1920, 1080); // returns an Engine
 ```
 
 > **Single instance vs. shared device.** If you only ever have one canvas you
-> can skip the session and call `DarklyHandle.create(canvas, w, h)` directly:
+> can skip the session and call `DarklyHandle.create(canvas, w, h, dpi)` directly:
 > it allocates its own device. Prefer `DarklySession` whenever more than one
 > canvas is in play.
 

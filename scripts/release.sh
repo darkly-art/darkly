@@ -53,8 +53,8 @@ fi
 # base branch for merge, squash and rebase merges alike.
 limit=200
 prs=$(gh pr list --state merged --limit "$limit" \
-        --json number,title,author,mergeCommit \
-        --jq '.[] | [(.mergeCommit.oid // ""), (.author.is_bot | tostring), (.number | tostring), .title] | @tsv')
+        --json number,title,author,mergeCommit,url \
+        --jq '.[] | [(.mergeCommit.oid // ""), (.author.is_bot | tostring), (.number | tostring), .url, .title] | @tsv')
 commits=$(git rev-list --reverse "$range")
 
 # gh returns newest first; if the list is full and its oldest entry is still
@@ -65,10 +65,15 @@ if [ "$(printf '%s\n' "$prs" | grep -c .)" -ge "$limit" ]; then
     && die "more than $limit merged PRs; the range may be truncated"
 fi
 
-notes=$(awk -F'\t' '
-  NR == FNR { if ($1 != "" && $2 == "false") pr[$1] = $4 " (#" $3 ")"; next }
+# One line per PR in the range: `Title (#N)` for the tag body, and the PR's
+# URL for the release PR body (an unordered list of links, numerically sorted,
+# which is how every release PR on this repository is written).
+picked=$(awk -F'\t' '
+  NR == FNR { if ($1 != "" && $2 == "false") pr[$1] = $3 "\t" $4 "\t" $5; next }
   $0 in pr  { print pr[$0] }
 ' <(printf '%s\n' "$prs") <(printf '%s\n' "$commits"))
+notes=$(printf '%s\n' "$picked" | awk -F'\t' 'NF { print $3 " (#" $1 ")" }')
+links=$(printf '%s\n' "$picked" | awk -F'\t' 'NF { print $1 "\t- " $2 }' | sort -n | cut -f2-)
 
 [ -n "$notes" ] || die "no merged pull requests between ${prev:-the first commit} and HEAD"
 if bad=$(printf '%s\n' "$notes" | grep -F '://'); then
@@ -81,7 +86,7 @@ fi
 title="Dev -> Master $version"
 pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number // empty')
 if [ -z "$pr" ]; then
-  printf '%s\n' "$notes" | gh pr create --base master --head dev --title "$title" --body-file -
+  printf '%s\n' "$links" | gh pr create --base master --head dev --title "$title" --body-file -
   die "opened the release PR; run this again once its checks pass"
 fi
 [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$(git rev-parse HEAD)" ] \
@@ -105,10 +110,10 @@ fi
 printf '%s\n\n%s\n' "$tag" "$notes" | git tag -a "$tag" -F -
 git push origin "$tag"
 
-# The release PR carries the tag body verbatim (GitHub links each (#N)) and is
-# merged as a merge commit, so master contains the tag. A failure here does not
+# The release PR body is the list of PR links, and the PR is merged as a merge
+# commit, so master contains the tag. A failure here does not
 # undo the release; it is reported and the PR can be merged by hand.
-printf '%s\n' "$notes" | gh pr edit "$pr" --title "$title" --body-file -
+printf '%s\n' "$links" | gh pr edit "$pr" --title "$title" --body-file -
 gh pr merge "$pr" --merge || echo "release: could not merge release PR #$pr; merge it by hand" >&2
 
 # The checked-in copy of the release history, refreshed now that the tag exists.

@@ -343,6 +343,7 @@ fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>, Vec<S
             height: doc.height,
             origin_x: doc.canvas_origin.x,
             origin_y: doc.canvas_origin.y,
+            dpi: doc.dpi,
         },
         requires,
         composite: "composite.png".to_string(),

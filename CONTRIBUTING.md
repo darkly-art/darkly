@@ -13,11 +13,15 @@ Thanks for wanting to contribute.
 cargo check --workspace
 cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
 
+# Once: the wasm32 target, the wasm-bindgen CLI, and node_modules.
+# `make` also needs binaryen's `wasm-opt` on PATH (your package manager's).
+make tools deps
+
 # WASM bridge
-(cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
+make wasm
 
 # Frontend dev server
-(cd frontend && npm install && npm run dev)
+(cd frontend && npm run dev)
 ```
 
 Before opening a PR, run the full suite under [Lint / CI Checks](#lint--ci-checks) and read the [Testing Principle](#testing-principle).
@@ -98,6 +102,8 @@ frontend/src/           Svelte UI
 desktop/                Electron host: main, preload, storage bridge, forge
 packaging/              Desktop-integration resources shared by every
                         channel (desktop entry, AppStream metainfo, icons)
+Makefile                Build + install recipe every channel calls
+                        (targets documented in packaging/README.md)
 ```
 
 ### Read Before You Touch
@@ -112,7 +118,7 @@ Each of these is required reading *before* you change the area it covers, and sa
 | A registration a README table or graphic names | [`docs/generated-markdown.md`](docs/generated-markdown.md) | Those spans are generated from the registries; see [Generated Markdown](#generated-markdown) |
 | The JS/Rust boundary or the async model | [`docs/architecture-history.md`](docs/architecture-history.md) | Most "obvious simplifications" there have already been tried and reverted |
 | The brush engine or its node graph | [`docs/brush/README.md`](docs/brush/README.md) | Stroke engine, node system, stabilization, and the imported brush formats |
-| Making a release, the version string, or anything a `v*` tag triggers | [`docs/versioning.md`](docs/versioning.md) | "Cutting a release" there is the whole procedure, every step from choosing the version to a published release, including the release PR, whose body is the tag body rather than the two-part form. The annotated tag is the release record; the metainfo's release history is generated from the tags and committed after each release. The version itself is derived from git tags at build time and baked twice (Rust and Vite) as declared canonical twins; the `Cargo.toml` / `package.json` values are vestigial |
+| Making a release, the version string, or anything a `v*` tag triggers | [`docs/versioning.md`](docs/versioning.md) | "Cutting a release" there is the whole procedure, every step from choosing the version to a published release, including the release PR, whose body is a plain list of PR links rather than the two-part form. The annotated tag is the release record; the metainfo's release history is generated from the tags and committed after each release. The version itself is derived from git tags at build time, once, in `build.rs` (a tarball reads it from `version.txt`); the `Cargo.toml` / `package.json` values are vestigial |
 
 ## DRY Principle
 
@@ -255,7 +261,7 @@ cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test
 # asserts it matches what is checked in sits behind `ts-export`, which the run
 # above does not enable. Without this line nothing checks it.
 cargo test -p darkly --test protocol --features testing,ts-export -- --test-threads=1
-(cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
+make wasm
 # Both TS gates are required: `tsc` cannot see inside `.svelte` files, so it
 # gives a false green on component bugs that `svelte-check` catches.
 (cd frontend && npx tsc --noEmit)

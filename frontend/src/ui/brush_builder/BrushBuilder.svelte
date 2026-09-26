@@ -137,8 +137,8 @@
     const MIN_W = 160, MIN_H = 60;
     const MAX_W = 800, MAX_H = 400;
 
-    const configW = $derived((config.get('ui.brushBuilder.previewWidth') as number | undefined) ?? 320);
-    const configH = $derived((config.get('ui.brushBuilder.previewHeight') as number | undefined) ?? 120);
+    const configW = $derived(config.number('ui.brushBuilder.previewWidth', 320));
+    const configH = $derived(config.number('ui.brushBuilder.previewHeight', 120));
 
     // During a drag, track size locally for 60fps responsiveness without a
     // WASM hop per frame; on `endResize` we persist the final value.

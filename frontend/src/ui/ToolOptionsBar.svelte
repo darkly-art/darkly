@@ -3,7 +3,7 @@
     import { catalogs } from '../state/catalogs.svelte';
     import { toolRegistry } from '../tools/registry';
     import { brushGraph } from '../state/brush_graph.svelte';
-    import FgBgSwatches from './color/FgBgSwatches.svelte';
+    import ToolBarLayout from './ToolBarLayout.svelte';
 
     // The strip itself is always mounted: only the content inside (and
     // any optional panel above) varies per tool. Keeping the same DOM
@@ -15,21 +15,14 @@
 
 <div class="bottom-area" class:fullscreen={brushGraph.fullscreen}>
     <div class="tool-options">
-        <!-- Global color chrome, not a per-tool option. It sits inside
-             `.tool-options` rather than beside this bar because `.bottom-area`
-             also hosts a tool panel (the brush builder) and goes fixed and
-             fullscreen with it; a sibling would flank that panel and then
-             disappear. A consequence of living here: the swatches stay
-             reachable inside the fullscreen brush builder, where the old
-             vertical toolbar was covered over. -->
-        <div class="color-zone">
-            <FgBgSwatches mode="popup" />
-        </div>
         {#if Options}
             <Options />
         {:else}
-            <span class="tool-name">{tool ? catalogs.displayName('tools', tool.id) : ''}</span>
-            <div class="spacer"></div>
+            <ToolBarLayout>
+                {#snippet center()}
+                    <span class="tool-name">{tool ? catalogs.displayName('tools', tool.id) : ''}</span>
+                {/snippet}
+            </ToolBarLayout>
         {/if}
     </div>
     {#if Panel}
@@ -55,6 +48,13 @@
         background: var(--bg);
     }
 
+    /* The row leads with the global color swatches, which `ToolBarLayout`
+     * renders. They must stay inside this element rather than beside the bar:
+     * `.bottom-area` also hosts a tool panel (the brush builder) and goes
+     * fixed and fullscreen with it, so a sibling would flank that panel and
+     * then disappear. Living here is what keeps them reachable inside the
+     * fullscreen brush builder, where the old vertical toolbar was covered
+     * over. */
     .tool-options {
         display: flex;
         align-items: center;
@@ -70,17 +70,6 @@
         min-height: 40px;
     }
 
-    /* Separated from the tool's own controls the same way the tool strip
-       separates its groups. */
-    .color-zone {
-        display: flex;
-        align-items: center;
-        flex: none;
-        padding-right: 8px;
-        margin-right: 4px;
-        border-right: 1px solid var(--bg-hover);
-    }
-
     .tool-name {
         display: flex;
         align-items: center;
@@ -90,9 +79,5 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
         padding: 0 12px;
-    }
-
-    .spacer {
-        flex: 1;
     }
 </style>

@@ -25,6 +25,14 @@ import { clamp01 } from '../../lib/clamp';
 import { hsvToRgb, rgbToHsv, type Hsv } from '../../lib/color';
 import type { Color } from '../../lib/color';
 
+/** The hue ring's colour ramp, red around to red.
+ *
+ *  What the two consumers share is the *ramp*, not the gradient: the wheel
+ *  paints it conically (`ColorWheel.svelte`), and the palette popup's spectrum
+ *  sector paints it linearly along an SVG gradient. Spelling the seven stops
+ *  twice is what this avoids. */
+export const HUE_STOPS = ['#f00', '#ff0', '#0f0', '#0ff', '#00f', '#f0f', '#f00'];
+
 export interface Pt {
     x: number;
     y: number;

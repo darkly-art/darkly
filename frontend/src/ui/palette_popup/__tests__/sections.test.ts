@@ -9,8 +9,14 @@ vi.mock('../../../state/recents.svelte', () => ({
 }));
 vi.mock('../../../state/brush_graph.svelte', () => ({ brushGraph: {} }));
 vi.mock('../../../state/brush_library.svelte', () => ({ brushLibrary: {} }));
+// The colors section reads its swatch count from the config store for its
+// `register*` half; the store reaches the wasm glue, and the builder under
+// test takes the count as an injected dep, so it stays out of this file too.
+vi.mock('../../../config/store.svelte', () => ({
+    config: { number: (_k: string, fallback: number) => fallback },
+}));
 
-import { colorNodes, SWATCH_COUNT, type ColorDeps } from '../sections/colors';
+import { colorNodes, type ColorDeps } from '../sections/colors';
 import { brushNodes, RECENT_COUNT, type BrushDeps } from '../sections/brushes';
 import type { Color } from '../../../lib/color';
 import type { WheelBranch, WheelLeaf } from '../model';
@@ -19,29 +25,63 @@ import { NEUTRAL_PALETTE, type PackPalette } from '../../../lib/packPalette';
 const RED: Color = { r: 255, g: 0, b: 0, a: 255 };
 const BLUE: Color = { r: 0, g: 0, b: 255, a: 255 };
 
-function colorDeps(recent: string[]): ColorDeps & { set: ReturnType<typeof vi.fn> } {
+function colorDeps(
+    recent: string[],
+    count = 5,
+): ColorDeps & { set: ReturnType<typeof vi.fn>; wheel: ReturnType<typeof vi.fn> } {
     const set = vi.fn();
+    const wheel = vi.fn();
     return {
         recent: () => recent,
         foreground: () => RED,
         background: () => BLUE,
         setForeground: set,
+        count: () => count,
+        openWheel: wheel,
         set,
+        wheel,
     };
 }
 
+/** The section leads with the spectrum leaf, so the swatches start at 1. */
+const swatches = (nodes: ReturnType<typeof colorNodes>) => nodes.slice(1);
+
 describe('colorNodes', () => {
-    it('maps recents to swatch leaves, capped at SWATCH_COUNT', () => {
+    it('leads with the spectrum leaf, which the arc puts at the screen-right end', () => {
+        // The section's arc runs from theta PI/6 to 5*PI/6 with +y down, and
+        // ring 0 lays node i at increasing theta, so index 0 is the rightmost
+        // sector: "far right" is the front of the list, not the back.
+        const nodes = colorNodes(colorDeps(['#112233ff', '#445566ff']));
+        expect(nodes[0].id).toBe('color:spectrum');
+        expect(nodes[0].visual).toEqual({ kind: 'spectrum' });
+    });
+
+    it('the spectrum leaf opens the color wheel where the gesture committed', () => {
+        const deps = colorDeps(['#112233ff', '#445566ff']);
+        const nodes = colorNodes(deps);
+        (nodes[0] as WheelLeaf).select({ x: 12, y: 34 });
+        expect(deps.wheel).toHaveBeenCalledWith({ x: 12, y: 34 });
+    });
+
+    it('maps recents to swatch leaves, capped at the configured count', () => {
         const recents = Array.from({ length: 16 }, (_, i) =>
             `#${i.toString(16).padStart(2, '0')}0000ff`);
-        const nodes = colorNodes(colorDeps(recents));
-        expect(nodes).toHaveLength(SWATCH_COUNT);
+        // Two counts, so the cap cannot be satisfied by a constant.
+        expect(swatches(colorNodes(colorDeps(recents, 5)))).toHaveLength(5);
+        const nodes = swatches(colorNodes(colorDeps(recents, 9)));
+        expect(nodes).toHaveLength(9);
         expect(nodes.every(n => n.kind === 'leaf' && n.visual.kind === 'swatch')).toBe(true);
         expect((nodes[0] as WheelLeaf).visual).toEqual({ kind: 'swatch', color: recents[0] });
     });
 
+    it('never hands back more swatches than the count, even while seeding', () => {
+        // One stored recent leaves the list short, so the pair is seeded; the
+        // limit has to apply after that, or a count of 2 yields three swatches.
+        expect(swatches(colorNodes(colorDeps(['#112233ff'], 2)))).toHaveLength(2);
+    });
+
     it('seeds the current foreground/background when recents run short', () => {
-        const nodes = colorNodes(colorDeps([]));
+        const nodes = swatches(colorNodes(colorDeps([])));
         expect(nodes.map(n => (n as WheelLeaf).visual)).toEqual([
             { kind: 'swatch', color: '#ff0000ff' },
             { kind: 'swatch', color: '#0000ffff' },
@@ -49,7 +89,7 @@ describe('colorNodes', () => {
     });
 
     it('does not seed a duplicate of an already-recent RGB', () => {
-        const nodes = colorNodes(colorDeps(['#ff0000cc']));
+        const nodes = swatches(colorNodes(colorDeps(['#ff0000cc'])));
         // Foreground red is already there (alpha ignored); only blue joins.
         expect(nodes.map(n => (n as WheelLeaf).visual)).toEqual([
             { kind: 'swatch', color: '#ff0000cc' },
@@ -59,8 +99,8 @@ describe('colorNodes', () => {
 
     it('select() parses the hex and sets the foreground', () => {
         const deps = colorDeps(['#12345678']);
-        const nodes = colorNodes(deps);
-        (nodes[0] as WheelLeaf).select();
+        const nodes = swatches(colorNodes(deps));
+        (nodes[0] as WheelLeaf).select({ x: 0, y: 0 });
         expect(deps.set).toHaveBeenCalledWith({ r: 0x12, g: 0x34, b: 0x56, a: 0x78 });
     });
 
@@ -178,7 +218,7 @@ describe('brushNodes', () => {
     it('select() loads by name and id', () => {
         const deps = brushDeps();
         const nodes = brushNodes(deps);
-        ((nodes[0] as WheelBranch).children[1] as WheelLeaf).select();
+        ((nodes[0] as WheelBranch).children[1] as WheelLeaf).select({ x: 0, y: 0 });
         expect(deps.load).toHaveBeenCalledWith('Ink', 'b1');
     });
 });

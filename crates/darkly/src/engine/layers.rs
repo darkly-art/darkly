@@ -1675,6 +1675,14 @@ impl DarklyEngine {
         self.doc.name = name;
     }
 
+    /// The document's DPI in pixels per inch. Describes the intended
+    /// physical size of the canvas. Set through `rescale_image`, its sole
+    /// mutator.
+    #[handler]
+    pub fn document_dpi(&self) -> f32 {
+        self.doc.dpi
+    }
+
     #[handler]
     pub fn set_layer_name(&mut self, id: LayerId, name: &str) {
         if !self.doc.is_node_editable(id) {

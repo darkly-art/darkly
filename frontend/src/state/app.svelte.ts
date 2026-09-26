@@ -64,8 +64,12 @@ export class DarklyInstance {
      *  fresh tabs default to. Set by `shell.open(name, dims)` for
      *  Opens-as-new-tab where the content has its own intrinsic size
      *  (e.g. opening a PNG: canvas matches the image). Consumed once
-     *  by `CanvasView.onMount`. */
-    pendingDims: { width: number; height: number } | null = null;
+     *  by `CanvasView.onMount`.
+     *
+     *  `dpi` rides along for the same reason: the New Document dialog is the
+     *  only place an artist names one, and it is the same hop. Omitted or
+     *  `null` means auto DPI, derived from the pixel size. */
+    pendingDims: { width: number; height: number; dpi?: number | null } | null = null;
 
     /** Per-tab cached `.darkly` file handle from the FS Access API.
      *  Set after a successful Save As or after opening a file via
@@ -853,12 +857,24 @@ export class DarklyInstance {
         this.background = tmp;
     }
 
-    /** Return both swatches to the painter's configured defaults; a pref that
-     *  is unset or malformed falls back to this build's fresh-document pair. */
-    resetColors() {
+    /** The pair "reset colors" returns to: the painter's configured defaults,
+     *  with this build's fresh-document pair standing in for a pref that is
+     *  unset or malformed. A getter rather than a constant so the reset glyph
+     *  can preview the colors it is about to apply instead of carrying its own
+     *  idea of what they are. */
+    get defaultColors(): { foreground: Color; background: Color } {
         const pref = (key: string) => hexToColor((config.get(key) as string | undefined) ?? '');
-        this.foreground = pref('colors.defaultForeground') ?? { ...freshDocument.foreground };
-        this.background = pref('colors.defaultBackground') ?? { ...freshDocument.background };
+        return {
+            foreground: pref('colors.defaultForeground') ?? { ...freshDocument.foreground },
+            background: pref('colors.defaultBackground') ?? { ...freshDocument.background },
+        };
+    }
+
+    /** Return both swatches to {@link defaultColors}. */
+    resetColors() {
+        const { foreground, background } = this.defaultColors;
+        this.foreground = foreground;
+        this.background = background;
     }
 
     /** Re-read the layer tree and reconcile session state against it.
