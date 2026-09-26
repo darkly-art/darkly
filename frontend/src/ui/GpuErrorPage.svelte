@@ -7,6 +7,8 @@
         type FlagLink,
         type Instructions,
     } from '../gpuErrorInstructions';
+    import AnnouncementBanner from './AnnouncementBanner.svelte';
+    import { announcement } from '../state/announcement.svelte';
 
     let { failure, platform }: { failure: GpuCheckFailure; platform: Platform } =
         $props();
@@ -52,6 +54,16 @@
 </script>
 
 <div class="gpu-error-root">
+    <!-- The reader who could not boot is the one most likely to need whatever
+         the build is announcing, bug-report links above all. -->
+    {#if announcement.visible}
+        <!-- Already as loaded as this path gets: there is no engine to wait on. -->
+        <AnnouncementBanner
+            html={announcement.html}
+            ready
+            ondismiss={() => announcement.dismiss()}
+        />
+    {/if}
     <main class="gpu-error">
         <h1>{headline}</h1>
         <p class="cause">{causeFor(failure)}</p>

@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
+    import { markAppReady } from '../state/appReady.svelte';
     import { initEditor, createInstance, ensureProcessInit, seedFreshDocument } from '../editor';
     import { config } from '../config/store.svelte';
     import { app, type DarklyInstance } from '../state/app.svelte';
@@ -163,6 +164,10 @@
         } catch (e) {
             console.error("Failed to initialize Darkly:", e);
             toast.show('error', `Failed to initialize: ${e instanceof Error ? e.message : e}`);
+        } finally {
+            // Up, or as up as it is going to get. Chrome that holds off during
+            // the boot waits on this.
+            markAppReady();
         }
     });
 

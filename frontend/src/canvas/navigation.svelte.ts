@@ -304,7 +304,7 @@ class NavigationState {
             app.zoom = newZoom;
         } else {
             // Pan (two-finger scroll on trackpad, or mouse scroll wheel)
-            const sens = (config.get('nav.panSensitivity') as number) ?? 0.5;
+            const sens = config.number('nav.panSensitivity', 0.5);
             app.panX -= deltaX * sens;
             app.panY -= deltaY * sens;
         }

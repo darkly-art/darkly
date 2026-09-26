@@ -13,10 +13,13 @@
         CHIP_ARC,
         type SectorGeom,
     } from './wheel_geometry';
-    import { wheelLabel, wheelLabels } from './model';
+    import { paintsSector, wheelLabel, wheelLabels } from './model';
     import BrushThumb from '../brush_library/BrushThumb.svelte';
     import { packPaletteStyle, PACK_RIM, PALETTE_CLASS } from '../../lib/packPalette';
     import Icon from '../../icons/Icon.svelte';
+    import ColorPopup from '../color/ColorPopup.svelte';
+    import { HUE_STOPS } from '../color/wheel_model';
+    import { app } from '../../state/app.svelte';
 
     const engaged = $derived(
         palettePopup.state.kind === 'engaged' ? palettePopup.state : null);
@@ -72,14 +75,15 @@
      *  center, so a submenu emerges from under its parent. */
     const POP = 0.15;
 
-    /** Fraction of its ring's depth a highlighted *swatch* grows radially
-     *  outward: inner and angular edges stay fixed, only the outer edge
-     *  extends.
+    /** Fraction of its ring's depth a highlighted *painted* sector grows
+     *  radially outward: inner and angular edges stay fixed, only the outer
+     *  edge extends.
      *
      *  Presentation and not layout, which is the whole reason it is affordable.
-     *  A colour is a leaf and terminates the gesture's chain, so no ring is
-     *  ever drawn outside a swatch that is under the pointer, and the room it
-     *  swells into costs nothing: rings still abut, and no other sector moves.
+     *  A painted sector is a leaf and terminates the gesture's chain, so no
+     *  ring is ever drawn outside one that is under the pointer, and the room
+     *  it swells into costs nothing: rings still abut, and no other sector
+     *  moves.
      *  A branch cannot have this, because the room would have to be reserved on
      *  every ring whether or not anything grew, which is radius paid four deep
      *  by the time a painter reaches a brush inside a pack. */
@@ -139,12 +143,12 @@
      *  entrance pop's compensated transform springs out along, and the node's
      *  palette, which its rim is drawn in.
      *
-     *  A swatch carries a second outline as well, the one it grows to under
-     *  the pointer. Only a swatch: nothing else grows, and a path is not a
-     *  cheap thing to build twice for every sector on the wheel. */
+     *  A painted sector carries a second outline as well, the one it grows to
+     *  under the pointer. Only a painted one: nothing else grows, and a path is
+     *  not a cheap thing to build twice for every sector on the wheel. */
     function sectorStyle(s: SectorGeom, cx: number, cy: number): string {
         const mid = midAngle(s);
-        const grows = s.node.visual.kind === 'swatch';
+        const grows = paintsSector(s.node.visual);
         return `--d: path('${sectorPath(s, cx, cy)}');`
             + (grows ? ` --d-grown: path('${sectorPath(grownGeom(s), cx, cy)}');` : '')
             + ` --ax: ${(Math.cos(mid) * s.r0).toFixed(1)}px;`
@@ -181,6 +185,8 @@
     /** SVG id for a sector's rim paint. Ids share one document-wide namespace,
      *  so it is the sector's path, not its key, spelled for an id. */
     const packId = (s: SectorGeom) => `palette-pack-${s.path.join('-')}`;
+    /** SVG id for a spectrum sector's hue ramp, in the same namespace. */
+    const hueId = (s: SectorGeom) => `palette-hue-${s.path.join('-')}`;
     /** SVG id for the baseline a sector's name is set along. */
     const arcId = (s: SectorGeom) => `palette-arc-${s.path.join('-')}`;
 
@@ -232,7 +238,15 @@
         <svg>
             {#each drawOrder as s (key(s))}
                 {@const swatch = s.node.visual.kind === 'swatch' ? s.node.visual : null}
-                {@const grown = swatch !== null && key(s) === highlightKey}
+                {@const spectrum = s.node.visual.kind === 'spectrum'}
+                {@const painted = paintsSector(s.node.visual)}
+                {@const grown = painted && key(s) === highlightKey}
+                <!-- Three paints, not two: a swatch fills with its own flat
+                     colour, a spectrum with its ramp's paint server, and
+                     everything else keeps the rim plus body. -->
+                {@const paint = swatch
+                    ? swatch.color.slice(0, 7)
+                    : spectrum ? `url(#${hueId(s)})` : undefined}
                 <!-- The sector's own shape twice: the pack's pair beneath at
                      full size, the opaque body over it narrower by the rim's
                      width, so the sector is outlined without its silhouette or
@@ -248,7 +262,17 @@
                      rule, and a custom property whose value contains `var()`
                      is substituted where it is declared. -->
                 <g class={PALETTE_CLASS} style={sectorStyle(s, cx, cy)}>
-                    {#if !swatch}
+                    {#if spectrum}
+                        <!-- The hue ring's ramp laid flat along the sector. A
+                             paint server, for the same reason the pack rim
+                             needs one: a CSS gradient cannot paint SVG. -->
+                        <linearGradient id={hueId(s)}>
+                            {#each HUE_STOPS as stop, i (i)}
+                                <stop offset={i / (HUE_STOPS.length - 1)} style:stop-color={stop} />
+                            {/each}
+                        </linearGradient>
+                    {/if}
+                    {#if !painted}
                         <!-- `--pack-rim-fill` is a CSS gradient, and CSS
                              gradients cannot paint an SVG stroke, so the pair
                              is spelled here as the paint server SVG needs.
@@ -269,12 +293,12 @@
                     {/if}
                     <path
                         class="sector"
-                        class:rimmed={!swatch}
+                        class:rimmed={!painted}
                         class:highlighted={key(s) === highlightKey}
                         class:grown={grown}
                         d={sectorPath(grown ? grownGeom(s) : s, cx, cy)}
-                        style:fill={swatch ? swatch.color.slice(0, 7) : undefined}
-                        style:stroke={swatch ? swatch.color.slice(0, 7) : undefined}
+                        style:fill={paint}
+                        style:stroke={paint}
                     />
                 </g>
             {/each}
@@ -377,6 +401,23 @@
     </dialog>
 {/if}
 
+<!-- Outside the dialog, which is `pointer-events: none` and unmounted the
+     instant the pen lifts. The wheel is asked for by the gesture and then
+     outlives it: it is dismissed the ordinary way, by a press outside it or
+     Escape, under its own scope so it and the swatches' wheel never close each
+     other. -->
+{#if palettePopup.colorWheelAt}
+    {@const at = palettePopup.colorWheelAt}
+    <ColorPopup
+        value={app.foreground}
+        oninput={(c) => (app.foreground = c)}
+        onchange={(c) => (app.foreground = c)}
+        onclose={() => palettePopup.closeColorWheel()}
+        scope="palette-color-wheel"
+        anchor={() => new DOMRect(at.x, at.y, 0, 0)}
+    />
+{/if}
+
 <style>
     .palette-popup {
         position: fixed;
@@ -435,10 +476,10 @@
         fill: var(--bg-active);
         stroke: var(--bg-active);
     }
-    /* A swatch under the pointer swells: the outline itself, not a transform,
-       so only its outer edge moves and its inner edge stays exactly still. It
-       is the one sector that can, and the one that most wants to, since a
-       swatch shows its own colour and cannot take the highlight fill that
+    /* A painted sector under the pointer swells: the outline itself, not a
+       transform, so only its outer edge moves and its inner edge stays exactly
+       still. It is the one kind of sector that can, and the one that most wants
+       to, since it shows its own colour and cannot take the highlight fill that
        tells every other sector it is the one being aimed at. */
     .sector.grown {
         d: var(--d-grown);

@@ -484,12 +484,17 @@ const LABEL_GAP = 5;
  *  The mark is whatever stands beside the name: a pack's glyph, a brush's
  *  chip. Both are placed on the arc rather than laid out in a box, so both cost
  *  the run a known width, and the run's arithmetic wants that width without
- *  caring which kind of thing supplied it. A swatch has no run to be part of. */
+ *  caring which kind of thing supplied it. A painted sector has no run to be
+ *  part of.
+ *
+ *  Spelled as an exhaustive switch rather than through `paintsSector`, so a new
+ *  visual kind cannot slip in without a decision about the arc it costs. */
 export function markWidth(node: WheelNode): number {
     switch (node.visual.kind) {
         case 'icon': return MARK;
         case 'brush': return CHIP_ARC;
         case 'swatch': return 0;
+        case 'spectrum': return 0;
     }
 }
 

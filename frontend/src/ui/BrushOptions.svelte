@@ -102,11 +102,11 @@
              from, that wraps alongside them. It opens the brush explorer, which
              takes the screen and closes again as soon as a brush is picked. -->
         <div class="brush-picker-section">
-            <!-- The chain sits in the gap between the toolbar's color swatches
-                 (pinned at the bottom of the rail, immediately left of this
-                 bar) and the brush picker, joining the two controls it ties
-                 together: engaged, each brush carries the color pair it was
-                 last used with, so switching brushes switches colors with it. -->
+            <!-- The chain sits in the gap between the row's color swatches and
+                 the brush picker, joining the two controls it ties together:
+                 engaged, each brush carries the color pair it was last used
+                 with, so switching brushes switches colors with it. All three
+                 are members of the same wrapping row. -->
             <LinkToggle
                 linked={lockColors}
                 onchange={(v) => config.set('colors.lockToBrush', v)}
@@ -216,7 +216,7 @@
 </ToolBarLayout>
 
 <style>
-    /* The chain leads, so it lands in the gap between the rail's color
+    /* The chain leads, so it lands in the gap between the row's color
      * swatches and the picker: the two controls it ties together. The 7px gap
      * is what its connector stub spans. Sizes to content so the group wraps in
      * the scrub row like any other control. */

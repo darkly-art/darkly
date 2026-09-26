@@ -52,7 +52,7 @@
         onchange={(c) => onchange(colorToHexRgb(c))}
         onclose={() => (open = false)}
         {scope}
-        anchor={swatch!}
+        anchor={() => swatch!.getBoundingClientRect()}
     />
 {/if}
 

@@ -17,9 +17,12 @@
     import PackExportModal from './ui/PackExportModal.svelte';
     import AboutModal from './ui/AboutModal.svelte';
     import MenuBar from './ui/menu/MenuBar.svelte';
+    import AnnouncementBanner from './ui/AnnouncementBanner.svelte';
     import CommandPalette from './ui/menu/CommandPalette.svelte';
     import PalettePopup from './ui/palette_popup/PalettePopup.svelte';
     import { menuBar } from './state/menuBar.svelte';
+    import { announcement } from './state/announcement.svelte';
+    import { appReady } from './state/appReady.svelte';
     import { addLayerModal } from './state/addLayerModal.svelte';
     import CanvasOverlay from './multi_tab/CanvasOverlay.svelte';
     import { shell } from './multi_tab/shell.svelte';
@@ -57,6 +60,13 @@
 <svelte:window onbeforeunload={onBeforeUnload} />
 
 <div class="app-root">
+    {#if announcement.visible}
+        <AnnouncementBanner
+            html={announcement.html}
+            ready={appReady.value}
+            ondismiss={() => announcement.dismiss()}
+        />
+    {/if}
     {#if menuBar.pinned}
         <MenuBar />
     {/if}
