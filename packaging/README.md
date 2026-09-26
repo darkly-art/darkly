@@ -12,7 +12,6 @@ packaging target.
 | `icon.icns` | macOS `.dmg` and `.zip` |
 | `icon.ico` | Windows installer |
 | `app.json` | `desktop/forge.config.js` (generated from `product.yaml`) |
-| `darkly.in` | `make install-app`, which renders it to the `darkly` launcher |
 
 The icons keep the plain `icon` stem rather than the app ID. Electron's packager
 derives the platform icon by stripping the extension and appending its own, and
@@ -23,9 +22,7 @@ on install, which `make install-data` does.
 
 ## What does not belong here
 
-Anything specific to a single packaging target. `darkly.in` is shared because
-every distro channel runs Darkly on a system Electron the same way. The Flathub
-launcher, which
+Anything specific to a single packaging target. The Flathub launcher, which
 wraps the binary in `zypak-wrapper`, is the worked example: zypak exists only
 inside `org.electronjs.Electron2.BaseApp`, so the launcher is meaningless to
 every other channel and belongs with the Flathub manifest rather than here,
@@ -36,7 +33,11 @@ per-channel recipes with their channel.
 ## Building and installing
 
 The root `Makefile` is the whole recipe; a channel's own recipe only fetches
-dependencies and calls it.
+dependencies and calls it. Every channel ships the Electron bundle
+`electron-forge package` produces, with the exact Electron
+`desktop/package-lock.json` resolves, because that is the Chromium the app's
+WebGPU pipeline is tested on. A distro's own Electron is a different Chromium
+build on a different schedule, so installing onto one is not supported.
 
 **Build dependencies:** Rust with the `wasm32-unknown-unknown` target, the
 `wasm-bindgen` CLI at exactly the version `Cargo.lock` resolves for the
@@ -46,18 +47,19 @@ dependencies and calls it.
 versions in the message. fontconfig headers are needed only for the native
 test suite and the docs tools, not for `make app`.
 
-**Runtime dependencies:** Electron (44 is what `desktop/package-lock.json`
-resolves and what CI runs), and a Vulkan driver for WebGPU.
+**Runtime dependencies:** a Vulkan driver for WebGPU, and the system libraries
+Electron's Chromium links (gtk3, nss, libpulse and the rest; a distro's own
+Electron package lists the same set, e.g. `pacman -Qi electron44`).
 
 | Target | Does |
 | --- | --- |
-| `app` (default) | `wasm`, `frontend`, `desktop` in order: the wasm bridge, the frontend in app mode, then the frontend staged into `desktop/resources/app` and the Electron host compiled |
+| `app` (default) | `wasm`, `frontend`, `desktop`, `bundle` in order: the wasm bridge, the frontend in app mode, the frontend staged into `desktop/resources/app` and the Electron host compiled, then `electron-forge package` into `desktop/out/Darkly-linux-<arch>/` |
 | `wasm` | `cargo build` of `darkly-wasm`, `wasm-bindgen` into `frontend/wasm/pkg`, and `wasm-opt -O` in the release profile |
 | `install` | `install-app` and `install-data` |
-| `install-app` | the app tree under `$(LIBDIR)/darkly` and the launcher at `$(BINDIR)/darkly` |
+| `install-app` | the bundle under `$(LIBDIR)/darkly`, `chrome-sandbox` setuid, and a relative symlink at `$(BINDIR)/darkly` |
 | `install-data` | the desktop entry, the metainfo with its release history rendered from the tags, the icon, the license |
 | `tools` | `rustup target add wasm32-unknown-unknown` and `cargo install` of the pinned `wasm-bindgen` CLI. For contributors: a packager on distro Rust already has the target |
-| `deps` | `npm ci` in `frontend/` and `desktop/`. The only target that uses the network |
+| `deps` | `npm ci` in `frontend/` and `desktop/` |
 | `clean` | removes the build outputs |
 
 | Variable | Default |
@@ -69,8 +71,12 @@ resolves and what CI runs), and a Vulkan driver for WebGPU.
 | `PREFIX` | `/usr/local` |
 | `BINDIR`, `LIBDIR`, `DATADIR` | `$(PREFIX)/bin`, `$(PREFIX)/lib`, `$(PREFIX)/share` |
 | `LICENSEDIR` | `$(DATADIR)/licenses/darkly` |
-| `ELECTRON` | `electron`; the command the launcher runs, e.g. `electron44` |
+| `DARKLY_ELECTRON_ZIP_DIR` (environment) | none; a directory holding `electron-v<version>-linux-<arch>.zip`, read by `desktop/forge.config.js` |
 
+`tools`, `deps` and `bundle` use the network; everything else is offline.
+`bundle` fetches the Electron zip (into `~/.cache/electron`) unless
+`DARKLY_ELECTRON_ZIP_DIR` names a directory that already holds it, so an
+offline build lists that zip as a source and points the variable at it.
 `make app` does not fetch `node_modules`: every channel has its own offline
 story, so it assumes they are present and fails with npm's message when they
 are not. `make install` builds nothing; run `make app` first.
@@ -78,9 +84,10 @@ are not. `make install` builds nothing; run `make app` first.
 **Install layout:**
 
 ```
-$(BINDIR)/darkly                        exec $(ELECTRON) $(LIBDIR)/darkly "$@"
-$(LIBDIR)/darkly/package.json           Electron reads `main` from it
-$(LIBDIR)/darkly/dist/                  the compiled Electron host
+$(BINDIR)/darkly                        -> ../lib/darkly/darkly (relative)
+$(LIBDIR)/darkly/darkly                 the bundled Electron, renamed
+$(LIBDIR)/darkly/chrome-sandbox         mode 4755
+$(LIBDIR)/darkly/resources/app.asar     the Electron host
 $(LIBDIR)/darkly/resources/app/         the frontend
 $(DATADIR)/applications/art.darkly.Darkly.desktop
 $(DATADIR)/metainfo/art.darkly.Darkly.metainfo.xml
@@ -88,22 +95,25 @@ $(DATADIR)/icons/hicolor/512x512/apps/art.darkly.Darkly.png
 $(LICENSEDIR)/LICENSE
 ```
 
-The installed tree needs no `node_modules`. The launcher bakes in `$(LIBDIR)`,
-so it runs only once installed there; stage with `DESTDIR`, not `PREFIX`.
-`electron-flags.conf` handling is left to the distro's own Electron launcher.
+`chrome-sandbox` is setuid root, as forge's deb maker and distro Electron
+packages install it. Chromium uses it only where unprivileged user namespaces
+are unavailable; elsewhere the namespace sandbox is used and the bit is inert.
+The symlink is relative, so a `DESTDIR` staging tree runs in place.
 
 **A distro recipe.** For the AUR, in full:
 
 ```bash
 makedepends=(rust wasm-bindgen binaryen nodejs npm make)
-depends=(electron44)
+depends=(gtk3 nss libpulse vulkan-icd-loader)
 prepare() { cd darkly-$pkgver; (cd frontend && npm ci --ignore-scripts); (cd desktop && npm ci --ignore-scripts); }
 build()   { cd darkly-$pkgver; make app; }
-package() { cd darkly-$pkgver; make install DESTDIR="$pkgdir" PREFIX=/usr ELECTRON=electron44; }
+package() { cd darkly-$pkgver; make install DESTDIR="$pkgdir" PREFIX=/usr; }
 ```
 
-`--ignore-scripts` in `desktop/` skips Electron's binary download, which a
-system-Electron install does not want. npm 12 also refuses git dependencies by
+`--ignore-scripts` in `desktop/` skips the `electron` package's postinstall
+download, which the build never uses: forge reads the Electron version from
+`package.json` and unpacks its own zip. CI runs plain `make deps`, which keeps
+the download; either works. npm 12 also refuses git dependencies by
 default, and `desktop/package-lock.json` has one (`@electron/node-gyp`, through
 electron-forge), so on npm 12 add `--allow-git=all` there. When the distro's
 `wasm-bindgen` is not the pinned version (Arch ships a newer one), install the
@@ -137,11 +147,12 @@ by hand. The committed copy is refreshed after each release
 ([`docs/versioning.md`](../docs/versioning.md)), so it lags a tag until that
 commit lands; `make install-data` therefore refills it at build time from the
 tags reachable from the checkout (`scripts/metainfo-releases.sh`), and installs
-the result. Flathub bundles its own Electron, so its manifest uses
-`install-data` alone:
+the result. Flathub installs the same bundle, then replaces the symlink with
+its zypak launcher and removes `chrome-sandbox`, since zypak bridges Chromium's
+sandbox to the flatpak one:
 
 ```bash
-make install-data DESTDIR=/ PREFIX=/app LICENSEDIR=/app/share/licenses/art.darkly.Darkly
+make install PREFIX=/app LIBDIR=/app LICENSEDIR=/app/share/licenses/art.darkly.Darkly
 ```
 
 The tags are the release record, so a channel that builds from a clone must

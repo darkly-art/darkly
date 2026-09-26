@@ -2,8 +2,8 @@
  * Desktop smoke test. Runs against the unpacked output of
  * `electron-forge package` (which `electron-forge make` also produces): the
  * desktop/out/Darkly-<platform>-<arch>/ directory. With DARKLY_EXECUTABLE set
- * it runs that binary instead: CI points it at the launcher `make install`
- * renders, which execs a system Electron on the installed tree.
+ * it runs that binary instead: CI points it at the `darkly` symlink
+ * `make install` stages, so the installed tree is what boots.
  *
  * Scope: verify that the desktop wrapper boots, a window opens with the
  * expected title, and the preload bridge exposes window.electronAPI.storage.
@@ -69,11 +69,9 @@ test('packaged app launches, renders, and exposes the storage bridge', async () 
 
         const win = await app.firstWindow({ timeout: 30_000 });
 
-        // Match a prefix, not the exact string: the upstream app's <title>
-        // carries a tagline (e.g. "Darkly - Entropic Editor for Artists") that
-        // changes independently of this deploy repo. We only care that the
-        // packaged bundle booted the right app.
-        await expect(win).toHaveTitle(/^Darkly\b/, { timeout: 30_000 });
+        // The window title is the frontend's <title>: the app's name alone,
+        // with no tagline.
+        await expect(win).toHaveTitle('Darkly', { timeout: 30_000 });
 
         // Intentionally no canvas/render check here. CI runners on Linux
         // (xvfb, no GPU) and the Intel-mac runner have no working WebGPU

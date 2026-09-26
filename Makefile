@@ -1,14 +1,16 @@
-# Build and install Darkly: the wasm bridge, the frontend, and the Electron
-# host, then an install tree for a system Electron. The one recipe every
-# channel calls; packaging/README.md documents the targets, the variables and
-# the install layout for packagers.
+# Build and install Darkly: the wasm bridge, the frontend, the Electron host,
+# and the forge bundle that ships with the exact Electron the app is tested
+# on. The one recipe every channel calls; packaging/README.md documents the
+# targets, the variables and the install layout for packagers.
 #
 #   make tools deps     # once: the wasm-bindgen CLI, then node_modules
-#   make                # build the desktop app
-#   make install DESTDIR="$pkgdir" PREFIX=/usr ELECTRON=electron44
+#   make                # build the desktop app bundle
+#   make install DESTDIR="$pkgdir" PREFIX=/usr
 #
-# Offline except `tools` and `deps`. Every variable below can be overridden on
-# the command line.
+# Offline except `tools`, `deps`, and `bundle`, which fetches the Electron zip
+# unless DARKLY_ELECTRON_ZIP_DIR names a directory that already holds it (see
+# desktop/forge.config.js). Every variable below can be overridden on the
+# command line.
 
 PROFILE      ?= release
 FEATURES     ?=
@@ -21,9 +23,10 @@ BINDIR       ?= $(PREFIX)/bin
 LIBDIR       ?= $(PREFIX)/lib
 DATADIR      ?= $(PREFIX)/share
 LICENSEDIR   ?= $(DATADIR)/licenses/darkly
-ELECTRON     ?= electron
 
+# The same id is the app's desktop name in desktop/src/main.ts.
 APP_ID       := art.darkly.Darkly
+BUNDLE       := desktop/out/Darkly-linux-*
 WASM_TARGET  := wasm32-unknown-unknown
 PKG          := frontend/wasm/pkg
 TARGET_DIR   := $(or $(CARGO_TARGET_DIR),target)
@@ -47,9 +50,9 @@ WASM_BINDGEN_VERSION = $(shell sed -n '/^name = "wasm-bindgen"$$/{n;s/^version =
 
 # `frontend` and `desktop` are also directory names: without .PHONY, make
 # would answer "is up to date" and build nothing.
-.PHONY: app wasm frontend desktop install install-app install-data tools deps clean
+.PHONY: app wasm frontend desktop bundle install install-app install-data tools deps clean
 
-app: desktop
+app: bundle
 
 wasm:
 	cargo build -p darkly-wasm --target $(WASM_TARGET) --profile $(PROFILE) $(if $(FEATURES),--features $(FEATURES))
@@ -68,24 +71,28 @@ desktop: frontend
 	cp -R frontend/dist/. desktop/resources/app/
 	cd desktop && npx tsc
 
+# The app with its own Electron: desktop/out/Darkly-linux-<arch>/.
+bundle: desktop
+	cd desktop && npx electron-forge package
+
 install: install-app install-data
 
-# The Electron app directory (its package.json names `main`), and a launcher
-# that runs it on the system Electron.
+# The bundle under $(LIBDIR)/darkly and a relative symlink to its executable
+# in $(BINDIR), the shape forge's deb maker installs. `cp -R` without `-p`
+# drops the setuid bit Chromium's sandbox helper needs where unprivileged
+# user namespaces are unavailable, so it is set again afterwards; `-p` would
+# record the build user's ownership under fakeroot.
 install-app:
-	@test -f desktop/dist/main.js -a -f desktop/resources/app/index.html \
-	  || { echo "nothing to install: run 'make app' first" >&2; exit 1; }
-	install -d $(DESTDIR)$(LIBDIR)/darkly/dist $(DESTDIR)$(LIBDIR)/darkly/resources $(DESTDIR)$(BINDIR)
-	install -m644 desktop/package.json $(DESTDIR)$(LIBDIR)/darkly/
-	cp -R desktop/dist/. $(DESTDIR)$(LIBDIR)/darkly/dist/
-	rm -rf $(DESTDIR)$(LIBDIR)/darkly/resources/app
-	cp -R desktop/resources/app $(DESTDIR)$(LIBDIR)/darkly/resources/
-	sed -e 's|@ELECTRON@|$(ELECTRON)|g' -e 's|@LIBDIR@|$(LIBDIR)|g' packaging/darkly.in \
-	  > $(DESTDIR)$(BINDIR)/darkly
-	chmod 755 $(DESTDIR)$(BINDIR)/darkly
+	@test "$(words $(wildcard $(BUNDLE)))" = 1 \
+	  || { echo "expected exactly one $(BUNDLE): run 'make app' first" >&2; exit 1; }
+	rm -rf $(DESTDIR)$(LIBDIR)/darkly
+	install -d $(DESTDIR)$(LIBDIR)/darkly $(DESTDIR)$(BINDIR)
+	cp -R $(wildcard $(BUNDLE))/. $(DESTDIR)$(LIBDIR)/darkly/
+	chmod 4755 $(DESTDIR)$(LIBDIR)/darkly/chrome-sandbox
+	ln -sfr $(DESTDIR)$(LIBDIR)/darkly/darkly $(DESTDIR)$(BINDIR)/darkly
 
-# Desktop integration, shared with channels that bundle their own Electron.
-# The metainfo's <releases> block is refilled from the tags on the way in.
+# Desktop integration. The metainfo's <releases> block is refilled from the
+# tags on the way in.
 install-data:
 	install -Dm644 packaging/$(APP_ID).desktop $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
 	install -d $(DESTDIR)$(DATADIR)/metainfo
@@ -101,11 +108,11 @@ tools:
 	@test -n "$(WASM_BINDGEN_VERSION)" || { echo "wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
 	cargo install --locked wasm-bindgen-cli --version $(WASM_BINDGEN_VERSION)
 
-# The one target that uses the network. Packagers substitute their own
-# vendoring (Flathub's generated sources, a PKGBUILD's prepare()).
+# Packagers substitute their own vendoring (Flathub's generated sources, a
+# PKGBUILD's prepare()).
 deps:
 	cd frontend && npm ci
 	cd desktop && npm ci
 
 clean:
-	rm -rf $(PKG) frontend/dist desktop/dist desktop/resources/app
+	rm -rf $(PKG) frontend/dist desktop/dist desktop/resources/app desktop/out

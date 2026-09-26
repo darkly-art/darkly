@@ -14,11 +14,9 @@ import * as fs from 'fs';
 import { createStorageHost } from './storage-host';
 
 // On Windows, handle Squirrel install/uninstall events at startup. If we
-// were launched as part of one, quit and let Squirrel do its thing. Required
-// only there, so an install tree run by a system Electron (`make install`)
-// needs no node_modules.
+// were launched as part of one, quit and let Squirrel do its thing.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-if (process.platform === 'win32' && require('electron-squirrel-startup')) {
+if (require('electron-squirrel-startup')) {
     app.quit();
 }
 
@@ -26,6 +24,11 @@ if (process.platform === 'win32' && require('electron-squirrel-startup')) {
 // package.json "name" (which is "darkly-desktop"). This must happen before
 // any app.getPath('userData') call.
 app.setName('Darkly');
+
+// The installed desktop entry's name, so Linux desktops pair the window with
+// it: Electron derives the X11 WM_CLASS and the Wayland app_id from this, and
+// the entry's StartupWMClass matches. The id is also APP_ID in the Makefile.
+app.setDesktopName('art.darkly.Darkly.desktop');
 
 // Allow overriding the userData path entirely for portable / sandboxed installs.
 const dataDirOverride = process.env.DARKLY_DATA_DIR;
@@ -94,10 +97,8 @@ function createWindow() {
     });
 
     // Locate the frontend resources.
-    // - A forge bundle: process.resourcesPath/app/ (Forge's extraResource).
-    // - Everything else reads ../resources/app/ relative to dist/:
-    //   `electron-forge start`, and the tree `make install` lays out under
-    //   $(LIBDIR)/darkly, which a system Electron runs directly.
+    // - Packaged: process.resourcesPath/app/ (set via Forge's extraResource).
+    // - electron-forge start: read from ../resources/app/ relative to dist/.
     const packagedResources = path.join(process.resourcesPath, 'app');
     const localResources = path.join(__dirname, '..', 'resources', 'app');
     const resourcesDir = fs.existsSync(packagedResources)

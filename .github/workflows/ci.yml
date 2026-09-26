@@ -194,7 +194,7 @@ jobs:
         run: npm test
 
   install:
-    name: make app + install on an unbundled Electron
+    name: make app + install
     runs-on: ubuntu-latest
     steps:
       # Full history: install-data renders the release block from the v* tags.
@@ -216,22 +216,18 @@ jobs:
       - run: make app
 
       # The lines a distro recipe runs, staged the way a package build stages.
-      - name: make install (staged)
+      # The symlink is relative, so the staged tree runs in place. `cp -R`
+      # drops the sandbox helper's setuid bit, which install-app sets again.
+      - name: make install
         run: |
-          make install DESTDIR="$RUNNER_TEMP/pkg" PREFIX=/usr ELECTRON=electron
-          grep -qx 'exec "electron" "/usr/lib/darkly" "\$@"' "$RUNNER_TEMP/pkg/usr/bin/darkly"
+          make install DESTDIR="$RUNNER_TEMP/pkg" PREFIX=/usr
+          test "$(readlink "$RUNNER_TEMP/pkg/usr/bin/darkly")" = ../lib/darkly/darkly
+          test "$(stat -c %a "$RUNNER_TEMP/pkg/usr/lib/darkly/chrome-sandbox")" = 4755
           test -f "$RUNNER_TEMP/pkg/usr/lib/darkly/resources/app/index.html"
-
-      # A runnable install: the launcher names its LIBDIR, so it has to be
-      # installed where it runs. ELECTRON is the Electron binary itself, not
-      # node_modules/.bin/electron, a Node wrapper that would spawn Electron as
-      # a child and leave Playwright attached to the wrong process.
-      - name: make install (runnable)
-        run: make install PREFIX="$RUNNER_TEMP/usr" ELECTRON="$PWD/desktop/node_modules/electron/dist/electron"
-      - name: Smoke test through the installed launcher
+      - name: Smoke test through the installed symlink
         working-directory: desktop
         env:
-          DARKLY_EXECUTABLE: ${{ runner.temp }}/usr/bin/darkly
+          DARKLY_EXECUTABLE: ${{ runner.temp }}/pkg/usr/bin/darkly
         run: xvfb-run -a npm run test:e2e
 
   packaging:
