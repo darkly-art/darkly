@@ -29,7 +29,7 @@ impl DarklyEngine {
     /// module docs), swaps canvas dims/origin for rotations, and records one
     /// undoable [`CanvasGeometryAction`].
     pub fn transform_canvas(&mut self, xform: OrthoXform) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
 
         let frame = self.doc.canvas_rect();
         let (old_w, old_h) = (self.doc.width, self.doc.height);

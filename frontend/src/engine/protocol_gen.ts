@@ -58,6 +58,8 @@ export type ApplyFilterReq = { node_id: number, filter_type: string, params: Jso
 
 export type ApplyMaskReq = { id: number, };
 
+export type BeginShapeReq = { family: string, params: JsonValue, x: number, y: number, width: number, height: number, fill: [number, number, number, number] | null, stroke: StrokeWire | null, anchor: number | null, };
+
 export type BeginStrokeReq = { id: number, };
 
 export type BeginTransformReq = { id: number, };
@@ -636,6 +638,8 @@ preview_staging: PreviewStaging | null, };
 
 export type NodeThumbnailReq = { node_id: number, width: number, height: number, };
 
+export type ObjectId = number;
+
 export type ObjectRefReq = { id: number, object: number, };
 
 export type OrthoXform = "flip_h" | "flip_v" | "rot180" | "rot90_cw" | "rot90_ccw";
@@ -696,7 +700,12 @@ widget: string, unit: UnitType, min: number | null, max: number | null, default:
  * Enum: `["Label1", "Label2", ...]`.
  * Icon: `[["fa6-solid:icon-name", "Label"], ...]`.
  */
-options: JsonValue | null, display: ParamDisplay, };
+options: JsonValue | null, display: ParamDisplay, 
+/**
+ * `[name, allowed]`: show this parameter only while the named sibling's
+ * integer value is in `allowed`. See `ParamDef::visible_when`.
+ */
+visible_when: [string, Array<number>] | null, };
 
 export type ParamValue = boolean | number | number | string | Array<[number, number]> | [number, number, number, number, number] | [number, number, number] | [number, number] | Array<{ [key in string]: ParamValue }>;
 
@@ -1000,6 +1009,10 @@ export type SetPreviewThemeReq = { fg: [number, number, number, number], bg: [nu
 
 export type SetRecordingParamsReq = { enabled: boolean, minIntervalSecs: number, width: number, height: number, baseWidth: number, baseHeight: number, };
 
+export type SetShapeParamsReq = { id: number, object: ObjectId, params: JsonValue, };
+
+export type SetShapeStyleReq = { id: number, object: ObjectId, fill: [number, number, number, number] | null, stroke: StrokeWire | null, };
+
 export type SetTextBoxReq = { id: number, object: number, 
 /**
  * Full canvas affine `G` (row-major) for the box's moved origin; the engine
@@ -1025,6 +1038,12 @@ export type SetViewportBgReq = { bg: [number, number, number, number], };
 
 export type SetVoidParamsReq = { id: number, params: JsonValue, };
 
+export type ShapeObjectInfo = { object: ObjectId, family: string, params: Array<ParamInfo>, width: number, height: number, fill: [number, number, number, number] | null, stroke: StrokeWire | null, };
+
+export type ShapeObjectRef = { id: number, object: ObjectId, };
+
+export type ShapeObjectsReq = { id: number, };
+
 export type ShrinkSelectionReq = { radius: number, };
 
 export type SmoothSelectionReq = { radius: number, };
@@ -1040,6 +1059,8 @@ cr: number, cg: number, cb: number, ca: number, };
 
 export type StrokeToReq = { op: StrokeOp, };
 
+export type StrokeWire = { width: number, color: [number, number, number, number], };
+
 export type Transform = { "mode": "Basic", "data": [number, number, number, number, number, number] } | { "mode": "Perspective", "data": [number, number, number, number, number, number, number, number, number] };
 
 export type TransformCapabilityError = { endpoint: number, operation: PixelTransformOperation, };
@@ -1047,6 +1068,8 @@ export type TransformCapabilityError = { endpoint: number, operation: PixelTrans
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 
 export type UpdateFloatingMatrixReq = { transform: Transform, };
+
+export type UpdateShapeReq = { x: number, y: number, width: number, height: number, };
 
 export type UpdateVectorObjectTransformReq = { id: number, object: number, payload: Array<number>, };
 
@@ -1071,6 +1094,7 @@ export type RequestKind =
     | 'antialias_selection'
     | 'apply_filter'
     | 'apply_mask'
+    | 'begin_shape'
     | 'begin_stroke'
     | 'begin_transform'
     | 'border_selection'
@@ -1118,6 +1142,7 @@ export type RequestKind =
     | 'can_merge_down'
     | 'cancel_filter_preview'
     | 'cancel_floating'
+    | 'cancel_shape'
     | 'canvas_dimensions'
     | 'canvas_rect'
     | 'catalogs'
@@ -1130,6 +1155,7 @@ export type RequestKind =
     | 'clone_source_anchored'
     | 'commit_filter_preview'
     | 'commit_floating'
+    | 'commit_shape'
     | 'convert_floating_to_smart_object'
     | 'convert_layer_to_smart_object'
     | 'copy'
@@ -1235,12 +1261,15 @@ export type RequestKind =
     | 'set_pixel_filter'
     | 'set_preview_theme'
     | 'set_recording_params'
+    | 'set_shape_params'
+    | 'set_shape_style'
     | 'set_text_box'
     | 'set_text_content'
     | 'set_text_style'
     | 'set_view_transform'
     | 'set_viewport_bg'
     | 'set_void_params'
+    | 'shape_objects'
     | 'shrink_selection'
     | 'smooth_selection'
     | 'start_export'
@@ -1251,6 +1280,7 @@ export type RequestKind =
     | 'text_objects'
     | 'undo'
     | 'update_floating_matrix'
+    | 'update_shape'
     | 'update_vector_object_transform'
     | 'update_void_transform'
     | 'vector_object_info'
@@ -1271,6 +1301,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'antialias_selection',
     'apply_filter',
     'apply_mask',
+    'begin_shape',
     'begin_stroke',
     'begin_transform',
     'border_selection',
@@ -1318,6 +1349,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'can_merge_down',
     'cancel_filter_preview',
     'cancel_floating',
+    'cancel_shape',
     'canvas_dimensions',
     'canvas_rect',
     'catalogs',
@@ -1330,6 +1362,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'clone_source_anchored',
     'commit_filter_preview',
     'commit_floating',
+    'commit_shape',
     'convert_floating_to_smart_object',
     'convert_layer_to_smart_object',
     'copy',
@@ -1435,12 +1468,15 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_pixel_filter',
     'set_preview_theme',
     'set_recording_params',
+    'set_shape_params',
+    'set_shape_style',
     'set_text_box',
     'set_text_content',
     'set_text_style',
     'set_view_transform',
     'set_viewport_bg',
     'set_void_params',
+    'shape_objects',
     'shrink_selection',
     'smooth_selection',
     'start_export',
@@ -1451,6 +1487,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'text_objects',
     'undo',
     'update_floating_matrix',
+    'update_shape',
     'update_vector_object_transform',
     'update_void_transform',
     'vector_object_info',
@@ -1479,6 +1516,7 @@ export interface EngineApi {
     antialiasSelection(): void;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
+    beginShape(req: BeginShapeReq): void;
     beginStroke(req: BeginStrokeReq): Promise<null>;
     beginTransform(req: BeginTransformReq): Promise<boolean>;
     borderSelection(req: BorderSelectionReq): void;
@@ -1526,6 +1564,7 @@ export interface EngineApi {
     canMergeDown(req: CanMergeDownReq): Promise<boolean>;
     cancelFilterPreview(): void;
     cancelFloating(): void;
+    cancelShape(): void;
     canvasDimensions(): Promise<CanvasDimensionsResp>;
     canvasRect(): Promise<CanvasRectResp>;
     catalogs(): Promise<Array<Catalog>>;
@@ -1538,6 +1577,7 @@ export interface EngineApi {
     cloneSourceAnchored(): Promise<boolean>;
     commitFilterPreview(req: CommitFilterPreviewReq): Promise<boolean>;
     commitFloating(): void;
+    commitShape(): Promise<ShapeObjectRef | null>;
     convertFloatingToSmartObject(): Promise<number>;
     convertLayerToSmartObject(req: ConvertLayerToSmartObjectReq): Promise<number>;
     copy(req: CopyReq): Promise<ClipboardExport | null>;
@@ -1643,12 +1683,15 @@ export interface EngineApi {
     setPixelFilter(req: SetPixelFilterReq): void;
     setPreviewTheme(req: SetPreviewThemeReq): void;
     setRecordingParams(req: SetRecordingParamsReq): void;
+    setShapeParams(req: SetShapeParamsReq): void;
+    setShapeStyle(req: SetShapeStyleReq): void;
     setTextBox(req: SetTextBoxReq): void;
     setTextContent(req: SetTextContentReq): void;
     setTextStyle(req: SetTextStyleReq): void;
     setViewTransform(req: SetViewTransformReq): void;
     setViewportBg(req: SetViewportBgReq): void;
     setVoidParams(req: SetVoidParamsReq): void;
+    shapeObjects(req: ShapeObjectsReq): Promise<Array<ShapeObjectInfo>>;
     shrinkSelection(req: ShrinkSelectionReq): void;
     smoothSelection(req: SmoothSelectionReq): void;
     startExport(): void;
@@ -1659,6 +1702,7 @@ export interface EngineApi {
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
     undo(): void;
     updateFloatingMatrix(req: UpdateFloatingMatrixReq): void;
+    updateShape(req: UpdateShapeReq): void;
     updateVectorObjectTransform(req: UpdateVectorObjectTransformReq): void;
     updateVoidTransform(req: UpdateVoidTransformReq): void;
     vectorObjectInfo(req: ObjectRefReq): Promise<{ ox: number, oy: number, w: number, h: number, mode: number, matrix: number[] } | null>;
@@ -1681,6 +1725,7 @@ export function makeApi(t: Transport): EngineApi {
         antialiasSelection: () => t.postFF('antialias_selection'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),
+        beginShape: (req) => t.postFF('begin_shape', req),
         beginStroke: (req) => t.request('begin_stroke', req),
         beginTransform: (req) => t.request('begin_transform', req),
         borderSelection: (req) => t.postFF('border_selection', req),
@@ -1728,6 +1773,7 @@ export function makeApi(t: Transport): EngineApi {
         canMergeDown: (req) => t.request('can_merge_down', req),
         cancelFilterPreview: () => t.postFF('cancel_filter_preview'),
         cancelFloating: () => t.postFF('cancel_floating'),
+        cancelShape: () => t.postFF('cancel_shape'),
         canvasDimensions: () => t.request('canvas_dimensions'),
         canvasRect: () => t.request('canvas_rect'),
         catalogs: () => t.request('catalogs'),
@@ -1740,6 +1786,7 @@ export function makeApi(t: Transport): EngineApi {
         cloneSourceAnchored: () => t.request('clone_source_anchored'),
         commitFilterPreview: (req) => t.request('commit_filter_preview', req),
         commitFloating: () => t.postFF('commit_floating'),
+        commitShape: () => t.request('commit_shape'),
         convertFloatingToSmartObject: () => t.request('convert_floating_to_smart_object'),
         convertLayerToSmartObject: (req) => t.request('convert_layer_to_smart_object', req),
         copy: (req) => t.request('copy', req),
@@ -1845,12 +1892,15 @@ export function makeApi(t: Transport): EngineApi {
         setPixelFilter: (req) => t.postFF('set_pixel_filter', req),
         setPreviewTheme: (req) => t.postFF('set_preview_theme', req),
         setRecordingParams: (req) => t.postFF('set_recording_params', req),
+        setShapeParams: (req) => t.postFF('set_shape_params', req),
+        setShapeStyle: (req) => t.postFF('set_shape_style', req),
         setTextBox: (req) => t.postFF('set_text_box', req),
         setTextContent: (req) => t.postFF('set_text_content', req),
         setTextStyle: (req) => t.postFF('set_text_style', req),
         setViewTransform: (req) => t.postFF('set_view_transform', req),
         setViewportBg: (req) => t.postFF('set_viewport_bg', req),
         setVoidParams: (req) => t.postFF('set_void_params', req),
+        shapeObjects: (req) => t.request('shape_objects', req),
         shrinkSelection: (req) => t.postFF('shrink_selection', req),
         smoothSelection: (req) => t.postFF('smooth_selection', req),
         startExport: () => t.postFF('start_export'),
@@ -1861,6 +1911,7 @@ export function makeApi(t: Transport): EngineApi {
         textObjects: (req) => t.request('text_objects', req),
         undo: () => t.postFF('undo'),
         updateFloatingMatrix: (req) => t.postFF('update_floating_matrix', req),
+        updateShape: (req) => t.postFF('update_shape', req),
         updateVectorObjectTransform: (req) => t.postFF('update_vector_object_transform', req),
         updateVoidTransform: (req) => t.postFF('update_void_transform', req),
         vectorObjectInfo: (req) => t.request('vector_object_info', req),

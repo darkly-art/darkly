@@ -3,7 +3,7 @@
     import { catalogs } from '../../state/catalogs.svelte';
     import Icon from '../../icons/Icon.svelte';
     import ParamRow from '../params/ParamRow.svelte';
-    import type { ParamInfo, ParamValue } from '../params/paramSchema';
+    import { visibleParams, type ParamInfo, type ParamValue } from '../params/paramSchema';
 
     // A void's params are `ParamInfo[]` on the wire, the same type a filter
     // carries, so they render through the same row.
@@ -133,7 +133,7 @@
 {#if node.params.length === 0}
     <div class="empty">No parameters</div>
 {:else}
-    {#each node.params as param (param.name)}
+    {#each visibleParams(node.params) as param (param.name)}
         <ParamRow {param} oninput={pushParams} onchange={pushParams} />
     {/each}
 {/if}

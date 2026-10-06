@@ -85,7 +85,7 @@ impl DarklyEngine {
         // selection, snapshot regions, clear the selection or scan node
         // extents: it changes one number on the document.
         let (bounds, regions, selection) = if dims_changed {
-            self.auto_commit_floating();
+            self.commit_pending_edits();
 
             // Enumerate pixel-bearing nodes by capability: raster layers +
             // mask filters. Void layers answer `pixels() == None` and are

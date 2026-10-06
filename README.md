@@ -96,6 +96,7 @@ For a feature to count, it must be:
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill, gradient, color picker
 - [x] Text tool
+- [x] Vector shapes (rectangle, ellipse with blob and superformula styles, polygon)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches

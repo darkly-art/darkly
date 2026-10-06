@@ -1012,9 +1012,10 @@ impl Document {
     /// Add a new vector-object layer. Carries no pixel buffer: the compositor
     /// realizes a texture from its `objects` (text/paths) on the next frame and
     /// re-realizes only when the objects/style/transform change. Starts empty;
-    /// the engine seeds the first object (e.g. a text block) atomically.
-    pub fn add_vector_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
-        let name = self.next_name("Text");
+    /// the engine seeds the first object (e.g. a text block) atomically. Named
+    /// `"<stem> N"` after what it is seeded with.
+    pub fn add_vector_layer(&mut self, stem: &str, anchor: Option<LayerId>) -> LayerId {
+        let name = self.next_name(stem);
         let id = self.entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Layer(Layer::Vector(VectorLayer::new(key, name))))
         });

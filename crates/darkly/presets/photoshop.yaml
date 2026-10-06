@@ -38,6 +38,10 @@ hotkeys:
   # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L.
   lassoSelectTool: KeyL
   polygonSelectTool: Shift+KeyL
+  # Photoshop groups its shape tools (Rectangle, Ellipse, Polygon, ...) on U;
+  # as with the M group, the first two members take the key and Shift+key.
+  rectangleTool: KeyU
+  ellipseTool: Shift+KeyU
   # Layers.
   # Delete on the Layers panel deletes the active layer; the global Delete
   # binding (clearSelectionContents) coexists via the binding-site scope.

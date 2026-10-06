@@ -28,6 +28,7 @@ pub mod nodegraph;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod product;
 pub mod sdf;
+pub mod shape;
 pub mod text;
 pub mod tool;
 pub mod tools;

@@ -13,7 +13,7 @@ use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
-use crate::undo::{EntityAddAction, GpuRegionAction};
+use crate::undo::GpuRegionAction;
 
 #[handlers]
 impl DarklyEngine {
@@ -510,8 +510,7 @@ impl DarklyEngine {
         let target = self.doc.resolve_anchor_target(active_layer_id);
         self.doc.place_layer(id, target);
 
-        let slot = self.doc.slot_of(id).unwrap_or_default();
-        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
+        self.record_entity_add(id);
 
         id
     }

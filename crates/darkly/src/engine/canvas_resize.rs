@@ -37,7 +37,7 @@ impl DarklyEngine {
     /// origin, is a planned follow-up; it needs lossy per-node pixel-snapshot
     /// undo, distinct from this document-only path.)
     pub fn resize_canvas(&mut self, new_rect: CanvasRect) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         if new_rect.width == 0
             || new_rect.height == 0
             || new_rect.width > MAX_CANVAS_DIM

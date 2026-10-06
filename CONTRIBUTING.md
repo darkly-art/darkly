@@ -143,7 +143,7 @@ When adding a new item to a modular system (filter, tool, brush, etc.):
 - **DO:** Create a single file in the appropriate directory that contains everything about that module: struct, implementation, registration function, constants, helpers.
 - **DO NOT:** Add match arms to a central dispatcher. Add entries to a handwritten list. Touch any file outside the module directory except the generated `mod.rs`.
 
-Mechanics: `build.rs` scans module directories and generates each `mod.rs` (never edit by hand) with a `registrations()` function. Each variant file exports `pub fn register() -> XRegistration`; the registry calls `registrations()` to populate itself. Generic infrastructure (`Trait`, `Registration`, `Registry`) is named after the kind, not after the first variant that happened to exist. See `gpu/effect.rs` + `gpu/effects/*.rs` for a worked example.
+Mechanics: `build.rs` scans module directories and generates each `mod.rs` (never edit by hand) with a `registrations()` function. Each variant file exports `pub fn register() -> XRegistration` (or `pub fn registrations() -> Vec<XRegistration>` when one file contributes a group); the registry calls `registrations()` to populate itself. Generic infrastructure (`Trait`, `Registration`, `Registry`) is named after the kind, not after the first variant that happened to exist. See `gpu/effect.rs` + `gpu/effects/*.rs` for a worked example.
 
 The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
 

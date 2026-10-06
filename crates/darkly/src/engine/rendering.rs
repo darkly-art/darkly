@@ -802,13 +802,13 @@ impl DarklyEngine {
 
     #[handler]
     pub fn undo(&mut self) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.apply_undo(UndoDirection::Undo);
     }
 
     #[handler]
     pub fn redo(&mut self) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.apply_undo(UndoDirection::Redo);
     }
 

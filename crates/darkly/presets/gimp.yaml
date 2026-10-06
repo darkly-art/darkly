@@ -50,6 +50,7 @@ hotkeys:
   # (`gimp_free_select_tool_register`). polygonSelectTool is left unbound
   # because GIMP has no separate polygonal tool.
   lassoSelectTool: KeyF
+  # GIMP has no vector shape tools, so they stay unbound.
   # Layers.
   isolateLayer: KeyI
   # GIMP's layers-delete action has no global accelerator (its accel slot is

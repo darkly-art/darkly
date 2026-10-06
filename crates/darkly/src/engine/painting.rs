@@ -415,7 +415,7 @@ impl DarklyEngine {
             self.active_stroke_layer = None;
             return Err(self.paint_refusal_reason(id));
         }
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.active_stroke_layer = Some(id);
         // Reset the per-stroke counter accumulator. The bench-side
         // per-event delta snapshot resets in lockstep so the first

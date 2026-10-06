@@ -314,7 +314,7 @@ impl DarklyEngine {
                 // clone: the texture rebuilds from the objects.
                 let objects = v.objects.clone();
                 let transform = v.transform;
-                let new_id = self.doc.add_vector_layer(anchor);
+                let new_id = self.doc.add_vector_layer(&common_name, anchor);
 
                 let new_name = if is_root {
                     format!("{common_name} copy")

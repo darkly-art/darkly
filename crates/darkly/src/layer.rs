@@ -367,14 +367,44 @@ impl TextProps {
     }
 }
 
-/// What a [`VectorObject`] draws. Two variants and no growth axis: shapes are
-/// plain [`BezPath`]s (rectangles/ellipses convert into one), and the only
-/// editable, non-path source is [`TextProps`]. No trait, no registry: a third
-/// kind would only ever be another bespoke editable source, added here.
+/// A parametric shape: a generator family plus its schema-ordered parameter
+/// values, drawn into a local box. The path is derived at scene-build time
+/// ([`crate::shape::tessellate`]) and never stored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapeProps {
+    /// Stable `type_id` from [`crate::shape::registry`] (`"rectangle"`, ...).
+    pub family: String,
+    /// Parameter values matching the family's `ParamDef` schema, in order.
+    pub params: Vec<ParamValue>,
+    /// The shape's local bounding box is `[0, width] x [0, height]`, in
+    /// object-local pixels. The object affine places and transforms it.
+    pub width: f32,
+    pub height: f32,
+}
+
+/// What a [`VectorObject`] draws. Each variant is a bespoke kind of source,
+/// and the enum has no growth axis: a baked outline is a [`BezPath`], editable
+/// text is [`TextProps`], and a parametric shape is [`ShapeProps`]. A shape is
+/// not a `Path` because its generator parameters stay editable after
+/// placement, which a baked path cannot offer; the variation across shape
+/// families lives behind [`ShapeProps::family`], not in further variants.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ObjectSource {
     Path(BezPath),
     Text(TextProps),
+    Shape(ShapeProps),
+}
+
+impl ObjectSource {
+    /// The geometry this source fills and strokes, in object-local
+    /// coordinates. `None` for text, which draws glyph runs instead.
+    pub fn outline(&self) -> Option<std::borrow::Cow<'_, BezPath>> {
+        match self {
+            ObjectSource::Path(p) => Some(std::borrow::Cow::Borrowed(p)),
+            ObjectSource::Shape(s) => Some(std::borrow::Cow::Owned(crate::shape::tessellate(s))),
+            ObjectSource::Text(_) => None,
+        }
+    }
 }
 
 /// Stable identity of a [`VectorObject`] within its owning [`VectorLayer`].
@@ -383,6 +413,7 @@ pub enum ObjectSource {
 /// alias a stale reference. Object addressing uses this rather than a list
 /// index, which would shift under reorder/insert/delete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ObjectId(pub u64);
 
 impl ObjectId {
@@ -421,10 +452,27 @@ impl VectorObject {
             source: ObjectSource::Text(text),
         }
     }
+
+    /// A shape object placed by `transform`, with an optional solid fill and
+    /// border. The id is left [`ObjectId::UNASSIGNED`] until pushed.
+    pub fn shape(
+        shape: ShapeProps,
+        transform: Affine,
+        fill: Option<Brush>,
+        stroke: Option<(Stroke, Brush)>,
+    ) -> Self {
+        VectorObject {
+            id: ObjectId::UNASSIGNED,
+            transform,
+            fill,
+            stroke,
+            source: ObjectSource::Shape(shape),
+        }
+    }
 }
 
 /// A vector-object layer: a layer owning an ordered list of [`VectorObject`]s
-/// (text today; paths/shapes later, reusing this layer and renderer). The
+/// (text and parametric shapes, sharing this layer and renderer). The
 /// objects are the authoritative, editable, serializable description; the GPU
 /// texture is a rebuildable realization. Darkly is raster-first: the texture
 /// regenerates only when objects/style/transform change, never on view zoom.

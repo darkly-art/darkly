@@ -28,7 +28,7 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         if self.doc.layer(node_id).is_none() && self.doc.find_filter(node_id).is_none() {
             return false;
         }

@@ -206,6 +206,10 @@ fn paste_floating_cancel_removes_layer() {
         "auto-created paste layer should be removed after cancel"
     );
     assert!(
+        !engine.test_holds_entity(pasted_id),
+        "nothing on the undo stack refers to it, so it is purged, not left as an orphan"
+    );
+    assert!(
         engine.has_layer(base_layer),
         "pre-existing layer must remain after cancel"
     );
