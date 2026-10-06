@@ -142,10 +142,14 @@ impl std::ops::AddAssign for BrushPerfCounters {
 /// Hard cap on dab records that can be queued in a single phase across
 /// any dab-batching terminal. Sized so the per-phase dab buffer is
 /// trivial VRAM cost (16384 records × ~32-byte typical record ≈ 512
-/// KB) and well above what any realistic stroke phase will reach
-/// (~30 dabs even at high stabilisation). `DabBatch::queue_dab`
-/// debug-asserts on this: overflow panics loudly in test/dev so the
-/// constant gets bumped rather than silently truncating in release.
+/// KB). A live stroke phase stays far below it (~30 dabs even at high
+/// stabilisation), but a whole path drawn in one phase (the brush
+/// preview, or a stroke no frame ran during, rendered at pen-up) can
+/// reach it, so
+/// `StrokeEngine::place_dab` flushes and submits when the queue is full.
+/// Queuing past the cap would make the terminal's upload overrun its dab
+/// buffer, which fails wgpu validation; `DabBatch::queue_dab`
+/// debug-asserts so such a path is caught in test/dev.
 pub const MAX_DABS_PER_PHASE: u32 = 16384;
 
 /// Resources needed to render to a real paint target: present during a
@@ -625,22 +629,27 @@ impl<'a> BrushGpuContext<'a> {
     /// dabs, which is negligible compared to the old per-dab submit.
     pub fn flush_if_needed(&mut self) {
         if self.pipelines.rings_nearly_full() {
-            let t = web_time::Instant::now();
-            let finished = std::mem::replace(
-                &mut self.encoder,
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("brush-ring-flush"),
-                    }),
-            );
-            self.queue.submit([finished.finish()]);
-            self.pipelines.reset_uniform_rings();
-            self.perf.submit_us = self
-                .perf
-                .submit_us
-                .saturating_add(t.elapsed().as_micros() as u64);
-            self.perf.submits = self.perf.submits.saturating_add(1);
+            self.submit_and_continue("brush-ring-flush");
         }
+    }
+
+    /// Submit the current encoder, reset all uniform rings, and continue
+    /// recording into a fresh encoder labelled `label`. Everything recorded
+    /// so far has read its ring slots by the time the rings are reused.
+    pub fn submit_and_continue(&mut self, label: &str) {
+        let t = web_time::Instant::now();
+        let finished = std::mem::replace(
+            &mut self.encoder,
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) }),
+        );
+        self.queue.submit([finished.finish()]);
+        self.pipelines.reset_uniform_rings();
+        self.perf.submit_us = self
+            .perf
+            .submit_us
+            .saturating_add(t.elapsed().as_micros() as u64);
+        self.perf.submits = self.perf.submits.saturating_add(1);
     }
 
     /// Ensure the preview mask is sized to fit a brush footprint of

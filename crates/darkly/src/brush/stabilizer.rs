@@ -27,10 +27,17 @@ use crate::gpu::params::{ParamDef, ParamValue};
 /// stroke engine's [`DivergenceDiff`](super::stroke_engine::DivergenceDiff)
 /// against that bound.
 pub trait StabilizerAlgorithm: Send {
-    /// Append a raw input point and run the algorithm.
-    fn push(&mut self, point: PaintInformation);
+    /// Append `points` and run the algorithm once. The polyline afterwards is
+    /// bit-identical to the one pushing each point in turn leaves. An empty
+    /// slice changes nothing.
+    fn push_all(&mut self, points: &[PaintInformation]);
 
-    /// Forget the most recent point, so the next `push` replaces it. The
+    /// Append one raw input point and run the algorithm.
+    fn push(&mut self, point: PaintInformation) {
+        self.push_all(std::slice::from_ref(&point));
+    }
+
+    /// Forget the most recent point, so the next push replaces it. The
     /// polyline is only meaningful again after that push.
     fn retract_tip(&mut self);
 
@@ -81,8 +88,8 @@ impl PassThrough {
 }
 
 impl StabilizerAlgorithm for PassThrough {
-    fn push(&mut self, point: PaintInformation) {
-        self.points.push(point);
+    fn push_all(&mut self, points: &[PaintInformation]) {
+        self.points.extend_from_slice(points);
     }
 
     fn retract_tip(&mut self) {
@@ -225,13 +232,16 @@ impl PredictingStabilizer {
 }
 
 impl StabilizerAlgorithm for PredictingStabilizer {
-    fn push(&mut self, point: PaintInformation) {
+    fn push_all(&mut self, points: &[PaintInformation]) {
+        if points.is_empty() {
+            return;
+        }
         // Advance the inner (real) stabilizer, then rebuild the combined
-        // polyline from its relaxed output. The push cannot have moved inner
-        // vertices further than its window behind the previous real tip, so
-        // the prefix before that is already in `combined` and only the rest,
-        // with the stale predicted tail, is replaced.
-        self.inner.push(point);
+        // polyline from its relaxed output. The batch cannot have moved
+        // inner vertices further than its window behind the previous real
+        // tip, so the prefix before that is already in `combined` and only
+        // the rest, with the stale predicted tail, is replaced.
+        self.inner.push_all(points);
         let inner = self.inner.stabilized();
         let unchanged = self
             .real_len
@@ -790,6 +800,43 @@ mod tests {
     /// commits forty vertices at a strength whose window is three, so the
     /// vertices around the previous frame's tip, which the first push of the
     /// next frame reshapes, sit far behind the current tip.
+    /// The whole stack (resampler, Laplacian and prediction) fed in batches
+    /// leaves, after every batch, the polyline it leaves fed a sample at a
+    /// time.
+    #[test]
+    fn batched_stack_matches_sequential() {
+        let registry = StabilizerRegistry::new();
+        let mut single = stroke_stabilizer_stack(&registry, &laplacian_config(0.6), 10.0, 1.0);
+        let mut batched = stroke_stabilizer_stack(&registry, &laplacian_config(0.6), 10.0, 1.0);
+        let raws: Vec<PaintInformation> = (0..300)
+            .map(|i| {
+                let th = i as f32 * 0.05;
+                mk(
+                    300.0 * th.cos() + i as f32,
+                    200.0 * (2.0 * th).sin(),
+                    i as f32 * 0.008,
+                )
+            })
+            .collect();
+        let mut start = 0;
+        for size in (1..=12).cycle() {
+            if start >= raws.len() {
+                break;
+            }
+            let chunk = &raws[start..(start + size).min(raws.len())];
+            for raw in chunk {
+                single.push(*raw);
+            }
+            batched.push_all(chunk);
+            start += chunk.len();
+            assert_eq!(
+                batched.stabilized(),
+                single.stabilized(),
+                "after the batch ending at sample {start}"
+            );
+        }
+    }
+
     #[test]
     fn batched_pushes_keep_rendered_positions_within_epsilon() {
         let mut stab =

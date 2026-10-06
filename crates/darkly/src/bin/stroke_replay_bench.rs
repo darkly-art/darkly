@@ -25,6 +25,10 @@
 //!   same fraction of the canvas.
 //! - `--output <path>` - TSV output path. Defaults to
 //!   `crates/darkly/bench-results/stroke-replay-<stem>-<sha>.tsv`.
+//! - `--no-frames` - instead, time the recording with a stroke flush after
+//!   every event against the same events with no frame between them (one
+//!   flush, at pen-up: what a headless embedder pays). Each on a fresh
+//!   engine with prediction off, including GPU completion.
 
 use std::fs;
 use std::io::Write as _;
@@ -51,6 +55,7 @@ struct Args {
     dab_size_px: Option<f32>,
     canvas: Option<(u32, u32)>,
     output: Option<PathBuf>,
+    no_frames: bool,
 }
 
 fn parse_args() -> Args {
@@ -60,6 +65,7 @@ fn parse_args() -> Args {
         dab_size_px: None,
         canvas: None,
         output: None,
+        no_frames: false,
     };
     let mut input_set = false;
     let mut argv = std::env::args().skip(1);
@@ -89,6 +95,7 @@ fn parse_args() -> Args {
                     argv.next().expect("--output requires a path"),
                 ));
             }
+            "--no-frames" => args.no_frames = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -117,7 +124,7 @@ fn parse_canvas(s: &str) -> (u32, u32) {
 fn print_help() {
     eprintln!(
         "stroke_replay_bench --input <path> [--brush <name>] [--dab-size <px>] \
-         [--canvas <WxH>] [--output <tsv>]"
+         [--canvas <WxH>] [--output <tsv>] [--no-frames]"
     );
 }
 
@@ -237,6 +244,67 @@ fn write_tsv(path: &Path, timings: &[EventTiming]) -> std::io::Result<()> {
     Ok(())
 }
 
+// ── Flush cadence ───────────────────────────────────────────────────────
+
+/// The recording with a stroke flush after every event, then with no frame
+/// between events, each on a fresh engine, timed through GPU completion.
+fn compare_flush_cadence(recording: &StrokeRecording, graph_json: &str, canvas: (u32, u32)) {
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(0.0),
+    );
+    let run = |no_frames: bool| {
+        let mut engine = build_engine(canvas);
+        engine
+            .set_brush_graph(graph_json)
+            .expect("brush graph compiles");
+        let layer = engine.add_raster_layer(None);
+        let start = Instant::now();
+        let submits = if no_frames {
+            let scale = (
+                canvas.0 as f32 / recording.canvas_width as f32,
+                canvas.1 as f32 / recording.canvas_height as f32,
+            );
+            let ops: Vec<_> = recording
+                .events
+                .iter()
+                .map(|e| e.to_stroke_op(scale))
+                .collect();
+            engine.begin_stroke(layer).expect("layer is paintable");
+            for op in ops {
+                engine.stroke_to(op);
+            }
+            engine.end_stroke();
+            // `replay` composites after pen-up inside its timing too.
+            engine.render(0.0);
+            engine.drain_brush_perf_delta().submits
+        } else {
+            let timings = replay(
+                &mut engine,
+                recording,
+                layer,
+                canvas,
+                ReplayPacing::AsFastAsPossible,
+                None,
+            );
+            timings.iter().map(|t| t.submits).sum()
+        };
+        engine.test_flush_readbacks();
+        (start.elapsed().as_secs_f64() * 1000.0, submits)
+    };
+    let (per_event_ms, per_event_submits) = run(false);
+    let (no_frames_ms, no_frames_submits) = run(true);
+    eprintln!(
+        "{} events, canvas {}x{}, prediction off: flush per event {per_event_ms:.1} ms \
+         ({per_event_submits} submits), no frames {no_frames_ms:.1} ms \
+         ({no_frames_submits} submits), {:.1}x",
+        recording.events.len(),
+        canvas.0,
+        canvas.1,
+        per_event_ms / no_frames_ms,
+    );
+}
+
 // ── main ────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -251,6 +319,10 @@ fn main() {
         .unwrap_or((recording.canvas_width, recording.canvas_height));
 
     let graph_json = brush_graph_json(&args.brush, args.dab_size_px);
+    if args.no_frames {
+        compare_flush_cadence(&recording, &graph_json, target_canvas);
+        return;
+    }
 
     let mut engine = build_engine(target_canvas);
     engine

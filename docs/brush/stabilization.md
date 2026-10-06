@@ -81,17 +81,17 @@ The key insight: instead of re-rendering the entire stroke every frame when earl
   Tablet event (any number per frame)
        │
        v
-  StrokeEngine.stabilize()
-       └─> Stabilizer.push()
-              ├─> resample
-              ├─> relax the window
-              └─> predict tail
+  StrokeEngine.stabilize()  (records the event)
                                     ┌───────────────────────────┐
   Frame (flush_stroke)              │     StrokeBuffer          │
        │                            │  ┌─────────────────────┐  │
        v                            │  │   stroke_texture    │──│──> composite onto layer
   StrokeEngine.take_divergence()    │  │   (dabs render here)│  │
-       │   (diff against where      │  └─────────────────────┘  │
+       │   Stabilizer.push_all(     │  └─────────────────────┘  │
+       │    events since the last   │                           │
+       │    flush): resample, relax │                           │
+       │    once, predict tail; then│                           │
+       │   (diff against where      │                           │
        │    each vertex was last    │  ┌─────────────────────┐  │
        │    rendered)               │  │  pre_stroke_texture │  │
        │                            │  │  (layer snapshot)   │  │
@@ -107,15 +107,17 @@ The key insight: instead of re-rendering the entire stroke every frame when earl
   render_from_stabilized_range_to(start, end)
 ```
 
-Tablet events only feed the stabilizer. Rendering happens once per frame and at pen-up, over every event that arrived since: a tablet that samples faster than the display refreshes would otherwise rewind and replay the stroke once per event, with nothing presented in between. The frame's flush runs first in `DarklyEngine::render`, and its time is the `stroke` sub-phase of the bridge's `[frame-perf]` slow-frame log. Krita's stabilizer has the same shape with a timer in place of the frame: `paintEvent` only adds the event to a sampler, and `stabilizerPollAndPaint` drains it on each tick and once more at pen-up (`krita/libs/ui/tool/kis_tool_freehand_helper.cpp`).
+Tablet events are only recorded. Stabilizing and rendering happen once per frame and at pen-up, over every event that arrived since, as one batch: a tablet that samples faster than the display refreshes would otherwise rewind and replay the stroke once per event, with nothing presented in between. The frame's flush runs first in `DarklyEngine::render`, and its time is the `stroke` sub-phase of the bridge's `[frame-perf]` slow-frame log. Krita's stabilizer has the same shape with a timer in place of the frame: `paintEvent` only adds the event to a sampler, and `stabilizerPollAndPaint` drains it on each tick and once more at pen-up (`krita/libs/ui/tool/kis_tool_freehand_helper.cpp`). A stroke no frame ran during, as a headless embedder paints, is stabilized and rendered once, at pen-up.
 
 ### Stabilizer (`stabilizer.rs`, `resampler.rs`, `stabilizers/`)
 
-`stroke_stabilizer_stack` builds what a stroke runs through: the configured algorithm, fed by the resampler and wrapped in prediction when a look-ahead horizon is set. Each tablet event:
+`stroke_stabilizer_stack` builds what a stroke runs through: the configured algorithm, fed by the resampler and wrapped in prediction when a look-ahead horizon is set. Each batch of tablet events (`push_all`):
 
-1. The resampler turns the raw point into zero or more vertices at a fixed arc-length spacing, and replaces the provisional tip in the algorithm's polyline
-2. The algorithm smooths its polyline, committed vertices and tip alike, with the tip pinned
+1. The resampler turns the raw points into vertices at a fixed arc-length spacing, retracts the previous provisional tip once, and hands the algorithm every committed vertex plus the new tip in one call
+2. The algorithm smooths its polyline once, committed vertices and tip alike, with the tip pinned
 3. Prediction appends a short extrapolated tail
+
+A batch leaves exactly the polyline pushing its events one at a time leaves; it only skips the intermediate polylines nothing renders.
 
 The stabilizer is pure geometry. At each frame the stroke engine diffs its output against the positions each vertex was last rendered at (`DivergenceDiff`, in `stroke_engine.rs`) to find the **divergence index**: the earliest rendered vertex that has since moved more than 0.1 CSS pixels (a wider tolerance shows as ripple on quick wide curves, since neighbouring vertices are re-rendered at different moments).
 
@@ -123,13 +125,13 @@ The divergence index tells the rendering system "everything from here to the tip
 
 Diffing against rendered positions rather than the previous event bounds how stale a rendered vertex can get: a vertex that drifts a little on every event is re-rendered once its accumulated drift reaches the epsilon.
 
-**Resampling** (`resampler.rs`). Smoothing algorithms work on vertex indices, while raw samples arrive at whatever rate the platform delivers, so the spacing of raw samples depends on the event rate and the pen speed. The resampler commits a vertex every 6 CSS pixels of raw arc length (`RESAMPLE_SPACING_CSS_PX`), converted to canvas pixels through the device pixel ratio and the zoom at stroke start. An index therefore means the same distance on screen on every platform, at every pen speed, zoom and display density. The latest raw sample is pushed into the algorithm's polyline as a provisional tip (zero lag, and the algorithm smooths right up to it) and is retracted and replaced until the pen has travelled one spacing. At most 8 vertices commit per event (`MAX_COMMITS_PER_PUSH`); a longer jump gets 8 vertices spread evenly along it, which is the one place the output still depends on input density. The resampler's divergence window is the algorithm's: after the provisional tip is retracted, the first vertex an event pushes lands where that tip was, so the event moves nothing further than the algorithm's window behind the tip as it stood before the event, and the commits that follow start further on.
+**Resampling** (`resampler.rs`). Smoothing algorithms work on vertex indices, while raw samples arrive at whatever rate the platform delivers, so the spacing of raw samples depends on the event rate and the pen speed. The resampler commits a vertex every 6 CSS pixels of raw arc length (`RESAMPLE_SPACING_CSS_PX`), converted to canvas pixels through the device pixel ratio and the zoom at stroke start. An index therefore means the same distance on screen on every platform, at every pen speed, zoom and display density. The latest raw sample is pushed into the algorithm's polyline as a provisional tip (zero lag, and the algorithm smooths right up to it) and is retracted and replaced until the pen has travelled one spacing. At most 8 vertices commit per event (`MAX_COMMITS_PER_SAMPLE`); a longer jump gets 8 vertices spread evenly along it, which is the one place the output still depends on input density. The resampler's divergence window is the algorithm's: after the provisional tip is retracted, the first vertex an event pushes lands where that tip was, so the event moves nothing further than the algorithm's window behind the tip as it stood before the event, and the commits that follow start further on.
 
 **Prediction** (`PredictingStabilizer`). Appends 3 points past the real tip along the recent heading, spanning the look-ahead horizon at the recent pen speed. Its window is the inner window plus 3.
 
 **Laplacian relaxation** (`stabilizers/laplacian.rs`) is the current algorithm. It runs N Gauss-Seidel sweeps over the interior points, with first and last points pinned; each sweep moves a point onto the chord between its neighbours at its own arc-length proportion (the midpoint when they are equally spaced), so smoothing changes shape without sliding points along the stroke. Each point is pulled toward that chord in proportion to the pen's speed as it passed (full at 500 CSS px/s and above), so fast motion is smoothed in full, a slow pivot keeps its corner and a stopped pen is exact. Repeated averaging is a diffusion whose radius grows with the square root of the sweep count, so `sweeps = ceil(strength^2 * 160)`: strength 0 is pass-through and the visible smoothing grows about linearly with the slider, reaching roughly ten vertex spacings (60 CSS px of corner cut) at strength 1, the same at any pen speed.
 
-The result is defined as relaxing the whole polyline from its raw points on every push, but a push computes only the last `N + 2` vertices, the ones the influence bound below says can change. In a forward Gauss-Seidel sweep, vertex `i` after sweep `k` depends only on raw points `0..=i + k`, so the vertex just left of the window takes, sweep for sweep, exactly the values it took when it was the left edge of an earlier push's window. Those per-sweep values are recorded then (for the two most recent left edges, which covers a push that replaces the provisional tip) and replayed as the window's left neighbour. The windowed result is bit-identical to the from-scratch one, at `N x (N + 1)` vertex updates per push whatever the stroke's length; relaxing the whole polyline every push made a long stroke at high strength lag further the longer it got. A naive window that reads its left neighbour at its settled value is not equivalent: the from-scratch run reads that neighbour while it is still converging, and at `N = 160` the two differ by up to 17 px.
+The result is defined as relaxing the whole polyline from its raw points after every batch, but a batch computes only the vertices the influence bound below says can change, from `N + 1` behind the previous tip. In a forward Gauss-Seidel sweep, vertex `i` after sweep `k` depends only on raw points `0..=i + k`, so vertex `len - N - 2` of a relaxed polyline depends only on `0..=len - 2`: no later point, nor retracting the provisional tip, changes it. Its per-sweep values are recorded and replayed as the next window's left neighbour. The windowed result is bit-identical to the from-scratch one, at `N x (M + N)` vertex updates for a batch of `M` vertices whatever the stroke's length: `N x (N + 1)` for one vertex, and never more than relaxing a batch's vertices one at a time. Relaxing the whole polyline every push made a long stroke at high strength lag further the longer it got; relaxing a window per vertex spent most of a headless stroke's CPU on polylines nothing rendered. A naive window that reads its left neighbour at its settled value is not equivalent: the from-scratch run reads that neighbour while it is still converging, and at `N = 160` the two differ by up to 17 px.
 
 Each stabilizer also reports `max_divergence_window()`: a *true* upper bound on how far behind the tip as it stood before a push that push can move a vertex. Measured from the earlier tip, the bound holds over any number of pushes, so the stroke engine's diff walks only the window behind the tip as last rendered, however many events arrived since. The checkpoint ring depends on this being a real ceiling: violating it breaks coverage and degrades re-render to `O(total_stroke)`. A debug assertion in the diff checks that nothing behind the window moved.
 
@@ -219,6 +221,8 @@ A tablet event only feeds the stabilizer (`brush_stroke_to`). Each frame, and pe
 2. Save checkpoints in the same submissions, only when the stabilizer can diverge at all (`max_divergence_window > 0`): the first flush lays them across what it renders, from the `vi = 0` anchor up, even when it renders a single vertex; a later one saves at the tip if enough distance has passed since the newest
 3. Composite
 
+The pen-up flush takes the same paths but saves no checkpoint, since no later sample can diverge, and renders its range as one segment. A stroke no frame ran during, such as a headless embedder's, therefore costs the prologue, one segment and the commit at any strength, plus a submission per `MAX_DABS_PER_PHASE` dabs.
+
 For the Laplacian, a rendered vertex stays put only when its neighbours are collinear and equally spaced, so at strength above 0 most frames still take a divergence path; the pinned tip being replaced in place is itself a divergence at the tip's own index.
 
 ## Performance Characteristics
@@ -246,12 +250,12 @@ The frame is the layer (8 x 1920 x 1080 texels per ground at 1080p, allocated on
 | `brush/stroke_buffer.rs` | `StrokeBuffer` - stroke and pre-stroke GPU textures, composite |
 | `brush/save_points.rs` | `SavePointStore` - per-dab cumulative bbox + render state |
 | `brush/checkpoint_ring.rs` | `CheckpointRing` - ring buffer of bbox-sized GPU texture checkpoints |
-| `engine/painting.rs` | Orchestration - `brush_stroke_to` feeds events, `flush_stroke` runs divergence handling, segmented rendering and the checkpoint lifecycle once per frame |
+| `engine/painting.rs` | Orchestration - `brush_stroke_to` records events, `flush_stroke` stabilizes them as one batch and runs divergence handling, segmented rendering and the checkpoint lifecycle once per frame |
 
 ## Adding a New Stabilizer Algorithm
 
 1. Create `brush/stabilizers/my_algorithm.rs`
-2. Implement `StabilizerAlgorithm`: `push()`, `retract_tip()`, `stabilized()`, `max_divergence_window()`, `clear()`
+2. Implement `StabilizerAlgorithm`: `push_all()` (run once per batch; `push()` wraps it), `retract_tip()`, `stabilized()`, `max_divergence_window()`, `clear()`
 3. Export `register() -> StabilizerRegistration` with params and factory
 4. Done. `build.rs` auto-discovers it; the registry picks it up.
 

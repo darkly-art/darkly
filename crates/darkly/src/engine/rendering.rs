@@ -687,7 +687,7 @@ impl DarklyEngine {
         // last frame, in one rewind and replay, before anything reads the
         // layer this frame.
         let t_stroke = web_time::Instant::now();
-        self.flush_stroke();
+        self.flush_stroke(false);
         let stroke_us = t_stroke.elapsed().as_micros() as u64;
 
         let t_poll = web_time::Instant::now();

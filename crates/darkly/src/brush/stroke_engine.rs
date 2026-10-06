@@ -12,7 +12,7 @@
 //! - Per-dab save points for rewind capability
 
 use super::eval::BrushGraphRunner;
-use super::gpu_context::BrushGpuContext;
+use super::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
 use super::interpolation::lerp_paint_info;
 use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
@@ -150,8 +150,9 @@ pub struct StrokeEngine {
     stabilizer: Box<dyn StabilizerAlgorithm>,
     /// Where each stabilized vertex was last rendered.
     rendered: DivergenceDiff,
-    /// Input has been stabilized since the last [`Self::take_divergence`].
-    unrendered_input: bool,
+    /// Events of `record` already handed to the stabilizer. Those after it
+    /// are pending until the next [`Self::take_divergence`].
+    stabilized_events: usize,
 
     /// Per-dab save points for rewind capability.
     pub save_points: SavePointStore,
@@ -270,7 +271,7 @@ impl StrokeEngine {
             spacing,
             stabilizer,
             rendered: DivergenceDiff::new(divergence_epsilon),
-            unrendered_input: false,
+            stabilized_events: 0,
             save_points: SavePointStore::new(),
             last_point: None,
             accumulated_distance: 0.0,
@@ -334,18 +335,25 @@ impl StrokeEngine {
         self.last_dab_size[0].max(self.last_dab_size[1])
     }
 
-    /// Feed a raw pointer event to the stabilizer. Rendering waits for the
-    /// next [`Self::take_divergence`], however many events arrive first.
+    /// Record a raw pointer event. The stabilizer takes every event recorded
+    /// since it last ran as one batch at the next [`Self::take_divergence`],
+    /// however many arrive first.
     pub fn stabilize(&mut self, raw: PaintInformation) {
         self.record.push(raw);
-        self.stabilizer.push(raw);
-        self.unrendered_input = true;
     }
 
-    /// Whether input has been stabilized since the last
+    /// Hand the stabilizer every event recorded since it last ran, as one
+    /// batch.
+    fn stabilize_pending(&mut self) {
+        self.stabilizer
+            .push_all(&self.record.events[self.stabilized_events..]);
+        self.stabilized_events = self.record.events.len();
+    }
+
+    /// Whether events have been recorded since the last
     /// [`Self::take_divergence`].
     pub fn has_unrendered_input(&self) -> bool {
-        self.unrendered_input
+        self.stabilized_events < self.record.events.len()
     }
 
     /// Number of stabilized vertices recorded as rendered: the index of the
@@ -360,7 +368,7 @@ impl StrokeEngine {
     /// [`Self::rendered_len`] (read before this call) need rendering. Called
     /// once per render of the stroke, whatever number of events it covers.
     pub fn take_divergence(&mut self) -> Option<usize> {
-        self.unrendered_input = false;
+        self.stabilize_pending();
         let window = self.stabilizer.max_divergence_window();
         self.rendered.update(self.stabilizer.stabilized(), window)
     }
@@ -682,6 +690,15 @@ impl StrokeEngine {
 
         self.dab_count += 1;
         gpu.perf.record_dab();
+
+        // A dab-batching terminal holds its whole queue until the phase
+        // flushes, in one buffer sized to `MAX_DABS_PER_PHASE`. A phase that
+        // reaches the cap (a long path drawn in one go) flushes and submits
+        // here so the next dab starts a fresh queue.
+        if gpu.dab_batch.count >= MAX_DABS_PER_PHASE {
+            self.runner.flush_dabs(gpu);
+            gpu.submit_and_continue("brush-dab-cap-flush");
+        }
     }
 
     /// Delegate the stroke-start / rewind-boundary lifecycle hook to every
@@ -697,6 +714,21 @@ impl StrokeEngine {
         region: Option<crate::coord::LayerRect>,
     ) {
         self.runner.begin_stroke(gpu, region);
+    }
+
+    /// Render the whole stabilized polyline from the terminal's stroke-start
+    /// state and commit it, all into `gpu`: the stroke as a from-scratch
+    /// re-render of its final polyline would leave it. For a path whose
+    /// every sample is known up front, such as the brush preview, so no
+    /// segment is ever drawn without its real lookahead.
+    pub fn render_whole(&mut self, gpu: &mut BrushGpuContext) {
+        self.stabilize_pending();
+        self.begin_stroke(gpu, None);
+        self.reset_render_state();
+        if let Some(end) = self.stabilizer.len().checked_sub(1) {
+            self.render_from_stabilized_range_to(gpu, 0, end);
+        }
+        self.commit(gpu);
     }
 
     /// Delegate the per-flush commit hook to every GPU terminal. Called once

@@ -581,6 +581,11 @@ pub struct DarklyEngine {
     /// `brush_stroke_to`).
     pub(crate) clone_source_anchor: Option<crate::coord::CanvasPoint>,
 
+    /// Seed for every following stroke's `random` nodes, or `None` (the
+    /// default) for a fresh wall-clock seed per stroke. Session state, set
+    /// by an embedder that needs reproducible renders.
+    pub(crate) stroke_seed: Option<u32>,
+
     /// Layer pinned by the clone set-source gesture, or `None` for
     /// same-layer clone. Session state like the anchor: persists across
     /// strokes and brush / tool switches, never serialized. Kept across
@@ -815,6 +820,7 @@ impl DarklyEngine {
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
             clone_source_anchor: None,
+            stroke_seed: None,
             clone_source_layer: None,
             diff_rect,
             pending_undo_commit: None,

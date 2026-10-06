@@ -856,6 +856,35 @@ fn unstabilized_stroke_never_rewinds() {
     assert_eq!(engine.test_stroke_full_rerender_events(), 0);
 }
 
+/// A pinned stroke seed makes a brush with `random` nodes paint the same
+/// pixels every time, and a different seed paints different ones.
+#[test]
+fn stroke_seed_pins_random_nodes() {
+    let (w, h) = (256, 256);
+    let paint = |seed: u32| {
+        let mut engine = test_engine(w, h);
+        let brush = darkly::brush::builtin_brushes::all()
+            .into_iter()
+            .find(|b| b.metadata.name == "Rough Ink")
+            .expect("Rough Ink is a builtin");
+        engine
+            .set_brush_graph(&serde_json::to_string(&brush.metadata.graph).unwrap())
+            .expect("Rough Ink compiles");
+        engine.set_stroke_seed(Some(seed));
+        let layer_id = engine.add_raster_layer(None);
+        paint_horizontal_stroke(&mut engine, layer_id, w, h);
+        engine.test_readback_layer(layer_id)
+    };
+    let first = paint(0x5eed);
+    assert!(first.chunks(4).any(|px| px[3] > 0), "the stroke painted");
+    assert_eq!(
+        first,
+        paint(0x5eed),
+        "the same seed repaints the same pixels"
+    );
+    assert_ne!(first, paint(0x5eed + 1), "another seed reshapes the nib");
+}
+
 /// Setting `brush_settings.spacing` to a larger ratio drops fewer dabs along the
 /// stroke, so total deposited alpha is lower than at the default 10%.
 /// Guards the wiring from `brush_settings.spacing` port → `SpacingConfig.ratio`.

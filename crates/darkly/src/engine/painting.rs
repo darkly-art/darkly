@@ -475,6 +475,13 @@ impl DarklyEngine {
         self.gpu_stroke_to(layer_id, op);
     }
 
+    /// Seed every following stroke's `random` nodes with `seed`, or with a
+    /// fresh wall-clock seed per stroke when `None` (the default). For
+    /// embedders that need random-node brushes to render reproducibly.
+    pub fn set_stroke_seed(&mut self, seed: Option<u32>) {
+        self.stroke_seed = seed;
+    }
+
     /// GPU paint path for all stroke operations.
     fn gpu_stroke_to(&mut self, layer_id: LayerId, op: StrokeOp) {
         // Defensive: `begin_stroke` already gates on the lock and paintability,
@@ -967,7 +974,7 @@ impl DarklyEngine {
                 stabilizer,
                 divergence_epsilon,
                 clone_source_anchor,
-                StrokeEngine::random_seed(),
+                self.stroke_seed.unwrap_or_else(StrokeEngine::random_seed),
                 self.active_stamp_angle_rate(),
                 self.doc.dpi,
             );
@@ -1104,7 +1111,11 @@ impl DarklyEngine {
     /// many events arrived. Nothing is presented between frames, and a
     /// tablet that samples faster than the display refreshes would otherwise
     /// rewind and replay the stroke once per event.
-    pub(crate) fn flush_stroke(&mut self) {
+    ///
+    /// `final_flush` is the pen-up flush: no later sample can move a rendered
+    /// vertex, so it saves no checkpoint and renders its range as one
+    /// segment. A stroke no frame ran during is rendered whole here.
+    pub(crate) fn flush_stroke(&mut self, final_flush: bool) {
         let Some(layer_id) = self.active_stroke_layer else {
             return;
         };
@@ -1217,7 +1228,7 @@ impl DarklyEngine {
             self.brush_perf += gpu_ctx.submit_final();
         }
 
-        let (start_vi, boundaries) = if let Some(div_idx) = div_idx {
+        let (start_vi, mut boundaries) = if let Some(div_idx) = div_idx {
             // Divergence: try checkpoint-based partial re-render.
             self.brush_rewinds += 1;
             #[cfg(any(test, feature = "testing"))]
@@ -1327,6 +1338,11 @@ impl DarklyEngine {
             };
             (first_new, boundaries)
         };
+        // The pen is up: no later flush can diverge, so a checkpoint saved now
+        // would never be restored.
+        if final_flush {
+            boundaries.clear();
+        }
 
         // Render from `start_vi` to the tip in segments, saving a checkpoint
         // at each boundary in its segment's submission.
@@ -1516,7 +1532,7 @@ impl DarklyEngine {
     #[handler]
     pub fn end_stroke(&mut self) {
         // Render whatever the last frame did not, so the stroke lands whole.
-        self.flush_stroke();
+        self.flush_stroke(true);
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // Per-stroke thumbnail refresh: the node texture (raster or mask
             // filter) now holds the cumulative pixels of every dab/op since

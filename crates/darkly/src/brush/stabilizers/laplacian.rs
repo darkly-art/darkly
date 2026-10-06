@@ -1,21 +1,23 @@
 //! Laplacian relaxation stabilizer: iterative smoothing with zero lag.
 //!
-//! Maintains a polyline of all input positions.  On each new input:
+//! Maintains a polyline of all input positions.  On each batch of input:
 //! 1. Append to polyline
 //! 2. Run N sweeps of Laplacian smoothing on interior points (first + last
 //!    pinned), each moving a point onto the chord between its neighbours
 //! 3. Sensor values (pressure, tilt, etc.) smoothed the same way
 //!
 //! The result is defined as relaxing the whole polyline from its raw points
-//! on every push, but only the last `N + 2` vertices can differ from the
-//! previous push (see [`LaplacianStabilizer::max_divergence_window`]), so
-//! that is all a push computes. In a forward Gauss-Seidel sweep, vertex `i`
-//! after sweep `k` depends only on raw points `0..=i + k`, so the vertex just
-//! left of the window takes, sweep for sweep, exactly the values it took when
-//! it was the left edge of an earlier push's window. Those per-sweep values
-//! are recorded then and replayed now as the window's left neighbour, which
-//! makes the windowed result bit-identical to the from-scratch one at a cost
-//! of `N x (N + 1)` vertex updates per push, whatever the stroke's length.
+//! after every batch, but a batch can only move vertices from `N + 1` behind
+//! the previous tip (see [`LaplacianStabilizer::max_divergence_window`]), so
+//! that is all it computes. In a forward Gauss-Seidel sweep, vertex `i`
+//! after sweep `k` depends only on raw points `0..=i + k`, so vertex
+//! `len - N - 2` of a relaxed polyline of length `len` depends only on
+//! `0..=len - 2`: no later point, nor retracting the tip, changes it. Its
+//! per-sweep values are recorded then and replayed as the next window's left
+//! neighbour, which makes the windowed result bit-identical to the
+//! from-scratch one. A batch of `M` vertices costs `N x (M + N)` vertex
+//! updates whatever the stroke's length: `N x (N + 1)` for one vertex, and
+//! never more than relaxing its vertices one at a time.
 //!
 //! A point lands on the chord at its own arc-length proportion between its
 //! neighbours (the midpoint when they are equally spaced), measured on the
@@ -69,8 +71,8 @@ const MAX_SWEEPS: f32 = 160.0;
 /// with speed.
 pub const REFERENCE_SPEED_CSS_PX_PER_S: f32 = 500.0;
 
-/// A vertex's value after each sweep of the push that last relaxed it as the
-/// left edge of its window.
+/// A vertex's value after each sweep of the relaxation that recorded it: the
+/// left neighbour the next window replays in place of recomputing it.
 struct EdgeTrajectory {
     index: usize,
     sweeps: Vec<PaintInformation>,
@@ -85,16 +87,25 @@ pub struct LaplacianStabilizer {
     /// Per interior point, how far toward that chord each sweep moves it:
     /// the pen's speed past it over the reference speed, at most 1.
     pull: Vec<f32>,
-    /// Per-sweep values of the left edges of the two most recent relaxation
-    /// windows: the boundary the next window, or a window that replaces the
-    /// tip, reads in place of the vertex it no longer recomputes.
-    edges: Vec<EdgeTrajectory>,
+    /// Per-sweep values of the vertex the next window starts after: the
+    /// boundary it reads in place of the vertex it no longer recomputes.
+    /// `None` until the polyline is long enough to need one.
+    edge: Option<EdgeTrajectory>,
     sweeps: u32,
     /// Reference speed in canvas px/s at this stroke's view.
     reference_speed: f32,
-    /// Vertex updates performed by relaxation, for tests that bound it.
-    #[cfg(test)]
-    relaxed_vertex_updates: u64,
+}
+
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    static RELAXED_VERTEX_UPDATES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Vertex updates every Laplacian relaxation on this thread has performed,
+/// for tests that bound the stabilizer's work.
+#[cfg(any(test, feature = "testing"))]
+pub fn relaxed_vertex_updates() -> u64 {
+    RELAXED_VERTEX_UPDATES.with(std::cell::Cell::get)
 }
 
 impl LaplacianStabilizer {
@@ -107,11 +118,9 @@ impl LaplacianStabilizer {
             stabilized: Vec::with_capacity(256),
             chord_t: Vec::with_capacity(256),
             pull: Vec::with_capacity(256),
-            edges: Vec::with_capacity(2),
+            edge: None,
             sweeps: (strength * strength * MAX_SWEEPS).ceil() as u32,
             reference_speed: REFERENCE_SPEED_CSS_PX_PER_S * canvas_per_css_px,
-            #[cfg(test)]
-            relaxed_vertex_updates: 0,
         }
     }
 
@@ -120,14 +129,11 @@ impl LaplacianStabilizer {
     /// from the pen's speed across those neighbours. Without timing (equal
     /// timestamps) the pull is full.
     ///
-    /// An interior point's weights read only its raw neighbours, so after a
-    /// push only the point that became interior, or whose right neighbour
-    /// replaced a retracted tip, needs computing.
+    /// An interior point's weights read only its raw neighbours, so a batch
+    /// computes only the points that became interior; `retract_tip` drops the
+    /// one weight that read the retracted point.
     fn update_weights(&mut self) {
         let raw = &self.raw_points;
-        let settled = raw.len().saturating_sub(2).max(1);
-        self.chord_t.truncate(settled);
-        self.pull.truncate(settled);
         if self.chord_t.is_empty() {
             // Index 0 is pinned and carries no weight.
             self.chord_t.push(0.5);
@@ -153,19 +159,21 @@ impl LaplacianStabilizer {
     /// Relax interior vertices `from..len - 1` over every sweep, with the
     /// first and last points pinned. `boundary`, when given, is vertex
     /// `from - 1`'s value after each sweep, read in its place; without it
-    /// `from` is 1 and the pinned origin is the boundary. Records vertex
-    /// `edge`'s per-sweep values for the windows that follow.
-    fn relax(&mut self, from: usize, edge: usize, boundary: Option<EdgeTrajectory>) {
+    /// `from` is 1 and the pinned origin is the boundary. Records the
+    /// trajectory of vertex `len - N - 2` for the next window, or keeps
+    /// `boundary` when that vertex is the boundary itself (a batch that
+    /// replaced a retracted tip with one vertex).
+    fn relax(&mut self, from: usize, boundary: Option<EdgeTrajectory>) {
         let len = self.stabilized.len();
-        // Reuse a stale trajectory's allocation for the one recorded now.
-        let mut trajectory = self.edges.pop().map(|e| e.sweeps).unwrap_or_default();
-        self.edges.clear();
-        trajectory.clear();
         if len < 3 {
+            self.edge = None;
             return;
         }
+        let sweeps = self.sweeps as usize;
+        let edge = (len - 2).checked_sub(sweeps).filter(|&e| e >= from);
+        let mut trajectory = Vec::with_capacity(if edge.is_some() { sweeps } else { 0 });
 
-        for k in 0..self.sweeps as usize {
+        for k in 0..sweeps {
             for i in from..len - 1 {
                 let prev = match &boundary {
                     Some(b) if i == from => b.sweeps[k],
@@ -200,53 +208,69 @@ impl LaplacianStabilizer {
                 smooth_field!(speed);
                 smooth_field!(tilt_magnitude);
                 smooth_field!(tilt_direction);
-                #[cfg(test)]
-                {
-                    self.relaxed_vertex_updates += 1;
-                }
-                if i == edge {
+                if Some(i) == edge {
                     trajectory.push(self.stabilized[i]);
                 }
             }
         }
+        #[cfg(any(test, feature = "testing"))]
+        RELAXED_VERTEX_UPDATES.with(|c| c.set(c.get() + (sweeps * (len - 1 - from)) as u64));
 
-        self.edges.extend(boundary);
-        self.edges.push(EdgeTrajectory {
-            index: edge,
-            sweeps: trajectory,
-        });
+        self.edge = match edge {
+            Some(index) => Some(EdgeTrajectory {
+                index,
+                sweeps: trajectory,
+            }),
+            None => {
+                debug_assert!(
+                    boundary
+                        .as_ref()
+                        .is_none_or(|b| b.index + sweeps + 2 == len),
+                    "the vertex to record lies left of the window"
+                );
+                boundary
+            }
+        };
     }
 }
 
 impl StabilizerAlgorithm for LaplacianStabilizer {
-    fn push(&mut self, point: PaintInformation) {
-        self.raw_points.push(point);
+    fn push_all(&mut self, points: &[PaintInformation]) {
+        if points.is_empty() {
+            return;
+        }
+        self.raw_points.extend_from_slice(points);
         self.update_weights();
 
-        // The window: the vertices this push can move. Its left neighbour's
-        // per-sweep values were recorded when that vertex was an earlier
-        // window's left edge; without them (stroke start) the window reaches
-        // back to the first interior vertex, which relaxes from scratch.
-        let len = self.raw_points.len();
-        let edge = len.saturating_sub(self.sweeps as usize + 2).max(1);
-        let boundary = self
-            .edges
-            .iter()
-            .position(|e| edge >= 2 && e.index == edge - 1)
-            .map(|p| self.edges.swap_remove(p));
-        let from = if boundary.is_some() { edge } else { 1 };
+        // The window: the vertices this batch can move, from just after the
+        // recorded edge. Without one (stroke start) it reaches back to the
+        // first interior vertex, which relaxes from scratch.
+        let (from, boundary) = match self.edge.take() {
+            Some(edge) => (edge.index + 1, Some(edge)),
+            None => (1, None),
+        };
 
         // Vertices before the window keep their settled values; the window
         // restarts from raw, as the from-scratch relaxation does.
         let keep = from.min(self.stabilized.len());
         self.stabilized.truncate(keep);
         self.stabilized.extend_from_slice(&self.raw_points[keep..]);
-        self.relax(from, edge, boundary);
+        self.relax(from, boundary);
     }
 
     fn retract_tip(&mut self) {
         self.raw_points.pop();
         self.stabilized.pop();
+        // The new last point's weights read the retracted one.
+        let settled = self.raw_points.len().saturating_sub(1).max(1);
+        self.chord_t.truncate(settled);
+        self.pull.truncate(settled);
+        debug_assert!(
+            self.edge
+                .as_ref()
+                .is_none_or(|e| e.index + (self.sweeps as usize) < self.raw_points.len()),
+            "a second retract before a push invalidated the recorded edge"
+        );
     }
 
     fn stabilized(&self) -> &[PaintInformation] {
@@ -255,10 +279,10 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
 
     /// Conservative upper bound on `tip_vi - find_divergence().unwrap()`.
     ///
-    /// Each `push()` yields the result of `N` Gauss-Seidel Laplacian sweeps
-    /// from scratch on the raw polyline. Between frames, the only
-    /// inputs that differ are the new tip and the now-interior previous tip
-    /// (formerly pinned). Both perturbations sit at indices `>= len - 2`.
+    /// Each batch yields the result of `N` Gauss-Seidel Laplacian sweeps
+    /// from scratch on the raw polyline. Between batches, the only inputs
+    /// that differ are the new points and the now-interior previous tip
+    /// (formerly pinned), all at indices `>= len - 2` of the previous length.
     ///
     /// Per sweep, the *backward* influence radius of a Gauss-Seidel Laplacian
     /// pass is exactly 1: forward in-sweep updates do not move information
@@ -267,8 +291,8 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
     /// index that can possibly differ between frames is `len - 2 - N`, so the
     /// distance from the tip (`len - 1`) is at most `N + 1`. (The bound is
     /// conservative by one: the previous tip's first sweep reads only
-    /// unchanged inputs, so `len - 1 - N` is the tight index.) `push` relaxes
-    /// exactly that range, so nothing outside it can move.
+    /// unchanged inputs, so `len - 1 - N` is the tight index.) A batch relaxes
+    /// from there to its tip, so nothing before it can move.
     fn max_divergence_window(&self) -> usize {
         if self.sweeps == 0 {
             return 0;
@@ -281,7 +305,7 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
         self.stabilized.clear();
         self.chord_t.clear();
         self.pull.clear();
-        self.edges.clear();
+        self.edge = None;
     }
 }
 
@@ -597,10 +621,10 @@ mod tests {
         let sweeps = stab.sweeps as u64;
         let mut costs = Vec::new();
         for i in 0..400 {
-            let before = stab.relaxed_vertex_updates;
+            let before = relaxed_vertex_updates();
             stab.push(make_point(i as f32 * 6.0, (i as f32 * 0.05).sin() * 40.0));
             if i == 99 || i == 399 {
-                costs.push(stab.relaxed_vertex_updates - before);
+                costs.push(relaxed_vertex_updates() - before);
             }
         }
         assert_eq!(
@@ -613,6 +637,39 @@ mod tests {
             "a push relaxed {} vertex updates, more than the {} its window holds",
             costs[1],
             sweeps * (sweeps + 1)
+        );
+    }
+
+    /// Regression: a batch relaxes once, from the last window's edge to the
+    /// tip, so it costs one window over the batch rather than one window per
+    /// vertex. A stroke no frame ran during reaches the stabilizer as one
+    /// batch, and relaxing it vertex by vertex was most of its CPU at high
+    /// strength.
+    #[test]
+    fn a_batch_costs_one_relaxation() {
+        let points: Vec<PaintInformation> = (0..1100)
+            .map(|i| make_point(i as f32 * 6.0, (i as f32 * 0.05).sin() * 40.0))
+            .collect();
+        let mut whole = LaplacianStabilizer::new(0.6, 1.0);
+        let sweeps = whole.sweeps as u64;
+        let before = relaxed_vertex_updates();
+        whole.push_all(&points);
+        let cost = relaxed_vertex_updates() - before;
+        assert!(
+            cost <= sweeps * (points.len() as u64 - 2),
+            "the whole stroke as one batch cost {cost} vertex updates"
+        );
+
+        let mut tail = LaplacianStabilizer::new(0.6, 1.0);
+        for p in &points[..800] {
+            tail.push(*p);
+        }
+        let before = relaxed_vertex_updates();
+        tail.push_all(&points[800..]);
+        let cost = relaxed_vertex_updates() - before;
+        assert!(
+            cost <= sweeps * (300 + sweeps),
+            "a 300-vertex batch after 800 cost {cost} vertex updates"
         );
     }
 
@@ -678,6 +735,93 @@ mod tests {
         out
     }
 
+    /// Raw point `i` of a wobbling curve, `wobble` vertices along from it,
+    /// with every relaxed sensor carrying its own signal.
+    fn curvy_sample(i: usize, wobble: f32, t: f32) -> PaintInformation {
+        let s = i as f32 + wobble;
+        PaintInformation {
+            pos: [s * 6.0, (s * 0.07).sin() * 50.0 + (s * 0.31).cos() * 4.0],
+            pressure: 0.5 + 0.4 * (s * 0.11).sin(),
+            x_tilt: (s * 0.05).cos(),
+            y_tilt: (s * 0.09).sin(),
+            rotation: s * 0.01,
+            tangential_pressure: (s * 0.2).sin(),
+            time: t,
+            speed: (s * 0.13).cos(),
+            tilt_magnitude: 0.3 + 0.2 * (s * 0.17).sin(),
+            tilt_direction: (s * 0.03).sin(),
+            ..Default::default()
+        }
+    }
+
+    /// Pen speed past vertex `i`: slow near multiples of 40 vertices, fast
+    /// elsewhere, so the pull is partial in places.
+    fn curvy_speed(i: usize) -> f32 {
+        if i % 40 < 6 {
+            60.0
+        } else {
+            900.0
+        }
+    }
+
+    /// Batches of every size relax to the from-scratch polyline, bit for
+    /// bit: from the stroke's start, as one batch for the whole stroke, and
+    /// across provisional tips the next batch retracts and replaces with one
+    /// vertex or several. A single vertex after any batch stays within one
+    /// window's cost, so every batch leaves the edge the next window needs.
+    #[test]
+    fn batches_are_bit_exact_with_from_scratch() {
+        let sizes = [1usize, 2, 7, 40, 1, 1, 1, 3, 2, 120, 1, 5];
+        for strength in [1.0f32, 0.6, 0.3, 0.1] {
+            let mut stab = LaplacianStabilizer::new(strength, 1.0);
+            let window_cost = stab.sweeps as u64 * (stab.sweeps as u64 + 1);
+            let mut raw: Vec<PaintInformation> = Vec::new();
+            let (mut i, mut t, mut provisional) = (0usize, 0.0f32, false);
+            for (round, &size) in sizes.iter().cycle().take(36).enumerate() {
+                if provisional {
+                    stab.retract_tip();
+                    raw.pop();
+                }
+                let mut batch = Vec::new();
+                for _ in 0..size {
+                    t += 6.0 / curvy_speed(i);
+                    batch.push(curvy_sample(i, 0.0, t));
+                    i += 1;
+                }
+                // Every third batch ends on a provisional tip, followed by
+                // batches of one, three and seven in turn.
+                provisional = round % 3 == 1;
+                if provisional {
+                    batch.push(curvy_sample(i, -0.4, t + 0.001));
+                }
+                let before = relaxed_vertex_updates();
+                stab.push_all(&batch);
+                let cost = relaxed_vertex_updates() - before;
+                raw.extend_from_slice(&batch);
+                assert_eq!(
+                    stab.stabilized(),
+                    relax_from_scratch(&raw, stab.sweeps, stab.reference_speed).as_slice(),
+                    "strength {strength}: batch {round} of {} points",
+                    batch.len()
+                );
+                if batch.len() == 1 {
+                    assert!(
+                        cost <= window_cost,
+                        "strength {strength}: a single vertex after batch {round} relaxed \
+                         {cost} vertex updates, past its window"
+                    );
+                }
+            }
+            let mut whole = LaplacianStabilizer::new(strength, 1.0);
+            whole.push_all(&raw);
+            assert_eq!(
+                whole.stabilized(),
+                relax_from_scratch(&raw, whole.sweeps, whole.reference_speed).as_slice(),
+                "strength {strength}: the whole stroke as one batch"
+            );
+        }
+    }
+
     /// The relaxed polyline is bit-identical to relaxing the whole stroke
     /// from its raw points after every push, including pushes that replace a
     /// provisional tip, with the pen's speed varying so the pull is partial
@@ -691,34 +835,17 @@ mod tests {
             let window_cost = stab.sweeps as u64 * (stab.sweeps as u64 + 1);
             let mut raw: Vec<PaintInformation> = Vec::new();
             let mut t = 0.0f32;
-            let sample = |i: usize, wobble: f32, t: f32| {
-                let s = i as f32 + wobble;
-                PaintInformation {
-                    pos: [s * 6.0, (s * 0.07).sin() * 50.0 + (s * 0.31).cos() * 4.0],
-                    pressure: 0.5 + 0.4 * (s * 0.11).sin(),
-                    x_tilt: (s * 0.05).cos(),
-                    y_tilt: (s * 0.09).sin(),
-                    rotation: s * 0.01,
-                    tangential_pressure: (s * 0.2).sin(),
-                    time: t,
-                    speed: (s * 0.13).cos(),
-                    tilt_magnitude: 0.3 + 0.2 * (s * 0.17).sin(),
-                    tilt_direction: (s * 0.03).sin(),
-                    ..Default::default()
-                }
-            };
+            let sample = curvy_sample;
             for i in 0..vertices {
-                // Slow near multiples of 40 vertices, fast elsewhere.
-                let speed = if i % 40 < 6 { 60.0 } else { 900.0 };
-                t += 6.0 / speed;
+                t += 6.0 / curvy_speed(i);
                 // A provisional tip, replaced in place, then the committed
                 // vertex, as the resampler feeds the algorithm.
                 if i % 3 == 0 && i > 0 {
-                    let tip = sample(i, -0.4, t - 2.0 / speed);
-                    let before = stab.relaxed_vertex_updates;
+                    let tip = sample(i, -0.4, t - 2.0 / curvy_speed(i));
+                    let before = relaxed_vertex_updates();
                     stab.push(tip);
                     assert!(
-                        stab.relaxed_vertex_updates - before <= window_cost,
+                        relaxed_vertex_updates() - before <= window_cost,
                         "strength {strength}: provisional tip at {i} relaxed past its window"
                     );
                     raw.push(tip);
@@ -731,10 +858,10 @@ mod tests {
                     raw.pop();
                 }
                 let p = sample(i, 0.0, t);
-                let before = stab.relaxed_vertex_updates;
+                let before = relaxed_vertex_updates();
                 stab.push(p);
                 assert!(
-                    stab.relaxed_vertex_updates - before <= window_cost,
+                    relaxed_vertex_updates() - before <= window_cost,
                     "strength {strength}: vertex {i} relaxed past its window"
                 );
                 raw.push(p);

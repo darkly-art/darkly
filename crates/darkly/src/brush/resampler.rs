@@ -11,8 +11,13 @@
 //! The inner algorithm's polyline is the committed vertices followed by the
 //! latest raw sample as a provisional tip, so the algorithm pins the pen
 //! position itself and smooths right up to it. Until the pen has travelled
-//! one spacing past the last committed vertex, each push retracts that
+//! one spacing past the last committed vertex, each batch retracts that
 //! provisional tip from the inner and pushes the new one in its place.
+//!
+//! A batch of raw samples reaches the inner as at most one retract and one
+//! `push_all` of every vertex it commits plus the new provisional tip; the
+//! provisional tips between its samples never reach the inner. The inner's
+//! raw sequence is the one pushing the samples one at a time leaves.
 //!
 //! Guarantees of the output polyline:
 //! - Committed vertices lie on the raw polyline, `spacing` apart in raw arc
@@ -21,22 +26,21 @@
 //! - The last vertex is the latest raw sample: the tip is pinned at the pen
 //!   with zero lag.
 //! - The polyline never shrinks and never ends in a zero-length segment.
-//! - At most [`MAX_COMMITS_PER_PUSH`] vertices commit per push. A raw segment
+//! - At most [`MAX_COMMITS_PER_SAMPLE`] vertices commit per raw sample. A raw segment
 //!   longer than that many spacings gets exactly that many vertices spread
 //!   evenly along it, the last one on the raw sample, so on such a segment
 //!   the spacing stretches. This is the one place the output still depends
 //!   on input density, and it only arises for jumps of more than
-//!   `MAX_COMMITS_PER_PUSH x spacing` in a single event.
+//!   `MAX_COMMITS_PER_SAMPLE x spacing` in a single event.
 //!
 //! Divergence window: the inner algorithm's window `W` bounds each of its
-//! pushes relative to its own tip before that push. After the provisional tip
-//! is retracted, the first inner push lands where that tip was, so the
+//! batches relative to its own tip before that batch. After the provisional
+//! tip is retracted, the batch's first vertex lands where that tip was, so the
 //! earliest vertex it can move is `W` behind the resampler's tip before the
-//! raw push; every later inner push of the same raw push starts further on
-//! and reaches no further back. The resampler's window is therefore the
-//! inner's, measured, like every stabilizer window, from the tip before the
-//! push, which is how the stroke engine diffs: from the tip as last
-//! rendered, however many vertices committed since.
+//! raw batch. The resampler's window is therefore the inner's, measured, like
+//! every stabilizer window, from the tip before the batch, which is how the
+//! stroke engine diffs: from the tip as last rendered, however many vertices
+//! committed since.
 
 use super::interpolation::lerp_paint_info;
 use super::paint_info::PaintInformation;
@@ -47,7 +51,7 @@ pub const RESAMPLE_SPACING_CSS_PX: f32 = 6.0;
 
 /// Most vertices one raw sample may commit, so a single jump cannot flood the
 /// polyline with vertices.
-pub const MAX_COMMITS_PER_PUSH: usize = 8;
+pub const MAX_COMMITS_PER_SAMPLE: usize = 8;
 
 /// Raw segments shorter than this carry no direction and commit nothing.
 const MIN_SEGMENT_PX: f32 = 1.0e-4;
@@ -65,6 +69,8 @@ pub struct ResamplingStabilizer {
     /// The last committed vertex is the raw tip itself, so no provisional tip
     /// follows it in the inner polyline.
     tip_is_committed: bool,
+    /// The vertices a batch hands the inner, reused across batches.
+    batch: Vec<PaintInformation>,
 }
 
 impl ResamplingStabilizer {
@@ -81,6 +87,7 @@ impl ResamplingStabilizer {
             last_raw: None,
             residual: 0.0,
             tip_is_committed: false,
+            batch: Vec::new(),
         }
     }
 
@@ -98,12 +105,12 @@ impl ResamplingStabilizer {
         } else {
             ((seg - first) / self.spacing).floor() as usize + 1
         };
-        if crossed > MAX_COMMITS_PER_PUSH {
+        if crossed > MAX_COMMITS_PER_SAMPLE {
             // Too long to commit at the nominal spacing: spread the cap
             // evenly, ending on the raw sample.
-            for j in 1..=MAX_COMMITS_PER_PUSH {
-                let t = j as f32 / MAX_COMMITS_PER_PUSH as f32;
-                self.inner.push(lerp_paint_info(&from, &to, t));
+            for j in 1..=MAX_COMMITS_PER_SAMPLE {
+                let t = j as f32 / MAX_COMMITS_PER_SAMPLE as f32;
+                self.batch.push(lerp_paint_info(&from, &to, t));
             }
             self.residual = 0.0;
             self.tip_is_committed = true;
@@ -111,7 +118,7 @@ impl ResamplingStabilizer {
         }
         for j in 0..crossed {
             let d = first + j as f32 * self.spacing;
-            self.inner.push(lerp_paint_info(&from, &to, d / seg));
+            self.batch.push(lerp_paint_info(&from, &to, d / seg));
         }
         self.residual = seg - (first + crossed as f32 * self.spacing - self.spacing);
         self.tip_is_committed = self.residual < MIN_SEGMENT_PX;
@@ -119,25 +126,34 @@ impl ResamplingStabilizer {
 }
 
 impl StabilizerAlgorithm for ResamplingStabilizer {
-    fn push(&mut self, raw: PaintInformation) {
-        match self.last_raw {
-            // The stroke origin is the first committed vertex.
-            None => {
-                self.inner.push(raw);
-                self.residual = 0.0;
-                self.tip_is_committed = true;
-            }
-            Some(from) => {
-                if !self.tip_is_committed {
-                    self.inner.retract_tip();
-                }
-                self.commit_segment(from, raw);
-                if !self.tip_is_committed {
-                    self.inner.push(raw);
-                }
-            }
+    fn push_all(&mut self, raws: &[PaintInformation]) {
+        let Some(&tip) = raws.last() else {
+            return;
+        };
+        if self.last_raw.is_some() && !self.tip_is_committed {
+            self.inner.retract_tip();
         }
-        self.last_raw = Some(raw);
+        self.batch.clear();
+        for &raw in raws {
+            match self.last_raw {
+                // The stroke origin is the first committed vertex.
+                None => {
+                    self.batch.push(raw);
+                    self.residual = 0.0;
+                    self.tip_is_committed = true;
+                }
+                Some(from) => self.commit_segment(from, raw),
+            }
+            self.last_raw = Some(raw);
+        }
+        if !self.tip_is_committed {
+            self.batch.push(tip);
+        }
+        // Empty only when the tip was already committed and every sample
+        // stood still on it: nothing was retracted and nothing changed.
+        if !self.batch.is_empty() {
+            self.inner.push_all(&self.batch);
+        }
     }
 
     fn retract_tip(&mut self) {
@@ -179,9 +195,9 @@ mod tests {
     }
 
     impl StabilizerAlgorithm for CountingInner {
-        fn push(&mut self, point: PaintInformation) {
+        fn push_all(&mut self, points: &[PaintInformation]) {
             self.pushes.fetch_add(1, Ordering::Relaxed);
-            self.points.push(point);
+            self.points.extend_from_slice(points);
         }
         fn retract_tip(&mut self) {
             self.points.pop();
@@ -221,6 +237,43 @@ mod tests {
 
     fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
         (a[0] - b[0]).hypot(a[1] - b[1])
+    }
+
+    /// A batch of raw samples reaches the inner as one push of every vertex
+    /// it commits plus the new provisional tip, and leaves the inner polyline
+    /// that pushing the samples one at a time leaves. A batch that stands
+    /// still on a committed tip reaches the inner not at all.
+    #[test]
+    fn a_batch_reaches_the_inner_as_one_push() {
+        // Steps from under a spacing up past the commit cap.
+        let raws: Vec<PaintInformation> = (0..50)
+            .map(|i| {
+                let s = i as f32;
+                mk(s * s * 0.8, (s * 0.3).sin() * 20.0, 0.5, s * 0.01)
+            })
+            .collect();
+        let (mut single, _) = counting();
+        let (mut batched, pushes) = counting();
+        for chunk in raws.chunks(7) {
+            for raw in chunk {
+                single.push(*raw);
+            }
+            let before = pushes.load(Ordering::Relaxed);
+            batched.push_all(chunk);
+            assert_eq!(pushes.load(Ordering::Relaxed) - before, 1);
+            assert_eq!(batched.stabilized(), single.stabilized());
+        }
+
+        let (mut still, pushes) = counting();
+        let origin = mk(10.0, 10.0, 0.5, 0.0);
+        still.push_all(&[origin]);
+        let before = (pushes.load(Ordering::Relaxed), still.stabilized().to_vec());
+        still.push_all(&[origin, origin]);
+        assert_eq!(
+            (pushes.load(Ordering::Relaxed), still.stabilized().to_vec()),
+            before,
+            "standing still on a committed tip changed the inner"
+        );
     }
 
     /// The tip is always the raw sample itself, the inner polyline holds the
@@ -398,9 +451,9 @@ mod tests {
         stab.push(mk(0.0, 0.0, 0.5, 0.0));
         stab.push(mk(200.0, 0.0, 0.5, 0.01));
         let out = stab.stabilized();
-        assert_eq!(out.len(), 1 + MAX_COMMITS_PER_PUSH, "no extra tip vertex");
+        assert_eq!(out.len(), 1 + MAX_COMMITS_PER_SAMPLE, "no extra tip vertex");
         for (j, v) in out.iter().enumerate() {
-            let expected = j as f32 * 200.0 / MAX_COMMITS_PER_PUSH as f32;
+            let expected = j as f32 * 200.0 / MAX_COMMITS_PER_SAMPLE as f32;
             assert!(
                 (v.pos[0] - expected).abs() < 1e-3,
                 "vertex {j} at {}",
@@ -412,7 +465,7 @@ mod tests {
         let out = stab.stabilized();
         assert_eq!(
             out.len(),
-            2 + MAX_COMMITS_PER_PUSH,
+            2 + MAX_COMMITS_PER_SAMPLE,
             "provisional tip appended"
         );
         assert!((out.last().unwrap().pos[0] - 203.0).abs() < 1e-3);
@@ -420,7 +473,7 @@ mod tests {
         let out = stab.stabilized();
         assert_eq!(
             out.len(),
-            3 + MAX_COMMITS_PER_PUSH,
+            3 + MAX_COMMITS_PER_SAMPLE,
             "one commit, tip replaced"
         );
         let next = out[out.len() - 2].pos[0];

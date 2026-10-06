@@ -482,7 +482,7 @@ impl ParamInfo {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone, Copy)]
 #[serde(tag = "op", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum StrokeOp {

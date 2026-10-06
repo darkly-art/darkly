@@ -52,7 +52,7 @@ Four pieces to keep in mind:
 
  for each pen event (brush_stroke_to):
    │
-   └─► stabilizer.push(event) → resampled, smoothed polyline; nothing renders
+   └─► record the event; nothing stabilizes or renders
 
  each frame, and at pen-up (flush_stroke), if events arrived since the last:
    │
@@ -60,8 +60,9 @@ Four pieces to keep in mind:
    │      // every terminal's begin_stroke hook fires:
    │      //   color_output → clear scratch to transparent
    │      //   liquify      → copy layer into scratch
-   ├─► StrokeEngine.take_divergence() → the earliest rendered vertex that
-   │      moved since it was rendered, else append-only
+   ├─► StrokeEngine.take_divergence() → stabilizer.push_all(events since
+   │      the last flush), then the earliest rendered vertex that moved
+   │      since it was rendered, else append-only
    ├─► StrokeEngine.render_from_stabilized_range(gpu_ctx, first_new)
    │      │   (after restoring a checkpoint on divergence)
    │      ├─► for each dab position on the segment:
@@ -80,7 +81,8 @@ Four pieces to keep in mind:
 
  end_stroke:
    │
-   ├─► flush_stroke: render the events no frame has
+   ├─► flush_stroke: render the events no frame has, as one segment
+   │     with no checkpoint (nothing can diverge after pen-up)
    ├─► save_point → undo ring (bbox + checkpoint)
    └─► drop StrokeBuffer
 ```
@@ -490,7 +492,11 @@ Each pipeline owns a `DynamicUniformRing` (~256 slots). A dab's uniform block
 is written to the next slot; the dynamic offset is passed to `set_bind_group`.
 This means all dabs in a stroke segment go through **one** encoder and **one**
 `queue.submit()`, instead of per-dab submission. When any ring nears capacity
-the engine flushes mid-stroke (cheap: a few per 1000 dabs).
+the engine flushes mid-stroke (cheap: a few per 1000 dabs). Dab-batching
+terminals hold their queue on the CPU in a buffer sized to
+`MAX_DABS_PER_PHASE`; `StrokeEngine::place_dab` flushes the terminals and
+submits when a phase reaches it, which only a whole path rendered in one
+phase does: the brush preview, or a stroke no frame ran during.
 
 ### `ensure_canvas_copy`
 
