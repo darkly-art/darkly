@@ -27,7 +27,7 @@
         "@playwright/test": "^1.63.0",
         "@reforged/maker-appimage": "^5.3.1",
         "@types/node": "^26.6.2",
-        "electron": "^44.0.0",
+        "electron": "^44.5.1",
         "playwright": "^1.50.0",
         "typescript": "^6.0.3",
         "vitest": "^5.0.1"
