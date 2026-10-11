@@ -71,7 +71,7 @@ async function drag(from: [number, number], to: [number, number], mods = {}) {
 
 describe('shape tools', () => {
     it('are one vector tool per family, clustered, with no options bar', () => {
-        expect(shapeTools.map((t) => t.id)).toEqual(['rectangle', 'ellipse', 'polygon']);
+        expect(shapeTools.map((t) => t.id)).toEqual(['polygon', 'ellipse']);
         for (const t of shapeTools) {
             expect(t.cluster).toBe('shape');
             // The color sampler's modifier chord (Alt+drag under the photoshop

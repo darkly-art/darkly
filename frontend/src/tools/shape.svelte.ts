@@ -161,8 +161,9 @@ function shapeToolDescriptor(family: string): ToolDescriptor {
     };
 }
 
-/** Shape families in flyout order, top to bottom. Each id is a `shapes`
- *  family and the `tools` entry its registration projects. */
-const SHAPE_FAMILIES = ['rectangle', 'ellipse', 'polygon'];
+/** Shape families in flyout order, top to bottom; the first is the cluster's
+ *  default. Each id is a `shapes` family and the `tools` entry its
+ *  registration projects. */
+const SHAPE_FAMILIES = ['polygon', 'ellipse'];
 
 export const shapeTools: ToolDescriptor[] = SHAPE_FAMILIES.map(shapeToolDescriptor);

@@ -1,4 +1,5 @@
-//! Regular polygon with optional circular corners, fitted to the box.
+//! Regular polygon with optional circular corners, fitted to the box. Four
+//! sides at any rounding is the rounded rectangle, the family's default.
 //!
 //! The rounding is a Minkowski sum with a disc: the sharp polygon is fitted
 //! into the box inset by the corner radius, then every edge is pushed out by
@@ -16,22 +17,27 @@ use crate::gpu::params::{ParamDef, ParamSlots, ParamValue};
 use crate::shape::{box_fit, ShapeFamilyRegistration, TOLERANCE};
 use crate::units::UnitType;
 
+/// Four sides: a first drag draws a rectangle filling the box.
+const DEFAULT_SIDES: i32 = 4;
+
 const PARAMS: &[ParamDef] = &[
-    ParamDef::int("points", 3, 32, 5)
+    ParamDef::int("points", 3, 32, DEFAULT_SIDES)
         .with_label("Sides")
         .with_description("Number of sides (min 3)."),
     ParamDef::float("rounding", 0.0, 1.0, 0.0)
         .with_label("Rounding")
         .with_unit(UnitType::Percent)
-        .with_description("Round the corners: 0% = sharp, 100% = circle."),
+        .with_description(
+            "Corner radius as a share of the short side: 0% = sharp, 100% = fully round (a circle in a square box).",
+        ),
 ];
 
 pub fn register() -> ShapeFamilyRegistration {
     ShapeFamilyRegistration {
         type_id: "polygon",
         display_name: "Polygon",
-        description: "A regular polygon resting on a flat base, with optional rounded corners, filling the dragged box.",
-        icon: "tabler:pentagon-filled",
+        description: "A rectangle, or any regular polygon resting on a flat base, with optional rounded corners, filling the dragged box.",
+        icon: "tabler:rectangle-filled",
         hotkey_action: "polygonTool",
         params: PARAMS,
         outline,
@@ -39,7 +45,7 @@ pub fn register() -> ShapeFamilyRegistration {
 }
 
 fn outline(params: &[ParamValue], w: f64, h: f64) -> BezPath {
-    let n = params.int_at(0, 5).max(3) as usize;
+    let n = params.int_at(0, DEFAULT_SIDES).max(3) as usize;
     let rounding = (params.float_at(1, 0.0) as f64).clamp(0.0, 1.0);
     // Shy of the full half-side so the inner polygon never collapses to a
     // point; at 100% the result is visually a circle or stadium.
@@ -103,6 +109,64 @@ mod tests {
 
     fn p(points: i32, rounding: f32) -> [ParamValue; 2] {
         [ParamValue::Int(points), ParamValue::Float(rounding)]
+    }
+
+    #[test]
+    fn defaults_draw_a_rectangle_filling_the_box() {
+        let defaults: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
+        let area = outline(&defaults, 200.0, 100.0).area().abs();
+        assert!((area - 20_000.0).abs() < 1e-6, "area {area}");
+    }
+
+    /// Four sides is kurbo's rounded rectangle with radius `rounding` times
+    /// half the short side. At full rounding the radius stops just short of
+    /// the half-side (so the inner polygon never collapses), a hair inside
+    /// the true stadium.
+    #[test]
+    fn four_sides_is_the_rounded_rectangle() {
+        use kurbo::{flatten, PathEl, RoundedRect};
+        fn dist(p: Point, path: &BezPath) -> f64 {
+            let mut pts = Vec::new();
+            flatten(path.iter(), 0.01, |el| {
+                if let PathEl::MoveTo(q) | PathEl::LineTo(q) = el {
+                    pts.push(q);
+                }
+            });
+            pts.push(pts[0]);
+            pts.windows(2)
+                .map(|s| {
+                    let (a, b) = (s[0], s[1]);
+                    let ab = b - a;
+                    let t = ((p - a).dot(ab) / ab.hypot2().max(1e-18)).clamp(0.0, 1.0);
+                    (p - (a + ab * t)).hypot()
+                })
+                .fold(f64::MAX, f64::min)
+        }
+        for (w, h) in [(100.0, 100.0), (200.0, 70.0)] {
+            for (rounding, area_tol, dist_tol) in [
+                (0.0, 1e-6, 0.01),
+                (0.25, 1e-6, 0.01),
+                (0.5, 1e-6, 0.01),
+                (0.995, 1e-6, 0.01),
+                (1.0, 1e-3, 1e-3 * f64::min(w, h)),
+            ] {
+                let poly = outline(&p(4, rounding as f32), w, h);
+                let rect =
+                    RoundedRect::new(0.0, 0.0, w, h, rounding * w.min(h) * 0.5).to_path(TOLERANCE);
+                let (a, b) = (poly.area().abs(), rect.area().abs());
+                assert!(
+                    (a - b).abs() / b < area_tol,
+                    "{w}x{h} @ {rounding}: area {a} vs {b}"
+                );
+                let mut far = 0.0f64;
+                flatten(poly.iter(), 0.01, |el| {
+                    if let PathEl::MoveTo(q) | PathEl::LineTo(q) = el {
+                        far = far.max(dist(q, &rect));
+                    }
+                });
+                assert!(far < dist_tol, "{w}x{h} @ {rounding}: {far} px off");
+            }
+        }
     }
 
     #[test]

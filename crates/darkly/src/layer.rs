@@ -372,7 +372,7 @@ impl TextProps {
 /// ([`crate::shape::tessellate`]) and never stored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShapeProps {
-    /// Stable `type_id` from [`crate::shape::registry`] (`"rectangle"`, ...).
+    /// Stable `type_id` from [`crate::shape::registry`] (`"polygon"`, ...).
     pub family: String,
     /// Parameter values matching the family's `ParamDef` schema, in order.
     pub params: Vec<ParamValue>,

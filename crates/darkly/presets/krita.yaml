@@ -46,7 +46,8 @@ hotkeys:
   lassoSelectTool: KeyL
   polygonSelectTool: Shift+KeyL
   # Krita's Ellipse Tool is Shift+J. Its Rectangle Tool's Shift+R is already
-  # ellipseSelectTool here, so rectangleTool stays unbound.
+  # ellipseSelectTool here, and its Polygon Tool has no default, so
+  # polygonTool stays unbound.
   ellipseTool: Shift+KeyJ
   # Layers.
   isolateLayer: KeyI

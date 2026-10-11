@@ -27,9 +27,9 @@ toolRegistry.register(transformTool);
 toolRegistry.register(transformPerspectiveTool);
 
 // Cluster buttons mirror their default tool's icon (rect_select's dashed
-// square for selection; fill's bucket for fill; the filled rectangle for
-// shapes): the cluster owns no
-// independent icon, only routing. See `ToolCluster.svelte`.
+// square for selection; fill's bucket for fill; the polygon tool's filled
+// rectangle for shapes): the cluster owns no independent icon, only routing.
+// See `ToolCluster.svelte`.
 toolClusterRegistry.register({
     id: 'select',
     toolIds: ['rect_select', 'ellipse_select', 'lasso_select', 'polygon_select', 'magic_wand'],
@@ -47,7 +47,7 @@ toolClusterRegistry.register({
 toolClusterRegistry.register({
     id: 'shape',
     toolIds: shapeTools.map((t) => t.id),
-    defaultToolId: 'rectangle',
+    defaultToolId: shapeTools[0].id,
     displayName: 'Shapes',
 });
 

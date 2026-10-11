@@ -40,7 +40,8 @@ hotkeys:
   polygonSelectTool: Shift+KeyL
   # Photoshop groups its shape tools (Rectangle, Ellipse, Polygon, ...) on U;
   # as with the M group, the first two members take the key and Shift+key.
-  rectangleTool: KeyU
+  # The polygon tool, which defaults to a rectangle, takes U.
+  polygonTool: KeyU
   ellipseTool: Shift+KeyU
   # Layers.
   # Delete on the Layers panel deletes the active layer; the global Delete

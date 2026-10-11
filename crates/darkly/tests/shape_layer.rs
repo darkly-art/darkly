@@ -62,6 +62,12 @@ fn add(
     (r.id, r.object)
 }
 
+/// A four-sided polygon's params: a rectangle filling its box, stated
+/// explicitly so the pixel probes do not depend on the family's default.
+fn four_sides() -> serde_json::Value {
+    json!({ "points": 4 })
+}
+
 /// The composited canvas pixel at a plane point.
 fn canvas_px(engine: &mut DarklyEngine, plane: (i32, i32)) -> [u8; 4] {
     let canvas = engine.canvas_rect();
@@ -72,11 +78,11 @@ fn canvas_px(engine: &mut DarklyEngine, plane: (i32, i32)) -> [u8; 4] {
 }
 
 #[test]
-fn rectangle_fills_its_box_and_undo_removes_the_layer() {
+fn polygon_defaults_fill_its_box_and_undo_removes_the_layer() {
     let mut engine = test_engine(128, 128);
     let (id, _) = add(
         &mut engine,
-        "rectangle",
+        "polygon",
         json!({}),
         (20.0, 30.0, 60.0, 40.0),
         Some(RED),
@@ -126,8 +132,8 @@ fn unknown_family_or_empty_box_places_nothing() {
     assert!(engine.commit_shape().is_none());
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (0.0, 0.0, 0.0, 10.0),
         Some(RED),
         None,
@@ -150,8 +156,8 @@ fn live_placement_renders_before_release() {
     let mut engine = test_engine(128, 128);
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (10.0, 10.0, 10.0, 10.0),
         Some(RED),
         None,
@@ -175,8 +181,8 @@ fn a_placement_is_one_undo_step_at_its_final_box() {
     let mut engine = test_engine(128, 128);
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (10.0, 10.0, 10.0, 10.0),
         Some(RED),
         None,
@@ -227,8 +233,8 @@ fn undo_mid_placement_commits_then_undoes_it() {
     let mut engine = test_engine(128, 128);
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (10.0, 10.0, 60.0, 60.0),
         Some(RED),
         None,
@@ -261,8 +267,8 @@ fn a_placement_swallowed_by_a_merge_is_not_recorded() {
     let below = engine.add_raster_layer(None);
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (10.0, 10.0, 60.0, 60.0),
         Some(RED),
         None,
@@ -288,8 +294,8 @@ fn a_placement_swallowed_by_flatten_then_cancelled_undoes_cleanly() {
     let mut engine = test_engine(128, 128);
     begin(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (10.0, 10.0, 60.0, 60.0),
         Some(RED),
         None,
@@ -314,8 +320,8 @@ fn a_zero_width_border_is_no_border() {
     };
     let (id, obj) = add(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (4.0, 4.0, 40.0, 40.0),
         Some(RED),
         Some(none),
@@ -388,8 +394,8 @@ fn border_without_fill_is_a_ring_and_style_edits_drop_it() {
     };
     let (id, obj) = add(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (20.0, 20.0, 80.0, 80.0),
         None,
         Some(border),
@@ -409,8 +415,8 @@ fn rounding_a_square_clears_its_corner() {
     let mut engine = test_engine(128, 128);
     let (id, obj) = add(
         &mut engine,
-        "rectangle",
-        json!({ "rounding": 0.0 }),
+        "polygon",
+        json!({ "points": 4, "rounding": 0.0 }),
         (20.0, 20.0, 80.0, 80.0),
         Some(RED),
         None,
@@ -421,7 +427,7 @@ fn rounding_a_square_clears_its_corner() {
         "sharp corner is filled"
     );
 
-    engine.set_shape_params(id, obj, RawParams(json!({ "rounding": 1.0 })));
+    engine.set_shape_params(id, obj, RawParams(json!({ "points": 4, "rounding": 1.0 })));
     assert_ne!(
         canvas_px(&mut engine, (22, 22)),
         RED,
@@ -429,9 +435,17 @@ fn rounding_a_square_clears_its_corner() {
     );
 
     let info = &engine.shape_objects(id)[0];
-    assert_eq!(info.family, "rectangle");
+    assert_eq!(info.family, "polygon");
     assert_eq!(
-        serde_json::to_value(&info.params[0].value).unwrap(),
+        serde_json::to_value(
+            &info
+                .params
+                .iter()
+                .find(|p| p.name == "rounding")
+                .unwrap()
+                .value
+        )
+        .unwrap(),
         json!(1.0)
     );
 
@@ -482,8 +496,8 @@ fn placement_is_in_plane_space_after_a_crop() {
     engine.resize_canvas(CanvasRect::from_xywh(10, 20, 100, 100));
     let (_, _) = add(
         &mut engine,
-        "rectangle",
-        json!({}),
+        "polygon",
+        four_sides(),
         (40.0, 50.0, 20.0, 20.0),
         Some(RED),
         None,

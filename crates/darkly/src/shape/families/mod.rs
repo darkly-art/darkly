@@ -5,7 +5,6 @@
 
 pub mod ellipse;
 pub mod polygon;
-pub mod rectangle;
 
 use crate::shape::ShapeFamilyRegistration;
 
@@ -15,6 +14,5 @@ pub fn registrations() -> Vec<ShapeFamilyRegistration> {
     let mut all = Vec::new();
     all.push(ellipse::register());
     all.push(polygon::register());
-    all.push(rectangle::register());
     all
 }
