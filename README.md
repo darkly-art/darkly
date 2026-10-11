@@ -216,13 +216,15 @@ npm --prefix frontend run dev -- --host
 
 The dev server builds the decorative demo that demo.darkly.art serves; add `-- --mode app` for the plain editor the app ships. Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
 
-**GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. Launch Chromium with GPU and Vulkan support:
+**GPU backend configuration (Linux):** On Wayland with an Intel GPU from 12th gen on (Mesa 22 or newer) or an NVIDIA GPU (driver 535 or newer), Chromium's defaults run WebGPU and nothing needs changing. On X11, or with an AMD or older Intel GPU, Chromium also needs its Vulkan backend:
 
 ```sh
-chromium --enable-features=Vulkan --enable-unsafe-webgpu
+chromium --enable-features=Vulkan
 ```
 
-You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
+(or `chrome://flags/#enable-vulkan`). On a laptop with two GPUs, a black canvas usually means Vulkan picked the GPU that does not drive the display; `MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1` in Chromium's environment keeps it on the display GPU. You can verify the active backend at `chrome://gpu`. On macOS and Windows none of this is needed (Metal and D3D12 are used by default).
+
+The desktop app does all of this itself: it starts on Chromium's defaults under Wayland and on the Vulkan backend under X11, falls back to Vulkan once if the defaults give no adapter, and on a multi-GPU machine keeps Vulkan on the display GPU. `DARKLY_GPU_PROFILE=defaults|vulkan` forces a profile; any of `MESA_VK_DEVICE_SELECT`, `DRI_PRIME`, `NODEVICE_SELECT` or `VK_LOADER_DRIVERS_DISABLE` in its environment takes device selection out of its hands.
 
 ## Use it in your own project
 

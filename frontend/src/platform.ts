@@ -9,7 +9,7 @@ export type Os =
     | 'chromeos'
     | 'unknown';
 
-export type Browser = 'chromium' | 'firefox' | 'safari' | 'unknown';
+export type Browser = 'electron' | 'chromium' | 'firefox' | 'safari' | 'unknown';
 
 export interface Platform {
     os: Os;
@@ -67,6 +67,10 @@ function detectOs(ua: string, uad: UAData | undefined, plat: string, touchPoints
 function detectBrowser(os: Os, ua: string, uad: UAData | undefined): Browser {
     // All iOS browsers are WebKit under the hood, so the same enable path applies.
     if (os === 'ios') return 'safari';
+
+    // The Darkly desktop app. Its brands are plain Chromium's, so the UA token
+    // is the only tell, and it must come before the brand check.
+    if (/Electron\//.test(ua)) return 'electron';
 
     if (uad?.brands?.some(b => CHROMIUM_BRANDS.has(b.brand))) return 'chromium';
 

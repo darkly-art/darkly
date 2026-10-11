@@ -10,8 +10,16 @@
     import AnnouncementBanner from './AnnouncementBanner.svelte';
     import { announcement } from '../state/announcement.svelte';
 
-    let { failure, platform }: { failure: GpuCheckFailure; platform: Platform } =
-        $props();
+    let {
+        failure,
+        platform,
+        diagnostics,
+    }: {
+        failure: GpuCheckFailure;
+        platform: Platform;
+        /** What the desktop host saw while trying its launch profiles. */
+        diagnostics?: string[];
+    } = $props();
 
     const primary = $derived(instructionsFor(platform));
     const others = $derived(
@@ -34,6 +42,8 @@
     const adapterInfo: AdapterInfo | undefined = $derived(
         failure.reason === 'fallback-adapter' ? failure.adapterInfo : undefined,
     );
+
+    const diagnosticsText = $derived(diagnostics?.join('\n'));
 
     let copied = $state<string | null>(null);
     let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,6 +102,23 @@
                 </dl>
                 <p class="hint">
                     Include these values if you file a bug: they describe the adapter the browser handed us.
+                </p>
+            </details>
+        {/if}
+
+        {#if diagnosticsText}
+            <details class="diagnostics">
+                <summary>What Darkly tried</summary>
+                <pre>{diagnosticsText}</pre>
+                <p class="hint">
+                    Include these lines if you file a bug
+                    <button
+                        type="button"
+                        class="copy-btn"
+                        onclick={() => copyFlag(diagnosticsText)}
+                    >
+                        {copied === diagnosticsText ? 'Copied' : 'Copy'}
+                    </button>
                 </p>
             </details>
         {/if}
@@ -319,6 +346,17 @@
         color: var(--text);
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         word-break: break-word;
+    }
+
+    pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        background: var(--bg-hover);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        white-space: pre-wrap;
+        user-select: text;
     }
 
     .hint {
