@@ -8,7 +8,7 @@ import App from './App.svelte';
 import BrushInspector from './ui/brush_inspector/BrushInspector.svelte';
 import GpuErrorPage from './ui/GpuErrorPage.svelte';
 import { mount } from 'svelte';
-import { checkGpu } from './gpu';
+import { checkGpu, reportToHost, type HostVerdict } from './gpu';
 import { detectPlatform } from './platform';
 import { suppressButtonKeyboardFocus } from './lib/suppressButtonKeyboardFocus';
 import { strokeRecorder } from './lib/strokeRecorder';
@@ -28,6 +28,10 @@ async function boot() {
     }
 
     const check = await checkGpu();
+    const host = window.electronAPI?.gpu;
+    const verdict: HostVerdict = host ? await reportToHost(check, host) : { verdict: 'continue' };
+    // The host is restarting the app; mounting anything would only flash.
+    if (verdict.verdict === 'relaunching') return;
     target.replaceChildren();
 
     if (check.ok) {
@@ -41,7 +45,11 @@ async function boot() {
     const platform = detectPlatform();
     return mount(GpuErrorPage, {
         target,
-        props: { failure: check, platform },
+        props: {
+            failure: check,
+            platform,
+            diagnostics: verdict.verdict === 'exhausted' ? verdict.diagnostics : undefined,
+        },
     });
 }
 

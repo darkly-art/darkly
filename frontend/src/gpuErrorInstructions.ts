@@ -1,4 +1,4 @@
-// Last reviewed: 2026-04
+// Last reviewed: 2026-10
 //
 // Per (os, browser) instructions for enabling hardware-accelerated WebGPU.
 // Keep URLs in code blocks, not anchors: chrome://... cannot be opened from
@@ -40,7 +40,52 @@ const CHROMIUM_DESKTOP_FLAGS: FlagLink[] = [
     { url: 'opera://settings/system', action: 'Opera' },
 ];
 
+/** A hybrid laptop's black canvas: Vulkan on the discrete GPU while the
+ *  display runs on the integrated one. Mesa's device-select layer settles it. */
+const HYBRID_NOTE =
+    'On a laptop with two GPUs, a black canvas usually means Vulkan picked the GPU that does not drive the display. '
+    + 'Launching with MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1 keeps every Vulkan user on the display GPU; '
+    + 'MESA_VK_DEVICE_SELECT=vid:did! picks one yourself (MESA_VK_DEVICE_SELECT=list vulkaninfo prints the ids).';
+
 const INSTRUCTIONS_MATRIX: Partial<Record<Browser, Partial<Record<Os, Instructions>>>> = {
+    // The Darkly desktop app: no browser settings to change, and on Linux the
+    // app has already tried every Chromium launch profile it knows
+    // (desktop/src/gpu-launch.ts) before showing this.
+    electron: {
+        windows: {
+            title: 'Darkly desktop on Windows',
+            steps: [
+                'Update your graphics drivers from your GPU vendor\'s site (NVIDIA, AMD, or Intel).',
+                'Restart Darkly.',
+            ],
+            flags: [],
+        },
+        macos: {
+            title: 'Darkly desktop on macOS',
+            steps: [
+                'Update macOS: System Settings → General → Software Update.',
+                'Restart Darkly.',
+            ],
+            flags: [],
+        },
+        linux: {
+            title: 'Darkly desktop on Linux',
+            steps: [
+                'Darkly tried Chromium\'s default GPU path and its Vulkan backend, and neither gave it a GPU. The details below say what it saw.',
+                'Update your graphics drivers: Mesa for Intel and AMD, driver 535 or newer for NVIDIA. The first command below should list your GPU.',
+                'If you launch Darkly with GPU flags of your own (such as --disable-features=Vulkan or --disable-gpu), remove them.',
+                'Restart Darkly.',
+            ],
+            flags: [
+                { url: 'vulkaninfo --summary', action: 'lists the GPUs Vulkan can use' },
+                { url: 'MESA_VK_DEVICE_SELECT=list vulkaninfo', action: 'prints their vid:did ids' },
+            ],
+            note: `${HYBRID_NOTE} Darkly sets the first on its own when it finds two GPUs. `
+                + 'VK_LOADER_DRIVERS_DISABLE=*nvidia* hides a driver, NODEVICE_SELECT=1 turns device selection off, '
+                + 'and DARKLY_GPU_PROFILE=defaults or vulkan forces a Chromium launch profile. '
+                + 'For the Flatpak, set any of these with flatpak override --user --env=NAME=value art.darkly.Darkly.',
+        },
+    },
     chromium: {
         windows: {
             title: 'Chromium on Windows',
@@ -64,15 +109,17 @@ const INSTRUCTIONS_MATRIX: Partial<Record<Browser, Partial<Record<Os, Instructio
             title: 'Chromium on Linux',
             steps: [
                 ...CHROMIUM_DESKTOP_STEPS,
-                'Linux GPUs are often on Chromium\'s blocklist. If the error persists, set the flags below to "Enabled" and relaunch.',
+                'On Wayland with an Intel GPU from 12th gen on (Mesa 22 or newer) or an NVIDIA GPU (driver 535 or newer), that is all WebGPU needs.',
+                'On X11, or with an AMD or older Intel GPU, Chromium also needs its Vulkan backend: set the Vulkan flag below to "Enabled" (or launch with --enable-features=Vulkan) and relaunch.',
+                'If the error persists, set "Override software rendering list" below to "Enabled" and relaunch.',
             ],
             flags: [
                 ...CHROMIUM_DESKTOP_FLAGS,
-                { url: 'chrome://flags/#ignore-gpu-blocklist', action: 'Enabled' },
-                { url: 'chrome://flags/#enable-unsafe-webgpu', action: 'Enabled (last resort)' },
+                { url: 'chrome://flags/#enable-vulkan', action: 'Enabled' },
+                { url: 'chrome://flags/#ignore-gpu-blocklist', action: 'Enabled (last resort)' },
             ],
             diagnosticUrl: 'chrome://gpu',
-            note: 'Make sure your Mesa/Vulkan drivers are up to date. Vulkan 1.1+ is required for WebGPU on Linux.',
+            note: `Make sure your Mesa/Vulkan drivers are up to date: Vulkan 1.1+ is required. ${HYBRID_NOTE}`,
         },
         chromeos: {
             title: 'Chromium on ChromeOS',

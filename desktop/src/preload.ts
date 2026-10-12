@@ -1,12 +1,13 @@
 /**
  * Preload script: runs in a sandboxed context with access to ipcRenderer.
- * Exposes the typed storage bridge to the renderer's window.electronAPI.
+ * Exposes the typed host bridge to the renderer's window.electronAPI.
  *
- * The shape declared here MUST exactly match the ElectronStorageBridge
- * interface in the public repo at frontend/src/storage/types.ts. If you
- * change one, change the other.
+ * The shape declared here MUST exactly match the ElectronApi interface in
+ * frontend/src/host.ts. If you change one, change the other.
  */
 import { contextBridge, ipcRenderer } from 'electron';
+// Type-only: a sandboxed preload cannot load local modules at runtime.
+import type { GpuReport } from './gpu-launch';
 
 contextBridge.exposeInMainWorld('electronAPI', {
     storage: {
@@ -15,5 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         list:   (dir: string)              => ipcRenderer.invoke('storage:list', dir),
         remove: (p: string)                => ipcRenderer.invoke('storage:remove', p),
         exists: (p: string)                => ipcRenderer.invoke('storage:exists', p),
+    },
+    gpu: {
+        report: (report: GpuReport) => ipcRenderer.invoke('gpu:report', report),
     },
 });
