@@ -1,27 +1,36 @@
 //! The checkpoint ring's region save and restore, pinned against a
 //! from-scratch render.
 //!
-//! Every mid-stroke event rewinds to a checkpoint, restores it, and
-//! replays the dabs after it. The ring copies only the region those dabs
-//! dirtied, so a region that is one texel too small leaves a stale dab or
-//! a hole. The
-//! oracle is the engine's own full re-render path: `test_set_full_rerender`
-//! clears the ring before every rewind, so each event renders the final
-//! polyline from index 0 with the terminal's whole-scratch prologue.
-//! That path and the incremental one must produce the same bytes.
+//! A stabilized stroke rewinds to a checkpoint, restores it, and replays
+//! the dabs after it, at every frame where a rendered vertex moved. The ring
+//! copies only the region those dabs dirtied, so a region that is one texel
+//! too small leaves a stale dab or a hole. The oracle is the engine's own
+//! full re-render path: `test_set_full_rerender` clears the ring before
+//! every rewind, so each frame renders the polyline from index 0 with the
+//! terminal's whole-scratch prologue. That path and the incremental one must
+//! produce the same bytes.
 //!
-//! All cells run at `stabilize = 0`, where only the synthetic tip
-//! correction rewinds and the two paths are exactly equal; a reported
-//! divergence at `stabilize > 0` leaves the segment before it drawn with
-//! a lookahead point that has since moved, so a from-scratch render
-//! differs there regardless of the ring.
+//! The cells stabilize at [`STABILIZE`] with a divergence epsilon of zero.
+//! An unstabilized stroke never rewinds, so it would compare the oracle with
+//! itself. With the production epsilon, a vertex that drifts by less than
+//! it keeps the dabs it was first rendered with, while the oracle redraws
+//! it where it now lies, so the two would differ regardless of the ring. At
+//! zero every moved vertex is re-rendered, and vertices the stabilizer has
+//! not moved are bit-identical in both runs.
+//!
+//! The same comparison pins flush cadence: a stroke rendered whole at
+//! pen-up, as a headless embedder that runs no frame during it gets, matches
+//! the same stroke rendered a frame at a time.
 //!
 //! Run with: `cargo test -p darkly --test stroke_rewind --features testing -- --test-threads=1`
 
 use std::path::PathBuf;
 
 use darkly::brush::builtin_brushes;
+use darkly::brush::gpu_context::MAX_DABS_PER_PHASE;
 use darkly::brush::input_value::InputValue;
+use darkly::brush::resampler::MAX_COMMITS_PER_SAMPLE;
+use darkly::brush::stabilizers::laplacian::relaxed_vertex_updates;
 use darkly::coord::CanvasRect;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
@@ -29,6 +38,10 @@ use darkly::format::stroke_recording::{replay, EventTiming, ReplayPacing, Stroke
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
+
+/// Stabilizer strength every cell paints at: deep enough that a frame
+/// rewinds across several checkpoint segments.
+const STABILIZE: f32 = 0.5;
 
 fn fixture(name: &str) -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", name]
@@ -89,6 +102,76 @@ fn event(x: f32, y: f32, t: f64) -> StrokeOp {
     }
 }
 
+/// `ops` as one stroke with no frame between them, as a headless embedder
+/// paints: the pen-up flush renders it whole.
+fn headless(engine: &mut DarklyEngine, layer: LayerId, ops: &[StrokeOp]) {
+    engine.begin_stroke(layer).unwrap();
+    for op in ops {
+        engine.stroke_to(*op);
+    }
+    engine.end_stroke();
+}
+
+/// `ops` as one stroke with a frame after every event.
+fn frame_per_event(engine: &mut DarklyEngine, layer: LayerId, ops: &[StrokeOp]) {
+    engine.begin_stroke(layer).unwrap();
+    for op in ops {
+        engine.stroke_to(*op);
+        engine.render(0.0);
+    }
+    engine.end_stroke();
+}
+
+/// The layer's pixels and bounds once every pending GPU readback has landed.
+fn readback(engine: &mut DarklyEngine, layer: LayerId) -> (Vec<u8>, CanvasRect) {
+    engine.test_flush_readbacks();
+    let bounds = engine.layer_bounds(layer).expect("raster layer has bounds");
+    (engine.test_readback_layer(layer), bounds)
+}
+
+/// Two runs' layers, compared byte for byte. `what` names the configuration
+/// in the failure message. Returns the layer bounds for the caller's
+/// structural assertions.
+fn assert_same(
+    what: &str,
+    a_name: &str,
+    (a, bounds): (Vec<u8>, CanvasRect),
+    b_name: &str,
+    (b, b_bounds): (Vec<u8>, CanvasRect),
+) -> CanvasRect {
+    assert_eq!(
+        bounds, b_bounds,
+        "{a_name} and {b_name} grew the layer differently ({what})"
+    );
+    assert!(
+        b.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
+        "the stroke left the layer empty ({what})"
+    );
+    if a != b {
+        let differing: Vec<(i32, i32, [u8; 4], [u8; 4])> = a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, (a, b))| {
+                let x = bounds.origin.x + (i as u32 % bounds.width) as i32;
+                let y = bounds.origin.y + (i as u32 / bounds.width) as i32;
+                (x, y, *a, *b)
+            })
+            .collect();
+        panic!(
+            "{a_name} differs from {b_name} in {} of {} pixels ({what}, layer {bounds:?}); \
+             first few (x, y, {a_name}, {b_name}): {:?}",
+            differing.len(),
+            b.len() / 4,
+            &differing[..differing.len().min(8)]
+        );
+    }
+    bounds
+}
+
 /// One stroke configuration, run either incrementally (the ring's region
 /// copies) or through the forced full re-render (the oracle).
 struct Cell<'a> {
@@ -103,12 +186,11 @@ struct Cell<'a> {
 }
 
 impl Cell<'_> {
-    fn run(
-        &self,
-        full_rerender: bool,
-        drive: impl FnOnce(&mut DarklyEngine, LayerId),
-    ) -> (Vec<u8>, CanvasRect) {
-        let mut engine = new_engine(self.canvas, self.brush, 0.0);
+    /// The cell's engine at [`STABILIZE`] and zero divergence epsilon, with
+    /// a fresh raster layer and the window cropped, before any stroke.
+    fn engine(&self) -> (DarklyEngine, LayerId) {
+        let mut engine = new_engine(self.canvas, self.brush, STABILIZE);
+        engine.test_set_divergence_epsilon(0.0);
         if let Some(b) = self.buildup {
             set_input(&mut engine, "paint", "buildup", b);
         }
@@ -116,10 +198,23 @@ impl Cell<'_> {
         if let Some(window) = self.crop {
             engine.resize_canvas(window);
         }
+        (engine, layer)
+    }
+
+    fn run(
+        &self,
+        full_rerender: bool,
+        drive: impl FnOnce(&mut DarklyEngine, LayerId),
+    ) -> (Vec<u8>, CanvasRect) {
+        let (mut engine, layer) = self.engine();
         engine.test_set_full_rerender(full_rerender);
         drive(&mut engine, layer);
-        engine.test_flush_readbacks();
         if !full_rerender {
+            assert!(
+                engine.test_stroke_rewinds() > 0,
+                "the incremental run never rewound, so this comparison would \
+                 be the oracle against itself"
+            );
             assert_eq!(
                 engine.test_stroke_full_rerender_events(),
                 0,
@@ -127,47 +222,19 @@ impl Cell<'_> {
                  comparison would be the oracle against itself"
             );
         }
-        let bounds = engine.layer_bounds(layer).expect("raster layer has bounds");
-        (engine.test_readback_layer(layer), bounds)
+        readback(&mut engine, layer)
     }
 
     /// Both runs of `drive`, compared byte for byte. Returns the layer
     /// bounds for the caller's structural assertions.
     fn assert_matches_oracle(&self, drive: impl Fn(&mut DarklyEngine, LayerId)) -> CanvasRect {
-        let (incremental, bounds) = self.run(false, &drive);
-        let (oracle, oracle_bounds) = self.run(true, &drive);
-        assert_eq!(
-            bounds, oracle_bounds,
-            "the two runs grew the layer differently"
-        );
-        assert!(
-            oracle.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
-            "the stroke left the layer empty"
-        );
-        if incremental != oracle {
-            let differing: Vec<(i32, i32, [u8; 4], [u8; 4])> = incremental
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(oracle.as_chunks::<4>().0)
-                .enumerate()
-                .filter(|(_, (a, b))| a != b)
-                .map(|(i, (a, b))| {
-                    let x = bounds.origin.x + (i as u32 % bounds.width) as i32;
-                    let y = bounds.origin.y + (i as u32 / bounds.width) as i32;
-                    (x, y, *a, *b)
-                })
-                .collect();
-            panic!(
-                "incremental rewind differs from the full re-render in {} of {} pixels \
-                 (buildup {:?}, layer {bounds:?}); first few (x, y, incremental, oracle): {:?}",
-                differing.len(),
-                oracle.len() / 4,
-                self.buildup,
-                &differing[..differing.len().min(8)]
-            );
-        }
-        bounds
+        assert_same(
+            &format!("{}, buildup {:?}", self.brush, self.buildup),
+            "incremental rewind",
+            self.run(false, &drive),
+            "the full re-render",
+            self.run(true, &drive),
+        )
     }
 }
 
@@ -190,32 +257,46 @@ fn replay_recording(
     timings
 }
 
+/// The recorded curvy stroke as ops, scaled to `canvas`.
+fn recorded_ops(canvas: (u32, u32)) -> Vec<StrokeOp> {
+    let recording =
+        StrokeRecording::load(&fixture("recorded_curvy_stroke.json")).expect("fixture parses");
+    let scale = (
+        canvas.0 as f32 / recording.canvas_width as f32,
+        canvas.1 as f32 / recording.canvas_height as f32,
+    );
+    recording
+        .events
+        .iter()
+        .map(|e| e.to_stroke_op(scale))
+        .collect()
+}
+
 /// A checkpoint save never submits on its own: it is recorded into the
-/// submission of the segment it snapshots. At `stabilize = 0` the
-/// synthetic tip correction rewinds to the checkpoint two indices below
-/// the tip and replays exactly two segments, so an event is at most four
-/// submissions: the stroke prologue or the rewind, the two segments
-/// (one may place no dab and still submits for its save), and the
-/// commit. A save in a submission of its own makes it six. Checked per
-/// event rather than as a stroke total, which could not tell one event
-/// over from another under.
+/// submission of the segment it snapshots. A frame is the stroke prologue
+/// or the rewind, one submission per segment, which also flushes the
+/// segment's dabs, an unsaved tail, and the commit, so it submits at most
+/// three more times than it flushes dabs. A save in a submission of its own
+/// adds one per segment. Checked per frame rather than as a stroke total,
+/// which could not tell one frame over from another under.
 #[test]
 fn checkpoint_saves_share_their_segment_submission() {
     let canvas = (1024, 512);
-    let mut engine = new_engine(canvas, "Ink Pen", 0.0);
+    let mut engine = new_engine(canvas, "Ink Pen", STABILIZE);
     let layer = engine.add_raster_layer(None);
     let timings = replay_recording(&mut engine, layer, canvas);
     engine.test_flush_readbacks();
+    assert!(engine.test_stroke_rewinds() > 0, "the stroke must rewind");
     assert_eq!(engine.test_stroke_full_rerender_events(), 0);
-    let over: Vec<(usize, u32)> = timings
+    let over: Vec<(usize, u32, u32)> = timings
         .iter()
-        .filter(|t| t.submits > 4)
-        .map(|t| (t.index, t.submits))
+        .filter(|t| t.submits > t.dab_flushes + 3)
+        .map(|t| (t.index, t.submits, t.dab_flushes))
         .collect();
     assert!(
         over.is_empty(),
-        "events with more submissions than rewind + two segments + commit (index, submits): \
-         {over:?}"
+        "frames with more submissions than dab flushes + rewind + tail + commit \
+         (index, submits, dab flushes): {over:?}"
     );
 }
 
@@ -233,8 +314,10 @@ fn checkpoint_saves_share_their_segment_submission() {
 fn grow_reverse_jump(engine: &mut DarklyEngine, layer: LayerId) {
     engine.begin_stroke(layer).unwrap();
     let mut t = 0.0;
+    // A frame per event, so the stroke rewinds as it goes.
     let mut go = |x: f32, y: f32| {
         engine.stroke_to(event(x, y, t));
+        engine.render(0.0);
         t += 16.0;
     };
     let (mut x, mut y) = (150.0, 120.0);
@@ -279,7 +362,7 @@ fn recorded_stroke_rewinds_match_full_rerender() {
 }
 
 /// Black vertical bars across the layer in the Ink Pen, then `brush`
-/// back at `stabilize = 0`: something for a brush that moves existing
+/// back at [`STABILIZE`]: something for a brush that moves existing
 /// pigment to move. The bars stay a dab's reach inside the layer: pigment
 /// at the border would let the smear cross the edge at a dab clipped
 /// before the layer grows, the history `grow_reverse_jump`'s note says a
@@ -297,7 +380,7 @@ fn lay_stripes(engine: &mut DarklyEngine, layer: LayerId, canvas: (u32, u32), br
         engine.end_stroke();
     }
     install_builtin(engine, brush);
-    set_input(engine, "brush_settings", "stabilize", 0.0);
+    set_input(engine, "brush_settings", "stabilize", STABILIZE);
 }
 
 /// The recorded stroke through the Smudge over a striped layer: every
@@ -356,4 +439,169 @@ fn growth_and_crop_rewind_match_full_rerender() {
             "the stroke must have grown the layer past the plane origin: {bounds:?}"
         );
     }
+}
+
+/// A boustrophedon across the canvas in 8 px steps, 16 px in from its edges.
+fn zig_zag_ops(canvas: (u32, u32)) -> Vec<StrokeOp> {
+    let mut ops = Vec::new();
+    let (x0, x1) = (16.0, canvas.0 as f32 - 16.0);
+    let mut y = 16.0;
+    let mut forward = true;
+    while y <= canvas.1 as f32 - 16.0 {
+        let mut x = if forward { x0 } else { x1 };
+        while (x0..=x1).contains(&x) {
+            ops.push(event(x, y, ops.len() as f64 * 4.0));
+            x += if forward { 8.0 } else { -8.0 };
+        }
+        forward = !forward;
+        y += 8.0;
+    }
+    ops
+}
+
+/// A small Ink Pen at the 1 px spacing floor over a long zig-zag, with no
+/// frame during the stroke, places more dabs in the pen-up flush's one
+/// segment than one phase holds. The phase splits at the cap, and the layer
+/// matches the same stroke rendered a frame per event, whose phases stay far
+/// below it. Unstabilized, so the stroke never rewinds and lays no
+/// checkpoint.
+#[test]
+fn headless_stroke_splits_phases_at_the_dab_cap() {
+    let canvas = (1024, 256);
+    let ops = zig_zag_ops(canvas);
+    let run = |drive: fn(&mut DarklyEngine, LayerId, &[StrokeOp])| {
+        let mut engine = new_engine(canvas, "Ink Pen", 0.0);
+        set_input(&mut engine, "brush_settings", "size", 0.02);
+        set_input(&mut engine, "brush_settings", "spacing", 0.0);
+        let layer = engine.add_raster_layer(None);
+        drive(&mut engine, layer, &ops);
+        let dabs = engine.test_stroke_total_dabs();
+        let submits = engine.drain_brush_perf_delta().submits as u64;
+        (readback(&mut engine, layer), dabs, submits)
+    };
+    let (headless_layer, dabs, submits) = run(headless);
+    assert!(
+        dabs > MAX_DABS_PER_PHASE as u64,
+        "the stroke must place more dabs than one phase holds: {dabs}"
+    );
+    // The prologue, one per full phase, the tail and the commit. Ink Pen's
+    // paint terminal writes its uniform ring once per dab flush, so no ring
+    // flush adds a submission.
+    assert!(
+        submits <= 3 + dabs / MAX_DABS_PER_PHASE as u64,
+        "{submits} submissions for {dabs} dabs"
+    );
+    let (framed_layer, _, _) = run(frame_per_event);
+    assert_same(
+        "Ink Pen at stabilize 0",
+        "headless",
+        headless_layer,
+        "a frame per event",
+        framed_layer,
+    );
+}
+
+/// A stroke no frame ran during is rendered whole by the pen-up flush, and
+/// nothing can diverge after pen-up, so that flush saves no checkpoint: the
+/// prologue, one segment and the commit, plus one submission per full dab
+/// phase. A checkpoint every few vertices would add a submission each.
+#[test]
+fn pen_up_flush_saves_no_checkpoints() {
+    let canvas = (1024, 512);
+    let mut engine = new_engine(canvas, "Ink Pen", STABILIZE);
+    let layer = engine.add_raster_layer(None);
+    headless(&mut engine, layer, &recorded_ops(canvas));
+    let dabs = engine.test_stroke_total_dabs();
+    let submits = engine.drain_brush_perf_delta().submits as u64;
+    assert_eq!(
+        engine.test_stroke_rewinds(),
+        0,
+        "the stroke's only flush has nothing rendered before it to rewind"
+    );
+    assert!(
+        submits <= 3 + dabs / MAX_DABS_PER_PHASE as u64,
+        "{submits} submissions for {dabs} dabs"
+    );
+}
+
+/// A frame before every event leaves the last one for the pen-up flush. At
+/// a divergence epsilon of zero that sample moves every vertex in the
+/// stabilizer's window, so the flush rewinds; it then renders to the tip as
+/// one segment and commits, saving nothing.
+#[test]
+fn live_pen_up_flush_renders_one_segment() {
+    let canvas = (1024, 512);
+    let cell = Cell {
+        brush: "Ink Pen",
+        buildup: None,
+        canvas,
+        crop: None,
+    };
+    let (mut engine, layer) = cell.engine();
+    engine.begin_stroke(layer).unwrap();
+    for op in recorded_ops(canvas) {
+        engine.render(0.0);
+        engine.stroke_to(op);
+    }
+    let rewinds = engine.test_stroke_rewinds();
+    engine.drain_brush_perf_delta();
+    engine.end_stroke();
+    let submits = engine.drain_brush_perf_delta().submits;
+    assert_eq!(
+        engine.test_stroke_rewinds(),
+        rewinds + 1,
+        "the pen-up flush must rewind"
+    );
+    assert!(
+        submits <= 3,
+        "the pen-up flush submitted {submits} times: more than its rewind, one segment and the commit"
+    );
+}
+
+/// The recorded stroke rendered whole at pen-up matches it rendered a flush
+/// per event with its rewinds and checkpoint restores: skipping the pen-up
+/// flush's checkpoints and rendering it as one segment changes no pixel.
+#[test]
+fn headless_stroke_matches_frame_by_frame() {
+    let canvas = (1024, 512);
+    let cell = Cell {
+        brush: "Ink Pen",
+        buildup: None,
+        canvas,
+        crop: None,
+    };
+    let framed = cell.run(false, |engine, layer| {
+        replay_recording(engine, layer, canvas);
+    });
+    let (mut engine, layer) = cell.engine();
+    headless(&mut engine, layer, &recorded_ops(canvas));
+    assert_same(
+        "Ink Pen",
+        "headless",
+        readback(&mut engine, layer),
+        "a flush per event",
+        framed,
+    );
+}
+
+/// Regression: a stroke no frame ran during reaches the stabilizer as one
+/// batch at pen-up, which the Laplacian relaxes once. Fed a sample at a time,
+/// it relaxed a window per resampled vertex: at stabilize 0.6 that was most
+/// of a headless stroke's CPU.
+#[test]
+fn headless_stroke_relaxes_once() {
+    let canvas = (1024, 512);
+    let ops = recorded_ops(canvas);
+    let mut engine = new_engine(canvas, "Ink Pen", 0.6);
+    let layer = engine.add_raster_layer(None);
+    let before = relaxed_vertex_updates();
+    headless(&mut engine, layer, &ops);
+    let updates = relaxed_vertex_updates() - before;
+    // One relaxation of ceil(0.6^2 x 160) = 58 sweeps over every resampled
+    // vertex, of which a raw sample commits at most `MAX_COMMITS_PER_SAMPLE`.
+    let bound = 58 * (ops.len() * MAX_COMMITS_PER_SAMPLE + 1) as u64;
+    assert!(
+        updates <= bound,
+        "the stroke relaxed {updates} vertex updates, more than one pass ({bound})"
+    );
 }

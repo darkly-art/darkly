@@ -864,7 +864,7 @@ fn screen_to_plane_tracks_rotate_and_undo() {
     let mut e = test_engine(w, h);
     let _layer = e.add_raster_layer(None);
     let (sw, sh) = (200.0f32, 200.0f32);
-    e.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    e.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     let (cx0, cy0) = e.screen_to_plane(sw / 2.0, sh / 2.0);
     assert!(

@@ -922,6 +922,58 @@ on the layer's size, so a dab re-rendered after the layer grew (the full
 re-render path) read a different LSB than the same dab rendered before
 the grow, and `tests/stroke_rewind.rs`'s oracle caught it.
 
+### #10: windowed relaxation and one stroke flush per frame (shipped)
+
+**Shape:** not a terminal change; the stabilizer and the per-event cycle in
+front of every brush. The stabilization rework raised the Laplacian's
+sweeps at strength 1 from 10 to 160 and resampled the polyline to a vertex
+every 6 CSS px, while each push still relaxed the whole polyline from its
+raw points, so a push cost `sweeps x stroke length` and grew as the stroke
+did. Now a push relaxes only the `N + 2` vertices its influence bound says
+can move, replaying the recorded per-sweep values of the vertex left of the
+window, which is bit-identical to the from-scratch result
+(`brush/stabilizers/laplacian.rs`; `docs/brush/stabilization.md` has the
+argument). Separately, `stroke_to` only feeds the stabilizer, and the
+rewind, replay and commit run once per frame in `flush_stroke`, from
+`render` and `end_stroke`: the brush tool forwards every coalesced pointer
+sample, so a tablet faster than the display ran the whole cycle several
+times per frame.
+
+**Measurements, on this machine** (Intel Raptor Lake-P iGPU, Vulkan, Mesa
+26.2.3), `stroke_replay_bench --brush Sponge --dab-size 256` over the
+recorded curvy stroke at `stabilize = 1` (the Sponge's default), prediction
+at the config default of 15 ms, one run of two shown (the other agrees
+within 0.3 ms on every column). Non-submit CPU is the median of
+`cpu_us - submit_us` over the first and last 40 events.
+
+| build | canvas | dabs | cpu p50 | cpu p95 | non-submit, events 0-40 / 160-204 |
+|---|---|---:|---:|---:|---:|
+| dev `c933fd27` | 1280x720 | 6419 | 3.7 ms | 5.7 ms | 1.3 / 1.3 ms |
+| before | 1280x720 | 9493 | 8.1 ms | 12.9 ms | 4.6 / 9.8 ms |
+| windowed relaxation only | 1280x720 | 9493 | 6.4 ms | 8.6 ms | 4.3 / 5.6 ms |
+| both | 1280x720 | 9416 | 6.1 ms | 7.9 ms | 3.8 / 5.1 ms |
+| both | 1920x1080 | 14130 | 6.8 ms | 9.1 ms | 4.1 / 6.1 ms |
+
+The identical dab count of the windowed row is the exactness, seen from the
+bench. The last rows' smaller count is the resampler's window losing the
+per-event commit cap it no longer needs (169 to 161 vertices at strength
+1), which spaces the checkpoint ring one vertex tighter. 1080p is new: the
+bench now runs on `bench_device`, whose limits admit a 1920 px layer.
+
+**What the native bench cannot show:** the per-frame flush. `replay`
+flushes after every event, because the recording carries one event per
+frame, so its per-event numbers are a frame's. On a tablet that samples at
+several times the display rate the browser ran the rewind and replay once
+per sample; it now runs them once per frame. Not measured in the browser.
+
+**What is left, measured:** with startup asset decoding set aside,
+`LaplacianStabilizer::push` is still the largest single cost per event
+(38% of the profile's samples). Each relaxation is now constant, but the
+resampler commits about ten vertices per event on this stroke and each is
+its own push, so an event relaxes ten windows of `N x (N + 1)` updates
+where one window widened by the commits would do. That, not the window, is
+why the non-submit column still sits above dev's.
+
 ## Background changes that are NOT competing attempts
 
 These landed for different reasons over the same time window. Listed
@@ -934,9 +986,12 @@ the per-event compute structure.
 - **Deferred composite batching**: collapsed N per-dab fragment
   passes into one pass with N draws. Optimization on (#1); obsoleted
   by (#2).
-- **WASM-bridge stroke coalescing**: collapses consecutive
-  `BrushStroke` events in a single drain. Reduces *how many* events
-  hit the engine, doesn't change per-event cost. Still in effect.
+- **One stroke flush per frame**: the bridge no longer coalesces
+  `BrushStroke` events, and every pen sample reaches the stabilizer.
+  The engine renders them once per frame (`flush_stroke`, from
+  `render` and `end_stroke`), so the number of events between two
+  frames changes what the stabilizer sees, not how many times the
+  stroke rewinds and replays. See #10.
 
 ## Options to explore next
 

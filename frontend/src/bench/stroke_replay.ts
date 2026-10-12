@@ -87,7 +87,9 @@ async function main() {
     const adapter = `${info?.vendor ?? ''} ${info?.architecture ?? ''} ${info?.description ?? ''}`.trim();
 
     api.resize({ width: W, height: H });
-    api.setViewTransform({ pan_x: 0, pan_y: 0, zoom: 1, rotation: 0, mirror_h: false, screen_w: W, screen_h: H });
+    // One device pixel per CSS pixel, as the native matrix runs, so the
+    // stabilizer resamples at the same canvas spacing in both.
+    api.setViewTransform({ pan_x: 0, pan_y: 0, zoom: 1, rotation: 0, mirror_h: false, screen_w: W, screen_h: H, dpr: 1 });
     const layerId = await api.addRaster({ anchor: null });
     await api.brushLoad({ name: BRUSH });
     const sizePort = (2 * RADIUS) / DAB_REFERENCE_SIZE;

@@ -1006,7 +1006,7 @@ fn a_present_only_frame_still_finds_the_last_composite() {
     let before = engine.test_readback_present();
     let runs_before = engine.test_composite_runs();
 
-    engine.set_view_transform(4.0, 2.0, 1.0, 0.0, false, W as f32, H as f32);
+    engine.set_view_transform(4.0, 2.0, 1.0, 0.0, false, W as f32, H as f32, 1.0);
     engine.render(0.0);
     let after = engine.test_readback_present();
 

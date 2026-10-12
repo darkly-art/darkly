@@ -225,9 +225,8 @@ impl DarklyEngine {
         &mut self,
         mut pen: crate::brush::paint_info::PaintInformation,
     ) {
-        // Chord length between the previous and current hover positions.
-        // Chord rather than Catmull-Rom arc length: there is no spline
-        // through a single sample.
+        // Chord length between the previous and current hover positions:
+        // the same segment length the stroke engine derives from.
         let segment_length = match &self.last_cursor_preview_pose {
             Some(prev) => {
                 let dx = pen.pos[0] - prev.pos[0];

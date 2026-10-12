@@ -439,7 +439,7 @@ fn resize_rebuilds_view_transform_for_new_dims() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     // Sanity: screen center maps to the original canvas center (32, 32).
     let (cx0, cy0) = engine.screen_to_plane(sw / 2.0, sh / 2.0);
@@ -484,7 +484,7 @@ fn screen_to_plane_includes_canvas_origin() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     // Crop to a NON-ZERO origin window at plane (8, 4), size 40×40.
     engine.resize_canvas(CanvasRect::from_xywh(8, 4, 40, 40));
@@ -599,7 +599,7 @@ fn transform_preview_matches_pretransform_present_after_crop() {
     let (vw, vh) = (192u32, 192u32);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
 
     // Crop to a non-zero origin, then paint a small mark at the window center.
     engine.resize_canvas(CanvasRect::from_xywh(24, 16, 48, 48));
@@ -920,7 +920,7 @@ fn presented_cross_ratio(crop: Option<CanvasRect>) -> f32 {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
     // Production-like view: viewport 400, zoom 1, no pan/rotation/mirror.
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
     // resize_canvas rebuilds the view transform internally (production path);
     // the frontend $effect does NOT re-push set_view_transform on crop.
     let center = match crop {
@@ -971,7 +971,7 @@ fn successive_crops_do_not_compound_squash() {
     let (vw, vh) = (400u32, 400u32);
     let mut engine = test_engine(200, 200);
     let layer_id = engine.add_raster_layer(None);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
     engine.resize_canvas(CanvasRect::from_xywh(40, 30, 160, 100));
     engine.resize_canvas(CanvasRect::from_xywh(60, 50, 110, 70));
     paint_cross(&mut engine, layer_id, 115.0, 85.0, 8.0);

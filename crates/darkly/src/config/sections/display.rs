@@ -11,7 +11,7 @@ const PREFS: &[Pref] = &[Pref {
     display_name: "Zoom appearance",
     description: Some(
         "How the canvas looks when zoomed in or out. \
-         Auto keeps edges smooth at normal zoom and shows crisp pixels when zoomed in past 100%.",
+         Auto keeps edges smooth at normal zoom and shows crisp pixels when zoomed in to 200% or more.",
     ),
     kind: PrefKind::Enum {
         options: PIXEL_FILTER_OPTIONS,

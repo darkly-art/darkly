@@ -785,7 +785,7 @@ fn screen_to_plane_tracks_dims_through_rescale_and_undo() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     let (cx0, cy0) = engine.screen_to_plane(sw / 2.0, sh / 2.0);
     assert!(

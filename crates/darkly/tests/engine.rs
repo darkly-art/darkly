@@ -828,9 +828,65 @@ fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32,
             cb: 0.0,
             ca: 1.0,
         });
+        // A frame per sample, so a stroke that could rewind does.
+        engine.render(0.0);
     }
     engine.end_stroke();
     engine.render(0.0);
+}
+
+/// Regression: an unstabilized stroke must never rewind. Dabs lie on the
+/// straight segment between consecutive vertices, so a segment is final the
+/// moment both its endpoints exist; only a stabilizer that moves an
+/// already-rendered vertex can require a checkpoint restore, and the
+/// pass-through stabilizer never does.
+#[test]
+fn unstabilized_stroke_never_rewinds() {
+    let (w, h) = (256, 256);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(0.0),
+    );
+
+    paint_horizontal_stroke(&mut engine, layer_id, w, h);
+
+    assert_eq!(
+        engine.test_stroke_rewinds(),
+        0,
+        "a pass-through stroke has nothing behind its tip that can move"
+    );
+    assert_eq!(engine.test_stroke_full_rerender_events(), 0);
+}
+
+/// A pinned stroke seed makes a brush with `random` nodes paint the same
+/// pixels every time, and a different seed paints different ones.
+#[test]
+fn stroke_seed_pins_random_nodes() {
+    let (w, h) = (256, 256);
+    let paint = |seed: u32| {
+        let mut engine = test_engine(w, h);
+        let brush = darkly::brush::builtin_brushes::all()
+            .into_iter()
+            .find(|b| b.metadata.name == "Rough Ink")
+            .expect("Rough Ink is a builtin");
+        engine
+            .set_brush_graph(&serde_json::to_string(&brush.metadata.graph).unwrap())
+            .expect("Rough Ink compiles");
+        engine.set_stroke_seed(Some(seed));
+        let layer_id = engine.add_raster_layer(None);
+        paint_horizontal_stroke(&mut engine, layer_id, w, h);
+        engine.test_readback_layer(layer_id)
+    };
+    let first = paint(0x5eed);
+    assert!(first.chunks(4).any(|px| px[3] > 0), "the stroke painted");
+    assert_eq!(
+        first,
+        paint(0x5eed),
+        "the same seed repaints the same pixels"
+    );
+    assert_ne!(first, paint(0x5eed + 1), "another seed reshapes the nib");
 }
 
 /// Setting `brush_settings.spacing` to a larger ratio drops fewer dabs along the
@@ -939,11 +995,12 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     engine.render(0.0);
 
     let dabs = engine.test_stroke_total_dabs();
-    // The 1 px floor caps *fresh* dab placements at one per stroke pixel.
-    // `total_dabs` also counts dabs re-placed by the tip-divergence re-render
-    // (every pen event re-renders the tip segment with proper Catmull-Rom
-    // lookahead) and any checkpoint-restore replay, so the observed total is
-    // higher than the stroke length even when the floor holds.
+    // The 1 px floor caps dab placements at one per stroke pixel. An
+    // unstabilized stroke never rewinds, so no dab is placed twice, apart
+    // from the first segment re-placing the origin dab (it starts at
+    // `traveled = 0`): that one duplicate is the stroke engine's shape, so
+    // the bound is `stroke_length + 1`, plus one per event for the
+    // `leftover_distance` carry across segment boundaries.
     //
     // The bound below is the gross-regression guard: if `SpacingConfig::distance()`
     // ever returned a sub-pixel value (e.g. 0.5 px), this number would roughly
@@ -951,7 +1008,7 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     // `debug_assert!(step >= ABSOLUTE_MIN_SPACING_PX, …)` in
     // `stroke_engine::render_from_stabilized_*` is the precise per-step guard
     // and would trip first under cargo test (which runs with debug_assertions).
-    let max_expected = (stroke_length_px.ceil() as u64) * 4;
+    let max_expected = stroke_length_px.ceil() as u64 + samples as u64;
     assert!(
         dabs <= max_expected,
         "tiny-brush stroke emitted {dabs} dabs across {stroke_length_px:.0}px \
@@ -5379,8 +5436,8 @@ fn long_stabilized_stroke_no_fallback() {
     // the checkpoint ring's coverage invariant; this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
     let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
-    // Full-strength stabilization → max_divergence_window = 11 (iterations=10
-    // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
+    // Full-strength stabilization: the Laplacian's window is its sweep count
+    // plus one, widened by the resampler's per-event commit cap.
     engine
         .brush_graph_set_input(
             &settings_id,
@@ -5409,29 +5466,317 @@ fn long_stabilized_stroke_no_fallback() {
         let r = 20.0 + t * 200.0;
         let x = cx + r * theta.cos();
         let y = cy + r * theta.sin();
-        engine.stroke_to(StrokeOp::BrushStroke {
-            x,
-            y,
-            pressure: 1.0,
-            x_tilt: 0.0,
-            y_tilt: 0.0,
-            rotation: 0.0,
-            tangential_pressure: 0.0,
-            time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
-        });
+        engine.stroke_to(brush_sample(x, y, i as f64 * 16.0));
+        // A frame per sample: the rewinds this test is about happen at
+        // frames.
+        engine.render(0.0);
     }
     engine.end_stroke();
 
+    assert!(
+        engine.test_stroke_rewinds() > 0,
+        "the stroke must rewind, or the fallback count below proves nothing"
+    );
     assert_eq!(
         engine.test_stroke_full_rerender_events(),
         0,
         "long stabilized stroke must not trigger any mid-stroke full \
          re-render fallback; the coverage invariant guarantees \
          `restore_before` succeeds for every reachable divergence index"
+    );
+}
+
+/// Paint one stroke through `points` (canvas px) at a constant pen speed of
+/// 600 px/s, so the timestamps depend on the path, not on how densely it is
+/// sampled. A frame renders after every sample, so the stroke rewinds as an
+/// artist's stroke at one sample per frame does.
+fn paint_path(engine: &mut DarklyEngine, layer_id: LayerId, points: &[(f32, f32)]) {
+    engine.begin_stroke(layer_id).unwrap();
+    let mut arc = 0.0f32;
+    for (i, &(x, y)) in points.iter().enumerate() {
+        if i > 0 {
+            let (px, py) = points[i - 1];
+            arc += (x - px).hypot(y - py);
+        }
+        engine.stroke_to(brush_sample(x, y, 1000.0 + arc as f64 / 0.6));
+        engine.render(0.0);
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// A full-pressure red pen sample at `(x, y)` canvas px and `time_ms`.
+fn brush_sample(x: f32, y: f32, time_ms: f64) -> StrokeOp {
+    StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms,
+        cr: 1.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    }
+}
+
+/// An L path (right, then down) sampled every `step` px.
+fn l_path(step: f32) -> Vec<(f32, f32)> {
+    let n = (160.0 / step).round() as usize;
+    let mut pts: Vec<_> = (0..=n).map(|i| (40.0 + i as f32 * step, 60.0)).collect();
+    pts.extend((1..=n).map(|i| (200.0, 60.0 + i as f32 * step)));
+    pts
+}
+
+fn stabilized_engine(w: u32, h: u32) -> (DarklyEngine, LayerId) {
+    engine_at_strength(w, h, 1.0)
+}
+
+/// A raster layer on a fresh engine whose brush stabilizes at `strength`,
+/// with prediction off.
+fn engine_at_strength(w: u32, h: u32, strength: f32) -> (DarklyEngine, LayerId) {
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+    let settings_id = find_node_id(&engine, brush_settings::TYPE_ID);
+    engine
+        .brush_graph_set_input(
+            &settings_id,
+            "stabilize",
+            darkly::brush::input_value::InputValue::Scalar(strength),
+        )
+        .unwrap();
+    darkly::config::set(
+        "input.predictionHorizon",
+        darkly::config::ConfigValue::Float(0.0),
+    );
+    (engine, layer_id)
+}
+
+/// Regression: a stabilized stroke paints the same shape whether the pen was
+/// sampled sparsely (a frame-rate event stream) or densely (a device-rate
+/// one). Stabilization used to all but vanish on dense input, cutting the
+/// corner of this L by about 15 px less.
+///
+/// The end cap is excluded. Vertices that moved less than the divergence
+/// epsilon are not re-rendered, so segment lengths differ by fractions of a
+/// pixel between the two event histories, and the final dab lands up to one
+/// dab spacing earlier or later along the last segment.
+#[test]
+fn stabilized_stroke_pixels_do_not_depend_on_sample_density() {
+    let (w, h) = (256, 256);
+    let (mut sparse, sparse_layer) = stabilized_engine(w, h);
+    paint_path(&mut sparse, sparse_layer, &l_path(10.0));
+    let (mut dense, dense_layer) = stabilized_engine(w, h);
+    paint_path(&mut dense, dense_layer, &l_path(1.25));
+
+    let a = sparse.test_readback_layer(sparse_layer);
+    let b = dense.test_readback_layer(dense_layer);
+    let end = (200.0f32, 220.0f32);
+    let differing = a
+        .chunks(4)
+        .zip(b.chunks(4))
+        .enumerate()
+        .filter(|(i, (pa, pb))| {
+            let (x, y) = ((*i as u32 % w) as f32, (*i as u32 / w) as f32);
+            (x - end.0).hypot(y - end.1) > 30.0 && pa[3].abs_diff(pb[3]) > 64
+        })
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels away from the end cap differ between 1x and 8x sampling of the same path"
+    );
+}
+
+/// Checkpoint coverage holds when the pinned tip is replaced in place: many
+/// events inside the first resample spacing, a slow phase that replaces the
+/// tip on most events, and a fast phase that commits several vertices per
+/// event.
+#[test]
+fn resampled_stroke_keeps_checkpoint_coverage() {
+    let (w, h) = (512, 512);
+    let (mut engine, layer_id) = stabilized_engine(w, h);
+    let (cx, cy) = ((w / 2) as f32, (h / 2) as f32);
+    let mut points = Vec::new();
+    // Within the first spacing of the origin.
+    for i in 0..8 {
+        points.push((cx + i as f32 * 0.6, cy));
+    }
+    // Slow spiral, about 1 px per event.
+    let (mut theta, mut r) = (0.0f32, 20.0f32);
+    for _ in 0..400 {
+        theta += 1.0 / r;
+        r += 0.05;
+        points.push((cx + r * theta.cos(), cy + r * theta.sin()));
+    }
+    // Fast phase: about 40 px per event, several commits each.
+    for _ in 0..40 {
+        theta += 40.0 / r;
+        points.push((cx + r * theta.cos(), cy + r * theta.sin()));
+    }
+    paint_path(&mut engine, layer_id, &points);
+
+    assert!(
+        engine.test_stroke_rewinds() > 0,
+        "the stroke must rewind, or the fallback count below proves nothing"
+    );
+    assert_eq!(
+        engine.test_stroke_full_rerender_events(),
+        0,
+        "every reachable divergence must find a checkpoint below it"
+    );
+}
+
+/// Sample `i` of a gentle wave left to right, 3 px of travel and 5 ms apart.
+fn wave_sample(i: usize) -> StrokeOp {
+    let x = 40.0 + i as f32 * 3.0;
+    brush_sample(
+        x,
+        128.0 + 30.0 * (i as f32 * 0.05).sin(),
+        1000.0 + i as f64 * 5.0,
+    )
+}
+
+/// Regression: pen samples that arrive between two frames are rendered
+/// once, at the frame. Rendering each sample as it arrived rewound and
+/// replayed the stroke per sample, several times a frame on a tablet whose
+/// event rate exceeds the display's.
+#[test]
+fn samples_between_frames_render_once() {
+    let (mut engine, layer_id) = stabilized_engine(384, 256);
+    engine.begin_stroke(layer_id).unwrap();
+    for i in 0..40 {
+        engine.stroke_to(wave_sample(i));
+    }
+    engine.render(0.0);
+    for i in 40..80 {
+        engine.stroke_to(wave_sample(i));
+    }
+    engine.render(0.0);
+    engine.end_stroke();
+
+    assert_eq!(
+        engine.test_stroke_rewinds(),
+        1,
+        "the first frame has nothing rendered to rewind; the second rewinds once"
+    );
+}
+
+/// Paint the wave `samples` long, rendering after every `frame` samples (0:
+/// only at pen-up), and return the layer pixels.
+fn paint_wave_in_frames(strength: f32, samples: usize, frame: usize) -> Vec<u8> {
+    let (mut engine, layer_id) = engine_at_strength(384, 256, strength);
+    engine.begin_stroke(layer_id).unwrap();
+    for i in 0..samples {
+        engine.stroke_to(wave_sample(i));
+        if frame > 0 && (i + 1) % frame == 0 {
+            engine.render(0.0);
+        }
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+    engine.test_readback_layer(layer_id)
+}
+
+/// Batching samples into frames paints what rendering every sample paints.
+/// Unstabilized, the two are byte-identical: nothing rendered ever moves.
+/// Stabilized, the two event histories re-render vertices at different
+/// moments, so sub-epsilon drift differs; the contract is the shape, away
+/// from the end cap where the last dab lands.
+#[test]
+fn batched_frames_paint_what_per_sample_frames_paint() {
+    assert_eq!(
+        paint_wave_in_frames(0.0, 80, 1),
+        paint_wave_in_frames(0.0, 80, 0),
+        "unstabilized: one flush at pen-up must paint exactly what per-sample flushes paint"
+    );
+
+    let per_sample = paint_wave_in_frames(1.0, 80, 1);
+    let batched = paint_wave_in_frames(1.0, 80, 7);
+    let end = (40.0 + 79.0 * 3.0, 128.0 + 30.0 * (79.0f32 * 0.05).sin());
+    let differing = per_sample
+        .chunks(4)
+        .zip(batched.chunks(4))
+        .enumerate()
+        .filter(|(i, (a, b))| {
+            let (x, y) = ((*i as u32 % 384) as f32, (*i as u32 / 384) as f32);
+            (x - end.0).hypot(y - end.1) > 30.0 && a[3].abs_diff(b[3]) > 64
+        })
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels away from the end cap differ between per-sample and batched frames"
+    );
+}
+
+/// Checkpoint coverage holds when a frame commits many vertices at once:
+/// a first frame that commits several before anything is rendered, or one
+/// that holds a single sample, then a slow phase and a fast one, all at a
+/// frame every four samples.
+#[test]
+fn batched_commits_keep_checkpoint_coverage() {
+    for first_frame in [4usize, 1] {
+        let (w, h) = (512, 512);
+        let (mut engine, layer_id) = stabilized_engine(w, h);
+        let (cx, cy) = ((w / 2) as f32, (h / 2) as f32);
+        let mut points = Vec::new();
+        // The first frame: fast, about 40 px per sample.
+        for i in 0..first_frame {
+            points.push((cx - 160.0 + i as f32 * 40.0, cy));
+        }
+        // Slow spiral, about 1 px per sample.
+        let (mut theta, mut r) = (0.0f32, 20.0f32);
+        for _ in 0..300 {
+            theta += 1.0 / r;
+            r += 0.05;
+            points.push((cx + r * theta.cos(), cy + r * theta.sin()));
+        }
+        // Fast phase: about 40 px per sample.
+        for _ in 0..60 {
+            theta += 40.0 / r;
+            points.push((cx + r * theta.cos(), cy + r * theta.sin()));
+        }
+
+        engine.begin_stroke(layer_id).unwrap();
+        for (i, &(x, y)) in points.iter().enumerate() {
+            engine.stroke_to(brush_sample(x, y, 1000.0 + i as f64 * 4.0));
+            if i + 1 == first_frame || (i + 1 > first_frame && (i + 1 - first_frame) % 4 == 0) {
+                engine.render(0.0);
+            }
+        }
+        engine.end_stroke();
+
+        assert!(
+            engine.test_stroke_rewinds() > 0,
+            "first frame of {first_frame}: the stroke must rewind"
+        );
+        assert_eq!(
+            engine.test_stroke_full_rerender_events(),
+            0,
+            "first frame of {first_frame}: every reachable divergence must find a checkpoint below it"
+        );
+    }
+}
+
+/// Pen-up paints every sample, even ones no frame has rendered yet.
+#[test]
+fn end_stroke_paints_unrendered_samples() {
+    let (mut engine, layer_id) = stabilized_engine(384, 256);
+    engine.begin_stroke(layer_id).unwrap();
+    for i in 0..20 {
+        engine.stroke_to(wave_sample(i));
+    }
+    engine.end_stroke();
+    let painted = engine
+        .test_readback_layer(layer_id)
+        .chunks(4)
+        .filter(|p| p[3] > 0)
+        .count();
+    assert!(
+        painted > 0,
+        "the stroke must land at pen-up without a frame"
     );
 }
 

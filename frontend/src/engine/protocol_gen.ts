@@ -1032,7 +1032,7 @@ export type SetTextStyleReq = { id: number, object: number, font_family?: string
  */
 variations?: { [key in string]: number }, features?: { [key in string]: number }, letter_spacing?: number, word_spacing?: number, line_height?: number, italic?: boolean, align?: string, color?: [number, number, number, number], };
 
-export type SetViewTransformReq = { pan_x: number, pan_y: number, zoom: number, rotation: number, mirror_h: boolean, screen_w: number, screen_h: number, };
+export type SetViewTransformReq = { pan_x: number, pan_y: number, zoom: number, rotation: number, mirror_h: boolean, screen_w: number, screen_h: number, dpr: number, };
 
 export type SetViewportBgReq = { bg: [number, number, number, number], };
 

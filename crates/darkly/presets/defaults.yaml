@@ -157,7 +157,7 @@ settings:
   # Input.
   input.fingerPainting: true
   # Stroke prediction look-ahead in ms (0 = off). See config/sections/input.rs.
-  input.predictionHorizon: 15.0
+  input.predictionHorizon: 10.0
   # Editing.
   edit.activateTransformAfterPaste: true
   # Colors.

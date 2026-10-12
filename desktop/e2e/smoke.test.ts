@@ -6,7 +6,8 @@
  * `make install` stages, so the installed tree is what boots.
  *
  * Scope: verify that the desktop wrapper boots, a window opens with the
- * expected title, and the preload bridge exposes window.electronAPI.storage.
+ * expected title, the preload bridge exposes window.electronAPI.storage, and
+ * on Linux the GPU launch profile's switches reach Chromium.
  * NOT a feature test: does not touch WebGPU, canvas rendering, drawing, or
  * file I/O. Feature behavior (including canvas mount) lives in the public
  * repo's Vitest suite, where a real GPU/Vulkan stack is available.
@@ -44,10 +45,15 @@ function packagedBinary(): string {
 }
 
 /** Env for the child Electron process, explicitly free of any leakage
- *  that would make it act as Node instead of Electron. */
+ *  that would make it act as Node instead of Electron. The GPU launch
+ *  profile and device pinning are fixed up front: either would otherwise
+ *  relaunch the app out from under Playwright on some machines (see
+ *  src/gpu-launch.ts). */
 function launchEnv(): NodeJS.ProcessEnv {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
+    env.DARKLY_GPU_PROFILE = 'vulkan';
+    env.MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE ??= '1';
     return env;
 }
 
@@ -87,6 +93,18 @@ test('packaged app launches, renders, and exposes the storage bridge', async () 
                 .electronAPI?.storage?.read === 'function'
         );
         expect(hasBridge).toBe(true);
+
+        // The Linux launch profile reaches Chromium's command line, and the
+        // unsafe-webgpu switch, which only ever handed out a software adapter
+        // where there was no hardware one, is gone.
+        if (process.platform === 'linux') {
+            const switches = await app.evaluate(({ app }) => ({
+                unsafe: app.commandLine.hasSwitch('enable-unsafe-webgpu'),
+                features: app.commandLine.getSwitchValue('enable-features'),
+            }));
+            expect(switches.unsafe).toBe(false);
+            expect(switches.features).toContain('Vulkan');
+        }
     } finally {
         await app?.close();
     }

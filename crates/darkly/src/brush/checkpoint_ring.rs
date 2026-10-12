@@ -640,15 +640,15 @@ impl CheckpointRing {
         max_divergence_window: usize,
     ) -> Vec<usize> {
         let spacing = Self::spacing(max_divergence_window);
-        let range = tip_vi.saturating_sub(start_vi);
-        if range == 0 {
-            return vec![];
-        }
-
         let mut boundaries = Vec::new();
-        // Coverage anchor: see invariant above.
+        // Coverage anchor: see invariant above. Pushed even when the range
+        // holds only `vi = 0`: a stroke's first flush can render a single
+        // vertex, and the anchor is what its later rewinds restore to.
         if start_vi == 0 {
             boundaries.push(0);
+        }
+        if tip_vi <= start_vi {
+            return boundaries;
         }
         let mut pos = start_vi + spacing;
         while pos < tip_vi {

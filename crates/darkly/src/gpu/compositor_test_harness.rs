@@ -11,9 +11,10 @@ use crate::layer::LayerId;
 impl Compositor {
     /// Run the present pass (`present.wgsl` via the current `view_uniform_buf`)
     /// into a `target_w × target_h` offscreen RGBA8 texture and return its
-    /// bytes. Assumes the composite cache and view uniform are already current.
+    /// bytes. Assumes the composite cache and view uniform are already current;
+    /// brings the root mip chain up to date the way the production present does.
     fn present_into_target(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_w: u32,
@@ -31,6 +32,7 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("test-present"),
         });
+        self.ensure_present_mips(device, &mut encoder);
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("test-present-pass"),

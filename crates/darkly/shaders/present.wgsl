@@ -18,7 +18,9 @@ struct ViewTransform {
     row1: vec4f,
     row2: vec4f,
     bg: vec4f,
-    // flags.x = pixel filter mode (0=linear, 1=nearest, 2=auto)
+    // flags.x = mip level to read (integer-valued: floor of log2 of canvas
+    //           texels per screen pixel, 0 when not minifying)
+    // flags.y = 1 to snap the sample to a texel centre, 0 to filter
     flags: vec4f,
 }
 
@@ -37,21 +39,15 @@ struct ViewTransform {
     let uv = vec2f(canvas_x, canvas_y) / tex_dims;
     let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
 
-    // Pixel filter selection:
-    //   mode 0 = linear: sample as-is.
-    //   mode 1 = nearest: snap UV to texel center so the bound linear
-    //           sampler returns the unfiltered texel value.
-    //   mode 2 = auto:   nearest when zoomed in past 1:1, otherwise linear.
-    //
-    // The inverse view matrix scales screen→canvas by 1/zoom, so the
-    // magnitude of `row0.xy` (which equals `inv_zoom * (cos, sin)`) is
-    // `inv_zoom`. inv_zoom < 1 means zoom > 1 (zoomed in).
-    let mode = u32(view.flags.x + 0.5);
-    let inv_zoom = length(vec2f(view.row0.x, view.row0.y));
-    let use_nearest = mode == 1u || (mode == 2u && inv_zoom < 1.0);
+    // The sampling policy is decided on the CPU (`ViewTransform::stamp_sampling`)
+    // and arrives as two numbers. Snapping the UV to a level-0 texel centre
+    // makes the linear sampler return that texel unfiltered; the explicit
+    // level selects the box-reduced mip the minified footprint needs.
+    let lod = view.flags.x;
+    let use_nearest = view.flags.y > 0.5;
     let snapped_uv = (floor(clamped_uv * tex_dims) + vec2f(0.5)) / tex_dims;
     let sample_uv = select(clamped_uv, snapped_uv, use_nearest);
-    let color = textureSample(t_source, t_sampler, sample_uv);
+    let color = textureSampleLevel(t_source, t_sampler, sample_uv, lod);
 
     // OOB check uses actual canvas dimensions (unpadded) so the tile
     // padding area shows as workspace background, not black.

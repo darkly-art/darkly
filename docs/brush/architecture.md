@@ -48,18 +48,24 @@ Four pieces to keep in mind:
  begin_stroke(layer_id)
    │
    ├─► compile active graph → BrushGraphRunner
-   ├─► create StrokeBuffer (scratch + pre-stroke snapshot of the layer)
-   └─► first event only: runner.begin_stroke(gpu_ctx)
-          // every terminal's begin_stroke hook fires:
-          //   color_output → clear scratch to transparent
-          //   liquify      → copy layer into scratch
+   └─► create StrokeBuffer (scratch + pre-stroke snapshot of the layer)
 
  for each pen event (brush_stroke_to):
    │
-   ├─► stabilizer.feed(event) → smoothed polyline, maybe a divergence index
-   ├─► StrokeEngine.render_from_stabilized_tail(gpu_ctx)
-   │      │
-   │      ├─► for each dab position on the spline:
+   └─► record the event; nothing stabilizes or renders
+
+ each frame, and at pen-up (flush_stroke), if events arrived since the last:
+   │
+   ├─► first flush only: runner.begin_stroke(gpu_ctx)
+   │      // every terminal's begin_stroke hook fires:
+   │      //   color_output → clear scratch to transparent
+   │      //   liquify      → copy layer into scratch
+   ├─► StrokeEngine.take_divergence() → stabilizer.push_all(events since
+   │      the last flush), then the earliest rendered vertex that moved
+   │      since it was rendered, else append-only
+   ├─► StrokeEngine.render_from_stabilized_range(gpu_ctx, first_new)
+   │      │   (after restoring a checkpoint on divergence)
+   │      ├─► for each dab position on the segment:
    │      │     ├─► runner.seed_sensors(PaintInformation)
    │      │     ├─► runner.execute_cpu()     // scalars (size, opacity, …)
    │      │     └─► runner.execute_gpu(ctx)  // render passes recorded in ctx.encoder
@@ -75,6 +81,8 @@ Four pieces to keep in mind:
 
  end_stroke:
    │
+   ├─► flush_stroke: render the events no frame has, as one segment
+   │     with no checkpoint (nothing can diverge after pen-up)
    ├─► save_point → undo ring (bbox + checkpoint)
    └─► drop StrokeBuffer
 ```
@@ -484,7 +492,11 @@ Each pipeline owns a `DynamicUniformRing` (~256 slots). A dab's uniform block
 is written to the next slot; the dynamic offset is passed to `set_bind_group`.
 This means all dabs in a stroke segment go through **one** encoder and **one**
 `queue.submit()`, instead of per-dab submission. When any ring nears capacity
-the engine flushes mid-stroke (cheap: a few per 1000 dabs).
+the engine flushes mid-stroke (cheap: a few per 1000 dabs). Dab-batching
+terminals hold their queue on the CPU in a buffer sized to
+`MAX_DABS_PER_PHASE`; `StrokeEngine::place_dab` flushes the terminals and
+submits when a phase reaches it, which only a whole path rendered in one
+phase does: the brush preview, or a stroke no frame ran during.
 
 ### `ensure_canvas_copy`
 
@@ -523,20 +535,13 @@ render pass.
 
 ## Dab spacing
 
-The stroke engine places dabs at a fixed distance along the Catmull-Rom
-interpolated polyline. The distance is derived from the brush's **own
-reported `dab_size`**:
-
-```rust
-for node_type in &["procedural", "stamp", "liquify"] {
-    if let Some(slot) = runner.find_output_slot(node_type, "dab_size") { ... }
-}
-```
-
-Any terminal-ish node that wants its footprint to drive spacing must expose
-a `dab_size: Vec2` output **and** have its `type_id` listed here. Forgetting
-to list it means dabs get placed one per input event instead of at uniform
-intervals; strokes will look choppy.
+The stroke engine places dabs at a fixed distance along the straight
+segments between consecutive stabilized vertices, every field interpolated
+linearly along the segment. The distance is derived from the brush's **own
+reported `dab_size`**: the runner caches, at build time, the slot of
+whichever terminal publishes a `dab_size: Vec2` output, and the stroke engine
+reads it after every dab (`BrushGraphRunner::last_dab_size`). A terminal that
+wants its footprint to drive spacing only has to publish that port.
 
 ## Undo and save points
 

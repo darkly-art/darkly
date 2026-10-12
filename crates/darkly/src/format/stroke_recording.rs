@@ -213,6 +213,10 @@ pub fn replay(
         let op = ev.to_stroke_op(scale);
         let t = Instant::now();
         engine.stroke_to(op);
+        // A frame per event: the recording carries one event per frame, so
+        // each event's timing is a frame's stroke work, rewind and replay
+        // included.
+        engine.flush_stroke(false);
         if let Some(hook) = after_event.as_deref_mut() {
             hook();
         }

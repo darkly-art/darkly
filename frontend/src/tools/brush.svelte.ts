@@ -258,14 +258,33 @@ class BrushTool extends ToolBase {
         const engine = this.engine;
         if (!engine) return;
         if (e.buttons & 1) {
-            const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
-            engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
-            strokeRecorder.addEvent(params);
+            const color = this.inst.consumeForeground();
+            // Device-rate samples the browser folded into this pointermove,
+            // oldest first; the dispatched event is the last of them. A
+            // browser without the method, or one that hands back an empty
+            // list, gets the dispatched event alone.
+            const coalesced = e.getCoalescedEvents?.() ?? [];
+            if (coalesced.length === 0) {
+                this.sendStrokeSample(e, cx, cy, color);
+            } else {
+                for (const sample of coalesced) {
+                    const p = this.screenToCanvas(sample.clientX, sample.clientY);
+                    this.sendStrokeSample(sample, p.x, p.y, color);
+                }
+            }
             onCloneStrokeMove(cx, cy);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
         void runHook(this.pushHoverOverlay(cursorPose(e), cx, cy));
+    }
+
+    /** Forward one pen sample of an in-progress stroke to the engine and
+     *  the stroke recorder. */
+    private sendStrokeSample(e: PointerEvent, cx: number, cy: number, c: Color): void {
+        const params = brushStrokeParams(e, cx, cy, c);
+        this.engine?.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
+        strokeRecorder.addEvent(params);
     }
 
     onPointerUp(): void {

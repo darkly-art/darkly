@@ -586,6 +586,11 @@ pub struct DarklyEngine {
     /// `brush_stroke_to`).
     pub(crate) clone_source_anchor: Option<crate::coord::CanvasPoint>,
 
+    /// Seed for every following stroke's `random` nodes, or `None` (the
+    /// default) for a fresh wall-clock seed per stroke. Session state, set
+    /// by an embedder that needs reproducible renders.
+    pub(crate) stroke_seed: Option<u32>,
+
     /// Layer pinned by the clone set-source gesture, or `None` for
     /// same-layer clone. Session state like the anchor: persists across
     /// strokes and brush / tool switches, never serialized. Kept across
@@ -621,6 +626,12 @@ pub struct DarklyEngine {
     /// rewind path against it byte for byte.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) test_full_rerender: bool,
+    /// Overrides the distance a rendered stroke vertex may drift before it
+    /// is re-rendered, for strokes begun after it is set. Zero re-renders
+    /// every vertex that moved at all, which makes a stabilized stroke's
+    /// incremental rewinds comparable byte for byte with a full re-render.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) test_divergence_epsilon: Option<f32>,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
@@ -684,6 +695,11 @@ pub struct DarklyEngine {
     /// when the checkpoint ring's coverage invariant fails; surfaced
     /// via `test_stroke_full_rerender_events`.
     pub(crate) brush_full_rerender_events: u32,
+
+    /// Checkpoint rewinds attempted during this stroke: every stroke flush
+    /// that found a rendered vertex moved since it was rendered. Surfaced via
+    /// `test_stroke_rewinds`.
+    pub(crate) brush_rewinds: u32,
 
     /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
     /// call. Subtracted from the current accumulator on each drain to
@@ -810,6 +826,7 @@ impl DarklyEngine {
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
             clone_source_anchor: None,
+            stroke_seed: None,
             clone_source_layer: None,
             diff_rect,
             pending_undo_commit: None,
@@ -836,8 +853,11 @@ impl DarklyEngine {
             layer_growth_capped: false,
             brush_perf: BrushPerfCounters::default(),
             brush_full_rerender_events: 0,
+            brush_rewinds: 0,
             #[cfg(any(test, feature = "testing"))]
             test_full_rerender: false,
+            #[cfg(any(test, feature = "testing"))]
+            test_divergence_epsilon: None,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
             recorder: ProcessRecorder::new(),
@@ -1299,6 +1319,19 @@ impl DarklyEngine {
         self.compositor.composite_runs()
     }
 
+    /// Root mip chains actually regenerated for the present: see
+    /// [`crate::gpu::compositor::Compositor::present_mip_runs`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_present_mip_runs(&self) -> u64 {
+        self.compositor.present_mip_runs()
+    }
+
+    /// Mip levels the root composite texture was allocated with.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_root_mip_levels(&self) -> u32 {
+        self.compositor.composited_texture().mip_level_count()
+    }
+
     /// Group walks that resumed from a captured prefix. Lets a reuse test
     /// prove it exercised the resume path rather than silently full-walking.
     #[cfg(any(test, feature = "testing"))]
@@ -1418,12 +1451,26 @@ impl DarklyEngine {
         self.test_full_rerender = on;
     }
 
+    /// Override the stroke divergence epsilon in canvas px (see the
+    /// `test_divergence_epsilon` field). Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_set_divergence_epsilon(&mut self, epsilon: f32) {
+        self.test_divergence_epsilon = Some(epsilon);
+    }
+
     /// Count of mid-stroke full-re-render fallbacks observed during the
     /// most recent stroke. Used by integration tests to assert that the
     /// checkpoint ring's coverage invariant kept fallback at zero across
     /// a stroke.
     pub fn test_stroke_full_rerender_events(&self) -> u32 {
         self.brush_full_rerender_events
+    }
+
+    /// Count of checkpoint rewinds (restore attempts) during the most
+    /// recent stroke: at most one per stroke flush, so at most one per frame.
+    /// An unstabilized stroke never diverges, so it must read zero.
+    pub fn test_stroke_rewinds(&self) -> u32 {
+        self.brush_rewinds
     }
 
     /// Total dabs placed during the most recent stroke. `brush_perf` is

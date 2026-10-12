@@ -219,7 +219,7 @@ impl Compositor {
         // Void sources are stored premultiplied, so texels average as-is: no
         // premultiply/un-premultiply round trip.
         self.rescale_pass
-            .generate_mip_chain(device, queue, &mut encoder, &tex, levels, true);
+            .generate_mip_chain(device, &mut encoder, &tex, levels, true);
         queue.submit([encoder.finish()]);
     }
 

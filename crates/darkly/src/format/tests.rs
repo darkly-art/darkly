@@ -189,7 +189,7 @@ fn round_trip_every_stabilizer() {
         // happy-path equivalent of what `start_save` → reload will run
         // through in Phase 3+.
         let _stab = registry
-            .create(&payload.type_id, &payload.params)
+            .create(&payload.type_id, &payload.params, 1.0)
             .unwrap_or_else(|| panic!("registry rejected its own '{type_id}'"));
     }
 }

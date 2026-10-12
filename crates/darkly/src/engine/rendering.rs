@@ -84,6 +84,7 @@ impl DarklyEngine {
         mirror_h: bool,
         screen_w: f32,
         screen_h: f32,
+        dpr: f32,
     ) {
         let rotation_changed = self.view_params.rotation != rotation;
         self.view_params = ViewParams {
@@ -94,6 +95,7 @@ impl DarklyEngine {
             mirror_h,
             screen_w,
             screen_h,
+            dpr,
         };
         self.rebuild_view_transform();
         // The cursor-preview mask was baked with the old view rotation;
@@ -680,6 +682,14 @@ impl DarklyEngine {
         // recorded into `self.last_frame_phases` even on fast frames: the
         // WASM bridge decides whether to emit; nominal cost is a handful
         // of `Instant::now()` calls.
+        //
+        // The brush stroke renders first: the events that arrived since the
+        // last frame, in one rewind and replay, before anything reads the
+        // layer this frame.
+        let t_stroke = web_time::Instant::now();
+        self.flush_stroke(false);
+        let stroke_us = t_stroke.elapsed().as_micros() as u64;
+
         let t_poll = web_time::Instant::now();
         let pending_completed = self.poll_pending();
         if pending_completed {
@@ -716,6 +726,7 @@ impl DarklyEngine {
             (Some(s), Some(c)) => (s, c),
             _ => {
                 self.last_frame_phases = super::FrameRenderPhases {
+                    stroke_us,
                     poll_us,
                     thumb_us,
                     anim_us: 0,
@@ -734,6 +745,7 @@ impl DarklyEngine {
         // 0-dimension textures and attempting to do so corrupts the device.
         if surface_config.width == 0 || surface_config.height == 0 {
             self.last_frame_phases = super::FrameRenderPhases {
+                stroke_us,
                 poll_us,
                 thumb_us,
                 anim_us: 0,
@@ -762,6 +774,7 @@ impl DarklyEngine {
         let compositor_us = t_comp.elapsed().as_micros() as u64;
 
         self.last_frame_phases = super::FrameRenderPhases {
+            stroke_us,
             poll_us,
             thumb_us,
             anim_us,

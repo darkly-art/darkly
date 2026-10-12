@@ -75,6 +75,9 @@ impl BrushPerfDelta {
 /// without having to plumb a return value out of `render`.
 #[derive(Default, Clone, Copy)]
 pub struct FrameRenderPhases {
+    /// The brush stroke's per-frame flush: rewind, replay and commit of the
+    /// events that arrived since the last frame.
+    pub stroke_us: u64,
     pub poll_us: u64,
     pub thumb_us: u64,
     pub anim_us: u64,

@@ -365,8 +365,8 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// not per-dab sampling.
     fn begin_stroke(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
-    /// Per-pen-event commit. Called after every event's dabs have rendered
-    /// into the scratch. The terminal pushes the scratch onto the layer
+    /// Per-flush commit. Called after every stroke flush's dabs have
+    /// rendered into the scratch. The terminal pushes the scratch onto the layer
     /// however its semantics require. Non-terminal nodes default to no-op.
     ///
     /// Inputs reflect the LAST dab's evaluated slot values: `commit`
@@ -379,9 +379,8 @@ pub trait BrushNodeEvaluator: Send + Sync {
 
     /// Flush any per-rendering-phase work the terminal has queued during
     /// the preceding `evaluate_gpu` calls. Called at the end of every
-    /// dab-rendering phase (`render_from_stabilized_range_to`,
-    /// `render_from_stabilized_tail`) just before that phase's
-    /// `submit_final`.
+    /// dab-rendering phase (`render_from_stabilized_range_to`) just before
+    /// that phase's `submit_final`.
     ///
     /// Dab-batching terminals (paint, watercolor_batched) use this to dispatch their
     /// batched work; fragment-path terminals that already record per-dab
@@ -1264,7 +1263,7 @@ impl BrushGraphRunner {
     }
 
     /// Dispatch `commit` to every GPU node's evaluator in topological
-    /// order. Runs once per pen event after that event's dabs have
+    /// order. Runs once per stroke flush after that flush's dabs have
     /// finished compositing into the scratch.
     pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
         // Gather inputs from the slot table so terminals that read

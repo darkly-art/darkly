@@ -5,6 +5,44 @@
 /// Fallback workspace color used until the frontend pushes the theme-sourced
 /// color via `set_viewport_bg()`.
 pub const DEFAULT_WORKSPACE_BG: [f32; 4] = [0.11, 0.11, 0.11, 1.0];
+
+/// How the present shader samples the composite when magnifying: the parsed
+/// `display.pixelFilter` preference. Minification always reads the composite's
+/// mip chain, whatever the mode; the modes only differ in whether a zoomed-in
+/// texel is shown as a hard square (`Nearest`) or blended with its neighbours
+/// (`Linear`), with `Auto` switching to hard squares from
+/// [`AUTO_NEAREST_ZOOM`], where texels tile the screen evenly.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum PixelFilter {
+    Linear,
+    Nearest,
+    #[default]
+    Auto,
+}
+
+impl PixelFilter {
+    /// Parse a `display.pixelFilter` value; anything unrecognised is `Auto`.
+    pub fn parse(mode: &str) -> Self {
+        match mode {
+            "linear" => PixelFilter::Linear,
+            "nearest" => PixelFilter::Nearest,
+            _ => PixelFilter::Auto,
+        }
+    }
+}
+
+/// Zoom at or above which [`PixelFilter::Auto`] snaps to texel centres. Below
+/// it nearest sampling cannot duplicate texels evenly (at 1.5x alternate
+/// texels are one and two screen pixels wide) and every edge staircases.
+/// Krita (`KisOpenGLCanvasRenderer::drawImageTiles`,
+/// `SCALE_MORE_OR_EQUAL_TO(.., 2.0)`) and GEGL (`gegl_buffer_get_unlocked`,
+/// `GEGL_BUFFER_FILTER_AUTO` at `scale >= 2.0`) both switch at 2x.
+pub const AUTO_NEAREST_ZOOM: f32 = 2.0;
+
+/// Tolerance added before flooring the mip level, so a rotation whose
+/// `cos^2 + sin^2` rounds a hair under 1 cannot drop an exact power-of-two
+/// zoom to the finer level.
+const LOD_EPSILON: f32 = 1e-4;
 /// Decomposed view parameters: the session-state inputs from which the
 /// present [`ViewTransform`] is derived. Retained so the matrix can be rebuilt
 /// whenever *either* input changes: pointer-driven pan/zoom/rotation (via
@@ -21,6 +59,10 @@ pub struct ViewParams {
     pub mirror_h: bool,
     pub screen_w: f32,
     pub screen_h: f32,
+    /// Device pixels per CSS pixel. `screen_w/h`, pan and zoom are in device
+    /// pixels; input that should feel the same on every display (stroke
+    /// resampling) is measured in CSS pixels through this ratio.
+    pub dpr: f32,
 }
 
 impl Default for ViewParams {
@@ -33,6 +75,7 @@ impl Default for ViewParams {
             mirror_h: false,
             screen_w: 1.0,
             screen_h: 1.0,
+            dpr: 1.0,
         }
     }
 }
@@ -50,11 +93,11 @@ pub struct ViewTransform {
     /// (overlay forward-matrix, etc.) ignore this field. Owned by the
     /// compositor and stamped onto every transform on upload.
     pub bg: [f32; 4],
-    /// Per-present flags consumed by the present shader. Stamped by the
-    /// compositor on upload, parallel to `bg`.
-    /// `flags[0]` = pixel filter mode: 0 = linear, 1 = nearest, 2 = auto
-    /// (nearest when zoom > 1, linear otherwise, decided in the shader
-    /// from the inverse-zoom magnitude of `row0.xy`).
+    /// Per-present sampling decisions consumed by the present shader, written
+    /// by [`Self::stamp_sampling`] on upload, parallel to `bg`.
+    /// `flags[0]` = mip level to read (an integer-valued float, see
+    /// [`Self::present_lod`]); `flags[1]` = 1 to snap the sample to a texel
+    /// centre, 0 to filter.
     pub flags: [f32; 4],
 }
 
@@ -126,6 +169,51 @@ impl ViewTransform {
             bg: DEFAULT_WORKSPACE_BG,
             flags: [0.0; 4],
         }
+    }
+
+    /// Canvas texels per screen pixel: the magnitude of the inverse matrix's
+    /// first row, `inv_zoom * (cos, sin)`. One number, because the view is a
+    /// similarity (uniform scale, rotation, optional mirror), so a screen
+    /// pixel's footprint on the canvas is an isotropic square of this side.
+    pub fn inv_zoom(&self) -> f32 {
+        let m = &self.matrix;
+        (m[0][0] * m[0][0] + m[0][1] * m[0][1]).sqrt()
+    }
+
+    /// Mip level the present samples: `floor(log2(texels per pixel))`, 0 at
+    /// or above 1:1. A bilinear tap at level `L` spans `2^(L+1)` canvas
+    /// texels, which exceeds the `inv_zoom < 2^(L+1)` footprint, so no texel
+    /// is ever skipped. One level sampled bilinearly, rather than a blend of
+    /// two, is what GEGL (`gegl_buffer_get_unlocked`, halving while
+    /// `scale <= 0.5`) and Krita's High Quality mode
+    /// (`GL_LINEAR_MIPMAP_NEAREST`) do; it keeps the 1:2 to 1:1 range a
+    /// plain level-0 tap.
+    pub fn present_lod(&self) -> f32 {
+        let inv_zoom = self.inv_zoom();
+        if inv_zoom <= 1.0 {
+            0.0
+        } else {
+            (inv_zoom.log2() + LOD_EPSILON).floor()
+        }
+    }
+
+    /// Write the sampling decisions for `filter` into `flags`: the mip level
+    /// and whether to snap to texel centres. Snapping is a magnification-only
+    /// idea (a level-0 texel centre means nothing on a coarser level), so it
+    /// is never set while minifying.
+    pub fn stamp_sampling(&mut self, filter: PixelFilter) {
+        let inv_zoom = self.inv_zoom();
+        let nearest = match filter {
+            PixelFilter::Linear => false,
+            PixelFilter::Nearest => inv_zoom <= 1.0,
+            PixelFilter::Auto => inv_zoom <= 1.0 / AUTO_NEAREST_ZOOM,
+        };
+        self.flags = [
+            self.present_lod(),
+            if nearest { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ];
     }
 
     /// Transform a screen point to **window-local** canvas coordinates (origin at
@@ -356,6 +444,73 @@ mod tests {
         let a = vt.screen_to_plane(200.0, 150.0, 0.0, 0.0);
         let b = vt.screen_to_plane(200.0, 150.0, 40.0, 15.0);
         assert!(approx(b.0 - a.0, 40.0) && approx(b.1 - a.1, 15.0));
+    }
+
+    #[test]
+    fn pixel_filter_parse() {
+        assert_eq!(PixelFilter::parse("linear"), PixelFilter::Linear);
+        assert_eq!(PixelFilter::parse("nearest"), PixelFilter::Nearest);
+        assert_eq!(PixelFilter::parse("auto"), PixelFilter::Auto);
+        assert_eq!(PixelFilter::parse("bogus"), PixelFilter::Auto);
+    }
+
+    fn at_zoom(zoom: f32, rotation: f32, mirror: bool) -> ViewTransform {
+        ViewTransform::from_pan_zoom_rotate(
+            3.0, -2.0, zoom, rotation, mirror, 800.0, 600.0, 400.0, 300.0,
+        )
+    }
+
+    /// `inv_zoom` is `1/zoom` whatever the rotation or mirror.
+    #[test]
+    fn inv_zoom_is_rotation_and_mirror_invariant() {
+        for &(rot, mir) in &[(0.0, false), (0.65, false), (0.65, true), (2.1, true)] {
+            let iz = at_zoom(0.25, rot, mir).inv_zoom();
+            assert!(approx(iz, 4.0), "rot {rot} mirror {mir}: inv_zoom {iz}");
+        }
+    }
+
+    /// The present level is the floor of log2(texels per pixel), 0 when not
+    /// minifying, and exact at power-of-two zooms even when rotated.
+    #[test]
+    fn present_lod_is_integer_floor() {
+        for &(zoom, want) in &[
+            (1.0 / 8.0, 3.0),
+            (0.2, 2.0),
+            (0.3, 1.0),
+            (0.5, 1.0),
+            (0.75, 0.0),
+            (1.0, 0.0),
+            (4.0, 0.0),
+        ] {
+            let lod = at_zoom(zoom, 0.0, false).present_lod();
+            assert_eq!(lod, want, "zoom {zoom}");
+            let lod = at_zoom(zoom, 0.37, true).present_lod();
+            assert_eq!(lod, want, "zoom {zoom} rotated");
+        }
+    }
+
+    /// Snapping: `Linear` never, `Nearest` at any magnification, `Auto` from
+    /// `AUTO_NEAREST_ZOOM`; none of them while minifying.
+    #[test]
+    fn stamp_sampling_truth_table() {
+        use PixelFilter::*;
+        for &(filter, zoom, nearest) in &[
+            (Auto, 1.5, false),
+            (Auto, 2.0, true),
+            (Auto, 3.0, true),
+            (Auto, 0.5, false),
+            (Nearest, 0.5, false),
+            (Nearest, 1.0, true),
+            (Nearest, 1.5, true),
+            (Nearest, 3.0, true),
+            (Linear, 1.0, false),
+            (Linear, 4.0, false),
+        ] {
+            let mut t = at_zoom(zoom, 0.0, false);
+            t.stamp_sampling(filter);
+            assert_eq!(t.flags[1] > 0.5, nearest, "{filter:?} at zoom {zoom}");
+            assert_eq!(t.flags[0], t.present_lod(), "{filter:?} at zoom {zoom}");
+        }
     }
 
     /// DRY contract: the pure `compute_view_matrices` (the JS coordinate path's

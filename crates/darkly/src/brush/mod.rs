@@ -25,6 +25,7 @@ pub mod pipeline;
 pub mod portable;
 pub mod preview_renderer;
 pub mod read_mirror_terminal;
+pub mod resampler;
 pub mod save_points;
 pub mod scalar_binary;
 pub mod scratch;

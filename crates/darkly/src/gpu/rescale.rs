@@ -41,6 +41,40 @@ pub struct RescalePass {
     halve_rgba: wgpu::RenderPipeline,
     halve_r8: wgpu::RenderPipeline,
     bgl: wgpu::BindGroupLayout,
+    /// The halve's uniforms, one buffer per alpha convention. A halve reads
+    /// texel space (`dst * 2`) and ignores every geometric field, so the only
+    /// information is the two convention flags; building the three variants
+    /// once keeps a per-frame chain regeneration from allocating a buffer per
+    /// level.
+    halve_params_rgba_straight: wgpu::Buffer,
+    halve_params_rgba_premul: wgpu::Buffer,
+    halve_params_r8: wgpu::Buffer,
+}
+
+/// Uniforms for one halve pass under the given alpha convention.
+fn halve_params(is_r8: bool, premul_io: bool) -> Params {
+    Params {
+        p0: [0.0, 0.0, 0.0, 0.0],
+        p1: [1.0, 1.0, 0.0, 0.0],
+        p2: [
+            1.0,
+            1.0,
+            if is_r8 { 1.0 } else { 0.0 },
+            if premul_io { 1.0 } else { 0.0 },
+        ],
+    }
+}
+
+/// Allocate and fill a uniform buffer holding `params`.
+fn params_buffer(device: &wgpu::Device, queue: &wgpu::Queue, params: &Params) -> wgpu::Buffer {
+    let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rescale-params"),
+        size: std::mem::size_of::<Params>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(params));
+    ubuf
 }
 
 impl std::fmt::Debug for RescalePass {
@@ -50,7 +84,7 @@ impl std::fmt::Debug for RescalePass {
 }
 
 impl RescalePass {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rescale-bgl"),
             entries: &[
@@ -128,6 +162,9 @@ impl RescalePass {
             halve_rgba: make("fs_halve", rgba, "rescale-halve-rgba"),
             halve_r8: make("fs_halve", r8, "rescale-halve-r8"),
             bgl,
+            halve_params_rgba_straight: params_buffer(device, queue, &halve_params(false, false)),
+            halve_params_rgba_premul: params_buffer(device, queue, &halve_params(false, true)),
+            halve_params_r8: params_buffer(device, queue, &halve_params(true, false)),
         }
     }
 
@@ -169,7 +206,7 @@ impl RescalePass {
             };
             let out_tex = create_intermediate(device, hw, hh, format);
             let out_view = out_tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.halve_into(device, queue, encoder, &input_view, &out_view, is_r8, false);
+            self.halve_into(device, encoder, &input_view, &out_view, is_r8, false);
             chain.push(out_tex);
             cur_w = hw;
             cur_h = hh;
@@ -212,14 +249,14 @@ impl RescalePass {
         } else {
             &self.resample_rgba
         };
+        let ubuf = params_buffer(device, queue, &params);
         self.run_pass(
             device,
-            queue,
             encoder,
             pipeline,
             &final_input_view,
             dest.view(),
-            &params,
+            &ubuf,
         );
         dest
     }
@@ -233,37 +270,21 @@ impl RescalePass {
     /// layer/mask path (premultiply on load, un-premultiply on store); `true`
     /// means source and destination are both premultiplied and texels average
     /// as-is. Ignored when `is_r8`, since single-channel masks never round-trip.
-    #[allow(clippy::too_many_arguments)]
     pub fn halve_into(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         src_view: &wgpu::TextureView,
         dst_view: &wgpu::TextureView,
         is_r8: bool,
         premul_io: bool,
     ) {
-        // A halve reads texel-space (`dst * 2`) and ignores every geometric
-        // field, so only the two convention flags carry information.
-        let params = Params {
-            p0: [0.0, 0.0, 0.0, 0.0],
-            p1: [1.0, 1.0, 0.0, 0.0],
-            p2: [
-                1.0,
-                1.0,
-                if is_r8 { 1.0 } else { 0.0 },
-                if premul_io { 1.0 } else { 0.0 },
-            ],
+        let (pipeline, ubuf) = match (is_r8, premul_io) {
+            (true, _) => (&self.halve_r8, &self.halve_params_r8),
+            (false, false) => (&self.halve_rgba, &self.halve_params_rgba_straight),
+            (false, true) => (&self.halve_rgba, &self.halve_params_rgba_premul),
         };
-        let pipeline = if is_r8 {
-            &self.halve_r8
-        } else {
-            &self.halve_rgba
-        };
-        self.run_pass(
-            device, queue, encoder, pipeline, src_view, dst_view, &params,
-        );
+        self.run_pass(device, encoder, pipeline, src_view, dst_view, ubuf);
     }
 
     /// Fill mip levels `1..levels` of `texture` by repeatedly box-reducing the
@@ -277,7 +298,6 @@ impl RescalePass {
     pub fn generate_mip_chain(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         texture: &wgpu::Texture,
         levels: u32,
@@ -295,31 +315,21 @@ impl RescalePass {
         for level in 1..levels {
             let src_view = level_view(level - 1);
             let dst_view = level_view(level);
-            self.halve_into(
-                device, queue, encoder, &src_view, &dst_view, is_r8, premul_io,
-            );
+            self.halve_into(device, encoder, &src_view, &dst_view, is_r8, premul_io);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// One fullscreen draw of `pipeline` from `input_view` into `output_view`
+    /// with `ubuf` (a [`Params`] buffer) bound.
     fn run_pass(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
         input_view: &wgpu::TextureView,
         output_view: &wgpu::TextureView,
-        params: &Params,
+        ubuf: &wgpu::Buffer,
     ) {
-        let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rescale-params"),
-            size: std::mem::size_of::<Params>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(params));
-
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rescale-bg"),
             layout: &self.bgl,
@@ -395,7 +405,7 @@ mod tests {
         premul_io: bool,
     ) -> (Vec<u8>, u32, u32) {
         let (device, queue) = test_device();
-        let pass = RescalePass::new(&device);
+        let pass = RescalePass::new(&device, &queue);
         let levels = levels_for(width, height);
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("mip-test-src"),
@@ -451,7 +461,7 @@ mod tests {
         });
 
         let mut encoder = device.create_command_encoder(&Default::default());
-        pass.generate_mip_chain(&device, &queue, &mut encoder, &tex, levels, premul_io);
+        pass.generate_mip_chain(&device, &mut encoder, &tex, levels, premul_io);
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &tex,

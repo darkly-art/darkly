@@ -94,9 +94,8 @@ impl PaintInformation {
     /// fill; they depend only on this sample.
     ///
     /// Segment-derived sensors (`drawing_angle`, `distance`, `speed`) fill
-    /// only when `prev` is present. `segment_length` is the arc length
-    /// between prev and this sample: use the chord length for straight
-    /// paths (preview) or the Catmull-Rom arc length for smoothed strokes.
+    /// only when `prev` is present. `segment_length` is the chord length
+    /// between prev and this sample.
     /// `motion` is NOT filled here; it's a per-dab quantity owned by
     /// `StrokeEngine::place_dab`.
     pub fn derive_sensors(&mut self, prev: Option<&Self>, segment_length: f32) {

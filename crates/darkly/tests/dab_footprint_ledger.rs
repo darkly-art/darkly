@@ -85,6 +85,8 @@ fn dab_that_writes_nothing_records_no_damage() {
     set_builtin_brush(&mut engine, "Liquify");
     engine.begin_stroke(layer_id).unwrap();
     stroke_to(&mut engine, 128.0, 128.0, 0.0);
+    // The stroke renders at the frame.
+    engine.render(0.0);
 
     let bbox = engine.test_stroke_save_point_bbox();
     assert!(
@@ -113,6 +115,8 @@ fn dab_that_writes_records_its_footprint() {
     for i in 1..=8 {
         stroke_to(&mut engine, 100.0 + 8.0 * i as f32, 128.0, 16.0 * i as f64);
     }
+    // The stroke renders at the frame.
+    engine.render(0.0);
 
     let bbox = engine
         .test_stroke_save_point_bbox()

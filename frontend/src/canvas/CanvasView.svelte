@@ -64,7 +64,7 @@
                     pan_x: inst.panX * dpr2, pan_y: inst.panY * dpr2,
                     zoom: inst.zoom, rotation: inst.rotation,
                     mirror_h: inst.mirrorH,
-                    screen_w: w, screen_h: h,
+                    screen_w: w, screen_h: h, dpr: dpr2,
                 });
                 // Drive the frame synchronously in this same task. The
                 // `canvas.width/height` write, the enqueued `resize`
@@ -436,7 +436,7 @@
                 pan_x: inst.panX * dpr, pan_y: inst.panY * dpr,
                 zoom: inst.zoom, rotation: inst.rotation,
                 mirror_h: inst.mirrorH,
-                screen_w: canvas.width, screen_h: canvas.height,
+                screen_w: canvas.width, screen_h: canvas.height, dpr,
             });
             inst.requestFrame();
         }
