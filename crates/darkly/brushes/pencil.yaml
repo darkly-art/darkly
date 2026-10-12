@@ -29,9 +29,9 @@ nodes:
       curve:
       - - 0.0
         - 0.0
-      - - 0.26743346
+      - - 0.27
         - 0.0
-      - - 0.76097316
+      - - 0.76
         - 1.0
       - - 1.0
         - 1.0
@@ -42,9 +42,9 @@ nodes:
     inputs:
       curve:
       - - 0.0
-        - 0.12476328
+        - 0.12
       - - 1.0
-        - 0.41776323
+        - 0.42
   curve_3:
     type: curve
     name: Select only high tilt
@@ -53,7 +53,7 @@ nodes:
       curve:
       - - 0.0
         - 0.0
-      - - 0.53058755
+      - - 0.53
         - 0.0
       - - 1.0
         - 1.0
@@ -65,10 +65,10 @@ nodes:
       curve:
       - - 0.0
         - 1.0
-      - - 0.79033375
-        - 0.8797826
+      - - 0.79
+        - 0.88
       - - 1.0
-        - 0.25908843
+        - 0.26
   curve_5:
     type: curve
     name: Curve pen pressure for flow
@@ -77,8 +77,8 @@ nodes:
       curve:
       - - 0.0
         - 0.0
-      - - 0.56401765
-        - 0.42231566
+      - - 0.56
+        - 0.42
       - - 1.0
         - 1.0
   curve_6:
@@ -89,8 +89,8 @@ nodes:
       curve:
       - - 0.0
         - 0.0
-      - - 0.71057105
-        - 0.42465276
+      - - 0.71
+        - 0.42
       - - 1.0
         - 1.0
   invert:
@@ -101,7 +101,7 @@ nodes:
     name: Grain intensity
     comment: Pen tilt determines intensity of the paper grain texture
     inputs:
-      in_high: 0.40818285942077637
+      in_high: 0.41
   multiply:
     type: multiply
     name: Combine grain with tip
@@ -114,14 +114,14 @@ nodes:
     type: noise
     name: Brush tip texture
     inputs:
-      roughness: 0.7344781160354614
+      roughness: 0.73
       scale: 10.0
       space: 1
   noise_2:
     type: noise
     name: Paper grain texture
     inputs:
-      roughness: 0.548843264579773
+      roughness: 0.55
       scale: 2.5
   paint:
     type: paint
