@@ -1,26 +1,16 @@
 //! Procedural (void) layer content on [`Compositor`]: the per-layer
-//! [`LayerContent`] / [`ProceduralContent`] state, void realization and
-//! parameter/transform updates, source-image install and copy, canvas
-//! resync, and the pre-composite re-render of dirty procedural textures.
+//! [`ProceduralContent`] state, void realization and parameter/transform
+//! updates, and source-image install and copy. The generic regenerate and
+//! canvas-resync passes that drive it are in `layer_content.rs`.
 
+use crate::coord::CanvasRect;
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::effect::EffectCache;
+use crate::gpu::layer_content::LayerContent;
 use crate::gpu::params::ParamValue;
 use crate::gpu::void::Void;
 use crate::layer::LayerId;
-
-/// How a layer's pixels reach `node_textures[id]`.
-///
-/// - `Raster`: pixels arrive via paint / paste / fill; `node_textures[id]`
-///   is authoritative and the compositor doesn't regenerate it.
-/// - `Procedural`: pixels are GPU-regenerable. The compositor calls
-///   [`Void::encode`] before the next composite when the void's own dirty
-///   flag (owned on the trait object) reports stale.
-pub(super) enum LayerContent {
-    Raster,
-    Procedural(ProceduralContent),
-}
 
 /// Per-instance procedural-content state. The "needs re-encode" flag lives
 /// on the [`Void`] itself ([`Void::take_dirty`]): the compositor neither
@@ -34,24 +24,22 @@ pub(super) struct ProceduralContent {
     pub(super) cache: EffectCache,
 }
 
-/// Field-explicit projection of a cache entry's procedural sidecar. A free
-/// function over the enum (not a method on `Compositor`) so call sites that
-/// hold a disjoint borrow of another compositor field can still route through
-/// the one `LayerContent` match: every pattern-match on the enum lives here
-/// and in [`procedural_of_mut`]; the accessors and iterators below all share
-/// them.
-fn procedural_of(content: &LayerContent) -> Option<&ProceduralContent> {
-    match content {
-        LayerContent::Procedural(p) => Some(p),
-        LayerContent::Raster => None,
+impl ProceduralContent {
+    pub(super) fn take_dirty(&mut self) -> bool {
+        self.void.take_dirty()
     }
-}
 
-/// Mutable counterpart to [`procedural_of`].
-fn procedural_of_mut(content: &mut LayerContent) -> Option<&mut ProceduralContent> {
-    match content {
-        LayerContent::Procedural(p) => Some(p),
-        LayerContent::Raster => None,
+    /// Voids caching canvas geometry in their sampling uniform rewrite it
+    /// (the uniform is window-local and, for a cover fit, derived from the
+    /// canvas size). The texture was just reallocated empty, so the void
+    /// redraws even if its own state is unchanged.
+    pub(super) fn canvas_rect_changed(&mut self, queue: &wgpu::Queue, canvas: CanvasRect) {
+        self.void.set_canvas_rect(queue, &self.cache, canvas);
+        self.void.mark_dirty();
+    }
+
+    pub(super) fn regenerate(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::TextureView) {
+        self.void.encode(encoder, &self.cache, dst);
     }
 }
 
@@ -124,14 +112,14 @@ impl Compositor {
     pub(super) fn procedural_content(&self, layer_id: LayerId) -> Option<&ProceduralContent> {
         self.layer_cache
             .get(&layer_id)
-            .and_then(|c| procedural_of(&c.content))
+            .and_then(|c| c.content.procedural())
     }
 
     /// Mutable counterpart to [`Self::procedural_content`].
     fn procedural_content_mut(&mut self, layer_id: LayerId) -> Option<&mut ProceduralContent> {
         self.layer_cache
             .get_mut(&layer_id)
-            .and_then(|c| procedural_of_mut(&mut c.content))
+            .and_then(|c| c.content.procedural_mut())
     }
 
     /// Iterate every realized procedural layer as `(id, sidecar)`. The
@@ -141,7 +129,7 @@ impl Compositor {
     pub(super) fn procedural_entries(&self) -> impl Iterator<Item = (LayerId, &ProceduralContent)> {
         self.layer_cache
             .iter()
-            .filter_map(|(id, c)| Some((*id, procedural_of(&c.content)?)))
+            .filter_map(|(id, c)| Some((*id, c.content.procedural()?)))
     }
 
     /// Mutable counterpart to [`Self::procedural_entries`].
@@ -150,7 +138,7 @@ impl Compositor {
     ) -> impl Iterator<Item = (LayerId, &mut ProceduralContent)> {
         self.layer_cache
             .iter_mut()
-            .filter_map(|(id, c)| Some((*id, procedural_of_mut(&mut c.content)?)))
+            .filter_map(|(id, c)| Some((*id, c.content.procedural_mut()?)))
     }
 
     /// Current persistent frame size of a void layer, if the void declares
@@ -356,45 +344,6 @@ impl Compositor {
         Some(proc.void.content_extent(self.canvas_rect()))
     }
 
-    /// Push a new canvas rect to every realized void, so those caching canvas
-    /// geometry in their sampling uniforms rewrite them. Called from
-    /// [`Self::set_canvas_rect`]; without it a resize or crop leaves a void
-    /// sampling through the old window while reporting the new one.
-    pub(super) fn resync_voids_to_canvas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let canvas = self.canvas_rect();
-
-        // A void's output texture is canvas-sized by definition, and
-        // `ensure_void_layer` allocates it once, so a resize has to
-        // reallocate it here or the void keeps drawing into the old window's
-        // footprint. Collected first: the loop below writes `node_textures`
-        // while `layer_cache` is borrowed.
-        let void_ids: Vec<LayerId> = self.procedural_entries().map(|(id, _)| id).collect();
-
-        for id in void_ids {
-            if self
-                .node_textures
-                .get(&id)
-                .is_none_or(|s| s.texture.canvas_extent() != canvas)
-            {
-                // `swap_node_texture` also refreshes the blend uniform's
-                // `layer_offset` / `layer_size` and drops the bind groups that
-                // named the old view: without that the composite samples the
-                // new texture through the old extent and clips the void to the
-                // previous window.
-                let tex = LayerTexture::with_bounds(device, canvas);
-                self.swap_node_texture(device, queue, id, tex);
-            }
-            if let Some(proc) = self.procedural_content_mut(id) {
-                // The sampling uniform is window-local and, for a cover
-                // fit, derived from the canvas size; both moved.
-                proc.void.set_canvas_rect(queue, &proc.cache, canvas);
-                // The texture above is freshly allocated and empty, so the
-                // void must redraw it even if its own state is unchanged.
-                proc.void.mark_dirty();
-            }
-        }
-    }
-
     /// Push a fresh external image frame (webcam, screenshare, …) into a
     /// void's input texture. Delegates to the void's
     /// [`Void::upload_external_image`], which handles texture allocation,
@@ -420,57 +369,5 @@ impl Compositor {
         // or a document edit: the composite must re-run, but thumbnails and
         // content bounds have no reason to churn at frame rate.
         self.revisions.bump_animation(layer_id);
-    }
-
-    /// Re-render every dirty procedural layer's texture. Runs at the top of
-    /// the compositor's encode pass so the subsequent blend in
-    /// `compose_children` samples up-to-date pixels. Raster layers are
-    /// inherently "never dirty": their pixels arrived through paint and
-    /// `node_textures[id]` is authoritative.
-    ///
-    /// The dirty bit is the void's own, returned through
-    /// [`Void::take_dirty`]: state-changing methods on the trait
-    /// (`update_params`, `update_time`, `upload_external_image`) mark it,
-    /// and `take_dirty` returns-and-clears so a void encodes at most once
-    /// per state change.
-    pub(super) fn encode_dirty_layer_content(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        // Two-phase: collect ids of procedural layers whose void reports
-        // dirty (consuming the flag), then drop the mutable borrow and
-        // re-acquire per-entry. Keeps the loop body short and avoids
-        // borrowing `self.layer_cache` and `self.node_textures` at the same
-        // time. The scratch buffer is owned by `self` so the per-frame Vec
-        // churn vanishes.
-        self.dirty_procedural_scratch.clear();
-        self.dirty_procedural_scratch
-            .extend(self.layer_cache.iter_mut().filter_map(|(id, c)| {
-                procedural_of_mut(&mut c.content).and_then(|p| p.void.take_dirty().then_some(*id))
-            }));
-        // Index-iterate so the loop body can re-borrow `self.layer_cache`
-        // mutably; the LayerIds are `Copy`. The scratch retains its
-        // capacity across frames so the per-frame `Vec` churn vanishes.
-        let count = self.dirty_procedural_scratch.len();
-        for i in 0..count {
-            let id = self.dirty_procedural_scratch[i];
-            let dst_view = match self.node_textures.get(&id) {
-                Some(s) => s.texture.view(),
-                None => continue,
-            };
-            // Field-explicit `procedural_of_mut` instead of
-            // `procedural_content_mut(&mut self, ..)` so the borrow checker
-            // sees that `node_textures` and `layer_cache` are disjoint
-            // fields: without that, dst_view and the procedural sidecar
-            // can't both be live at once.
-            let Some(proc) = self
-                .layer_cache
-                .get_mut(&id)
-                .and_then(|c| procedural_of_mut(&mut c.content))
-            else {
-                continue;
-            };
-            proc.void.encode(encoder, &proc.cache, dst_view);
-        }
-        // Leave the field empty at exit: capacity is retained but no
-        // potentially-stale LayerIds live past dispose.
-        self.dirty_procedural_scratch.clear();
     }
 }

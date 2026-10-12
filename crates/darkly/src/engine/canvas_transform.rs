@@ -2,7 +2,8 @@
 //!
 //! Like [`image_rescale`](super::image_rescale), this permutes **every
 //! pixel-bearing node** (raster layers + mask filters), but exactly, via the
-//! ortho GPU pass rather than a resample. Each node moves to its transformed
+//! ortho GPU pass rather than a resample. Layers whose content has a plane
+//! transform instead of pixels (vector layers) move through that transform. Each node moves to its transformed
 //! extent about the canvas window; rotations additionally swap the canvas
 //! dimensions and recentre `canvas_origin` (GIMP's `offset = (old − new)/2`).
 //! It is undoable through the shared [`CanvasGeometryAction`]: each node's
@@ -17,7 +18,8 @@
 //! dimension-swapping selection through is a follow-up.
 
 use super::DarklyEngine;
-use crate::coord::{CanvasPoint, CanvasRect};
+use crate::coord::CanvasRect;
+use crate::gpu::compositor::ortho_extent_about;
 use crate::gpu::ortho_transform::OrthoXform;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
@@ -100,16 +102,15 @@ impl DarklyEngine {
             bounds.push((*id, *old_extent, new_extent));
         }
 
-        // 5. Swap canvas dims + recentre origin for rotations (GIMP offset rule).
-        let (new_w, new_h, new_origin) = if xform.swaps_dims() {
-            let no = CanvasPoint::new(
-                old_origin.x + (old_w as i32 - old_h as i32) / 2,
-                old_origin.y + (old_h as i32 - old_w as i32) / 2,
-            );
-            (old_h, old_w, no)
-        } else {
-            (old_w, old_h, old_origin)
-        };
+        // 5. Move transform-carried content by the same mapping.
+        let transforms = self
+            .doc
+            .apply_plane_affine_to_layers(&xform.plane_affine(frame));
+
+        // 6. Swap canvas dims + recentre origin for rotations (GIMP offset
+        //    rule), the same frame mapping every node went through.
+        let new_frame = ortho_extent_about(frame, frame, xform);
+        let (new_w, new_h, new_origin) = (new_frame.width, new_frame.height, new_frame.origin);
         self.doc.width = new_w;
         self.doc.height = new_h;
         self.doc.canvas_origin = new_origin;
@@ -125,11 +126,14 @@ impl DarklyEngine {
             self.doc.dpi,
             bounds,
             regions,
+            transforms,
             selection,
         )));
 
-        // 6. Reconcile window-sized GPU resources + present view to new dims.
+        // 7. Reconcile window-sized GPU resources + present view to new dims,
+        //    then push the moved transforms downhill.
         self.apply_canvas_rect_to_compositor();
+        self.sync_compositor_layers();
         self.compositor.mark_dirty();
     }
 

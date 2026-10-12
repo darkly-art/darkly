@@ -15,7 +15,7 @@ use super::canvas_resize::MAX_CANVAS_DIM;
 use super::DarklyEngine;
 use crate::coord::CanvasRect;
 use crate::document::{MAX_DPI, MIN_DPI};
-use crate::gpu::compositor::scaled_extent_about;
+use crate::gpu::compositor::{scale_affine_about, scaled_extent_about};
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::undo::CanvasGeometryAction;
@@ -84,7 +84,7 @@ impl DarklyEngine {
         // DPI-only edit touches no pixels, so it must not commit a floating
         // selection, snapshot regions, clear the selection or scan node
         // extents: it changes one number on the document.
-        let (bounds, regions, selection) = if dims_changed {
+        let (bounds, regions, transforms, selection) = if dims_changed {
             self.commit_pending_edits();
 
             // Enumerate pixel-bearing nodes by capability: raster layers +
@@ -159,9 +159,13 @@ impl DarklyEngine {
                 self.doc.set_node_pixel_bounds(*id, new_extent);
                 bounds.push((*id, *old_extent, new_extent));
             }
-            (bounds, regions, selection)
+            // Content carried by a plane transform scales by the same map.
+            let transforms = self
+                .doc
+                .apply_plane_affine_to_layers(&scale_affine_about(origin, sx, sy));
+            (bounds, regions, transforms, selection)
         } else {
-            (Vec::new(), Vec::new(), None)
+            (Vec::new(), Vec::new(), Vec::new(), None)
         };
 
         // 5. Update canvas dimensions (origin fixed) + push the undo step.
@@ -177,13 +181,16 @@ impl DarklyEngine {
             new_dpi,
             bounds,
             regions,
+            transforms,
             selection,
         )));
 
-        // 6. Reconcile window-sized GPU resources + present view to new dims.
-        //    A DPI-only edit moved no pixels and no window.
+        // 6. Reconcile window-sized GPU resources + present view to new dims,
+        //    then push the scaled transforms downhill. A DPI-only edit moved
+        //    no pixels and no window.
         if dims_changed {
             self.apply_canvas_rect_to_compositor();
+            self.sync_compositor_layers();
             self.compositor.mark_dirty();
         }
     }

@@ -12,6 +12,7 @@ use darkly::engine::protocol::RawParams;
 use darkly::engine::shapes::StrokeWire;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::ortho_transform::OrthoXform;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::{LayerId, ObjectId};
 use darkly::transform::Transform;
@@ -512,4 +513,151 @@ fn placement_is_in_plane_space_after_a_crop() {
         RED,
         "outside, in plane terms"
     );
+}
+
+/// A shape placed before a resize stays put in the plane: the vector layer's
+/// texture follows the canvas window, and the scene is rasterized into it
+/// through the window's origin. The three probes fail separately for a
+/// texture that never follows the window (70, 70), and for one that follows
+/// it but draws in window-local coordinates (45, 45) and (95, 95).
+#[test]
+fn a_resize_after_placing_keeps_the_shape_in_plane_space() {
+    let mut engine = test_engine(64, 64);
+    add(
+        &mut engine,
+        "polygon",
+        four_sides(),
+        (40.0, 40.0, 40.0, 40.0),
+        Some(RED),
+        None,
+    );
+    engine.resize_canvas(CanvasRect::from_xywh(20, 20, 100, 100));
+    assert_eq!(
+        canvas_px(&mut engine, (45, 45)),
+        RED,
+        "inside, near the corner"
+    );
+    assert_eq!(
+        canvas_px(&mut engine, (70, 70)),
+        RED,
+        "inside, beyond the window the layer was created in"
+    );
+    assert_ne!(canvas_px(&mut engine, (95, 95)), RED, "outside the box");
+
+    engine.undo();
+    assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(0, 0, 64, 64));
+    assert_eq!(
+        canvas_px(&mut engine, (45, 45)),
+        RED,
+        "undoing the resize keeps the shape where it was"
+    );
+}
+
+/// Box `(4, 4, 20, 10)` on a 64 x 32 canvas: the fixture of the canvas-wide
+/// transform tests below. Plane `(14, 9)` is inside it.
+fn place_box(engine: &mut DarklyEngine) -> (LayerId, ObjectId) {
+    add(
+        engine,
+        "polygon",
+        four_sides(),
+        (4.0, 4.0, 20.0, 10.0),
+        Some(RED),
+        None,
+    )
+}
+
+#[test]
+fn flipping_the_canvas_mirrors_a_shape_about_the_window() {
+    let mut engine = test_engine(64, 32);
+    place_box(&mut engine);
+    engine.transform_canvas(OrthoXform::FlipH);
+    // x 4..24 mirrors to 64 - 24 .. 64 - 4 = 40..60.
+    assert_eq!(canvas_px(&mut engine, (50, 9)), RED);
+    assert_ne!(canvas_px(&mut engine, (14, 9)), RED);
+    engine.undo();
+    assert_eq!(canvas_px(&mut engine, (14, 9)), RED);
+    assert_ne!(canvas_px(&mut engine, (50, 9)), RED);
+}
+
+#[test]
+fn rotating_the_canvas_rotates_a_shape_and_recentres_the_window() {
+    let mut engine = test_engine(64, 32);
+    place_box(&mut engine);
+    engine.transform_canvas(OrthoXform::Rot90Cw);
+    // The window recentres to (16, -16, 32, 64), and window-local (x, y)
+    // maps to (32 - y, x): the box lands at plane x 34..44, y -12..8.
+    assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(16, -16, 32, 64));
+    assert_eq!(canvas_px(&mut engine, (39, -2)), RED);
+    assert_ne!(canvas_px(&mut engine, (39, 12)), RED);
+    engine.undo();
+    assert_eq!(engine.canvas_rect(), CanvasRect::from_xywh(0, 0, 64, 32));
+    assert_eq!(canvas_px(&mut engine, (14, 9)), RED);
+}
+
+#[test]
+fn flipping_the_canvas_after_a_crop_mirrors_about_the_window() {
+    let mut engine = test_engine(128, 128);
+    engine.resize_canvas(CanvasRect::from_xywh(10, 20, 100, 100));
+    add(
+        &mut engine,
+        "polygon",
+        four_sides(),
+        (20.0, 30.0, 20.0, 10.0),
+        Some(RED),
+        None,
+    );
+    engine.transform_canvas(OrthoXform::FlipH);
+    // Window-local x 10..30 mirrors to 100 - 30 .. 100 - 10 = 70..90, which
+    // is plane x 80..100.
+    assert_eq!(canvas_px(&mut engine, (90, 35)), RED);
+    assert_ne!(canvas_px(&mut engine, (30, 35)), RED);
+}
+
+#[test]
+fn rescaling_the_image_scales_a_shape_about_the_origin() {
+    let mut engine = test_engine(64, 32);
+    place_box(&mut engine);
+    engine.rescale_image(128, 64, None);
+    // The box doubles about the origin to (8, 8, 40, 20).
+    assert_eq!(canvas_px(&mut engine, (28, 18)), RED);
+    assert_ne!(canvas_px(&mut engine, (6, 6)), RED);
+    engine.undo();
+    assert_eq!(canvas_px(&mut engine, (6, 6)), RED);
+}
+
+/// The second transform starts from a layer transform the first one set, so
+/// the order they compose in shows: FlipH then Rot90Cw lands the box at
+/// plane x 34..44, y 24..44; the reverse would land it at x 20..30,
+/// y -12..8.
+#[test]
+fn canvas_transforms_compose_in_order() {
+    let mut engine = test_engine(64, 32);
+    place_box(&mut engine);
+    engine.transform_canvas(OrthoXform::FlipH);
+    engine.transform_canvas(OrthoXform::Rot90Cw);
+    assert_eq!(canvas_px(&mut engine, (39, 34)), RED);
+    assert_ne!(canvas_px(&mut engine, (25, -2)), RED);
+}
+
+/// Flipping a vector layer is a document edit: it must survive the next
+/// re-rasterization (here, a fill change), not just mirror the texture.
+#[test]
+fn flipping_a_vector_layer_mirrors_it_and_survives_re_render() {
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    let mut engine = test_engine(64, 32);
+    let (id, obj) = place_box(&mut engine);
+    assert!(engine.flip_node(id, OrthoXform::FlipH));
+    assert_eq!(canvas_px(&mut engine, (50, 9)), RED);
+
+    engine.set_shape_style(id, obj, Some(GREEN), None);
+    assert_eq!(
+        canvas_px(&mut engine, (50, 9)),
+        GREEN,
+        "the flip survives re-rendering the layer"
+    );
+    assert_ne!(canvas_px(&mut engine, (14, 9)), GREEN);
+
+    engine.undo();
+    engine.undo();
+    assert_eq!(canvas_px(&mut engine, (14, 9)), RED);
 }

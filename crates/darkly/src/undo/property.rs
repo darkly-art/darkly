@@ -80,8 +80,8 @@ impl Property {
                 }
             }
             Property::Transform(t) => {
-                if let LayerNode::Layer(Layer::Void(v)) = node {
-                    v.transform = *t;
+                if let LayerNode::Layer(layer) = node {
+                    layer.set_transform(*t);
                 }
             }
             Property::VectorObjects(objects) => {

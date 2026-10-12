@@ -1112,13 +1112,13 @@ impl Compositor {
         );
     }
 
-    /// Composite a content layer (raster or void) into its parent group's
-    /// ping-pong accumulators. One blend arm for both raster and procedural
-    /// content: the procedural texture lives in `node_textures` keyed by
-    /// layer id (allocated by `ensure_void_layer` and refreshed by
-    /// `encode_dirty_layer_content` before the tree walk), and the blend
-    /// uniforms are the same `BlendUniforms` shape in the unified
-    /// `layer_cache`, so neither lookup branches on kind here.
+    /// Composite a content layer (raster, void or vector) into its parent
+    /// group's ping-pong accumulators. One blend arm for every kind of
+    /// content: each texture lives in `node_textures` keyed by layer id
+    /// (regenerated content is refreshed by `encode_dirty_layer_content`
+    /// before the tree walk), and the blend uniforms are the same
+    /// `BlendUniforms` shape in the unified `layer_cache`, so neither lookup
+    /// branches on kind here.
     fn compose_layer_arm(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,

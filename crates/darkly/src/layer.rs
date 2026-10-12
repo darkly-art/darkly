@@ -1166,4 +1166,39 @@ impl Layer {
             Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
         }
     }
+
+    /// Move this layer's content by a plane-space affine (a canvas flip,
+    /// rotate or rescale) through its document transform, returning the
+    /// `(old, new)` transform for undo. `None` for a layer whose content does
+    /// not move this way: raster pixels move on the GPU, and filters and
+    /// dividers have no content of their own.
+    pub fn apply_plane_affine(
+        &mut self,
+        m: &crate::transform::Affine2D,
+    ) -> Option<(crate::transform::Transform, crate::transform::Transform)> {
+        match self {
+            Layer::Vector(v) => {
+                let old = v.transform;
+                v.transform = old.then_affine(m);
+                Some((old, v.transform))
+            }
+            // A void's transform lives in the window-local frame (the gizmo
+            // edits it where `FragCoord.xy` is, so `canvas_origin` cancels in
+            // the shader), and a void without live transform keeps it at
+            // identity. A plane affine composed onto it would land off by the
+            // window origin, so voids are not moved here.
+            Layer::Void(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Divider(_) => None,
+        }
+    }
+
+    /// Install a document transform: the undo side of a transform edit.
+    /// Ignored by layers that carry none.
+    pub fn set_transform(&mut self, transform: crate::transform::Transform) {
+        match self {
+            Layer::Vector(v) => v.transform = transform,
+            Layer::Void(v) => v.transform = transform,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Divider(_) => {}
+        }
+    }
 }
