@@ -48,8 +48,10 @@
         align-items: center;
         justify-content: center;
         flex: none;
-        width: 34px;
-        height: 34px;
+        /* The tool options bar's control height: a taller button would
+           stretch the bar whenever a tool shows it. */
+        width: 32px;
+        height: 32px;
         background: var(--bg);
         border: 1px solid var(--bg-hover);
         border-radius: var(--radius-md);

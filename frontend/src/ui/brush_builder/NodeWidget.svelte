@@ -2,6 +2,7 @@
     import { getContext } from 'svelte';
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
     import { pointerDrag } from '../../lib/pointerDrag';
+    import { isVisibleWhen } from '../../lib/visibleWhen';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import NodePreview from './NodePreview.svelte';
@@ -49,11 +50,10 @@
      *  input's current value. Engine-side the port still works regardless;
      *  this is purely UI. */
     function isPortVisible(port: PortDef): boolean {
-        if (!port.visible_when) return true;
-        const [inputName, allowed] = port.visible_when;
-        const src = node.ports.find(p => p.name === inputName && p.dir === 'Input');
-        if (!src) return true;
-        return allowed.includes(Number(src.value));
+        return isVisibleWhen(
+            port.visible_when,
+            (name) => node.ports.find(p => p.name === name && p.dir === 'Input')?.value,
+        );
     }
     let inputPorts = $derived(
         node.ports.filter(p => p.dir === 'Input' && isPortVisible(p))

@@ -1,6 +1,6 @@
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
-import { OverlayBuilder } from '../canvas/gpu_overlay';
+import { DRAG_THRESHOLD, drawRubberBand, clearRubberBand } from './rubber_band';
 import { createTextFromPending, flushTextContent, type FullStyle, type Rgba } from './text_editor';
 import { TextBoxGizmo } from './text_box_gizmo';
 import { ToolBase, type ToolDescriptor } from './registry';
@@ -65,9 +65,6 @@ export interface TextPlacement {
     box?: [number, number] | null;
 }
 
-/** Min canvas-px extent on each axis for a drag to count as a box (vs a click). */
-const DRAG_THRESHOLD = 4;
-
 /**
  * Text tool: per-instance. Chooses what the properties panel edits and drives
  * the on-canvas box; the text controls live in `TextProperties.svelte`.
@@ -103,17 +100,13 @@ class TextTool extends ToolBase {
     /** Draw the rubber-band rectangle for an in-flight box creation. */
     private drawCreateBand(): void {
         const engine = this.inst.engine;
-        const canvasEl = this.canvasEl;
-        if (!engine || !this.creating || !canvasEl) return;
+        if (!engine || !this.creating) return;
         const { sx, sy, cx, cy } = this.creating;
-        const o = new OverlayBuilder(canvasEl);
-        const c: [number, number][] = [[sx, sy], [cx, sy], [cx, cy], [sx, cy]];
-        for (let i = 0; i < 4; i++) o.line(c[i], c[(i + 1) % 4], { color: '#4af', thickness: 1, dash: 4 });
-        o.push(engine);
+        drawRubberBand(engine, sx, sy, cx, cy);
     }
 
     private clearCreateBand(): void {
-        this.inst.engine?.api.clearOverlay();
+        if (this.inst.engine) clearRubberBand(this.inst.engine);
         this.inst.requestFrame();
     }
 
@@ -328,6 +321,8 @@ export function focusedTextTool(): TextTool | null {
 
 export const textTool: ToolDescriptor = {
     id: 'text',
-    group: 'paint',
+    // A vector tool, not a paint tool: the paint-group modifier chords (the
+    // color sampler's Alt/Ctrl+drag) must never arm over its drag-to-box.
+    group: 'vector',
     create: (inst: DarklyInstance) => new TextTool(inst),
 };

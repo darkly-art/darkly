@@ -49,7 +49,8 @@ The invariant: **`plane = window_local + canvas_origin`**.
   (and the `WindowPoint`/`CanvasPoint` equivalents).
 - screen ↔ plane: `ViewTransform::screen_to_plane` (Rust) / `app.viewMatrices` (JS, via
   `coordinates.ts`).
-- layer ↔ plane: `LayerTexture::layer_to_canvas` / `canvas_to_layer_rect`.
+- layer ↔ plane: `LayerTexture::layer_to_canvas` / `canvas_to_layer_rect`, and
+  `canvas_to_layer_affine` for renderers that draw through a transform (Vello).
 - reference ↔ plane: `BrushGraphRunner::dpi_factor` / `EvalContext::dpi_factor`
   (Rust), `u.intrinsic.dpi_factor` (WGSL), both
   `document::canvas_per_reference_px(doc.dpi)`.

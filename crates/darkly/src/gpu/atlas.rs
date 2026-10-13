@@ -38,6 +38,12 @@ pub struct LayerTexture {
     /// have to reach into `texture.format()`; matches what the document-side
     /// `PixelBuffer` records.
     format: wgpu::TextureFormat,
+    /// Usage flags beyond the common set every layer texture carries (e.g.
+    /// `STORAGE_BINDING` for a vector layer), and the debug label. Kept so
+    /// [`reallocated`](Self::reallocated) can produce the same kind of
+    /// texture at another extent.
+    extra_usage: wgpu::TextureUsages,
+    label: &'static str,
 }
 
 impl LayerTexture {
@@ -109,21 +115,27 @@ impl LayerTexture {
         t
     }
 
-    /// Allocate a texture at `extent` matching an existing node texture's
-    /// `format`: the reallocation constructor behind resize/staging paths,
-    /// which are format-agnostic. The format is this type's own fact, so the
-    /// per-format dispatch (and its unsupported-format panic) lives here.
-    pub fn new_for_format(
+    /// A texture like this one (format, usage, label, default fill) at
+    /// `extent`: the reallocation constructor behind resize, staging and
+    /// resample paths, which don't care what kind of texture they move.
+    pub fn reallocated(
+        &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
         extent: CanvasRect,
     ) -> Self {
-        match format {
-            wgpu::TextureFormat::R8Unorm => Self::new_mask_with_extent(device, queue, extent),
-            wgpu::TextureFormat::Rgba8Unorm => Self::with_bounds(device, extent),
-            other => panic!("LayerTexture::new_for_format: unsupported format {other:?}"),
-        }
+        let mut t = Self::with_format(
+            device,
+            Some(queue),
+            extent.width,
+            extent.height,
+            self.format,
+            self.extra_usage,
+            self.label,
+        );
+        t.offset_x = extent.origin.x;
+        t.offset_y = extent.origin.y;
+        t
     }
 
     fn with_format(
@@ -133,7 +145,7 @@ impl LayerTexture {
         height: u32,
         format: wgpu::TextureFormat,
         extra_usage: wgpu::TextureUsages,
-        label: &str,
+        label: &'static str,
     ) -> Self {
         let bpp = format.block_copy_size(None).unwrap_or(1);
         let fill_byte = match format {
@@ -197,6 +209,8 @@ impl LayerTexture {
             offset_x: 0,
             offset_y: 0,
             format,
+            extra_usage,
+            label,
         }
     }
 
@@ -241,6 +255,15 @@ impl LayerTexture {
         } else {
             None
         }
+    }
+
+    /// The affine taking canvas-space coordinates into this texture's local
+    /// frame, for renderers that draw through a transform instead of
+    /// addressing texels. The unbounded sibling of
+    /// [`canvas_to_layer`](Self::canvas_to_layer): points outside the extent
+    /// map outside the texture rather than to `None`.
+    pub fn canvas_to_layer_affine(&self) -> kurbo::Affine {
+        kurbo::Affine::translate((-self.offset_x as f64, -self.offset_y as f64))
     }
 
     /// Intersect a canvas-space rect with the texture's extent and translate

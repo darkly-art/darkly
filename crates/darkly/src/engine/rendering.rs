@@ -815,13 +815,13 @@ impl DarklyEngine {
 
     #[handler]
     pub fn undo(&mut self) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.apply_undo(UndoDirection::Undo);
     }
 
     #[handler]
     pub fn redo(&mut self) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.apply_undo(UndoDirection::Redo);
     }
 
@@ -939,16 +939,13 @@ impl DarklyEngine {
                             cell: forward.pixels.clone(),
                         },
                     );
-                    self.gpu.encode("undo-rescale-realloc", |enc| {
-                        self.compositor.realloc_node_texture(
-                            &self.gpu.device,
-                            &self.gpu.queue,
-                            enc,
-                            node_id,
-                            target_extent,
-                            false,
-                        );
-                    });
+                    self.compositor.realloc_node_texture(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        node_id,
+                        target_extent,
+                        None,
+                    );
                     let new_frame = self
                         .compositor
                         .node_texture(node_id)

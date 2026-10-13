@@ -212,11 +212,7 @@ impl RescalePass {
             cur_h = hh;
         }
 
-        let dest = if is_r8 {
-            LayerTexture::new_mask_with_extent(device, queue, new_extent)
-        } else {
-            LayerTexture::with_bounds(device, new_extent)
-        };
+        let dest = src.reallocated(device, queue, new_extent);
 
         let params = Params {
             p0: [

@@ -39,6 +39,36 @@ impl OrthoXform {
         matches!(self, OrthoXform::Rot90Cw | OrthoXform::Rot90Ccw)
     }
 
+    /// The plane-space affine this transform applies about `frame` (the
+    /// canvas window, for canvas operations): the point form of
+    /// [`Self::map_local`], lifted from frame-local to plane coordinates,
+    /// landing in the transformed frame (recentred for quarter turns, see
+    /// [`crate::gpu::compositor::ortho_extent_about`]). What moves content
+    /// that has a plane transform instead of pixels.
+    pub fn plane_affine(self, frame: CanvasRect) -> crate::transform::Affine2D {
+        let (fw, fh) = (frame.width as f32, frame.height as f32);
+        // Frame-local `(x, y) -> L (x, y) + k`, the same permutation
+        // `map_local` applies to pixel rects.
+        let ([a, b, c, d], (kx, ky)) = match self {
+            OrthoXform::FlipH => ([-1.0, 0.0, 0.0, 1.0], (fw, 0.0)),
+            OrthoXform::FlipV => ([1.0, 0.0, 0.0, -1.0], (0.0, fh)),
+            OrthoXform::Rot180 => ([-1.0, 0.0, 0.0, -1.0], (fw, fh)),
+            OrthoXform::Rot90Cw => ([0.0, -1.0, 1.0, 0.0], (fh, 0.0)),
+            OrthoXform::Rot90Ccw => ([0.0, 1.0, -1.0, 0.0], (0.0, fw)),
+        };
+        let to = crate::gpu::compositor::ortho_extent_about(frame, frame, self).origin;
+        let (fx, fy) = (frame.origin.x as f32, frame.origin.y as f32);
+        // plane' = L (plane - f) + k + to
+        [
+            a,
+            b,
+            kx + to.x as f32 - (a * fx + b * fy),
+            c,
+            d,
+            ky + to.y as f32 - (c * fx + d * fy),
+        ]
+    }
+
     /// The transform that undoes this one (its inverse permutation).
     pub fn inverse(self) -> OrthoXform {
         match self {
@@ -212,11 +242,7 @@ impl OrthoTransformPass {
     ) -> LayerTexture {
         let is_r8 = format == wgpu::TextureFormat::R8Unorm;
         let old = src.layer_extent();
-        let dest = if is_r8 {
-            LayerTexture::new_mask_with_extent(device, queue, new_extent)
-        } else {
-            LayerTexture::with_bounds(device, new_extent)
-        };
+        let dest = src.reallocated(device, queue, new_extent);
         let params = Params {
             p: [xform as u32, old.width, old.height, 0],
         };
@@ -410,6 +436,38 @@ mod tests {
         let (ni0, nj0, nw, nh) = OrthoXform::Rot90Ccw.map_local(0, 0, 3, 5, 10, 8);
         // ni0 = j0 = 0; nj0 = fw - w - i0 = 10 - 3 - 0 = 7; dims swap to (5, 3).
         assert_eq!((ni0, nj0, nw, nh), (0, 7, 5, 3));
+    }
+
+    /// `plane_affine` moves a rect exactly where the pixel path moves a node
+    /// with that extent, for every variant, about a frame off the origin.
+    #[test]
+    fn plane_affine_agrees_with_ortho_extent_about() {
+        use crate::gpu::compositor::ortho_extent_about;
+        let frame = CanvasRect::from_xywh(5, -3, 13, 7);
+        let rect = CanvasRect::from_xywh(7, -1, 4, 3);
+        for xform in [
+            OrthoXform::FlipH,
+            OrthoXform::FlipV,
+            OrthoXform::Rot180,
+            OrthoXform::Rot90Cw,
+            OrthoXform::Rot90Ccw,
+        ] {
+            let m = xform.plane_affine(frame);
+            let corner =
+                |x: i32, y: i32| crate::transform::affine_transform(&m, x as f32, y as f32);
+            let (ax, ay) = corner(rect.x0(), rect.y0());
+            let (bx, by) = corner(
+                rect.x0() + rect.width as i32,
+                rect.y0() + rect.height as i32,
+            );
+            let mapped = CanvasRect::from_xywh(
+                ax.min(bx).round() as i32,
+                ay.min(by).round() as i32,
+                (ax - bx).abs().round() as u32,
+                (ay - by).abs().round() as u32,
+            );
+            assert_eq!(mapped, ortho_extent_about(rect, frame, xform), "{xform:?}");
+        }
     }
 
     #[test]

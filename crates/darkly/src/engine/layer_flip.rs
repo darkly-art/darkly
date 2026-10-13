@@ -6,7 +6,9 @@
 //! selection's bounding-box centre, masked to the selection *shape* (Krita's
 //! `KisMirrorProcessingVisitor`); with none, the whole layer flips about its
 //! own extent centre. Horizontal/vertical only (no layer rotate), so the node
-//! extent never changes and undo is a single [`GpuRegionAction`].
+//! extent never changes and undo is a single [`GpuRegionAction`]. A vector
+//! layer flips through its document transform instead, about the canvas
+//! window, undone as a transform property edit.
 
 use darkly_macros::handlers;
 
@@ -15,22 +17,43 @@ use super::{DarklyEngine, PendingFlip};
 use crate::coord::WindowRect;
 use crate::gpu::ortho_transform::OrthoXform;
 use crate::layer::LayerId;
+use crate::undo::property::{Property, PropertyAction};
 use crate::undo::GpuRegionAction;
 
 #[handlers]
 impl DarklyEngine {
-    /// Flip the given node (raster layer or mask filter) horizontally or
-    /// vertically. Returns `false` if the node isn't editable, has no texture,
-    /// or the flip was deferred waiting on the selection cache.
+    /// Flip the given node horizontally or vertically. A raster layer or mask
+    /// filter mirrors its pixels (within the selection, when one is active);
+    /// a layer whose content has a plane transform (a vector layer) mirrors
+    /// through that transform about the canvas window, whole, since a
+    /// transform cannot be masked by a selection. Returns `false` if the node
+    /// isn't editable, has nothing to flip, or the flip was deferred waiting
+    /// on the selection cache.
     #[handler]
     pub fn flip_node(&mut self, node_id: LayerId, xform: OrthoXform) -> bool {
         debug_assert!(matches!(xform, OrthoXform::FlipH | OrthoXform::FlipV));
         if !self.doc.is_node_editable(node_id) {
             return false;
         }
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         if self.doc.layer(node_id).is_none() && self.doc.find_filter(node_id).is_none() {
             return false;
+        }
+
+        let mirror = xform.plane_affine(self.doc.canvas_rect());
+        if let Some((old, new)) = self
+            .doc
+            .layer_mut(node_id)
+            .and_then(|l| l.apply_plane_affine(&mirror))
+        {
+            self.push_undo(Box::new(PropertyAction::new(
+                node_id,
+                Property::Transform(old),
+                Property::Transform(new),
+            )));
+            self.sync_compositor_layers();
+            self.compositor.mark_dirty();
+            return true;
         }
         let (node_extent, format) = match self.compositor.node_texture(node_id) {
             Some(t) => (t.canvas_extent(), t.format()),

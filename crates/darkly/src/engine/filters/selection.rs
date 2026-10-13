@@ -407,7 +407,7 @@ impl DarklyEngine {
 
     #[handler]
     pub fn clear_selection(&mut self) {
-        if !self.resolve_transform_conflict() {
+        if !self.resolve_pending_edits() {
             return;
         }
         if let Some((was_active, entry)) = self.clear_selection_collecting_undo() {
@@ -449,7 +449,7 @@ impl DarklyEngine {
 
     #[handler]
     pub fn select_all(&mut self) {
-        if !self.resolve_transform_conflict() {
+        if !self.resolve_pending_edits() {
             return;
         }
         let rect = self.selection_full_canvas_rect();
@@ -473,7 +473,7 @@ impl DarklyEngine {
 
     #[handler]
     pub fn invert_selection(&mut self) {
-        if !self.resolve_transform_conflict() || !self.has_selection() {
+        if !self.resolve_pending_edits() || !self.has_selection() {
             return;
         }
         let rect = self.selection_full_canvas_rect();
@@ -632,7 +632,7 @@ impl DarklyEngine {
 
     #[handler]
     pub fn clear_selection_contents(&mut self, id: LayerId) {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         if !self.has_selection() {
             return;
         }
@@ -643,7 +643,7 @@ impl DarklyEngine {
 
     /// Apply a tight-bounds rasterized mask (from SDF tools).
     pub(crate) fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
-        if !self.resolve_transform_conflict() {
+        if !self.resolve_pending_edits() {
             return;
         }
         let was_active = self.has_selection();
@@ -716,7 +716,7 @@ impl DarklyEngine {
         mode: SelectionMode,
         was_active: bool,
     ) {
-        if !self.resolve_transform_conflict() {
+        if !self.resolve_pending_edits() {
             return;
         }
         match mode {

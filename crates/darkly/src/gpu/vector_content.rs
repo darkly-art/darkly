@@ -1,52 +1,79 @@
-//! Vector-object layer realization on [`Compositor`]: the shared Vello
-//! renderer, per-layer scene state ([`VectorSubsystem`]), and the
-//! rasterization of dirty scenes into their storage textures before each
-//! composite.
+//! Vector-object layer content on [`Compositor`]: the per-layer scene state
+//! ([`VectorContent`]), its realization slot, and its rasterization through
+//! the shared Vello renderer. The generic regenerate and canvas-resync passes
+//! that drive it are in `layer_content.rs`.
 
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::compositor::Compositor;
-use crate::gpu::void_content::LayerContent;
+use crate::gpu::layer_content::{ContentBackends, LayerContent};
 use crate::layer::LayerId;
-use std::collections::HashMap;
 
-/// Realization input for a vector-object layer: the `vello::Scene` the engine
-/// built from the document's objects, plus a "needs re-rasterize" flag. Held in
-/// a separate map (not `LayerContent`) because vector layers reuse the raster
-/// blend path verbatim: only their texture source differs. `dirty` flips when
-/// the engine pushes a new scene (object/style/transform change) and clears
-/// after [`Compositor::realize_dirty_vector_layers`] rasterizes it: never on
-/// view zoom/pan (raster-first).
+/// Realization input for a vector-object layer: the plane-space
+/// `vello::Scene` the engine built from the document's objects, plus a
+/// "needs re-rasterize" flag. The flag is set when the engine pushes a new
+/// scene (object/style/transform change) or the canvas window moves, and is
+/// cleared when the scene is rasterized: never on view zoom/pan
+/// (raster-first).
+///
+/// The scene stays in plane coordinates; the move into the texture's frame
+/// happens at render time, so a reallocated texture re-renders it with no
+/// engine round trip.
 pub(super) struct VectorContent {
     scene: vello::Scene,
     dirty: bool,
 }
 
-/// The compositor's vector-layer state: the one lazily-created Vello renderer
-/// shared by every vector layer, and the per-layer realization inputs keyed by
-/// layer id.
-pub(super) struct VectorSubsystem {
-    /// One Vello renderer shared by every vector layer, created lazily on the
-    /// first vector-layer realization so projects with none never pay its
-    /// shader-compile cost.
-    pub(super) renderer: Option<crate::gpu::vector_renderer::VectorRenderer>,
-    /// Per-vector-layer realization input (the `vello::Scene` + dirty flag).
-    /// Keyed by layer id; entries are created by
-    /// [`Compositor::ensure_vector_layer`] and removed alongside the layer's
-    /// other GPU resources on dispose.
-    pub(super) scenes: HashMap<LayerId, VectorContent>,
+impl VectorContent {
+    /// An empty scene, dirty so the first composite produces a fresh texture.
+    fn new() -> Self {
+        VectorContent {
+            scene: vello::Scene::new(),
+            dirty: true,
+        }
+    }
+
+    fn set_scene(&mut self, scene: vello::Scene) {
+        self.scene = scene;
+        self.dirty = true;
+    }
+
+    pub(super) fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// The texture was reallocated at the new window, empty.
+    pub(super) fn canvas_rect_changed(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Rasterize the scene into `dst`. Vello submits its own command buffer.
+    pub(super) fn regenerate(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        backends: &mut ContentBackends,
+        dst: &LayerTexture,
+    ) {
+        backends
+            .vector_renderer(device)
+            .render(device, queue, &self.scene, dst);
+    }
 }
 
 impl Compositor {
-    /// Allocate the per-instance GPU state for a new vector-object layer:
-    /// a canvas-sized `Rgba8Unorm` + `STORAGE_BINDING` texture (Vello renders
-    /// into it as a storage image) and a `LayerCache` with blend uniforms.
-    ///
-    /// Unlike a void, a vector layer carries no procedural sidecar: its
-    /// `LayerContent` is `Raster` so the void animation/dirty machinery skips
-    /// it. The realization is driven separately: the engine builds a
+    /// Allocate the per-instance GPU state for a new vector-object layer: a
+    /// canvas-window-sized `Rgba8Unorm` + `STORAGE_BINDING` texture (Vello
+    /// renders into it as a storage image) and a `LayerCache` with blend
+    /// uniforms and an empty [`LayerContent::Vector`]. The engine builds the
     /// `vello::Scene` from the document objects and pushes it via
-    /// [`Self::set_vector_scene`], and [`Self::realize_dirty_vector_layers`]
-    /// rasterizes dirty scenes before each composite. Idempotent.
+    /// [`Self::set_vector_scene`]. Idempotent.
+    ///
+    /// The texture is window-sized, like a void's, so it costs a full canvas
+    /// of VRAM whatever the objects cover. Sizing it to the objects' padded
+    /// bounds instead (plane-anchored, grown in chunks like a raster layer,
+    /// left alone by a resize) would make the cost proportional to content;
+    /// it needs the drawn bounds of strokes and shaped text before
+    /// rendering, and is a change to this variant only.
     pub fn ensure_vector_layer(
         &mut self,
         device: &wgpu::Device,
@@ -58,14 +85,12 @@ impl Compositor {
         }
         let bounds = self.canvas_rect();
         let layer_tex = LayerTexture::with_bounds_storage(device, bounds);
-        self.insert_content_layer(device, queue, layer_id, layer_tex, LayerContent::Raster);
-        // Empty scene, dirty so the first composite produces a fresh texture.
-        self.vector.scenes.insert(
+        self.insert_content_layer(
+            device,
+            queue,
             layer_id,
-            VectorContent {
-                scene: vello::Scene::new(),
-                dirty: true,
-            },
+            layer_tex,
+            LayerContent::Vector(VectorContent::new()),
         );
         self.mark_dirty();
     }
@@ -73,14 +98,18 @@ impl Compositor {
     /// Replace the realized `vello::Scene` for a vector layer and mark it dirty
     /// so the next composite re-rasterizes. The engine builds the scene from
     /// the document's authoritative objects (text shaped by parley, paths from
-    /// kurbo): the compositor stays ignorant of fonts and geometry. No-op if
-    /// the layer wasn't ensured.
+    /// kurbo) in plane coordinates: the compositor stays ignorant of fonts and
+    /// geometry. No-op if the layer wasn't ensured.
     pub fn set_vector_scene(&mut self, layer_id: LayerId, scene: vello::Scene) {
-        if let Some(vc) = self.vector.scenes.get_mut(&layer_id) {
-            vc.scene = scene;
-            vc.dirty = true;
-            self.mark_dirty();
-        }
+        let Some(vc) = self
+            .layer_cache
+            .get_mut(&layer_id)
+            .and_then(|c| c.content.vector_mut())
+        else {
+            return;
+        };
+        vc.set_scene(scene);
+        self.mark_dirty();
     }
 
     /// Compile the vector renderer's pipelines now (if not already), so the first
@@ -90,53 +119,6 @@ impl Compositor {
     /// commits a text box, rather than blocking the frame that would show it.
     /// Idempotent: a no-op once the renderer exists.
     pub fn ensure_vector_renderer(&mut self, device: &wgpu::Device) {
-        self.vector
-            .renderer
-            .get_or_insert_with(|| crate::gpu::vector_renderer::VectorRenderer::new(device));
-    }
-
-    /// Rasterize every dirty vector layer's scene into its storage texture.
-    /// Runs before the composite pass (in `render_offscreen`) so the blend
-    /// walk samples up-to-date pixels. Lazily constructs the shared
-    /// [`VectorRenderer`](crate::gpu::vector_renderer::VectorRenderer) on
-    /// first use (see [`Self::ensure_vector_renderer`]).
-    /// Vello submits its own command buffer per layer; those submits are ordered
-    /// before the compositor's, so GPU ordering is preserved.
-    pub(super) fn realize_dirty_vector_layers(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) {
-        let dirty: Vec<LayerId> = self
-            .vector
-            .scenes
-            .iter()
-            .filter_map(|(id, vc)| vc.dirty.then_some(*id))
-            .collect();
-        if dirty.is_empty() {
-            return;
-        }
-        let renderer = self
-            .vector
-            .renderer
-            .get_or_insert_with(|| crate::gpu::vector_renderer::VectorRenderer::new(device));
-        for id in dirty {
-            let Some(tex) = self.node_textures.get(&id).map(|s| &s.texture) else {
-                continue;
-            };
-            let extent = tex.layer_extent();
-            let Some(vc) = self.vector.scenes.get_mut(&id) else {
-                continue;
-            };
-            renderer.render(
-                device,
-                queue,
-                &vc.scene,
-                tex.view(),
-                extent.width,
-                extent.height,
-            );
-            vc.dirty = false;
-        }
+        self.backends.vector_renderer(device);
     }
 }

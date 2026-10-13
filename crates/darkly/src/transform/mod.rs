@@ -158,14 +158,22 @@ impl Transform {
     /// homography commutes with the perspective divide: the divide happens on
     /// `w`, and a translation row leaves `w` untouched.
     pub fn then_translated(self, dx: f32, dy: f32) -> Transform {
+        self.then_affine(&affine_translate(dx, dy))
+    }
+
+    /// This transform followed by `m` in the frame it maps *into*
+    /// (`m ∘ self`): what moving the transformed content as a whole (a canvas
+    /// flip, rotate or rescale) does to it.
+    ///
+    /// Mode-preserving, like [`Self::then_translated`]: an affine on the left
+    /// leaves a homography's bottom row a homography's, and an affine's an
+    /// affine's.
+    pub fn then_affine(self, m: &Affine2D) -> Transform {
         match self {
-            Transform::Basic([a, b, tx, c, d, ty]) => {
-                Transform::Basic([a, b, tx + dx, c, d, ty + dy])
+            Transform::Basic(t) => Transform::Basic(affine_multiply(m, &t)),
+            Transform::Perspective(t) => {
+                Transform::Perspective(mat3_multiply(&affine_to_mat3(m), &t))
             }
-            Transform::Perspective(m) => Transform::Perspective(mat3_multiply(
-                &[1.0, 0.0, dx, 0.0, 1.0, dy, 0.0, 0.0, 1.0],
-                &m,
-            )),
         }
     }
 
@@ -606,6 +614,27 @@ mod tests {
     /// Translating by zero is the identity, in both modes: the degenerate
     /// case conversion hits whenever the trimmed content starts at the plane
     /// origin.
+    #[test]
+    fn then_affine_applies_the_affine_after_self() {
+        // Translate by (10, 0), then rotate a quarter turn about the origin:
+        // (1, 0) -> (11, 0) -> (0, 11). The reverse order would give (10, 1).
+        let quarter = affine_rotate(std::f32::consts::FRAC_PI_2);
+        let t = Transform::from_affine(affine_translate(10.0, 0.0)).then_affine(&quarter);
+        let (x, y) = mat3_apply(&t.to_projective(), 1.0, 0.0);
+        approx(x, 0.0);
+        approx(y, 11.0);
+
+        let p = Transform::Perspective(affine_to_mat3(&affine_translate(10.0, 0.0)))
+            .then_affine(&quarter);
+        assert!(
+            matches!(p, Transform::Perspective(_)),
+            "homography stays a homography"
+        );
+        let (x, y) = mat3_apply(&p.to_projective(), 1.0, 0.0);
+        approx(x, 0.0);
+        approx(y, 11.0);
+    }
+
     #[test]
     fn then_translated_by_zero_changes_nothing() {
         let basic = Transform::from_affine([2.0, 0.5, 1.0, -0.5, 2.0, 4.0]);
