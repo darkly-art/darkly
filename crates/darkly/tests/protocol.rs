@@ -269,6 +269,26 @@ fn macro_move_layer_dispatch_reorders_via_nested_target() {
     assert!(resp.value.is_null(), "a `()` return serializes to null");
 }
 
+/// The brush-bar reorder's anchor is optional, and `null` on the wire means
+/// "move to the end". `protocol_gen_ts_is_in_sync` pins the TS type, not that
+/// the decoder accepts the `null` the frontend actually sends.
+#[test]
+fn brush_bar_reorder_null_anchor_moves_to_end() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+
+    reg.dispatch(
+        &mut engine,
+        "brush_graph_reorder_exposed_port",
+        json!({ "key": "paint.wash_flow", "before": null }),
+        &[],
+    )
+    .expect("a null anchor decodes");
+
+    let last = engine.brush_exposed_ports().pop().expect("bar has entries");
+    assert_eq!(last.key, "paint.wash_flow");
+}
+
 /// The macro's autoref response conversion produces the engine's *natural*
 /// return shapes: no `{ id }`/`{ skipped }` envelope. `add_group` (`-> LayerId`)
 /// is a bare number; `group_layers`'s `Err` (`Result<_, String>`) rejects as a

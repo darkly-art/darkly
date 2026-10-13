@@ -1,6 +1,7 @@
 <script lang="ts">
     import { getContext } from 'svelte';
     import { pointerDrag } from '../../lib/pointerDrag';
+    import { reorderAnchor } from '../../lib/reorderAnchor';
     import { flip } from 'svelte/animate';
     import { cubicOut } from 'svelte/easing';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
@@ -42,9 +43,9 @@
     // Drag-reorder state. `liveOrder` shadows the engine's port list
     // during a drag so the rows can shuffle in real time on every
     // `dragover`; `animate:flip` rides those reactive reorders and
-    // slides the rows past the cursor. On drop we commit the final
-    // index to the engine in one call; on cancel/escape we just drop
-    // the shadow and revert to whatever the engine still says.
+    // slides the rows past the cursor. On drop we commit the row's new
+    // neighbour to the engine in one call, and keep the shadow on screen
+    // until the engine's answer has replaced `exposedPorts`.
     let dragKey = $state<string | null>(null);
     let liveOrder = $state<ExposedPortInfo[] | null>(null);
 
@@ -54,9 +55,10 @@
 
     function onRowDragStart(e: DragEvent, port: ExposedPortInfo) {
         dragKey = port.key;
-        // Snapshot the current order as a mutable shadow we'll
-        // splice the dragged entry through on every dragover.
-        liveOrder = [...brushGraph.exposedPorts];
+        // Snapshot the order on screen as a mutable shadow we'll splice
+        // the dragged entry through on every dragover. That is the
+        // previous drop's shadow if its commit is still in flight.
+        liveOrder = [...displayPorts];
         if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', port.key);
@@ -97,30 +99,35 @@
     function onRowDrop(e: DragEvent) {
         e.preventDefault();
         e.stopPropagation();
-        commitDrag();
+        void commitDrag();
     }
 
     function onRowDragEnd() {
-        // Drop fired? We've already committed. Drop didn't fire (drag
-        // ended outside any row or via Escape)? Discard the shadow.
-        commitDrag();
+        // Drop fired? It already committed and cleared `dragKey`, so this
+        // is a no-op. Drop didn't fire (released outside a row, or
+        // Escape)? The shadow is committed anyway: the order the artist
+        // saw last is the order they get.
+        void commitDrag();
     }
 
-    function commitDrag() {
+    async function commitDrag() {
         const key = dragKey;
         const order = liveOrder;
-        if (key !== null && order) {
+        if (key === null || !order) return;
+        dragKey = null;
+        try {
             const finalIdx = order.findIndex((p) => p.key === key);
             const engineIdx = brushGraph.exposedPorts.findIndex((p) => p.key === key);
             if (finalIdx !== -1 && finalIdx !== engineIdx) {
-                // Sync engine state synchronously; the resulting engine
-                // order will match liveOrder, so clearing the shadow
-                // below doesn't flash the row back to its old slot.
-                brushGraph.reorderExposedPort(key, finalIdx);
+                const keys = order.map((p) => p.key);
+                await brushGraph.reorderExposedPort(key, reorderAnchor(keys, key));
             }
+        } finally {
+            // `exposedPorts` now carries the engine's order, so dropping
+            // the shadow doesn't animate the rows back to their old slots.
+            // A drag started during the round trip owns a fresh shadow.
+            if (liveOrder === order) liveOrder = null;
         }
-        dragKey = null;
-        liveOrder = null;
     }
 
     // Edit modal state.
