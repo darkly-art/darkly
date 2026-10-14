@@ -19,7 +19,7 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+Darkly does not want to be Photoshop, but it wants to be the best paint app for artists. It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
@@ -103,8 +103,8 @@ For a feature to count, it must be:
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
-- [x] Per-stroke color jitter (hue / saturation / value)
 - [x] Color picker
+- [x] Color jitter
 - [x] Raster layers + groups
 - [x] 16 blend modes
 - [x] Layer masks
