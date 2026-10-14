@@ -9,7 +9,9 @@
 //                  overrides the model selector
 //
 // The colour-space conversions (`rgb_to_hsv`/`hsv_to_rgb`, `rgb_to_hsl`/…,
-// `rgb_to_hsy`/`hsy_to_rgb`) are prepended from `shaders/lib/colorspace.wgsl`.
+// `rgb_to_hsy`/`hsy_to_rgb`) are prepended from `shaders/lib/colorspace.wgsl`,
+// and `wrap360`/`apply_sat`/`apply_val`/`hsv_adjust` from
+// `shaders/lib/hsv_adjust.wgsl`, which the brush graph's `hsv` node shares.
 // The Rust side (`gpu/effects/hsv.rs`) packs the params: `hue` in degrees
 // (−180..180), `saturation`/`value` normalized to −1..1, `model`/`colorize`
 // as u32.
@@ -39,28 +41,6 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VsOut {
     return out;
 }
 
-fn wrap360(h: f32) -> f32 {
-    return h - floor(h / 360.0) * 360.0;
-}
-
-// Saturation scale, Krita `HSVTransform`: a nonlinear boost for ds > 0
-// (ds=0.5 → ×2, ds=1 → ×4), a plain fade for ds ≤ 0 (ds=−1 → 0, fully grey).
-fn apply_sat(s: f32, ds: f32) -> f32 {
-    if (ds > 0.0) {
-        return min(1.0, s * (1.0 + ds + 2.0 * ds * ds));
-    }
-    return s * (ds + 1.0);
-}
-
-// Value/lightness/luma scale, Krita `HSVTransform`: dv > 0 lerps toward 1,
-// dv < 0 fades toward 0. dv=0 is identity.
-fn apply_val(v: f32, dv: f32) -> f32 {
-    if (dv > 0.0) {
-        return v + dv * (1.0 - v);
-    }
-    return v * (dv + 1.0);
-}
-
 fn hsv_transform(rgb: vec3f) -> vec3f {
     let dh = params.hue;
     let ds = params.saturation;
@@ -88,11 +68,7 @@ fn hsv_transform(rgb: vec3f) -> vec3f {
     }
 
     if (params.model == 0u) {
-        var hsv = rgb_to_hsv(rgb);
-        hsv.x = wrap360(hsv.x + dh);
-        hsv.y = apply_sat(hsv.y, ds);
-        hsv.z = apply_val(hsv.z, dv);
-        return hsv_to_rgb(hsv);
+        return hsv_adjust(rgb, dh, ds, dv);
     } else if (params.model == 1u) {
         var hsl = rgb_to_hsl(rgb);
         hsl.x = wrap360(hsl.x + dh);

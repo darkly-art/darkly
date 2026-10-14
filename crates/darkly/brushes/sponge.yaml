@@ -38,8 +38,8 @@ nodes:
       - - 1.0
         - 0.5
       input: 0.10
-  levels:
-    type: levels
+  remap:
+    type: remap
   multiply:
     type: multiply
   noise:
@@ -72,12 +72,12 @@ nodes:
     inputs:
       a: 0.11924592405557632
 connections:
-- add.result -> levels.input
+- add.result -> remap.input
 - brush_settings.size -> multiply.a
-- curve.output -> levels.in_low
+- curve.output -> remap.in_low
 - curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.b
-- levels.output -> stamp.tip
+- remap.output -> stamp.tip
 - multiply.result -> noise.scale
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color

@@ -1063,6 +1063,13 @@ fn assemble_shader(
     // the `noise` node compiles calls into these. Dead-stripped when unused.
     out.push_str(include_str!("../../../shaders/lib/fbm2d.wgsl"));
     out.push('\n');
+    // Colour-space conversions and the HSV adjustment (`hsv_adjust`): the
+    // `hsv` node compiles calls into these, shared with the Hue/Saturation
+    // effect shader. Dead-stripped when unused.
+    out.push_str(include_str!("../../../shaders/lib/colorspace.wgsl"));
+    out.push('\n');
+    out.push_str(include_str!("../../../shaders/lib/hsv_adjust.wgsl"));
+    out.push('\n');
     out.push_str(include_str!("../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
 

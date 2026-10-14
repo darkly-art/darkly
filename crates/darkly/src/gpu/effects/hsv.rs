@@ -45,12 +45,14 @@ pub const PARAMS: &[ParamDef] = &[
         ),
 ];
 
-/// The HSV fragment shader: the shared colour-space lib prepended to `hsv.wgsl`
-/// (built at load time; the render shaders have no `#include` preprocessor).
+/// The HSV fragment shader: the shared colour-space and adjustment libs
+/// prepended to `hsv.wgsl` (built at load time; the render shaders have no
+/// `#include` preprocessor).
 fn hsv_shader_source() -> String {
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         include_str!("../../../shaders/lib/colorspace.wgsl"),
+        include_str!("../../../shaders/lib/hsv_adjust.wgsl"),
         include_str!("../../../shaders/effects/hsv.wgsl"),
     )
 }

@@ -13,8 +13,8 @@
      * tooltip, focus, and keep-open scope.
      *
      * In `popup` mode a swatch click opens the color wheel for that swatch. In
-     * `select` mode (the docked color panel, which shows its own wheel) a click
-     * only reports which swatch the host should edit.
+     * `select` mode (the docked color panel, which hosts the color editor
+     * itself) a click only reports which swatch the host should edit.
      */
     import { app } from '../../state/app.svelte';
     import type { Color } from '../../lib/color';
@@ -90,6 +90,7 @@
         onclose={() => (open = null)}
         scope={SCOPE}
         anchor={() => (open === 'foreground' ? fgButton : bgButton)!.getBoundingClientRect()}
+        paint
     />
 {/if}
 

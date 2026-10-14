@@ -227,7 +227,7 @@ compounds at both, and the commit is what keeps them in step.
 
 **Whole pigments, any chroma.** The ceiling deposits a dab's colour as a
 whole: room is measured along the dab's own pigment, so a graph that varies
-dab colour per dab (via `random`, `split_color`, or an `image` tip) lays
+dab colour per dab (via `random`, `hsv`, `split_color`, or an `image` tip) lays
 each colour down intact, and a later pigment far from an earlier one finds
 room and replaces it rather than fringing. (The `Max` blend state the
 instanced terminal ran took each channel's maximum from a different dab,
