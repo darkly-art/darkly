@@ -37,7 +37,8 @@ pub enum BrushWireType {
     Bool,
     /// `vec2<f32>` (position, tilt, motion).
     Vec2,
-    /// `vec4<f32>` (RGBA color, premultiplied; arbitrary 4-vector).
+    /// `vec4<f32>` (RGBA color: straight on the `paint_color` leg, premultiplied
+    /// from `stamp.dab` onward; arbitrary 4-vector).
     Vec4,
     /// A dropdown-selected index that picks a compile-time WGSL branch
     /// (shape algorithm, sampling space, random mode). Carries an `i32`

@@ -24,8 +24,8 @@ nodes:
         - 0.6756355
   divide:
     type: divide
-  levels:
-    type: levels
+  remap:
+    type: remap
   multiply:
     type: multiply
     inputs:
@@ -64,13 +64,13 @@ nodes:
     inputs:
       a: 0.11999999731779099
 connections:
-- add.result -> levels.input
+- add.result -> remap.input
 - brush_settings.size -> divide.b
 - brush_settings.size -> multiply_3.a
 - circle.mask -> add.b
-- curve.output -> levels.in_low
+- curve.output -> remap.in_low
 - divide.result -> multiply.a
-- levels.output -> stamp.tip
+- remap.output -> stamp.tip
 - multiply.result -> multiply_2.b
 - multiply_2.result -> noise.rotation
 - multiply_3.result -> noise.scale

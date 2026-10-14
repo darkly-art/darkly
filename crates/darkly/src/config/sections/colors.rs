@@ -25,6 +25,34 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Bool,
         widget: WidgetHint::Auto,
     },
+    // The colour panel's Jitter tab. Amplitudes: each brush stroke draws one
+    // offset per channel in `[-amp, amp]` at stroke start
+    // (`brush::color_jitter`). Hidden from Settings: they are live tool state
+    // with their own UI, like panel sizes.
+    Pref {
+        key: "colors.jitterHue",
+        display_name: "Hue jitter",
+        description: Some("Degrees either side of the foreground hue a stroke may land."),
+        kind: PrefKind::Float {
+            min: 0.0,
+            max: 180.0,
+        },
+        widget: WidgetHint::Hidden,
+    },
+    Pref {
+        key: "colors.jitterSaturation",
+        display_name: "Saturation jitter",
+        description: Some("How far a stroke's saturation may drift from the foreground's."),
+        kind: PrefKind::Float { min: 0.0, max: 1.0 },
+        widget: WidgetHint::Hidden,
+    },
+    Pref {
+        key: "colors.jitterValue",
+        display_name: "Value jitter",
+        description: Some("How far a stroke's value may drift from the foreground's."),
+        kind: PrefKind::Float { min: 0.0, max: 1.0 },
+        widget: WidgetHint::Hidden,
+    },
 ];
 
 pub fn register() -> SchemaSection {

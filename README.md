@@ -11,6 +11,9 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/darkly-art/darkly/ci.yml?branch=master&label=Tests&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/darkly/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
+[![itch.io](https://img.shields.io/badge/itch.io-black?logo=itchdotio&logoColor=9500ff&style=for-the-badge&labelColor=black)](https://darklyart.itch.io/darkly)
+[![Flathub](https://img.shields.io/flathub/v/art.darkly.Darkly?label=Flathub&logo=flathub&logoColor=6914ff&style=for-the-badge&labelColor=black&color=6914ff)](https://flathub.org/en/apps/art.darkly.Darkly)
+
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
@@ -100,6 +103,7 @@ For a feature to count, it must be:
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
+- [x] Per-stroke color jitter (hue / saturation / value)
 - [x] Color picker
 - [x] Raster layers + groups
 - [x] 16 blend modes

@@ -164,3 +164,6 @@ settings:
   colors.defaultForeground: "#ffffff"
   colors.defaultBackground: "#000000"
   colors.lockToBrush: false
+  colors.jitterHue: 0.0
+  colors.jitterSaturation: 0.0
+  colors.jitterValue: 0.0
