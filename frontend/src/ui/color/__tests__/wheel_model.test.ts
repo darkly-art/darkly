@@ -50,17 +50,21 @@ describe('ring', () => {
     it('pointForHue_lands_on_the_ring_midline_and_reads_back', () => {
         for (const h of [0, 33, 120, 200, 359]) {
             const p = pointForHue(g, h);
-            expect(regionAt(g, h, p.x, p.y)).toBe('ring');
+            expect(regionAt(g, h, p.x, p.y)).toBe('hue');
             expect(hueAt(g, p.x, p.y)).toBeCloseTo(h);
         }
     });
 
-    it('regionAt_classifies_ring_triangle_gap_and_outside', () => {
-        expect(regionAt(g, 0, C + (g.size / 2 - g.ringWidth / 2), C)).toBe('ring');
-        expect(regionAt(g, 0, C, C)).toBe('triangle');
-        // Between the triangle's flat side and the ring, opposite the hue corner.
-        expect(regionAt(g, 0, C - 60, C)).toBeNull();
-        expect(regionAt(g, 0, 1, 1)).toBeNull();
+    it('regionAt_sends_every_press_to_the_nearer_control', () => {
+        expect(regionAt(g, 0, C + (g.size / 2 - g.ringWidth / 2), C)).toBe('hue');
+        expect(regionAt(g, 0, C, C)).toBe('sv');
+        // Between the triangle's flat side and the ring, opposite the hue
+        // corner: 21 px past the edge, 28 px from the ring. The nearer control
+        // is the triangle, which is what separates this rule from "anything
+        // off the triangle steers hue".
+        expect(regionAt(g, 0, C - 60, C)).toBe('sv');
+        // The box's corner, outside the disc: nearest the ring.
+        expect(regionAt(g, 0, 1, 1)).toBe('hue');
     });
 
     it('the_gap_keeps_the_triangle_clear_of_the_ring', () => {
@@ -71,7 +75,7 @@ describe('ring', () => {
             const vs = triangleVertices(g, h);
             for (const p of [vs.hue, vs.black, vs.white]) {
                 expect(Math.hypot(p.x - C, p.y - C)).toBeCloseTo(inner - g.gap, 6);
-                expect(regionAt(g, h, p.x, p.y)).toBe('triangle');
+                expect(regionAt(g, h, p.x, p.y)).toBe('sv');
             }
         }
     });
@@ -176,5 +180,42 @@ describe('edge coverage', () => {
             y: mid.y + (mid.y - hue.y) / away,
         };
         expect(b.weights(out.x, out.y).hue * b.edgeScale).toBeCloseTo(-1, 6);
+    });
+});
+
+describe('every press lands somewhere', () => {
+    /** The point at `deg` degrees and radius `r` from the wheel's center. */
+    const polar = (deg: number, r: number) => {
+        const a = (deg * Math.PI) / 180;
+        return { x: C + Math.cos(a) * r, y: C + Math.sin(a) * r };
+    };
+
+    it('the_gap_between_an_edge_and_the_ring_steers_hue', () => {
+        // At hue 0 the hue-black edge faces 60 degrees. Radius 80 is 41 px
+        // past that edge and 8 px inside the ring's hole.
+        const p = polar(60, 80);
+        expect(regionAt(g, 0, p.x, p.y)).toBe('hue');
+        expect(hueAt(g, p.x, p.y)).toBeCloseTo(60);
+    });
+
+    it('a_near_miss_off_an_edge_picks_the_edge', () => {
+        // 6 px past the black-white (s = 0) edge, far from the ring.
+        const p = polar(180, 45);
+        expect(regionAt(g, 0, p.x, p.y)).toBe('sv');
+        const sv = svAt(g, 0, p.x, p.y);
+        expect(sv.s).toBe(0);
+        expect(sv.v).toBeCloseTo(0.5, 1);
+    });
+
+    it('a_near_miss_past_a_corner_picks_the_corner', () => {
+        // 3 px past the black corner (120 degrees at hue 0).
+        const p = polar(120, triangleRadius(g) + 3);
+        expect(regionAt(g, 0, p.x, p.y)).toBe('sv');
+        expect(svAt(g, 0, p.x, p.y).v).toBeCloseTo(0);
+    });
+
+    it('the_box_corners_steer_hue', () => {
+        expect(regionAt(g, 0, 1, 1)).toBe('hue');
+        expect(hueAt(g, 1, 1)).toBeCloseTo(225);
     });
 });

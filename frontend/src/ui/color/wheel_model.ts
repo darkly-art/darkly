@@ -1,14 +1,16 @@
 /**
  * Geometry and state rules for the hue ring + saturation/value triangle color
  * wheel. Pure (no DOM, no runes): the component paints from `pointForHue` /
- * `pointForSv` and hit-tests exclusively through `regionAt` / `hueAt` / `svAt`,
- * so paint and hit can never disagree.
+ * `pointForSv` and hit-tests exclusively through `regionAt` / `hueAt` / `svAt`.
+ * The hit rule is derived from the painted geometry, so the two cannot drift
+ * apart.
  *
  * The ring, triangle, and clamped edge projection are a port of GIMP's
  * `gimpcolorwheel.c` (`compute_triangle`, `is_in_ring`, `compute_sv`,
  * `is_in_triangle`, `compute_v`) by Simon Budig, Federico Mena-Quintero,
  * Jonathan Blandford and Michael Natterer, GPL-3.0-or-later:
  * https://gitlab.gnome.org/GNOME/gimp/-/blob/master/modules/gimpcolorwheel.c
+ * The press rule departs from `is_in_ring`'s strict annulus; see `regionAt`.
  *
  * The keep-last-hue rule in `hsvFromColor` is Krita's
  * `KisVisualColorModel::convertKoColorToChannelValues`
@@ -63,7 +65,9 @@ export function wheelGeometry(size: number): WheelGeometry {
     };
 }
 
-export type WheelRegion = 'ring' | 'triangle' | null;
+/** Which axis a press steers: the hue around the ring, or saturation and
+ *  value inside the triangle. Every point of the wheel's box has one. */
+export type WheelRegion = 'hue' | 'sv';
 
 const DEG = 180 / Math.PI;
 
@@ -94,19 +98,6 @@ function innerRadius(g: WheelGeometry): number {
  *  pulled in by the gap. */
 export function triangleRadius(g: WheelGeometry): number {
     return innerRadius(g) - g.gap;
-}
-
-/** Which part of the wheel a point lands on given the current hue `h` (the
- *  triangle turns with it), or `null` for the corners and the gaps between the
- *  triangle and the ring. */
-export function regionAt(g: WheelGeometry, h: number, x: number, y: number): WheelRegion {
-    // The gap keeps the two apart, so nothing is ever both.
-    if (isInTriangle(g, h, x, y)) return 'triangle';
-    const c = center(g);
-    const dx = x - c, dy = y - c;
-    const dist = dx * dx + dy * dy;
-    const outer = g.size / 2, inner = innerRadius(g);
-    return dist >= inner * inner && dist <= outer * outer ? 'ring' : null;
 }
 
 /** Hue in degrees `[0, 360)` for the direction from the center to a point. */
@@ -217,4 +208,31 @@ export function pointForSv(g: WheelGeometry, h: number, s: number, v: number): P
         x: S.x + v * (V.x - S.x) + v * s * (H.x - V.x),
         y: S.y + v * (V.y - S.y) + v * s * (H.y - V.y),
     };
+}
+
+/**
+ * Which axis a press at a point steers, given the current hue `h` (the
+ * triangle turns with it). Total over the wheel's box: inside the triangle a
+ * press steers saturation and value; anywhere else it goes to whichever
+ * painted control is nearer, the ring band or the triangle.
+ *
+ * GIMP (`is_in_ring`) and Krita (the ring widget's annulus mask) accept hue
+ * presses on the band alone, but their rings are thicker and their triangles
+ * touch them. Here the ring is thin and a gap separates it from the
+ * triangle, so a strict test would leave half the disc dead. Nearest-control
+ * keeps a near miss beside the triangle on the triangle, clamped to the edge
+ * or corner it overshot as a drag past the edge already is (`svAt`), the way
+ * Krita's visual triangle takes presses a few pixels past its edge and
+ * clamps them on (`KisVisualTriangleSelectorShape::getMaskMap`, widened by
+ * `m_margin`, in `krita/libs/widgets/KisVisualTriangleSelectorShape.cpp`).
+ */
+export function regionAt(g: WheelGeometry, h: number, x: number, y: number): WheelRegion {
+    if (isInTriangle(g, h, x, y)) return 'sv';
+    const c = center(g);
+    const r = Math.hypot(x - c, y - c);
+    const toRing = Math.max(0, innerRadius(g) - r, r - g.size / 2);
+    const { s, v } = svAt(g, h, x, y);
+    const nearest = pointForSv(g, h, s, v);
+    const toTriangle = Math.hypot(x - nearest.x, y - nearest.y);
+    return toTriangle < toRing ? 'sv' : 'hue';
 }

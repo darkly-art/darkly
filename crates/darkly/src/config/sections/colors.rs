@@ -25,7 +25,7 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Bool,
         widget: WidgetHint::Auto,
     },
-    // The colour panel's Jitter tab. Amplitudes: each brush stroke draws one
+    // The color editor's Jitter tab. Amplitudes: each brush stroke draws one
     // offset per channel in `[-amp, amp]` at stroke start
     // (`brush::color_jitter`). Hidden from Settings: they are live tool state
     // with their own UI, like panel sizes.

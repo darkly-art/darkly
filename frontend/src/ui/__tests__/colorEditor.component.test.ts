@@ -2,9 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-// The panel's wheel reads the focused instance's colours and the jitter tab
-// reads and writes the `colors.jitter*` prefs through the config store, which
-// is WASM-backed in production.
+// The color editor (the widget the swatch popup and the docked Color panel
+// both host): its tabs, and what a paint host gets that a generic color field
+// does not. The jitter tab reads and writes the `colors.jitter*` prefs through
+// the config store, which is WASM-backed in production; the panel host reads
+// the focused instance's colors.
 vi.mock('../../config/store.svelte', async (importOriginal) => ({
     ...(await importOriginal<object>()),
     config: (await import('../../__tests__/fakeConfig.svelte')).fakeConfig,
@@ -13,9 +15,14 @@ vi.mock('../../config/store.svelte', async (importOriginal) => ({
 
 import { fakeConfig } from '../../__tests__/fakeConfig.svelte';
 import { DarklyInstance, setActiveInstance } from '../../state/app.svelte';
+import type { Color } from '../../lib/color';
+import ColorEditor from '../color/ColorEditor.svelte';
 import ColorPanel from '../color/ColorPanel.svelte';
+import { pointForSv, wheelGeometry } from '../color/wheel_model';
 
 beforeEach(() => {
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.hasPointerCapture = () => false;
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
         () =>
             ({
@@ -26,9 +33,11 @@ beforeEach(() => {
 });
 
 const mounted: Array<Record<string, unknown>> = [];
+let inst: DarklyInstance;
 
 beforeEach(() => {
-    setActiveInstance(new DarklyInstance());
+    inst = new DarklyInstance();
+    setActiveInstance(inst);
     fakeConfig.reset();
 });
 afterEach(() => {
@@ -38,7 +47,18 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-function render() {
+const RED: Color = { r: 255, g: 0, b: 0, a: 255 };
+
+function render(paint = true) {
+    const target = document.createElement('div');
+    document.body.append(target);
+    const props = { value: RED, oninput: () => {}, onchange: () => {}, size: 200, paint };
+    mounted.push(mount(ColorEditor, { target, props }) as Record<string, unknown>);
+    flushSync();
+    return target;
+}
+
+function renderPanel() {
     const target = document.createElement('div');
     document.body.append(target);
     mounted.push(mount(ColorPanel, { target, props: {} }) as Record<string, unknown>);
@@ -63,7 +83,7 @@ function scrubValue(scrub: HTMLElement): string {
     return scrub.querySelector('.bar-control-value')?.textContent ?? '';
 }
 
-describe('colour panel', () => {
+describe('color editor', () => {
     it('opens_on_the_wheel_with_no_jitter_controls', () => {
         const target = render();
         expect(target.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe('Wheel');
@@ -105,5 +125,41 @@ describe('colour panel', () => {
         clickTab(target, 'Wheel');
         expect(target.querySelector('canvas')).not.toBeNull();
         expect(scrubs(target)).toHaveLength(0);
+    });
+
+    it('without_paint_there_is_no_tab_strip_and_no_jitter', () => {
+        const target = render(false);
+        expect(target.querySelector('[role=tab]')).toBeNull();
+        expect(target.querySelector('canvas')).not.toBeNull();
+        expect(target.querySelector('.hex')).not.toBeNull();
+        expect(scrubs(target)).toHaveLength(0);
+    });
+});
+
+describe('color panel', () => {
+    it('hosts_the_editor_with_the_jitter_tab_and_edits_the_selected_swatch', () => {
+        inst.foreground = { r: 0, g: 255, b: 0, a: 255 };
+        inst.background = { r: 0, g: 0, b: 128, a: 255 };
+        const target = renderPanel();
+        expect(target.querySelector('.swatches')).not.toBeNull();
+        expect(
+            Array.from(target.querySelectorAll('[role=tab]')).map((t) => t.textContent),
+        ).toEqual(['Wheel', 'Jitter']);
+
+        // Select the navy background, then press the triangle's hue corner:
+        // full saturation and value at navy's hue is pure blue.
+        target.querySelector<HTMLElement>('.swatch.bg')!.click();
+        flushSync();
+        const wheel = target.querySelector('.wheel')!;
+        wheel.getBoundingClientRect = () =>
+            ({ left: 0, top: 0, right: 220, bottom: 220, width: 220, height: 220, x: 0, y: 0, toJSON() {} }) as DOMRect;
+        const p = pointForSv(wheelGeometry(220), 240, 1, 1);
+        wheel.dispatchEvent(
+            new PointerEvent('pointerdown', { clientX: p.x, clientY: p.y, pointerId: 1, button: 0, bubbles: true }),
+        );
+        flushSync();
+
+        expect(inst.background).toEqual({ r: 0, g: 0, b: 255, a: 255 });
+        expect(inst.foreground).toEqual({ r: 0, g: 255, b: 0, a: 255 });
     });
 });

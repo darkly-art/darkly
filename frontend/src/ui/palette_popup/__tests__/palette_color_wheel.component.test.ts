@@ -103,6 +103,10 @@ describe('palette popup color wheel', () => {
         // each other.
         expect(popup!.getAttribute('data-keep-open')).toBe('palette-color-wheel');
         expect(popup!.querySelector('.wheel')).not.toBeNull();
+        // It edits the foreground, a paint color, so the painting tabs apply.
+        expect(
+            Array.from(popup!.querySelectorAll('[role=tab]')).map((t) => t.textContent),
+        ).toEqual(['Wheel', 'Jitter']);
         // No gesture is running: the wheel is mounted outside the overlay that
         // the pen lifting unmounts.
         expect(palettePopup.isOpen).toBe(false);

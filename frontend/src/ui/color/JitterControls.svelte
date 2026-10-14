@@ -1,6 +1,6 @@
 <script lang="ts">
     /**
-     * The colour panel's Jitter tab: three amplitudes read from and written
+     * The color editor's Jitter tab: three amplitudes read from and written
      * to the `colors.jitter*` prefs. Each brush stroke draws one offset per
      * channel in `[-amp, amp]` at stroke start (`brush::color_jitter`), so
      * the engine only ever reads the settled value: a drag is held here and

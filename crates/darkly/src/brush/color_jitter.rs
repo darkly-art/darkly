@@ -36,7 +36,7 @@ pub struct ColorJitter {
 }
 
 impl ColorJitter {
-    /// The amplitudes the artist set in the colour panel.
+    /// The amplitudes the artist set on the color editor's Jitter tab.
     pub fn from_config() -> Self {
         Self {
             hue: crate::config::get_f64(HUE_KEY) as f32,
