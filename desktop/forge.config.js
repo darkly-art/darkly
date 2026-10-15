@@ -11,6 +11,8 @@ const path = require('path');
 // drift from the desktop entry and the AppStream metainfo the way three
 // hand-written copies of the category list did.
 const app = require('../packaging/app.json');
+const fs = require('fs');
+const { artifactName } = require('./artifact-name');
 
 
 // macOS code signing + notarization, enabled only when the CI signing step has
@@ -52,26 +54,6 @@ const macSign = process.env.DARKLY_MAC_SIGN === '1'
 const winSign = process.env.WINDOWS_SIGN_HOOK_MODULE_PATH
     ? { windowsSign: { hookModulePath: process.env.WINDOWS_SIGN_HOOK_MODULE_PATH } }
     : {};
-
-// Architecture this `make` is producing for. Forge builds for the host arch
-// unless told otherwise, so process.arch is right in CI; the argv sniffing
-// keeps a manual `--arch` cross-build honest.
-//
-// Needed because electron-winstaller's setupExe is a fixed string with no
-// {arch} template, while every maker's output for every platform lands in one
-// flat GitHub Release namespace (see the upload step in
-// .github/workflows/build-electron.yml). Without the suffix the x64 and arm64
-// Windows jobs both emit `DarklySetup.exe`, and whichever finishes last
-// clobbers the other: users on the losing arch download an installer whose
-// payload their machine can't execute (ERROR_EXE_MACHINE_TYPE_MISMATCH). The
-// mac/linux makers already put the arch in their filenames.
-const targetArch = (() => {
-    const flag = process.argv.indexOf('--arch');
-    if (flag !== -1 && process.argv[flag + 1]) return process.argv[flag + 1];
-    const inline = process.argv.find((a) => a.startsWith('--arch='));
-    if (inline) return inline.slice('--arch='.length);
-    return process.arch;
-})();
 
 /** @type {import('@electron-forge/shared-types').ForgeConfig} */
 module.exports = {
@@ -148,7 +130,6 @@ module.exports = {
             platforms: ['win32'],
             config: {
                 name: 'darkly',
-                setupExe: `DarklySetup-${targetArch}.exe`,
                 // Signs the generated Setup.exe. This is separate from the
                 // packagerConfig.windowsSign above, which signs what goes
                 // INSIDE it (darkly.exe, Update.exe, the Electron DLLs). Both
@@ -162,4 +143,24 @@ module.exports = {
         },
     ],
     plugins: [],
+    hooks: {
+        // Every maker output takes the one release-artifact name (see
+        // artifact-name.js). The hook returns the renamed results so Forge's
+        // own listing and any publisher see the final paths.
+        postMake: async (_config, results) =>
+            results.map((result) => ({
+                ...result,
+                artifacts: result.artifacts.map((file) => {
+                    const name = artifactName(file, {
+                        version: result.packageJSON.version,
+                        platform: result.platform,
+                        arch: result.arch,
+                    });
+                    if (!name) return file;
+                    const renamed = path.join(path.dirname(file), name);
+                    fs.renameSync(file, renamed);
+                    return renamed;
+                }),
+            })),
+    },
 };
