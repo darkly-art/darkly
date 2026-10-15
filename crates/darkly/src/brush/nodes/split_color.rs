@@ -4,7 +4,7 @@
 //! Rec.601 luminance. Mirrors [`super::split_vec2`] (which splits
 //! Vec2 → (x, y)); useful for routing one channel of a sampled
 //! [`super::image`] result into a Scalar-only consumer like
-//! [`super::levels`] or [`super::multiply`].
+//! [`super::remap`] or [`super::multiply`].
 //!
 //! Luminance is computed once even when only `luminance` is wired:
 //! it's three multiplies + two adds, cheaper than branching.

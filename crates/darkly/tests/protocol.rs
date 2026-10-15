@@ -339,3 +339,69 @@ fn poll_recording_frame_reports_canvas_dims_when_empty() {
     assert!(resp.value["frame"].is_null());
     assert!(resp.bytes.is_none());
 }
+
+#[test]
+fn shape_placement_dispatch_returns_the_layer_and_object() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    reg.dispatch(
+        &mut engine,
+        "begin_shape",
+        json!({
+            "family": "polygon",
+            "params": { "points": 6 },
+            "x": 4.0, "y": 4.0, "width": 10.0, "height": 10.0,
+            "fill": [255, 0, 0, 255],
+            "stroke": { "width": 2.0, "color": [0, 0, 0, 255] },
+            "anchor": null,
+        }),
+        &[],
+    )
+    .expect("begin_shape dispatch");
+    reg.dispatch(
+        &mut engine,
+        "update_shape",
+        json!({ "x": 4.0, "y": 4.0, "width": 40.0, "height": 30.0 }),
+        &[],
+    )
+    .expect("update_shape dispatch");
+    let resp = reg
+        .dispatch(&mut engine, "commit_shape", json!({}), &[])
+        .expect("commit_shape dispatch");
+    let id = resp.value["id"].as_u64().expect("{ id, object }");
+    let object = resp.value["object"].as_u64().expect("{ id, object }");
+
+    let listed = reg
+        .dispatch(&mut engine, "shape_objects", json!({ "id": id }), &[])
+        .expect("shape_objects dispatch");
+    let shape = &listed.value[0];
+    assert_eq!(shape["object"], json!(object));
+    assert_eq!(shape["family"], json!("polygon"));
+    assert_eq!(shape["params"][0]["name"], json!("points"));
+    assert_eq!(shape["params"][0]["value"], json!(6));
+    assert_eq!(shape["stroke"]["width"], json!(2.0));
+    assert_eq!(
+        (shape["width"].clone(), shape["height"].clone()),
+        (json!(40.0), json!(30.0))
+    );
+}
+
+#[test]
+fn shape_placement_of_an_unknown_family_commits_null() {
+    let reg = RequestRegistry::new();
+    let mut engine = test_engine(64, 64);
+    reg.dispatch(
+        &mut engine,
+        "begin_shape",
+        json!({
+            "family": "not_a_shape", "params": {},
+            "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0,
+        }),
+        &[],
+    )
+    .expect("begin_shape dispatch is infallible at the protocol level");
+    let resp = reg
+        .dispatch(&mut engine, "commit_shape", json!({}), &[])
+        .expect("commit_shape dispatch");
+    assert!(resp.value.is_null());
+}

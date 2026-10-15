@@ -2,7 +2,7 @@ use crate::action::{ActionCategory, ActionDef};
 
 /// Selecting a tool is not declared here: each tool names the action that
 /// selects it on its own `ToolRegistration` (`hotkey_action`), so the `tools`
-/// catalog already documents those twelve. What is left is the tool state a
+/// catalog already documents them. What is left is the tool state a
 /// hotkey can flip without being a tool of its own.
 const ACTIONS: &[ActionDef] = &[ActionDef {
     id: "toggleEraseMode",

@@ -287,9 +287,10 @@ fn apply_lifecycle(
 }
 
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
-/// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
+/// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`
+/// and by the global colour jitter (`brush::color_jitter`).
 #[inline]
-fn prng_f32(seed: u32, index: u32) -> f32 {
+pub(crate) fn prng_f32(seed: u32, index: u32) -> f32 {
     let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
     h ^= h >> 16;
     h = h.wrapping_mul(0x45d9f3b);

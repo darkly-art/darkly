@@ -42,8 +42,8 @@ nodes:
       - - 1.0
         - 0.5
       input: 0.1
-  levels:
-    type: levels
+  remap:
+    type: remap
     name: Adjust Texture Intensity By Pen Pressure
   multiply:
     type: multiply
@@ -73,10 +73,10 @@ nodes:
 connections:
 - brush_settings.size -> multiply.a
 - circle.mask -> subtract.a
-- curve.output -> levels.in_low
+- curve.output -> remap.in_low
 - curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.b
-- levels.output -> stamp.tip
+- remap.output -> stamp.tip
 - multiply.result -> noise.scale
 - noise.value -> subtract.b
 - paint_color.color -> stamp.color
@@ -86,7 +86,7 @@ connections:
 - random.value -> noise.rotation
 - random_2.value -> noise.variation
 - stamp.dab -> paint.rgba
-- subtract.result -> levels.input
+- subtract.result -> remap.input
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}

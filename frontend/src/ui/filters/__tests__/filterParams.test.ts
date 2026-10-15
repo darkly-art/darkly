@@ -10,26 +10,7 @@ import {
     type ListValue,
 } from '../filterParams';
 import { channelLabel, cloneParamValue, paramIsResettable } from '../../params/paramSchema';
-
-
-/** Fill the fields every `ParamInfo` carries but these cases don't exercise, so
- *  each fixture below states only what it is actually testing. Keeping the
- *  fixtures typed as the generated `ParamInfo` is the point: this file is the
- *  guard that the generated type still satisfies every panel helper. */
-function param(p: Partial<ParamInfo> & Pick<ParamInfo, 'kind' | 'name' | 'default'>): ParamInfo {
-    return {
-        label: null,
-        description: null,
-        widget: 'auto',
-        unit: 'Raw',
-        min: null,
-        max: null,
-        value: null,
-        options: null,
-        display: { min: null, max: null, default: null, unit: '' },
-        ...p,
-    };
-}
+import { param } from '../../params/__tests__/paramFixture';
 
 const curve = (name: string): ParamInfo => param({
     kind: 'curve',

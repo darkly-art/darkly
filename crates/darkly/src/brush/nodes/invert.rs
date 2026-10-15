@@ -15,7 +15,7 @@
 //! no natural range, so its value passes raw; on its default `0..1` slider the
 //! node reads exactly as the entry flag would.
 //!
-//! The input defaults to `0.0` like `curve.input` and `levels.input`: the port
+//! The input defaults to `0.0` like `curve.input` and `remap.input`: the port
 //! is meant to be wired, and an unwired inverter reading `1.0` is the honest
 //! complement of that default. `0.5` is the one value `1 - x` leaves alone, and
 //! would make an unwired node inert, but at the cost of a default unlike every

@@ -101,7 +101,10 @@ jobs:
 
       - name: Pack
         run: |
-          NAME="darkly-docs-${TARGET:-${GITHUB_REF_NAME//\//-}}.tar.gz"
+          # Named like every other release artifact, Darkly-<version>-<what>;
+          # a run off a branch carries the branch name as its version.
+          VERSION="${TARGET:-${GITHUB_REF_NAME//\//-}}"
+          NAME="Darkly-${VERSION#v}-docs.tar.gz"
           echo "ARTIFACT=$NAME" >> "$GITHUB_ENV"
           tar czf "$NAME" -C out .
           tar tzf "$NAME"

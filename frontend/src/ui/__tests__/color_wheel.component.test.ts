@@ -5,6 +5,9 @@ import type { Color } from '../../lib/color';
 import ColorWheelHarness from './ColorWheelHarness.test.svelte';
 import { pointForHue, pointForSv, wheelGeometry } from '../color/wheel_model';
 
+// Pressing the color wheel: a hue picked on an achromatic color survives the
+// round trip through the host, and every press in the wheel steers something.
+
 // jsdom has no 2D canvas and no pointer capture; the wheel needs both to
 // mount and to take a click. Neither affects the color math under test.
 beforeEach(() => {
@@ -93,5 +96,17 @@ describe('choosing a hue on an achromatic foreground', () => {
         pointerDown(wheel, corner.x, corner.y);
         flushSync();
         expect(host.value).toEqual({ r: 0, g: 0, b: 255, a: 255 });
+    });
+});
+
+describe('pressing between the ring and the triangle', () => {
+    it('a_press_in_the_gap_sets_the_hue', () => {
+        const { wheel, host } = render({ r: 255, g: 0, b: 0, a: 255 });
+        flushSync();
+        // Angle 60, radius 80: past the hue-black edge, inside the ring's hole.
+        const a = (60 * Math.PI) / 180;
+        pointerDown(wheel, SIZE / 2 + Math.cos(a) * 80, SIZE / 2 + Math.sin(a) * 80);
+        flushSync();
+        expect(host.value).toEqual({ r: 255, g: 255, b: 0, a: 255 });
     });
 });

@@ -164,4 +164,17 @@ describe('foreground/background swatches', () => {
 
         expect(target.querySelector('.color-popup')).toBeNull();
     });
+
+    it('a_swatch_popup_offers_the_jitter_tab', () => {
+        const target = render();
+        click(target, '.swatch.bg');
+        const popup = target.querySelector('.color-popup')!;
+        const jitter = Array.from(popup.querySelectorAll<HTMLElement>('[role=tab]')).find(
+            (t) => t.textContent === 'Jitter',
+        );
+        expect(jitter).toBeDefined();
+        jitter!.click();
+        flushSync();
+        expect(popup.querySelectorAll('.scrub')).toHaveLength(3);
+    });
 });

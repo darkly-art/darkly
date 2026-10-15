@@ -38,7 +38,7 @@ description: "Darkly is a GPU-native paint program built for artists. It has a p
 # section title. Keep it in step with the README by hand.
 long_description:
   - "Do you suffer from the oppressive sanity of rulers, guides, and nondestructive workflows? Break free with Darkly, home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature."
-  - "Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and dark arts to help you commune with your imagination."
+  - "Darkly does not want to be Photoshop, but it wants to be the best paint app for artists. It has a unique brush engine, and dark arts to help you commune with your imagination."
   - "Darkly pledges to:"
   - - "🛐 Honor human imagination"
     - "⚛️ Run offline and without a login"

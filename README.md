@@ -11,12 +11,15 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/darkly-art/darkly/ci.yml?branch=master&label=Tests&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/darkly/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
+[![itch.io](https://img.shields.io/badge/itch.io-black?logo=itchdotio&logoColor=9500ff&style=for-the-badge&labelColor=black)](https://darklyart.itch.io/darkly)
+[![Flathub](https://img.shields.io/flathub/v/art.darkly.Darkly?label=Flathub&logo=flathub&logoColor=6914ff&style=for-the-badge&labelColor=black&color=6914ff)](https://flathub.org/en/apps/art.darkly.Darkly)
+
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+Darkly aims to be the best paint app for artists (but it does not want to be Photoshop). It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
@@ -96,10 +99,12 @@ For a feature to count, it must be:
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill, gradient, color picker
 - [x] Text tool
+- [x] Vector shapes
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker
+- [x] Color jitter
 - [x] Raster layers + groups
 - [x] 16 blend modes
 - [x] Layer masks

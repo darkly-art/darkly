@@ -10,6 +10,7 @@ use darkly::engine::DarklyEngine;
 use darkly::engine::SavePurpose;
 use darkly::format::manifest::Manifest;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::ortho_transform::OrthoXform;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::{TextAlign, TextLayout, TextProps, TextStyle};
 use darkly::transform::Transform;
@@ -484,5 +485,138 @@ fn same_font_embedded_once() {
     assert_eq!(
         font_blobs, 1,
         "exactly one fonts/* blob for the shared bytes"
+    );
+}
+
+/// Plane-space bounding box `(x0, y0, x1, y1)` (exclusive max) of every
+/// composited pixel with any coverage, or `None` for an empty canvas.
+fn ink_bbox(engine: &mut DarklyEngine) -> Option<(i32, i32, i32, i32)> {
+    let canvas = engine.canvas_rect();
+    let pixels = engine.test_readback_canvas();
+    let mut bbox: Option<(i32, i32, i32, i32)> = None;
+    for (i, p) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if p[3] == 0 {
+            continue;
+        }
+        let x = canvas.origin.x + (i as u32 % canvas.width) as i32;
+        let y = canvas.origin.y + (i as u32 / canvas.width) as i32;
+        bbox = Some(match bbox {
+            None => (x, y, x + 1, y + 1),
+            Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1)),
+        });
+    }
+    bbox
+}
+
+/// Whether `inner` lies inside `outer` grown by `slack` on every side.
+fn within(inner: (i32, i32, i32, i32), outer: (i32, i32, i32, i32), slack: i32) -> bool {
+    inner.0 >= outer.0 - slack
+        && inner.1 >= outer.1 - slack
+        && inner.2 <= outer.2 + slack
+        && inner.3 <= outer.3 + slack
+}
+
+fn set_text_color(
+    engine: &mut DarklyEngine,
+    id: darkly::layer::LayerId,
+    obj: darkly::layer::ObjectId,
+    color: [u8; 4],
+) {
+    engine.set_text_style(
+        id,
+        obj,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(color),
+    );
+}
+
+/// Text added after a crop is drawn where the document places it: its ink
+/// sits inside the object's plane box, and that is where it hit-tests.
+#[test]
+fn text_is_placed_in_plane_space_after_a_crop() {
+    let mut engine = test_engine(256, 128);
+    engine.resize_canvas(darkly::coord::CanvasRect::from_xywh(60, 40, 180, 80));
+    let mut text = TextProps::new("W".to_string());
+    text.size = 48.0;
+    let (id, obj) = engine.add_text_layer(text, 70.0, 45.0, [255, 255, 255, 255], None);
+
+    let (_, _, w, h, g) = engine.vector_object_info(id, obj).expect("info");
+    let corner = |x: f32, y: f32| darkly::transform::affine_transform(&g, x, y);
+    let (bx0, by0) = corner(0.0, 0.0);
+    let (bx1, by1) = corner(w, h);
+    let object_box = (bx0 as i32, by0 as i32, bx1.ceil() as i32, by1.ceil() as i32);
+
+    let ink = ink_bbox(&mut engine).expect("the text draws something");
+    assert!(
+        within(ink, object_box, 4),
+        "ink {ink:?} lies outside the object's plane box {object_box:?}"
+    );
+    let (cx, cy) = ((ink.0 + ink.2) as f64 / 2.0, (ink.1 + ink.3) as f64 / 2.0);
+    assert_eq!(engine.hit_test_vector_object(id, cx, cy), Some(obj));
+}
+
+/// Rotating the canvas a quarter turn carries the text with it. On a
+/// 128 x 64 canvas the window recentres to (32, -32, 64, 128) and
+/// window-local (x, y) maps to (64 - y, x), so plane (x, y) lands at
+/// (96 - y, x - 32). The old window maps exactly onto the new one, so the
+/// visible ink maps onto the visible ink.
+#[test]
+fn rotating_the_canvas_rotates_text() {
+    let mut engine = test_engine(128, 64);
+    let mut text = TextProps::new("W".to_string());
+    text.size = 32.0;
+    let (id, obj) = engine.add_text_layer(text, 16.0, 8.0, [255, 255, 255, 255], None);
+    let (x0, y0, x1, y1) = ink_bbox(&mut engine).expect("the text draws something");
+
+    engine.transform_canvas(OrthoXform::Rot90Cw);
+    let expected = (96 - y1, x0 - 32, 96 - y0, x1 - 32);
+    let ink = ink_bbox(&mut engine).expect("the rotated text draws something");
+    assert!(
+        within(ink, expected, 2) && within(expected, ink, 2),
+        "rotated ink {ink:?}, expected about {expected:?}"
+    );
+    let (cx, cy) = ((ink.0 + ink.2) as f64 / 2.0, (ink.1 + ink.3) as f64 / 2.0);
+    assert_eq!(engine.hit_test_vector_object(id, cx, cy), Some(obj));
+}
+
+/// Flipping a text layer mirrors its ink about the canvas, and the flip
+/// survives re-rendering the layer (a colour change) and undoes cleanly.
+#[test]
+fn flipping_a_text_layer_mirrors_its_ink() {
+    let mut engine = test_engine(128, 64);
+    let mut text = TextProps::new("L".to_string());
+    text.size = 40.0;
+    let (id, obj) = engine.add_text_layer(text, 12.0, 8.0, [255, 255, 255, 255], None);
+    let before = ink_bbox(&mut engine).expect("the text draws something");
+    let mirrored = (128 - before.2, before.1, 128 - before.0, before.3);
+
+    assert!(engine.flip_node(id, OrthoXform::FlipH));
+    let ink = ink_bbox(&mut engine).expect("flipped text draws something");
+    assert!(
+        within(ink, mirrored, 2) && within(mirrored, ink, 2),
+        "flipped ink {ink:?}, expected about {mirrored:?}"
+    );
+
+    set_text_color(&mut engine, id, obj, [255, 0, 0, 255]);
+    let ink = ink_bbox(&mut engine).expect("recoloured text draws something");
+    assert!(
+        within(ink, mirrored, 2) && within(mirrored, ink, 2),
+        "after re-render the ink {ink:?} is no longer mirrored ({mirrored:?})"
+    );
+
+    engine.undo();
+    engine.undo();
+    let ink = ink_bbox(&mut engine).expect("text draws something after undo");
+    assert!(
+        within(ink, before, 2) && within(before, ink, 2),
+        "after undo the ink {ink:?} is not back at {before:?}"
     );
 }

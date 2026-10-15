@@ -146,6 +146,7 @@ pub mod flood_fill;
 pub mod frame_clock;
 pub mod hash;
 pub mod histogram;
+pub mod layer_content;
 pub mod layer_readback;
 pub mod lut_filter;
 pub mod ortho_transform;

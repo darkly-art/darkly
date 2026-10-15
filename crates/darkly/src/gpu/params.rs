@@ -72,6 +72,11 @@ pub struct ParamDef {
     /// already stored in display space declares [`UnitType::Raw`].
     pub unit: UnitType,
     pub kind: ParamKind,
+    /// Show this parameter only while the named sibling `Int`/`Enum`
+    /// parameter's value is one of the listed values. A UI affordance: the
+    /// engine still stores and reads the value. Same contract and wire shape
+    /// as `PortDef::visible_when`.
+    pub visible_when: Option<(&'static str, &'static [i32])>,
 }
 
 /// The value-shaped half of a [`ParamDef`]: what this parameter stores, its
@@ -157,6 +162,7 @@ impl ParamDef {
             description: None,
             unit: UnitType::Raw,
             kind,
+            visible_when: None,
         }
     }
 
@@ -240,6 +246,11 @@ impl ParamDef {
 
     pub const fn with_unit(mut self, unit: UnitType) -> Self {
         self.unit = unit;
+        self
+    }
+
+    pub const fn with_visible_when(mut self, param: &'static str, values: &'static [i32]) -> Self {
+        self.visible_when = Some((param, values));
         self
     }
 }
@@ -514,15 +525,62 @@ mod tests {
         }
 
         let mut checked = 0usize;
-        for reg in crate::gpu::effect::EffectRegistry::new().registrations() {
-            check(reg.type_id, reg.params);
-            checked += reg.params.len();
-        }
-        for reg in crate::gpu::void::VoidRegistry::new().types() {
-            check(reg.type_id, reg.params);
-            checked += reg.params.len();
+        for (owner, defs) in every_schema() {
+            check(owner, defs);
+            checked += defs.len();
         }
         assert!(checked > 0, "no parameters found: the scan found nothing");
+    }
+
+    /// Every registered parameter schema, by owner id.
+    fn every_schema() -> Vec<(&'static str, &'static [ParamDef])> {
+        let mut out: Vec<(&'static str, &'static [ParamDef])> = Vec::new();
+        for reg in crate::gpu::effect::EffectRegistry::new().registrations() {
+            out.push((reg.type_id, reg.params));
+        }
+        for reg in crate::gpu::void::VoidRegistry::new().types() {
+            out.push((reg.type_id, reg.params));
+        }
+        for reg in crate::shape::registry() {
+            out.push((reg.type_id, reg.params));
+        }
+        out
+    }
+
+    /// A `visible_when` rule names an `Int`/`Enum` sibling in the same schema
+    /// and only values that sibling can take; names are unique per schema (a
+    /// collision would make two slots read the same JSON value); and no rule
+    /// sits inside a `List` item, whose editor does not honour it.
+    #[test]
+    fn every_visible_when_names_a_sibling_selector() {
+        fn check(owner: &str, defs: &[ParamDef], in_list: bool) {
+            let mut seen = std::collections::HashSet::new();
+            for d in defs {
+                assert!(seen.insert(d.name), "`{owner}` declares `{}` twice", d.name);
+                if let Some((sibling, allowed)) = d.visible_when {
+                    assert!(!in_list, "`{owner}.{}`: rule inside a List item", d.name);
+                    let s = defs
+                        .iter()
+                        .find(|s| s.name == sibling)
+                        .unwrap_or_else(|| panic!("`{owner}.{}` names no `{sibling}`", d.name));
+                    let range = match s.kind {
+                        ParamKind::Int { min, max, .. } => min..=max,
+                        ParamKind::Enum { options, .. } => 0..=options.len() as i32 - 1,
+                        _ => panic!("`{owner}.{sibling}` is not Int or Enum"),
+                    };
+                    assert!(!allowed.is_empty(), "`{owner}.{}`: empty rule", d.name);
+                    for v in allowed {
+                        assert!(range.contains(v), "`{owner}.{}`: {v} out of range", d.name);
+                    }
+                }
+                if let ParamKind::List { item, .. } = &d.kind {
+                    check(&format!("{owner}.{}", d.name), item, true);
+                }
+            }
+        }
+        for (owner, defs) in every_schema() {
+            check(owner, defs, false);
+        }
     }
 
     // A small list schema used across the List/Vec2/Color tests: one entry is a

@@ -14,8 +14,7 @@ use super::super::rendering::commit_undo_region;
 use super::super::DarklyEngine;
 use crate::layer::LayerId;
 use crate::undo::{
-    CompoundAction, EntityAddAction, EntityRemoveAction, GpuRegionAction, MaskLinkedToHostAction,
-    UndoAction,
+    CompoundAction, EntityRemoveAction, GpuRegionAction, MaskLinkedToHostAction, UndoAction,
 };
 
 #[handlers]
@@ -70,8 +69,7 @@ impl DarklyEngine {
         // dirty per the write-site invariant.
         self.compositor.mark_dirty();
 
-        let slot = self.doc.slot_of(mod_id).unwrap_or_default();
-        self.push_undo(Box::new(EntityAddAction::new(mod_id, slot)));
+        self.record_entity_add(mod_id);
         Ok(())
     }
 
@@ -110,7 +108,7 @@ impl DarklyEngine {
     /// Set the transform relationship state owned by a mask filter entity.
     #[handler]
     pub fn set_mask_linked_to_host(&mut self, id: LayerId, linked: bool) {
-        if !self.resolve_transform_conflict() || !self.doc.is_node_editable(id) {
+        if !self.resolve_pending_edits() || !self.doc.is_node_editable(id) {
             return;
         }
         let old = match self.doc.find_filter_mut(id) {
@@ -130,7 +128,7 @@ impl DarklyEngine {
     /// Remove the mask filter on a host layer or group.
     #[handler]
     pub fn remove_mask(&mut self, id: LayerId) {
-        if !self.resolve_transform_conflict() || !self.doc.is_node_editable(id) {
+        if !self.resolve_pending_edits() || !self.doc.is_node_editable(id) {
             return;
         }
         let Some(mask_id) = self.doc.mask_filter_id(id) else {
@@ -143,7 +141,7 @@ impl DarklyEngine {
     /// The layer panel lists modifiers as selectable rows, so generic
     /// operations (delete, batch delete) reach them this way.
     pub(crate) fn remove_modifier(&mut self, modifier_id: LayerId) {
-        if !self.resolve_transform_conflict() {
+        if !self.resolve_pending_edits() {
             return;
         }
         if let Some(action) = self.detach_for_remove(modifier_id) {

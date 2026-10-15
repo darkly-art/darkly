@@ -319,6 +319,11 @@ pub struct ParamInfo {
     #[cfg_attr(feature = "ts-export", ts(type = "JsonValue | null"))]
     pub options: Option<serde_json::Value>,
     pub display: ParamDisplay,
+    /// `[name, allowed]`: show this parameter only while the named sibling's
+    /// integer value is in `allowed`. See `ParamDef::visible_when`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(type = "[string, Array<number>] | null"))]
+    pub visible_when: Option<(&'static str, &'static [i32])>,
 }
 
 impl ParamInfo {
@@ -403,6 +408,7 @@ impl ParamInfo {
             value: value.cloned(),
             options,
             display,
+            visible_when: def.visible_when,
         }
     }
 
@@ -478,6 +484,7 @@ impl ParamInfo {
             default,
             value: None,
             options,
+            visible_when: None,
         }
     }
 }
@@ -786,6 +793,18 @@ pub(crate) fn modifier_to_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ruled parameter carries its `visible_when` onto the wire; an unruled
+    /// one omits the key, so every other schema serializes exactly as before.
+    #[test]
+    fn param_info_carries_visible_when_only_when_declared() {
+        const RULED: ParamDef = ParamDef::int("m", 0, 8, 5).with_visible_when("style", &[2]);
+        const PLAIN: ParamDef = ParamDef::int("m", 0, 8, 5);
+        let ruled = serde_json::to_value(ParamInfo::from_def(&RULED, None)).unwrap();
+        assert_eq!(ruled["visible_when"], serde_json::json!(["style", [2]]));
+        let plain = serde_json::to_value(ParamInfo::from_def(&PLAIN, None)).unwrap();
+        assert!(plain.get("visible_when").is_none());
+    }
 
     fn brush_at(x: f32, y: f32) -> StrokeOp {
         StrokeOp::BrushStroke {

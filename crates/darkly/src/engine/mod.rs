@@ -24,6 +24,7 @@ pub mod protocol;
 pub mod rendering;
 pub mod save;
 mod selection_support;
+pub mod shapes;
 mod smart_object;
 pub mod types;
 mod undo_dispatch;
@@ -419,6 +420,10 @@ pub struct DarklyEngine {
     pub(crate) fonts: crate::text::FontRegistry,
     pub(crate) undo_stack: UndoStack,
     pub(crate) active_stroke_layer: Option<LayerId>,
+    /// The shape a drag is placing: a document layer with no undo record
+    /// until the drag commits it. A pending edit, resolved by
+    /// [`Self::resolve_pending_edits`].
+    pub(crate) shape_placement: Option<shapes::ShapePlacement>,
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
     /// a layer is rendered without siblings/parents). Universal across node
@@ -782,6 +787,7 @@ impl DarklyEngine {
             fonts: crate::text::FontRegistry::new(),
             undo_stack,
             active_stroke_layer: None,
+            shape_placement: None,
             isolated_node: None,
             view_transform: ViewTransform::identity(),
             view_params: ViewParams::default(),
@@ -1056,6 +1062,14 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_can_redo(&self) -> bool {
         self.undo_stack.can_redo()
+    }
+
+    /// Test-only: whether the document still holds the entity at all, linked
+    /// or not. [`Self::has_layer`] is false for a detached orphan too; this
+    /// tells a purge from a detach.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_holds_entity(&self, id: LayerId) -> bool {
+        self.doc.layer(id).is_some()
     }
 
     /// Test-only: a pixel-bearing node's document-side `PixelBuffer.bounds`

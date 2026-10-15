@@ -105,7 +105,7 @@ enum Topology {
     /// Pencil: the mid-dial `paint` brush (`buildup: 0.1`, so the
     /// dispatch loads and stores two packed grounds per thread), spacing
     /// 0.03, a perlin disc with a soft edge, two baked noise tiles and
-    /// the curve/levels chain between them. Same terminal as Paint; the
+    /// the curve/remap chain between them. Same terminal as Paint; the
     /// regime an artist actually shades in.
     Pencil,
 }

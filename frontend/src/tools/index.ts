@@ -10,12 +10,14 @@ import { polygonSelectTool } from './polygon_select.svelte';
 import { magicWandTool } from './magic_wand.svelte';
 import { transformTool, transformPerspectiveTool } from './transform.svelte';
 import { textTool } from './text.svelte';
+import { shapeTools } from './shape.svelte';
 
 toolRegistry.register(brushTool);
 toolRegistry.register(fillTool);
 toolRegistry.register(gradientTool);
 toolRegistry.register(colorPickerTool);
 toolRegistry.register(textTool);
+for (const t of shapeTools) toolRegistry.register(t);
 toolRegistry.register(rectSelectTool);
 toolRegistry.register(ellipseSelectTool);
 toolRegistry.register(lassoSelectTool);
@@ -25,8 +27,9 @@ toolRegistry.register(transformTool);
 toolRegistry.register(transformPerspectiveTool);
 
 // Cluster buttons mirror their default tool's icon (rect_select's dashed
-// square for selection; fill's bucket for fill): the cluster owns no
-// independent icon, only routing. See `ToolCluster.svelte`.
+// square for selection; fill's bucket for fill; the polygon tool's filled
+// rectangle for shapes): the cluster owns no independent icon, only routing.
+// See `ToolCluster.svelte`.
 toolClusterRegistry.register({
     id: 'select',
     toolIds: ['rect_select', 'ellipse_select', 'lasso_select', 'polygon_select', 'magic_wand'],
@@ -39,6 +42,13 @@ toolClusterRegistry.register({
     toolIds: ['fill', 'gradient'],
     defaultToolId: 'fill',
     displayName: 'Fill',
+});
+
+toolClusterRegistry.register({
+    id: 'shape',
+    toolIds: shapeTools.map((t) => t.id),
+    defaultToolId: shapeTools[0].id,
+    displayName: 'Shapes',
 });
 
 toolClusterRegistry.register({

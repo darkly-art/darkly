@@ -415,7 +415,7 @@ impl DarklyEngine {
             self.active_stroke_layer = None;
             return Err(self.paint_refusal_reason(id));
         }
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.active_stroke_layer = Some(id);
         // Reset the per-stroke counter accumulator. The bench-side
         // per-event delta snapshot resets in lockstep so the first
@@ -966,6 +966,11 @@ impl DarklyEngine {
             #[cfg(any(test, feature = "testing"))]
             let divergence_epsilon = self.test_divergence_epsilon.unwrap_or(divergence_epsilon);
 
+            // The colour selector's jitter is a pure function of the stroke
+            // seed, so a pinned seed replays the same colour.
+            let stroke_seed = self.stroke_seed.unwrap_or_else(StrokeEngine::random_seed);
+            let color =
+                crate::brush::color_jitter::ColorJitter::from_config().apply(color, stroke_seed);
             let engine = StrokeEngine::new(
                 runner,
                 color,
@@ -974,7 +979,7 @@ impl DarklyEngine {
                 stabilizer,
                 divergence_epsilon,
                 clone_source_anchor,
-                self.stroke_seed.unwrap_or_else(StrokeEngine::random_seed),
+                stroke_seed,
                 self.active_stamp_angle_rate(),
                 self.doc.dpi,
             );

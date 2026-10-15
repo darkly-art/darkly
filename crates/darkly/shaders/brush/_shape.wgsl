@@ -8,11 +8,11 @@
 // responsible for building a `ShapeParams` for each dab (typically from
 // its own dab record).
 //
-// **Bit-exact parity with `crates/darkly/src/brush/nodes/circle.rs`** is
-// load-bearing: the CPU-side `integrate_centroid` walks the same `r(θ)`
-// at a finer resolution, and per-pixel render tests catch drift as a
-// mismatch. Keep the `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` /
-// `r_superformula` formulas here byte-equivalent to `circle.rs`.
+// **Formula-level parity with `crates/darkly/src/shape/polar.rs`**: the
+// CPU port the vector shape families draw their outlines from. A brush tip
+// and a placed shape with the same knobs are the same family of curves, so
+// a change to `hash1d` / `fbm_1d` / `r_sine` / `r_perlin` /
+// `r_superformula` here is a product decision to make on both sides.
 //
 // Include via `concat!()` at the consumer site:
 //
@@ -68,11 +68,10 @@ struct ShapeParams {
 
 const SHAPE_TAU: f32 = 6.28318530717958647692;
 
-/// Integer bit-mix hash, bit-identical to `hash1d` in `shape.rs`.
+/// Integer bit-mix hash, the same formula as `hash1d` in `shape/polar.rs`.
 /// We avoid `fract(sin(x*K)*M)` because `sin` precision
 /// differs between CPU and GPU and the `*43758` amplification turns
-/// sub-ULP drift into a totally different noise array, which the
-/// centroid alignment test would flag.
+/// sub-ULP drift into a totally different noise array.
 fn shape_hash1d(x: f32, seed: f32) -> f32 {
     let xi = u32(x);
     let si = u32(seed);
@@ -85,7 +84,7 @@ fn shape_hash1d(x: f32, seed: f32) -> f32 {
     return f32(h) / 4294967295.0;
 }
 
-/// Periodic 1D value-noise fBm, mirroring `fbm_1d` in `shape.rs`.
+/// Periodic 1D value-noise fBm, the same formula as `fbm_1d` in `shape/polar.rs`.
 fn shape_fbm_1d(t: f32, p: ShapeParams) -> f32 {
     var sum: f32 = 0.0;
     var norm: f32 = 0.0;

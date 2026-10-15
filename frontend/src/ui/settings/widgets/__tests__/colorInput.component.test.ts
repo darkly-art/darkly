@@ -55,4 +55,14 @@ describe('color input', () => {
 
         expect(target.querySelector<HTMLElement>('.swatch')!.style.background).toBe('rgb(51, 85, 255)');
     });
+
+    it('its_popup_has_the_wheel_and_no_jitter_tab', () => {
+        const target = render('#3355ff');
+        target.querySelector<HTMLElement>('.swatch')!.click();
+        flushSync();
+        const popup = target.querySelector('.color-popup');
+        expect(popup).not.toBeNull();
+        expect(popup!.querySelector('.wheel')).not.toBeNull();
+        expect(popup!.querySelector('[role=tab]')).toBeNull();
+    });
 });

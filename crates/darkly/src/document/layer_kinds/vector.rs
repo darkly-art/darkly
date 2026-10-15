@@ -1,5 +1,5 @@
 //! Vector layer kind: a leaf holding an ordered list of vector objects
-//! (text today; paths/shapes later, reusing the same layer and renderer).
+//! (text and parametric shapes, sharing the same layer and renderer).
 //!
 //! A vector layer carries no pixel buffer. Its entire authoritative state (the
 //! object list, the layer transform, blend) round-trips through the manifest
@@ -26,7 +26,7 @@ struct VectorBody {
     blend_mode: String,
     /// The authoritative object list. Each object's geometry (`kurbo::BezPath`
     /// / `Affine`), its stable [`crate::layer::ObjectId`], style (`peniko`
-    /// brushes/stroke), and the bespoke `TextProps` round-trip through their
+    /// brushes/stroke), and the bespoke `TextProps` / `ShapeProps` round-trip through their
     /// derived `serde` impls.
     objects: Vec<VectorObject>,
     /// Next monotonic object id. Persisted so a reload never re-issues a live
@@ -209,5 +209,47 @@ mod tests {
             }
             _ => panic!("expected a text object"),
         }
+    }
+
+    #[test]
+    fn round_trips_shape_object() {
+        use crate::gpu::params::ParamValue;
+        use crate::layer::{ObjectSource, ShapeProps};
+
+        let mut sm: SlotMap<LayerId, ()> = SlotMap::with_key();
+        let id = sm.insert(());
+        let shape = ShapeProps {
+            family: "polygon".to_string(),
+            params: vec![ParamValue::Int(6), ParamValue::Float(0.25)],
+            width: 120.0,
+            height: 80.0,
+        };
+        let stroke = (
+            kurbo::Stroke::new(4.0).with_join(kurbo::Join::Miter),
+            Brush::Solid(Color::from_rgba8(1, 2, 3, 255)),
+        );
+        let obj = VectorObject::shape(
+            shape.clone(),
+            Affine::translate((10.0, 20.0)),
+            Some(Brush::Solid(Color::from_rgba8(200, 100, 50, 255))),
+            Some(stroke),
+        );
+        let mut layer = VectorLayer::new(id, "Polygon 1".to_string());
+        layer.push_object(obj);
+        let node = LayerNode::Layer(Layer::Vector(layer));
+
+        let entity = serialize(&node);
+        let restored = deserialize(&entity.body, id).expect("deserialize");
+        assert_eq!(entity.body, serialize(&restored).body, "bit-stable");
+
+        let LayerNode::Layer(Layer::Vector(v)) = &restored else {
+            panic!("restored node is not a vector layer");
+        };
+        let ObjectSource::Shape(s) = &v.objects[0].source else {
+            panic!("expected a shape object");
+        };
+        assert_eq!(*s, shape, "family, params (Int stays Int) and box survive");
+        let (st, _) = v.objects[0].stroke.as_ref().expect("stroke survives");
+        assert_eq!(st.width, 4.0);
     }
 }

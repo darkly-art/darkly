@@ -415,6 +415,7 @@
         onclose={() => palettePopup.closeColorWheel()}
         scope="palette-color-wheel"
         anchor={() => new DOMRect(at.x, at.y, 0, 0)}
+        paint
     />
 {/if}
 

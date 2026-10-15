@@ -810,6 +810,27 @@ impl Document {
         out
     }
 
+    /// Move every content layer that carries its content through a document
+    /// transform by the plane affine `m` (see [`Layer::apply_plane_affine`]),
+    /// returning `(id, old, new)` for each one moved so the operation can be
+    /// undone. The document half of a canvas flip, rotate or rescale.
+    pub fn apply_plane_affine_to_layers(
+        &mut self,
+        m: &crate::transform::Affine2D,
+    ) -> Vec<(
+        LayerId,
+        crate::transform::Transform,
+        crate::transform::Transform,
+    )> {
+        let ids: Vec<LayerId> = self.all_content_layers().iter().map(|l| l.id()).collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                let (old, new) = self.layer_mut(id)?.apply_plane_affine(m)?;
+                Some((id, old, new))
+            })
+            .collect()
+    }
+
     fn collect_content_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Layer>) {
         let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
             return;
@@ -1012,9 +1033,10 @@ impl Document {
     /// Add a new vector-object layer. Carries no pixel buffer: the compositor
     /// realizes a texture from its `objects` (text/paths) on the next frame and
     /// re-realizes only when the objects/style/transform change. Starts empty;
-    /// the engine seeds the first object (e.g. a text block) atomically.
-    pub fn add_vector_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
-        let name = self.next_name("Text");
+    /// the engine seeds the first object (e.g. a text block) atomically. Named
+    /// `"<stem> N"` after what it is seeded with.
+    pub fn add_vector_layer(&mut self, stem: &str, anchor: Option<LayerId>) -> LayerId {
+        let name = self.next_name(stem);
         let id = self.entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Layer(Layer::Vector(VectorLayer::new(key, name))))
         });

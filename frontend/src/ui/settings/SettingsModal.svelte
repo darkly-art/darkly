@@ -1,5 +1,6 @@
 <script lang="ts">
     import { config } from '../../config/store.svelte';
+    import Tabs from '../Tabs.svelte';
     import { settings } from '../../state/settings.svelte';
     import { actions, type Action } from '../../actions/registry';
     import { exportRootAsZip, downloadBlob } from '../../storage';
@@ -30,6 +31,10 @@
         });
     });
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
+    const TABS = [
+        { id: 'settings', label: 'Settings' },
+        { id: 'hotkeys', label: 'Hotkeys' },
+    ];
     /** Reveal per-trigger Scope dropdowns in the Hotkeys tab. When off,
      *  non-global scopes are still surfaced as a read-only chip beside
      *  the chord so the artist isn't blind to them. */
@@ -128,20 +133,12 @@
     {/snippet}
 
     <div class="main">
-        <nav class="tab-strip">
-            <button
-                type="button"
-                class="tab"
-                class:active={activeTab === 'settings'}
-                onclick={() => activeTab = 'settings'}
-            >Settings</button>
-            <button
-                type="button"
-                class="tab"
-                class:active={activeTab === 'hotkeys'}
-                onclick={() => activeTab = 'hotkeys'}
-            >Hotkeys</button>
-        </nav>
+        <Tabs
+            orientation="column"
+            tabs={TABS}
+            active={activeTab}
+            onselect={(id) => (activeTab = id as typeof activeTab)}
+        />
 
         <div class="prefs-list">
             {#if activeTab === 'settings'}
@@ -205,40 +202,6 @@
         min-height: 0;
     }
 
-    .tab-strip {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 8px 0;
-        border-right: 1px solid var(--bg-hover);
-        flex-shrink: 0;
-        min-width: 140px;
-    }
-    .tab {
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        font-size: 13px;
-        font-weight: 500;
-        padding: 8px 16px;
-        cursor: pointer;
-        position: relative;
-        border-radius: 0;
-        text-align: left;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active {
-        color: var(--text);
-    }
-    .tab.active::after {
-        content: '';
-        position: absolute;
-        top: 6px;
-        bottom: 6px;
-        right: -1px;
-        width: 2px;
-        background: var(--accent);
-    }
 
 
     .trigger-header {

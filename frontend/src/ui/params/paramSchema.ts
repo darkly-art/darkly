@@ -1,7 +1,7 @@
 /**
  * The param vocabulary shared by every panel that renders a `ParamInfo[]`.
  *
- * Filters, veils and voids all carry the same wire type (`ParamInfo`, see
+ * Filters, veils, voids and shapes all carry the same wire type (`ParamInfo`, see
  * `engine/protocol_gen.ts`), so the value aliases, the deep clone and the
  * label rules belong to none of them in particular. This module is named
  * after the shape it describes rather than after the first panel that needed
@@ -12,6 +12,7 @@
  */
 
 import type { ParamInfo, ParamValue } from '../../engine/protocol_gen';
+import { isVisibleWhen } from '../../lib/visibleWhen';
 
 // The wire types are authoritative and are re-exported rather than restated.
 // (The hand-written union that used to live here had already drifted: it
@@ -76,3 +77,14 @@ export function channelLabel(name: string): string {
     return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/** The params of `shown` whose `visible_when` rule passes, each rule resolved
+ *  against the whole schema `all` (a panel that renders a subset, like the
+ *  filter editor's scalars, still finds a selector outside it). Hidden params
+ *  keep their values: callers push the full list, never this one. */
+export function visibleParams(shown: ParamInfo[], all: ParamInfo[] = shown): ParamInfo[] {
+    const valueOf = (name: string) => {
+        const p = all.find((q) => q.name === name);
+        return p ? (p.value ?? p.default) : undefined;
+    };
+    return shown.filter((p) => isVisibleWhen(p.visible_when, valueOf));
+}
