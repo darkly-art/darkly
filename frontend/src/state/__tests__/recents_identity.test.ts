@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
-import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
+import { BrushGraphState } from '../brush_graph.svelte';
 import { brushLibrary } from '../brush_library.svelte';
 import { recentBrushes } from '../recents.svelte';
-
-const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
+import { fakeBrushEngine } from './fakeBrushEngine';
 
 /** Ids are YAML file stems, names are display strings, and the two differ.
  *  That difference is the whole subject of this file: recents is id-keyed
@@ -12,8 +11,8 @@ const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
  *  against live ids, so anything recorded under a display name is dropped by
  *  the next refresh, which `hydrate` runs at boot. */
 function fakeEngine() {
-    return {
-        api: {
+    return fakeBrushEngine(
+        {
             libraryList: async () => ({
                 brushes: [
                     { id: 'ink_pen', name: 'Ink Pen', author: '', description: '', tags: [], icon: null },
@@ -21,13 +20,9 @@ function fakeEngine() {
                 packs: [],
             }),
             brushNodeTypes: async () => [],
-            brushLoad: async () => null,
-            brushGraphActive: async () => emptyGraph,
-            brushExposedPorts: async () => [],
-            brushActiveCapabilities: async () => ({}),
-            brushTopologyVersion: async () => ({ value: 0 }),
         },
-    } as unknown as NonNullable<typeof app.engine>;
+        { 'Ink Pen': 'ink_pen' },
+    ).engine;
 }
 
 beforeEach(async () => {

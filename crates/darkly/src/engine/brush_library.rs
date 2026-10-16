@@ -6,6 +6,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::brush::library::{self as library, BrushInfo, LibrarySnapshot};
 use crate::brush::metadata::{Brush, BrushMetadata};
 use crate::brush::pack::PackPalette;
+use crate::brush::state::BrushState;
 
 /// Dimensions used for baked brush thumbnails. Matches the live editor
 /// preview so brushes look identical in the picker grid.
@@ -56,6 +57,17 @@ pub(crate) const DAB_PREVIEW_BASE_SIZE: f32 = 0.3;
 /// follow-up.
 pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (1792, 1792);
 
+/// The library brush the live graph belongs to: `brush_loaded`'s answer.
+#[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct LoadedBrush {
+    pub id: String,
+    /// Display name, read from the library when asked.
+    pub name: String,
+    /// Whether the live graph differs from the brush's saved graph.
+    pub modified: bool,
+}
+
 #[handlers]
 impl DarklyEngine {
     /// Every brush and every pack, in one round trip.
@@ -75,19 +87,57 @@ impl DarklyEngine {
     }
 
     /// Load a brush by name and set it as the active brush graph.
+    ///
+    /// The outgoing brush's tweaks are stashed as its working copy, and the
+    /// incoming brush's working copy, if it has one, is what gets installed,
+    /// so tweaks survive switching away and back. The double-click reset
+    /// baseline is always the brush's saved graph, never the tweak. Loading
+    /// the brush that is already loaded changes nothing.
     #[handler]
     pub fn brush_load(&mut self, name: &str) -> Result<(), String> {
-        // The library borrow ends before `set_brush_graph`, which takes
-        // `&mut self` and would otherwise re-enter it.
-        let json = library::with(|lib| {
-            let brush = lib
-                .by_name(name)
-                .ok_or_else(|| format!("brush '{name}' not found"))?;
-            serde_json::to_string(&brush.metadata.graph)
-                .map_err(|e| format!("failed to serialize graph: {e}"))
+        // The library borrow ends before any engine write: see
+        // `library::with`.
+        let (id, saved) = library::with(|lib| {
+            lib.by_name(name)
+                .map(|b| (b.id().to_string(), b.metadata.graph.clone()))
+                .ok_or_else(|| format!("brush '{name}' not found"))
         })?;
-        self.set_brush_graph(&json)?;
-        Ok(())
+        if self.with_brush_state(|b| b.loaded.as_deref() == Some(id.as_str())) {
+            return Ok(());
+        }
+        let copy = self.with_brush_state_mut(|b| b.working_copies.remove(&id));
+        self.install_library_brush(id, saved, copy)
+    }
+
+    /// Throw away the loaded brush's tweaks and put its saved graph back.
+    /// `Err` when no library brush is loaded: there is nothing to revert to.
+    #[handler]
+    pub fn brush_revert(&mut self) -> Result<(), String> {
+        let id = self
+            .with_brush_state(|b| b.loaded.clone())
+            .ok_or_else(|| "no library brush is loaded".to_string())?;
+        let saved = library::with(|lib| lib.get(&id).map(|b| b.metadata.graph.clone()))
+            .ok_or_else(|| format!("brush '{id}' not found"))?;
+        self.with_brush_state_mut(BrushState::discard_loaded);
+        self.install_library_brush(id, saved, None)
+    }
+
+    /// The library brush the live graph belongs to, and whether the painter
+    /// has tweaked it. `None` when the graph is nobody's (after a reset or a
+    /// YAML import). Name and saved graph are read from the library at call
+    /// time, so a rename shows up without any bookkeeping.
+    #[handler]
+    pub fn brush_loaded(&self) -> Option<LoadedBrush> {
+        self.with_brush_state(|state| {
+            let id = state.loaded.as_deref()?;
+            library::with(|lib| {
+                lib.get(id).map(|b| LoadedBrush {
+                    id: id.to_string(),
+                    name: b.metadata.name.clone(),
+                    modified: state.is_modified(&b.metadata.graph),
+                })
+            })
+        })
     }
 
     /// Save the active brush graph as a brush in the library, under the
@@ -116,8 +166,12 @@ impl DarklyEngine {
             lib.insert(Brush::from_metadata(metadata));
             Ok::<(), String>(())
         })?;
-        // Saving establishes a new "brush baseline": what the artist just
-        // saved IS what reset-to-default should now return to.
+        // The live graph is now what brush `id` is: it is loaded, has no
+        // tweaks, and is what reset-to-default should return to.
+        self.with_brush_state_mut(|b| {
+            b.working_copies.remove(id);
+            b.loaded = Some(id.to_string());
+        });
         self.snapshot_brush_defaults();
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
@@ -157,16 +211,21 @@ impl DarklyEngine {
         serde_yaml_ng::to_string(&portable).map_err(|e| format!("YAML serialize error: {e}"))
     }
 
-    /// Rename a brush. Touches no pack and no recents entry: both hold ids.
+    /// Rename a brush. Touches no pack, no recents entry and no working copy:
+    /// all of them hold ids.
     #[handler]
     pub fn brush_rename(&mut self, id: &str, name: &str) -> Result<(), String> {
         library::with_mut(|lib| lib.rename(id, name))
     }
 
-    /// Delete a brush, removing it from every pack that held it.
+    /// Delete a brush, removing it from every pack that held it and
+    /// forgetting any tweaks to it. If it was loaded, its graph stays live as
+    /// nobody's.
     #[handler]
     pub fn brush_delete(&mut self, id: &str) -> Result<(), String> {
-        library::with_mut(|lib| lib.delete_brush(id))
+        library::with_mut(|lib| lib.delete_brush(id))?;
+        self.with_brush_state_mut(|b| b.forget(id));
+        Ok(())
     }
 
     /// Create a brush pack under a caller-supplied id.
@@ -315,5 +374,29 @@ impl DarklyEngine {
             }
         });
         Vec::new()
+    }
+}
+
+impl DarklyEngine {
+    /// Install library brush `id`: its working copy when there is one, its
+    /// saved graph otherwise, with the saved graph as the reset baseline
+    /// either way. A working copy that no longer compiles is dropped in
+    /// favour of the saved graph, so a library brush can always be loaded.
+    fn install_library_brush(
+        &mut self,
+        id: String,
+        saved: crate::nodegraph::Graph<crate::brush::wire::BrushWireType>,
+        copy: Option<crate::nodegraph::Graph<crate::brush::wire::BrushWireType>>,
+    ) -> Result<(), String> {
+        let defaults = super::brush_graph::port_defaults(&saved);
+        if let Some(copy) = copy {
+            if self
+                .install_brush_graph(copy, defaults.clone(), Some(id.clone()))
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        self.install_brush_graph(saved, defaults, Some(id))
     }
 }

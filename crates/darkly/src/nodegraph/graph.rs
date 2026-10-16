@@ -65,7 +65,7 @@ pub enum PortDir {
 }
 
 /// Schema for a single port on a node type.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(concrete(W = crate::brush::wire::BrushWireType), bound = "W: ts_rs::TS"))]
@@ -477,7 +477,7 @@ impl<W: WireKind> PortDef<W> {
 // ── Node instance ────────────────────────────────────────────────────
 
 /// A placed node in a graph.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct NodeInstance<W: WireKind> {
     pub id: NodeId,
@@ -722,6 +722,18 @@ pub struct Graph<W: WireKind> {
     /// [`exposed_port_key`].
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub exposed_ports: IndexMap<String, ExposedPortMeta>,
+}
+
+/// Structural equality: two graphs are equal when they would save to the same
+/// brush. Written by hand rather than derived because `IndexMap`'s own
+/// `PartialEq` ignores order, and the order of `exposed_ports` is authored
+/// state (the brush-bar display order), so a reorder alone is a difference.
+impl<W: WireKind> PartialEq for Graph<W> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes
+            && self.connections == other.connections
+            && self.exposed_ports.iter().eq(other.exposed_ports.iter())
+    }
 }
 
 impl<W: WireKind> Default for Graph<W> {

@@ -19,7 +19,7 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-Darkly aims to be the best paint app for artists (but it does not want to be Photoshop). It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+Darkly aims to be the best paint app for artists (but does not want to be Photoshop). It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
@@ -149,6 +149,7 @@ For a feature to count, it must be:
 - [x] Flip layer / selection H / V
 - [x] Smart objects
 - [x] Recent colors
+- [x] Recent brushes
 - [ ] Saved swatches / palettes
 - [x] Palette popup
 - [ ] Navigator / overview window

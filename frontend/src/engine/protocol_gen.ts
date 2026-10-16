@@ -554,6 +554,16 @@ layers: Array<LayerInfo>, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
+export type LoadedBrush = { id: string, 
+/**
+ * Display name, read from the library when asked.
+ */
+name: string, 
+/**
+ * Whether the live graph differs from the brush's saved graph.
+ */
+modified: boolean, };
+
 export type MaskToSelectionReq = { id: number, };
 
 export type MergeDownReq = { source_id: number, };
@@ -1126,14 +1136,15 @@ export type RequestKind =
     | 'brush_graph_validate'
     | 'brush_list'
     | 'brush_load'
+    | 'brush_loaded'
     | 'brush_node_preview'
     | 'brush_node_types'
     | 'brush_rename'
+    | 'brush_revert'
     | 'brush_save'
     | 'brush_set_exposed_port'
     | 'brush_stroke_preview'
     | 'brush_thumbnail'
-    | 'brush_topology_version'
     | 'brush_upload_image'
     | 'can_convert_floating_to_smart_object'
     | 'can_convert_layer_to_smart_object'
@@ -1333,14 +1344,15 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_validate',
     'brush_list',
     'brush_load',
+    'brush_loaded',
     'brush_node_preview',
     'brush_node_types',
     'brush_rename',
+    'brush_revert',
     'brush_save',
     'brush_set_exposed_port',
     'brush_stroke_preview',
     'brush_thumbnail',
-    'brush_topology_version',
     'brush_upload_image',
     'can_convert_floating_to_smart_object',
     'can_convert_layer_to_smart_object',
@@ -1548,14 +1560,15 @@ export interface EngineApi {
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushList(): Promise<Array<BrushInfo>>;
     brushLoad(req: BrushLoadReq): Promise<null>;
+    brushLoaded(): Promise<LoadedBrush | null>;
     brushNodePreview(req: BrushNodePreviewReq): Promise<{ bytes: Uint8Array }>;
     brushNodeTypes(): Promise<Array<NodeRegistration>>;
     brushRename(req: BrushRenameReq): Promise<null>;
+    brushRevert(): Promise<null>;
     brushSave(req: BrushSaveReq): Promise<null>;
     brushSetExposedPort(req: BrushSetExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushStrokePreview(): Promise<{ bytes: Uint8Array }>;
     brushThumbnail(req: BrushThumbnailReq): Promise<{ bytes: Uint8Array }>;
-    brushTopologyVersion(): Promise<{ value: number }>;
     brushUploadImage(req: BrushUploadImageReq, bytes: Uint8Array): Promise<void>;
     canConvertFloatingToSmartObject(): Promise<boolean>;
     canConvertLayerToSmartObject(req: CanConvertLayerToSmartObjectReq): Promise<boolean>;
@@ -1757,14 +1770,15 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushList: () => t.request('brush_list'),
         brushLoad: (req) => t.request('brush_load', req),
+        brushLoaded: () => t.request('brush_loaded'),
         brushNodePreview: (req) => t.request('brush_node_preview', req),
         brushNodeTypes: () => t.request('brush_node_types'),
         brushRename: (req) => t.request('brush_rename', req),
+        brushRevert: () => t.request('brush_revert'),
         brushSave: (req) => t.request('brush_save', req),
         brushSetExposedPort: (req) => t.request('brush_set_exposed_port', req),
         brushStrokePreview: () => t.request('brush_stroke_preview'),
         brushThumbnail: (req) => t.request('brush_thumbnail', req),
-        brushTopologyVersion: () => t.request('brush_topology_version'),
         brushUploadImage: (req, bytes) => t.request('brush_upload_image', req, bytes),
         canConvertFloatingToSmartObject: () => t.request('can_convert_floating_to_smart_object'),
         canConvertLayerToSmartObject: (req) => t.request('can_convert_layer_to_smart_object', req),
