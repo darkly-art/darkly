@@ -4,11 +4,13 @@
     import kritaSvg from '../assets/presets/krita.svg?raw';
     import gimpSvg from '../assets/presets/gimp.svg?raw';
     import photoshopSvg from '../assets/presets/photoshop.svg?raw';
+    import clipStudioPaintSvg from '../assets/presets/clipstudiopaint.svg?raw';
 
     const logos: Record<string, string> = {
         krita: kritaSvg,
         gimp: gimpSvg,
         photoshop: photoshopSvg,
+        'clip studio paint': clipStudioPaintSvg,
     };
 
     function pick(name: string) {

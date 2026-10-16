@@ -51,6 +51,9 @@ hotkeys:
   # because GIMP has no separate polygonal tool.
   lassoSelectTool: KeyF
   # GIMP has no vector shape tools, so they stay unbound.
+  # Colors. GIMP binds `context-colors-default` to D (context-actions.c).
+  # Per-overlay because Clip Studio Paint spends D on a tool and has no reset.
+  resetColors: KeyD
   # Layers.
   isolateLayer: KeyI
   # GIMP's layers-delete action has no global accelerator (its accel slot is

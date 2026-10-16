@@ -95,7 +95,7 @@ crates/darkly/src/
 crates/darkly/product.yaml
                         Darkly's summary, description,
                         categories, keywords. The one home for all four.
-crates/darkly/presets/  Bundled config overlays (gimp, krita, photoshop)
+crates/darkly/presets/  Bundled per-editor config overlays
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
   graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
@@ -114,7 +114,7 @@ Each of these is required reading *before* you change the area it covers, and sa
 | --- | --- | --- |
 | Anything with x/y coordinates | [`docs/coordinate-systems.md`](docs/coordinate-systems.md) | A pixel moves through several frames (screen → plane → window-local → layer-local). A value carried into the wrong one is the single most recurring class of bug here, invisible until the canvas is cropped |
 | The brush hover preview or on-canvas overlays | [`docs/brush-preview-and-overlays.md`](docs/brush-preview-and-overlays.md) | Brushes compile to two shader variants, `setOverlay` is single-slot, and preview swaps stroke-only bindings for fallbacks: the model that makes hover-feedback bugs visible |
-| Hotkeys, the config schema, or editor presets | [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml) header | Settings resolve `user → overlay (krita/ps/gimp) → defaults`, and where a key belongs follows from that. Host-editor reference hotkeys are in [`docs/*-default-hotkeys.md`](docs/) |
+| Hotkeys, the config schema, or editor presets | [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml) header | Settings resolve `user → overlay (the active editor's) → defaults`, and where a key belongs follows from that. Host-editor reference hotkeys are in [`docs/*-default-hotkeys.md`](docs/) |
 | A registration a README table or graphic names | [`docs/generated-markdown.md`](docs/generated-markdown.md) | Those spans are generated from the registries; see [Generated Markdown](#generated-markdown) |
 | The JS/Rust boundary or the async model | [`docs/architecture-history.md`](docs/architecture-history.md) | Most "obvious simplifications" there have already been tried and reverted |
 | The brush engine or its node graph | [`docs/brush/README.md`](docs/brush/README.md) | Stroke engine, node system, stabilization, and the imported brush formats |
