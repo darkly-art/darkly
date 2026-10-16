@@ -8,10 +8,10 @@
 //!
 //! `InputValue` is deliberately **separate** from
 //! [`crate::gpu::params::ParamValue`]: that type is the filter/veil effect
-//! system's value vocabulary and is untouched by the brush graph. The two
-//! only meet at the serialization boundary, where [`crate::gpu::params::PortableValue`]
-//! (a pure DTO) is reused for both, and [`InputValue::from_portable`] coerces
-//! it into the brush-node shape.
+//! system's value vocabulary and is untouched by the brush graph. On disk an
+//! `InputValue` takes the shape of [`PortableValue`], the brush YAML's
+//! untyped DTO, which [`InputValue::from_portable`] coerces back into the
+//! brush-node shape using the port's wire type.
 //!
 //! Distinct from [`crate::brush::wire::ScalarValue`], which is the `Copy`,
 //! 16-byte *runtime* value that flows on a wire during per-dab evaluation.
@@ -21,7 +21,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::brush::wire::ScalarValue;
-use crate::gpu::params::{ParamTypeMismatch, PortableValue};
 
 /// The authored value on a disconnected brush-graph input port.
 ///
@@ -122,9 +121,8 @@ impl InputValue {
 
     /// Coerce an externally-typed portable value (parsed from YAML/JSON) into
     /// the concrete `InputValue` the port expects, given the port's wire type.
-    /// The brush-side analog of [`crate::gpu::params::ParamDef::coerce_portable`],
-    /// with the same hard type-mismatch discipline so a curve in an enum slot
-    /// fails loudly rather than silently defaulting.
+    /// A mismatch is a hard error, so a curve in an enum slot fails loudly
+    /// rather than silently defaulting.
     pub fn from_portable(
         wire_type: crate::brush::wire::BrushWireType,
         v: PortableValue,
@@ -138,11 +136,11 @@ impl InputValue {
                 _ => mismatch("bool"),
             },
             W::Int | W::Enum => match v {
-                PortableValue::Int(i) => Ok(Self::Int(i as i32)),
+                PortableValue::Int(i) => Ok(Self::Int(i)),
                 _ => mismatch("integer"),
             },
             W::Scalar => match v {
-                PortableValue::Float(f) => Ok(Self::Scalar(f as f32)),
+                PortableValue::Float(f) => Ok(Self::Scalar(f)),
                 PortableValue::Int(i) => Ok(Self::Scalar(i as f32)),
                 _ => mismatch("number"),
             },
@@ -165,20 +163,66 @@ impl InputValue {
         }
     }
 
-    /// Serialize into the shared [`PortableValue`] DTO for on-disk YAML. The
-    /// inverse of [`Self::from_portable`]; reuses the filter/veil DTO so the
-    /// wire format stays DRY without coupling the two value *systems*.
+    /// Convert into the [`PortableValue`] DTO for on-disk YAML. The inverse of
+    /// [`Self::from_portable`].
     pub fn to_portable(&self) -> PortableValue {
         match self {
             Self::Bool(b) => PortableValue::Bool(*b),
-            Self::Int(i) => PortableValue::Int(*i as i64),
-            Self::Scalar(f) => PortableValue::Float(*f as f64),
+            Self::Int(i) => PortableValue::Int(*i),
+            Self::Scalar(f) => PortableValue::Float(*f),
             Self::String(s) => PortableValue::String(s.clone()),
             Self::Curve(c) => PortableValue::Curve(c.clone()),
             Self::Vec2(v) => PortableValue::Vec2(*v),
             Self::Vec4(v) => PortableValue::Color([v[0], v[1], v[2]]),
         }
     }
+}
+
+/// Untyped value parsed from brush YAML (or JSON), the on-disk shape of an
+/// [`InputValue`]. Coerced into the concrete `InputValue` by
+/// [`InputValue::from_portable`] using the port's wire type.
+///
+/// `#[serde(untagged)]` tries variants top-down, more-specific first, so a
+/// YAML `true` doesn't slip into `Int(1)`, `42` lands in `Int` before
+/// `Float`, and the variant carrying its source typing through the round trip
+/// means `algorithm: 0` reads back as `0` (not `0.0`).
+///
+/// Each numeric variant is exactly as wide as the `InputValue` it carries. A
+/// wider type would serialize an `f32`'s rounding error at `f64` precision,
+/// writing an authored `0.12` as `0.11999999731779099`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PortableValue {
+    Bool(bool),
+    Int(i32),
+    Float(f32),
+    String(String),
+    Curve(Vec<[f32; 2]>),
+    Color([f32; 3]),
+    Vec2([f32; 2]),
+}
+
+impl PortableValue {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "integer",
+            Self::Float(_) => "float",
+            Self::String(_) => "string",
+            Self::Curve(_) => "curve",
+            Self::Color(_) => "color",
+            Self::Vec2(_) => "vec2",
+        }
+    }
+}
+
+/// Returned by [`InputValue::from_portable`] when the externally-typed value
+/// does not match the port's wire type. Carries just the type labels; the
+/// caller adds input-name / node-type context.
+#[derive(Debug)]
+pub struct ParamTypeMismatch {
+    pub expected: &'static str,
+    pub actual: &'static str,
 }
 
 #[cfg(test)]

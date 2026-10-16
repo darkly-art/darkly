@@ -1,12 +1,10 @@
-name: Sponge
+name: Sponge - Square
 description: A textured brush useful for laying down big, smooth shapes
 nodes:
-  add:
-    type: add
   brush_settings:
     type: brush_settings
     inputs:
-      size: 0.2
+      size: 0.6
       spacing: 0.02
       stabilize: 1.0
   curve:
@@ -21,6 +19,7 @@ nodes:
         - 0.0
   curve_2:
     type: curve
+    name: Pressure to Flow
     inputs:
       curve:
       - - 0.0
@@ -31,19 +30,22 @@ nodes:
         - 1.0
   curve_3:
     type: curve
+    name: Lower Noise Scale
     inputs:
       curve:
       - - 0.0
         - 0.0
       - - 1.0
         - 0.5
-      input: 0.10
+      input: 0.1
   remap:
     type: remap
+    name: Adjust Texture Intensity By Pen Pressure
   multiply:
     type: multiply
   noise:
     type: noise
+    name: Brush Noise Texture
     inputs:
       scale: 6.0
       space: 1
@@ -55,6 +57,7 @@ nodes:
     type: pen_input
   polygon:
     type: polygon
+    name: Tip Shape
     inputs:
       points: 4
       rounding: 0.5
@@ -63,33 +66,33 @@ nodes:
       squeeze_angle: -0.78
   random:
     type: random
+    name: Random Noise Rotation
   random_2:
     type: random
+    name: Random Noise Variation
   stamp:
     type: stamp
-  subtract:
+  subtract_2:
     type: subtract
-    inputs:
-      a: 0.11924592405557632
+    name: Subtract Noise from Brush Tip
 connections:
-- add.result -> remap.input
 - brush_settings.size -> multiply.a
 - curve.output -> remap.in_low
 - curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.b
 - remap.output -> stamp.tip
 - multiply.result -> noise.scale
-- noise.value -> subtract.b
+- noise.value -> subtract_2.b
 - paint_color.color -> stamp.color
 - pen_input.drawing_angle -> polygon.rotation_input
 - pen_input.position -> paint.position
 - pen_input.pressure -> curve.input
 - pen_input.pressure -> curve_2.input
-- polygon.mask -> add.b
+- polygon.mask -> subtract_2.a
 - random.value -> noise.rotation
 - random_2.value -> noise.variation
 - stamp.dab -> paint.rgba
-- subtract.result -> add.a
+- subtract_2.result -> remap.input
 exposed_ports:
   brush_settings.stabilize: {}
   brush_settings.size: {}
