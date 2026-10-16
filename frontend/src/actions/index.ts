@@ -459,9 +459,6 @@ export function registerActions() {
     actions.register({
         id: 'newDocument',
         menuPath: ['File:10'],
-        // No default hotkey: `$mod+KeyN` is reserved by every major browser
-        // for "new window" and cannot be intercepted by the page. Artists can
-        // still bind it via the Hotkeys tab if their browser/OS allows.
         handler: () => {
             newDocument.open = true;
         },

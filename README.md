@@ -161,7 +161,7 @@ For a feature to count, it must be:
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting
 - [x] Installable PWA
-- [x] Krita / Photoshop / GIMP hotkey presets
+- [x] Krita / Photoshop / GIMP / Clip Studio Paint hotkey presets
 - [x] Settings modal
 - [x] Theme system
 - [x] Hotkey system + searchable cheatsheet
