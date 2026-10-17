@@ -3,7 +3,6 @@ use crate::document::Document;
 use crate::gpu::blend_mode::BlendModeRegistration;
 use crate::gpu::params::ParamValue;
 use crate::layer::{Layer, LayerId, LayerNode};
-use std::collections::{HashMap, HashSet};
 
 /// A layer property value that can be saved and restored.
 #[derive(Clone)]
@@ -148,14 +147,12 @@ impl PropertyAction {
 }
 
 impl UndoAction for PropertyAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.old_value.apply(doc, self.layer_id);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.new_value.apply(doc, self.layer_id);
-        HashMap::new()
     }
 
     fn try_coalesce_property(&mut self, other: &PropertyAction) -> bool {

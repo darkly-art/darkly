@@ -853,7 +853,6 @@ impl DarklyEngine {
                 &mut self.readbacks,
                 "transform-stage-undo-entry",
                 target.node_id,
-                &frame,
                 &snapshot,
                 target.document_bounds,
             ));
@@ -889,7 +888,6 @@ impl DarklyEngine {
                     &mut self.readbacks,
                     "transform-selection-undo-entry",
                     filter_id,
-                    &frame,
                     &snapshot,
                     rect,
                 ),
@@ -1076,16 +1074,14 @@ impl DarklyEngine {
 
         // The undo entry has to be committed BEFORE the ClearShape + commit
         // pass writes to the target, because `commit_region` reads from the
-        // scratch (which holds the pre-clear state). Separate encode-and-
-        // submit so the clear/commit pass sees the scratch upload done.
-        let frame = layer_frame!();
+        // snapshot (which holds the pre-clear state). Separate encode-and-
+        // submit so the clear/commit pass sees the snapshot upload done.
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
             "transform-commit-undo",
             layer_id,
-            &frame,
             &commit_snap,
             affected_canvas_rect,
         );

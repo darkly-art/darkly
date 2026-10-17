@@ -1,8 +1,6 @@
 use super::UndoAction;
 use crate::coord::CanvasPoint;
 use crate::document::Document;
-use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Undo action for a canvas-window move/resize that does **not** rescale
 /// content (translate / crop / crop-to-selection).
@@ -47,13 +45,11 @@ impl CanvasResizeAction {
 }
 
 impl UndoAction for CanvasResizeAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         Self::apply(doc, self.old_origin, self.old_width, self.old_height);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         Self::apply(doc, self.new_origin, self.new_width, self.new_height);
-        HashMap::new()
     }
 }

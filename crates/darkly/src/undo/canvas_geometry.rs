@@ -31,7 +31,6 @@ use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::transform::Transform;
-use std::collections::{HashMap, HashSet};
 
 /// The selection clear/transform folded into a geometry edit, so undo restores
 /// the selection in the same step. Mirrors [`super::SelectionAction`]'s fields.
@@ -99,7 +98,7 @@ impl CanvasGeometryAction {
 }
 
 impl UndoAction for CanvasGeometryAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         doc.width = self.old_w;
         doc.height = self.old_h;
         doc.canvas_origin = self.old_origin;
@@ -114,10 +113,9 @@ impl UndoAction for CanvasGeometryAction {
         }
         // GPU pixel + selection restores are handled by the engine via
         // `gpu_region_entries_mut` / `selection_region_entry_mut`.
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         doc.width = self.new_w;
         doc.height = self.new_h;
         doc.canvas_origin = self.new_origin;
@@ -130,7 +128,6 @@ impl UndoAction for CanvasGeometryAction {
                 layer.set_transform(*new);
             }
         }
-        HashMap::new()
     }
 
     fn gpu_region_entries_mut(&mut self) -> Vec<&mut UndoRegionEntry> {
@@ -153,12 +150,12 @@ impl UndoAction for CanvasGeometryAction {
         let regions: u64 = self
             .regions
             .iter()
-            .map(|e| e.byte_size)
+            .map(|e| e.byte_size())
             .fold(0, u64::saturating_add);
         let sel = self
             .selection
             .as_ref()
-            .map(|s| s.entry.byte_size)
+            .map(|s| s.entry.byte_size())
             .unwrap_or(0);
         regions.saturating_add(sel)
     }

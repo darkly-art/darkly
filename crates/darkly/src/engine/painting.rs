@@ -15,7 +15,8 @@ use crate::coord::CanvasRect;
 use crate::document::canvas_per_reference_px;
 use crate::gpu::layer_readback;
 use crate::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
-use crate::gpu::region_store::UndoRegionEntry;
+use crate::gpu::region_runs::RegionRuns;
+use crate::gpu::region_store::{Snapshot, UndoRegionEntry};
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -79,44 +80,97 @@ impl DarklyEngine {
         crate::brush::nodes::brush_settings::stamp_angle_rate(&brush.graph)
     }
 
-    /// Flush any pending diff-based undo commit. Called before overwriting the
-    /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait);
-    /// if the diff hasn't completed yet, it falls back to a full-canvas rect.
-    pub(crate) fn flush_pending_undo_commit(&mut self) {
-        if !self.diff_rect.is_pending() {
+    /// Diff `layer_id` against `snapshot` (its pre-operation pixels) and
+    /// queue the undo commit; [`Self::resolve_pending_undo_commits`] commits
+    /// the changed region once the diff lands. The snapshot owns its
+    /// texture, so later saves cannot disturb the pixels the commit reads.
+    pub(crate) fn queue_undo_diff(&mut self, layer_id: LayerId, mut snapshot: Snapshot) {
+        let Some(extent) = self.node_canvas_extent(layer_id) else {
             return;
+        };
+        if snapshot.saved != extent {
+            // The layer grew after the save (a flood fill landing after a
+            // later stroke grew its layer). Re-anchor so the diff compares
+            // aligned texels and the commit covers every pixel it can flag.
+            if !extent.contains(snapshot.saved) {
+                return;
+            }
+            self.gpu.encode("undo-diff-rebase", |encoder| {
+                self.region_scratch
+                    .rebase(&self.gpu.device, encoder, &mut snapshot, extent);
+            });
         }
-        let Some(commit) = self.pending_undo_commit.take() else {
+        let Some(tex) = self.compositor.node_texture(layer_id) else {
             return;
         };
+        let before_view = snapshot
+            .frame()
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let diff = self.diff_rect.request(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &before_view,
+            tex.view(),
+            extent,
+            snapshot.format,
+        );
+        self.pending_undo_commits.push(PendingUndoCommit {
+            layer_id,
+            snapshot,
+            diff,
+        });
+    }
 
-        // Try to collect the result without blocking.
-        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
-        let rect = match self.diff_rect.poll(&self.gpu.device) {
-            Some(Some(rect)) => rect,
-            Some(None) => return, // Textures identical, no commit needed.
-            // Diff not ready, fall back to the full saved area. (NOT
-            // `scratch_dimensions()`, which diverges from `snapshot.saved`
-            // after a mid-stroke `grow_scratch_preserving`.)
-            None => commit.snapshot.saved,
+    /// Commit, in order, every queued undo diff that has landed, stopping at
+    /// the first still in flight so the stack keeps the artist's order.
+    /// Polls without blocking.
+    pub(crate) fn resolve_pending_undo_commits(&mut self) {
+        while let Some(head) = self.pending_undo_commits.first_mut() {
+            let Some(runs) = head.diff.poll(&self.gpu.device) else {
+                break;
+            };
+            let commit = self.pending_undo_commits.remove(0);
+            self.commit_pending_undo(commit, runs, "undo-diff-commit");
+        }
+    }
+
+    /// Commit every queued undo diff now, in order, so the stack holds them
+    /// before an action that must follow them (another undoable action, or
+    /// an undo about to pop). Polls without blocking; a diff that has not
+    /// landed commits its whole saved rect instead.
+    pub(crate) fn flush_pending_undo_commits(&mut self) {
+        for mut commit in std::mem::take(&mut self.pending_undo_commits) {
+            let runs = commit
+                .diff
+                .poll(&self.gpu.device)
+                .unwrap_or_else(|| Some(commit.snapshot.saved.into()));
+            self.commit_pending_undo(commit, runs, "undo-diff-flush");
+        }
+    }
+
+    /// Push `commit`'s entry for `runs`, or nothing when the diff found no
+    /// change. Pushes without flushing: the caller is draining the queue in
+    /// order.
+    fn commit_pending_undo(
+        &mut self,
+        commit: PendingUndoCommit,
+        runs: Option<RegionRuns>,
+        label: &'static str,
+    ) {
+        let Some(runs) = runs else {
+            return;
         };
-
-        let layer_frame = match self.compositor.node_texture(commit.layer_id) {
-            Some(t) => t.canvas_frame(),
-            None => return,
-        };
-
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
-            "brush-stroke-end-flush",
+            label,
             commit.layer_id,
-            &layer_frame,
             &commit.snapshot,
-            rect,
+            runs,
         );
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        self.push_undo_without_flush(Box::new(GpuRegionAction::new(entry)));
     }
 
     // --- Painting ---
@@ -172,7 +226,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             label_commit,
             node_id,
-            &frame,
             &snap,
             rect,
         );
@@ -204,7 +257,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             label_commit,
             node_id,
-            &frame,
             &snap,
             rect,
         ))
@@ -241,7 +293,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             "fill-background-commit",
             id,
-            &layer_frame,
             &snap,
             rect,
         );
@@ -510,7 +561,6 @@ impl DarklyEngine {
         // The unified node-texture pool dispatches by node id; format dispatch
         // is read off `LayerTexture.format` rather than a sidecar boolean.
         if self.scratch_snapshot.is_none() {
-            self.flush_pending_undo_commit();
             // Inline dispatch: the borrow checker treats `self.paint_target(...)`
             // as borrowing all of &self, which conflicts with the
             // &self.region_scratch call below. Direct field access via
@@ -696,37 +746,15 @@ impl DarklyEngine {
         // textures got rebased above, and the metadata translates to the new
         // layer-local frame on demand at the wgpu boundary.
 
-        // Re-anchor the region_scratch so the diff_rect at end_stroke
-        // compares matching coordinate frames. If the scratch hasn't been
-        // saved yet (this is the first dab and lazy init hasn't run), the
-        // rebase is a no-op on still-empty contents.
+        // Re-anchor the stroke's snapshot so the diff at end_stroke compares
+        // matching coordinate frames, and so it covers the grown area (whose
+        // pre-stroke value is the format default). Before the first save
+        // there is nothing to re-anchor: the save itself sizes the scratch.
         if let Some(snap) = self.scratch_snapshot.as_mut() {
-            self.gpu.encode("region-scratch-grow", |encoder| {
-                self.region_scratch.grow_scratch_preserving(
-                    &self.gpu.device,
-                    encoder,
-                    current_extent,
-                    new_extent,
-                );
+            self.gpu.encode("region-scratch-rebase", |encoder| {
+                self.region_scratch
+                    .rebase(&self.gpu.device, encoder, snap, new_extent);
             });
-            // After grow_scratch_preserving, the new scratch holds valid
-            // pre-stroke state over the full new extent: the old extent's
-            // snapshot rebased to the new frame, and the format default
-            // (transparent for a raster layer, white for an R8 mask)
-            // everywhere else. The newly-grown pixels didn't exist before the
-            // grow, so that default IS their pre-stroke value. Widen `saved`
-            // to cover the full new canvas extent so a diff_rect that spills
-            // into the newly-grown area is still contained at commit time.
-            snap.saved = new_extent;
-        } else {
-            // Lazy init will allocate the scratch at the new dimensions
-            // when it next saves; just bump capacity now so the save
-            // doesn't trigger another reallocation.
-            self.region_scratch.ensure_scratch_capacity(
-                &self.gpu.device,
-                new_extent.width,
-                new_extent.height,
-            );
         }
     }
 
@@ -1407,6 +1435,12 @@ impl DarklyEngine {
         color: [u8; 4],
         tolerance: u8,
     ) {
+        // The fill lands frames from now; its pre-fill snapshot travels with
+        // the readback so the stroke slot is free for whatever comes next.
+        // The lazy save in `gpu_stroke_to` has always run by here.
+        let Some(snapshot) = self.scratch_snapshot.take() else {
+            return;
+        };
         let pt = match self.paint_target(layer_id) {
             Some(t) => t,
             None => return,
@@ -1429,6 +1463,7 @@ impl DarklyEngine {
                 color,
                 tolerance,
                 extent,
+                snapshot,
             },
         );
     }
@@ -1444,6 +1479,7 @@ impl DarklyEngine {
         color: [u8; 4],
         tolerance: u8,
         extent: layer_readback::LayerReadbackExtent,
+        snapshot: Snapshot,
         pixels: Vec<u8>,
     ) {
         let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);
@@ -1496,40 +1532,10 @@ impl DarklyEngine {
         );
         encoder.submit();
 
-        // 4. Commit undo. The lazy save in `gpu_stroke_to` snapshotted the
-        //    layer texture's extent; the fill can only modify pixels inside
-        //    that texture (the readback and the stamp are both bounded by it),
-        //    so the layer extent is the region to commit, never the canvas
-        //    rect, which may reach past the layer when the window is resized.
-        let snap = match self.scratch_snapshot.take() {
-            Some(s) => s,
-            // No snapshot means the lazy save never ran (stroke_to was
-            // never called for this op), which is extremely unusual; bail
-            // rather than fabricate an empty snapshot.
-            None => {
-                self.compositor.mark_node_pixels_dirty(layer_id);
-                return;
-            }
-        };
-        let layer_frame = match self.compositor.node_texture(layer_id) {
-            Some(t) => t.canvas_frame(),
-            None => {
-                self.compositor.mark_node_pixels_dirty(layer_id);
-                return;
-            }
-        };
-        let rect = layer_frame.canvas_extent;
-        let entry = commit_undo_region(
-            &self.gpu,
-            &self.region_scratch,
-            &mut self.readbacks,
-            "flood-fill-undo",
-            layer_id,
-            &layer_frame,
-            &snap,
-            rect,
-        );
-        self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        // 4. Queue the undo diff against the pre-fill snapshot: the entry
+        //    covers the tiles the fill changed, and none when it changed
+        //    nothing.
+        self.queue_undo_diff(layer_id, snapshot);
 
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
@@ -1544,15 +1550,6 @@ impl DarklyEngine {
             // begin_stroke. Live mid-stroke updates are intentionally skipped.
             self.compositor.mark_node_pixels_dirty(layer_id);
 
-            // If a flood fill is pending, defer undo commit: complete_flood_fill
-            // will handle it when the readback arrives.
-            if self
-                .readbacks
-                .any(|c| matches!(c, ReadbackContext::FloodFill { .. }))
-            {
-                return;
-            }
-
             // Finalize brush stroke engine and destroy stroke buffer + checkpoints.
             if let Some(engine) = self.brush_stroke_engine.take() {
                 let _record = engine.end();
@@ -1560,29 +1557,11 @@ impl DarklyEngine {
             self.stroke_buffer = None;
             self.checkpoint_ring.clear();
 
-            // Dispatch GPU diff to find the exact changed region for undo.
-            if let (Some(snap), true) = (
-                self.scratch_snapshot.take(),
-                self.pending_undo_commit.is_none(),
-            ) {
-                let layer_extent = self
-                    .compositor
-                    .node_texture(layer_id)
-                    .map(|t| (t.view(), t.canvas_extent()));
-                if let Some((current_view, layer_canvas_extent)) = layer_extent {
-                    let scratch_view = self.region_scratch.scratch_view(snap.format);
-                    self.diff_rect.request(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &scratch_view,
-                        current_view,
-                        layer_canvas_extent,
-                    );
-                    self.pending_undo_commit = Some(PendingUndoCommit {
-                        layer_id,
-                        snapshot: snap,
-                    });
-                }
+            // Diff against the stroke's snapshot to find the changed region
+            // for undo. A flood fill moved its snapshot into its readback
+            // and queues its own diff when the fill lands.
+            if let Some(snap) = self.scratch_snapshot.take() {
+                self.queue_undo_diff(layer_id, snap);
             }
         }
     }

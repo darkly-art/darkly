@@ -846,14 +846,14 @@ impl DarklyEngine {
                 return None;
             }
         };
-        let frame = self.compositor.selection_state()?.canvas_frame();
+        // No selection texture to restore into: no entry.
+        self.compositor.selection_state()?;
         Some(commit_undo_region(
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
             "sel-undo-commit",
             filter_id,
-            &frame,
             &snap,
             rect,
         ))
