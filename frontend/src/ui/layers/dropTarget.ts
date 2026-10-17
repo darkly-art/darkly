@@ -17,10 +17,19 @@
 import type { DropRow } from '../../state/layerTree';
 import type { MoveTarget } from '../../engine/protocol_gen';
 
-/** Left padding of a depth-0 row, in px. Mirrors the panel's row styles. */
+/**
+ * The panel's row geometry: a row at `depth` is indented `rowIndent(depth)` px.
+ * The one source for it. The row pads itself with it, the drop line starts at
+ * it, and the drop model reads cursor X against it, so the three cannot drift.
+ */
 export const ROW_BASE_PAD = 8;
 /** Additional left padding per depth level, in px. */
 export const ROW_INDENT = 16;
+
+/** The left indent, in px, of a row at `depth`. */
+export function rowIndent(depth: number): number {
+    return ROW_BASE_PAD + depth * ROW_INDENT;
+}
 
 export interface DropResolution {
     /** The tree depth the drop lands at. Drives the indicator's indent. */

@@ -19,7 +19,9 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-Darkly aims to be the best paint app for artists (but it does not want to be Photoshop). It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+I made Darkly because I wanted something as fun as Procreate, but for PC. PC users deserve to have fun too, and I miss the days when art felt like exploration. Darkly makes painting fun again - on Linux, Windows, macOS, and anything with a web browser.
+
+Darkly is not a Photoshop clone, and does not want to be. It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
