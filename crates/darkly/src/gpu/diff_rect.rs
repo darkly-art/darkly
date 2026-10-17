@@ -1,29 +1,34 @@
-//! GPU-accelerated diff bounding rect computation.
+//! GPU diff of a layer against its pre-operation snapshot, for undo.
 //!
-//! A compute shader compares two textures (pre-stroke scratch vs post-stroke
-//! canvas) and produces the tight bounding rect of all differing pixels using
-//! atomic min/max. Used at stroke end to determine the exact undo region
-//! without hand-tracking dab positions.
+//! A compute shader compares two textures (the snapshot and the current
+//! layer) and produces the tight bounding rect of all differing pixels plus
+//! one changed-flag per tile of the format's [`TileGrid`]. The result becomes
+//! the [`RegionRuns`] an undo entry stores, so an operation's undo costs the
+//! tiles it changed without hand-tracking where it painted.
 //!
-//! The "differs from texture B" predicate + its two-texture bind group are all
-//! that's specific here; the atomic min/max machinery and async readback live
-//! in [`BboxReduction`](super::bbox::BboxReduction).
+//! The "differs from texture B" predicate, its two-texture bind group, and
+//! the decoding into runs are all that's specific here; the dispatch and
+//! async readback live in [`PendingReduction`].
 
-use super::bbox::{BboxReduction, PendingBbox};
+use super::reduction::{decode_bounds, PendingReduction, BOUNDS_INIT};
+use super::region_runs::{bytes_per_pixel, RegionRuns, TileGrid};
+use crate::coord::CanvasRect;
 
 pub struct DiffRectPass {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    pending: Option<PendingDiff>,
 }
 
-struct PendingDiff {
-    bbox: PendingBbox,
+/// An in-flight diff awaiting its readback.
+pub struct PendingDiff {
+    reduction: PendingReduction,
     /// Canvas-space extent of the layer at the time of `request`. Used to
-    /// translate the shader's layer-local bounding rect back to canvas
-    /// coords on `poll`. It must be captured at request time so the result
-    /// remains correct even if the layer grows between request and poll.
-    layer_canvas_extent: crate::coord::CanvasRect,
+    /// translate the shader's layer-local result back to canvas coords on
+    /// `poll`. It must be captured at request time so the result remains
+    /// correct even if the layer grows between request and poll.
+    layer_canvas_extent: CanvasRect,
+    grid: TileGrid,
+    bpp: u32,
 }
 
 /// Uniform buffer layout matching the shader's `Params` struct.
@@ -32,6 +37,8 @@ struct PendingDiff {
 struct Params {
     width: u32,
     height: u32,
+    tile_w: u32,
+    tile_h: u32,
 }
 
 impl DiffRectPass {
@@ -66,7 +73,7 @@ impl DiffRectPass {
                     },
                     count: None,
                 },
-                // binding 2: atomic bounds storage buffer
+                // binding 2: atomic bounds + tile flags storage buffer
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -109,44 +116,52 @@ impl DiffRectPass {
         DiffRectPass {
             pipeline,
             bind_group_layout,
-            pending: None,
         }
     }
 
-    /// Dispatch the diff compute shader comparing two textures.
+    /// Dispatch the diff compute shader comparing two textures of `format`.
     ///
-    /// `scratch_view` is the pre-stroke snapshot, `current_view` is the
-    /// post-stroke canvas. `layer_canvas_extent` is the canvas-space rect
-    /// occupied by the layer at request time, used to translate the
-    /// layer-local result back to canvas coords when [`poll`] resolves.
-    /// Capturing it at request time keeps the result correct even if the
-    /// layer grows before the result is read. Results arrive asynchronously
-    /// via [`poll`].
+    /// `before_view` is the pre-operation snapshot, `current_view` is the
+    /// layer now; both are aligned so texel `(x, y)` is the same layer pixel.
+    /// `layer_canvas_extent` is the canvas-space rect occupied by the layer at
+    /// request time, used to translate the layer-local result back to canvas
+    /// coords when [`PendingDiff::poll`] resolves, so the result stays correct
+    /// even if the layer grows before it is read.
     pub fn request(
-        &mut self,
+        &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        scratch_view: &wgpu::TextureView,
+        before_view: &wgpu::TextureView,
         current_view: &wgpu::TextureView,
-        layer_canvas_extent: crate::coord::CanvasRect,
-    ) {
+        layer_canvas_extent: CanvasRect,
+        format: wgpu::TextureFormat,
+    ) -> PendingDiff {
         let width = layer_canvas_extent.width;
         let height = layer_canvas_extent.height;
+        let grid = TileGrid::for_format(format);
 
-        let params = Params { width, height };
+        let params = Params {
+            width,
+            height,
+            tile_w: grid.tile_w,
+            tile_h: grid.tile_h,
+        };
         let param_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("diff-rect-params"),
             size: std::mem::size_of::<Params>() as u64,
             usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: true,
         });
-        {
-            let mut mapping = param_buf.slice(..).get_mapped_range_mut();
-            mapping.copy_from_slice(bytemuck::bytes_of(&params));
-        }
+        param_buf
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&params));
         param_buf.unmap();
 
-        let bbox = BboxReduction::dispatch(
+        let mut seed = BOUNDS_INIT.to_vec();
+        seed.resize(BOUNDS_INIT.len() + grid.flag_words(width, height), 0);
+
+        let reduction = PendingReduction::dispatch(
             device,
             queue,
             &self.pipeline,
@@ -157,7 +172,7 @@ impl DiffRectPass {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(scratch_view),
+                            resource: wgpu::BindingResource::TextureView(before_view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -174,38 +189,39 @@ impl DiffRectPass {
                     ],
                 })
             },
+            &seed,
             width,
             height,
         );
 
-        self.pending = Some(PendingDiff {
-            bbox,
+        PendingDiff {
+            reduction,
             layer_canvas_extent,
-        });
+            grid,
+            bpp: bytes_per_pixel(format),
+        }
     }
+}
 
-    /// True if a diff result is pending.
-    pub fn is_pending(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    /// Poll for the diff result. Returns `Some(Some(rect))` when ready,
-    /// `Some(None)` if the textures are identical, or `None` if still pending.
+impl PendingDiff {
+    /// Poll for the diff result. Returns `Some(Some(runs))` when ready,
+    /// `Some(None)` if the textures are identical (or the readback failed),
+    /// or `None` if still pending.
     ///
-    /// The rect is returned in canvas coords: the shader produces
-    /// layer-local bounds, which are translated using the layer's canvas
-    /// extent captured at [`request`](Self::request) time. The result
-    /// therefore remains valid through layer growth between request and poll.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::CanvasRect>> {
-        // Still pending (no request, or the reduction hasn't landed) → None.
-        let ready = self.pending.as_mut()?.bbox.poll(device)?;
-        // The reduction landed: consume the request and map its texel-local
-        // rect into canvas coords via the extent captured at request time.
-        let pending = self.pending.take().unwrap();
-        Some(ready.map(|[x, y, w, h]| {
-            let canvas_x = pending.layer_canvas_extent.origin.x + x as i32;
-            let canvas_y = pending.layer_canvas_extent.origin.y + y as i32;
-            crate::coord::CanvasRect::from_xywh(canvas_x, canvas_y, w, h)
+    /// The runs are in canvas coords: the shader produces layer-local bounds
+    /// and tile flags, which are translated using the layer's canvas extent
+    /// captured at [`DiffRectPass::request`] time, so the result remains
+    /// valid through layer growth between request and poll.
+    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<RegionRuns>> {
+        let Some(words) = self.reduction.poll(device)? else {
+            return Some(None);
+        };
+        let (bounds, flags) = words.split_first_chunk::<4>()?;
+        Some(decode_bounds(*bounds).map(|[x, y, w, h]| {
+            let extent = self.layer_canvas_extent;
+            let tight_bbox =
+                CanvasRect::from_xywh(extent.origin.x + x as i32, extent.origin.y + y as i32, w, h);
+            RegionRuns::from_tile_flags(flags, self.grid, extent, tight_bbox, self.bpp)
         }))
     }
 }

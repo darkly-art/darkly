@@ -139,10 +139,12 @@ pub(crate) struct RichCopyMask {
     pub bounds: crate::coord::CanvasRect,
 }
 
-/// Deferred undo commit: waiting for async GPU diff rect result.
+/// Deferred undo commit: an operation's pre-operation snapshot waiting on the
+/// GPU diff that says which of its tiles changed.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: LayerId,
     pub snapshot: crate::gpu::region_store::Snapshot,
+    pub diff: crate::gpu::diff_rect::PendingDiff,
 }
 
 /// Context for a pending async GPU readback: travels with the request and
@@ -164,6 +166,8 @@ pub(crate) enum ReadbackContext {
         /// window-local R8 buffer. See
         /// `crate::gpu::layer_readback::LayerReadbackExtent`.
         extent: crate::gpu::layer_readback::LayerReadbackExtent,
+        /// The target's pre-fill pixels, diffed for undo once the fill lands.
+        snapshot: crate::gpu::region_store::Snapshot,
     },
     ColorPick,
     Copy {
@@ -454,9 +458,9 @@ pub struct DarklyEngine {
     pub(crate) region_scratch: RegionScratch,
     pub(crate) paint_pipelines: PaintPipelines,
     /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
-    /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
-    /// `pending_undo_commit`) or by a sync commit path (flood fill, clear,
-    /// fill_background: those take their own snapshots inline).
+    /// on the first stroke_to of a stroke; consumed at end_stroke (queued as
+    /// a diff in `pending_undo_commits`) or by a flood fill, which carries it
+    /// in its readback context until the fill lands.
     pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
     /// Selection-texture snapshot held between `save_selection_for_undo` and
     /// the matching `commit_selection_undo`. Some selection ops (magic wand,
@@ -603,7 +607,9 @@ pub struct DarklyEngine {
 
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
-    pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
+    /// Undo commits waiting on their diffs, in the order the operations
+    /// happened; committed in that order.
+    pub(crate) pending_undo_commits: Vec<PendingUndoCommit>,
 
     // --- Selection ---
     /// Reusable GPU pipelines for selection boolean / invert operations.
@@ -829,7 +835,7 @@ impl DarklyEngine {
             stroke_seed: None,
             clone_source_layer: None,
             diff_rect,
-            pending_undo_commit: None,
+            pending_undo_commits: Vec::new(),
             selection_pipelines,
             pending_transform: None,
             transform_setup_generation: 0,
@@ -1051,6 +1057,18 @@ impl DarklyEngine {
             .find_filter(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
+    }
+
+    /// Test-only: number of steps on the undo stack.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_len(&self) -> usize {
+        self.undo_stack.test_undo_len()
+    }
+
+    /// Test-only: total byte cost charged to the undo budget.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_total_bytes(&self) -> u64 {
+        self.undo_stack.total_bytes()
     }
 
     /// Test-only: whether the undo / redo stacks have anything to apply.
