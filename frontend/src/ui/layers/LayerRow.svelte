@@ -27,6 +27,7 @@
     import ContextMenu, { type ContextMenuItem } from '../ContextMenu.svelte';
     import { flattenOffer, smartObjectOffer } from './menu_offers';
     import { layerDropTarget } from './dropTarget.svelte';
+    import { rowIndent } from './dropTarget';
     import MaskChainControl from './MaskChainControl.svelte';
     import { hasSiblingBelow, isContainer } from '../../state/layerTree';
     import { maskOf, type RowNode } from './rowNode';
@@ -328,7 +329,7 @@
         draggable: draggable && editable,
         onupdate,
     }}
-    style:padding-left="{8 + depth * 16}px"
+    style:padding-left="{rowIndent(depth)}px"
 >
     <!-- The eye and lock buttons suppress the row drag while pressed, so
          pressing them never starts one. -->
