@@ -71,6 +71,9 @@ hotkeys:
   # is action search, Clip Studio Paint's is the Zoom tool; none of those
   # actions exist in Darkly).
   cycleRecentBrush: Slash
+  # The reverse walk takes the same key shifted (`?`), which no reference
+  # editor or overlay binds either.
+  cycleRecentBrushBack: Shift+Slash
   # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
   # default. Darkly picks the macOS preferences convention.
   openSettings: $mod+Comma
@@ -183,3 +186,5 @@ settings:
   colors.jitterHue: 0.0
   colors.jitterSaturation: 0.0
   colors.jitterValue: 0.0
+  # Tools. Darkly-original: no reference editor cycles recent brushes.
+  tools.recentBrushCycleLength: 5

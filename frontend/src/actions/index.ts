@@ -572,21 +572,28 @@ export function registerActions() {
     });
 
     // Tap to swap to the previous brush; tap again quickly to keep stepping
-    // back through recent brushes. No menu entry, like `swapColors`: the
-    // hotkey and the command palette are its surfaces.
-    actions.register({
-        id: 'cycleRecentBrush',
-        enabled: () => brushGraph.canCycleRecentBrush || 'No other recent brush',
-        handler: () => {
-            // A stroke in flight keeps its compiled brush; swapping under it
-            // would only recompile and redraw the cursor preview mid-stroke.
-            if (app.pointerActive) return;
-            // Step first: dispatch does not consult `enabled`, and a press
-            // with nothing to switch to must not change the tool either.
-            if (brushGraph.cycleRecentBrush() === null) return;
-            if (app.activeToolId !== 'brush') app.activeToolId = 'brush';
-        },
-    });
+    // back through recent brushes, or use the backward action to walk the
+    // other way. No menu entry, like `swapColors`: the hotkeys and the
+    // command palette are their surfaces.
+    for (const [id, direction] of [
+        ['cycleRecentBrush', 1],
+        ['cycleRecentBrushBack', -1],
+    ] as const) {
+        actions.register({
+            id,
+            enabled: () => brushGraph.canCycleRecentBrush || 'No other recent brush',
+            handler: () => {
+                // A stroke in flight keeps its compiled brush; swapping under
+                // it would only recompile and redraw the cursor preview
+                // mid-stroke.
+                if (app.pointerActive) return;
+                // Step first: dispatch does not consult `enabled`, and a press
+                // with nothing to switch to must not change the tool either.
+                if (brushGraph.cycleRecentBrush(direction) === null) return;
+                if (app.activeToolId !== 'brush') app.activeToolId = 'brush';
+            },
+        });
+    }
 
     // Tweaks to a brush survive switching away and back, so re-picking a
     // brush no longer restores it; this is the gesture that does.

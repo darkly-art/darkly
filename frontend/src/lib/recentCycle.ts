@@ -3,9 +3,11 @@
  *
  * One press steps to the most recent item other than the current one. Further
  * presses in quick succession keep stepping back through the list, wrapping
- * around to where they started. A pause (or `settle()`) ends the chain and
- * commits the item it landed on as the most recent, so the next press after a
- * pause swaps straight back.
+ * around to where they started. Stepping the other way walks the same ring in
+ * reverse, starting from its far end, and the two directions mix freely within
+ * one chain. A pause (or `settle()`) ends the chain and commits the item it
+ * landed on as the most recent, so the next press after a pause swaps straight
+ * back.
  *
  * The list is frozen when a chain starts and nothing is committed while it is
  * alive. Committing on every step would put each landed item at the head and
@@ -22,18 +24,26 @@ export interface RecentCycleDeps<T> {
     current: () => T | null;
     /** Record `item` as most recently used; called once, when a chain ends. */
     commit: (item: T) => void;
+    /** How many items a chain walks, counting the current one; the rest of
+     *  the list is left out of the walk. Read when a chain starts. */
+    limit: () => number;
     /** Quiet time after a step that ends the chain. */
     pauseMs: number;
 }
+
+/** Which way a press walks the ring: `1` toward older items, `-1` back toward
+ *  newer ones, which from the start of a chain means the oldest it holds. */
+export type CycleDirection = 1 | -1;
 
 export interface RecentCycle<T> {
     /** Whether a press would land somewhere: the list holds something other
      *  than the current item. */
     canStep(): boolean;
-    /** One press: start a chain or advance the live one. Returns what to
-     *  switch to, or null when there is nothing to land on (an empty list, or
-     *  a one-entry chain that already landed and only re-armed its timer). */
-    step(): T | null;
+    /** One press: start a chain or advance the live one in `direction`.
+     *  Returns what to switch to, or null when there is nothing to land on (an
+     *  empty list, or a one-entry chain that already landed and only re-armed
+     *  its timer). */
+    step(direction?: CycleDirection): T | null;
     /** End the chain now, committing what it landed on. No-op without one. */
     settle(): void;
     /** Whether a chain is alive. */
@@ -51,12 +61,13 @@ export function createRecentCycle<T>(deps: RecentCycleDeps<T>): RecentCycle<T> {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     /** The ring a new chain walks: the current item first, so the first step
-     *  lands on the most recent other one and a full loop comes back to it. */
+     *  lands on the most recent other one and a full loop comes back to it,
+     *  cut to `limit` entries. */
     function ring(): { ring: T[]; current: T | null } {
         const current = deps.current();
         const items = deps.items();
-        if (current === null) return { ring: [...items], current };
-        return { ring: [current, ...items.filter(i => i !== current)], current };
+        const all = current === null ? [...items] : [current, ...items.filter(i => i !== current)];
+        return { ring: all.slice(0, Math.max(1, deps.limit())), current };
     }
 
     function rearm() {
@@ -69,15 +80,19 @@ export function createRecentCycle<T>(deps: RecentCycleDeps<T>): RecentCycle<T> {
         return r.some(i => i !== current);
     }
 
-    function step(): T | null {
+    function step(direction: CycleDirection = 1): T | null {
         if (!chain) {
             if (!canStep()) return null;
             const { ring: r, current } = ring();
             // With something current it sits at index 0 and the first step
-            // moves past it; with nothing current the first step is the head.
-            chain = { ring: r, cursor: current === null ? -1 : 0, landed: null };
+            // moves off it either way. With nothing current the chain starts
+            // between the two ends, so the first step lands on the head going
+            // forward and on the far end going back.
+            const cursor = current !== null ? 0 : direction === 1 ? -1 : r.length;
+            chain = { ring: r, cursor, landed: null };
         }
-        chain.cursor = (chain.cursor + 1) % chain.ring.length;
+        const n = chain.ring.length;
+        chain.cursor = (((chain.cursor + direction) % n) + n) % n;
         const next = chain.ring[chain.cursor];
         rearm();
         if (next === chain.landed) return null;
