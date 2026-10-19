@@ -22,7 +22,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "toggleStrokeEdit",
         display_name: "Edit Last Stroke",
-        description: "Redraw the last brush stroke with every change to the brush or colour, until you paint again or toggle it off.",
+        description: "Redraw the last brush stroke with every change to the brush or colour until you apply or discard; it stays editable until your next action.",
         icon: "fa6-solid:pen-nib",
     },
     ActionDef {

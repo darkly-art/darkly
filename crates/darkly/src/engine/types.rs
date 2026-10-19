@@ -34,9 +34,10 @@ pub struct EngineState {
     pub dirty: bool,
     /// Document has an active selection. Backs selection-gated menu items.
     pub has_selection: bool,
-    /// The last brush stroke is being edited (stroke edit): brush and colour
-    /// changes redraw it. Backs the stroke-edit toggle's active state.
-    pub stroke_edit_active: bool,
+    /// The kind of the edit session open for the artist to apply or
+    /// discard (stroke edit, a transform, pasted content), if any. Backs the
+    /// canvas's session frame and the stroke-edit toggle's active state.
+    pub edit_session: Option<crate::engine::EditSessionKind>,
     /// The canvas window rect in plane coordinates (`Document::canvas_rect`):
     /// where the window sits and how big it is. Rides the frame snapshot
     /// because the frontend's copy of it has to follow every op that moves or

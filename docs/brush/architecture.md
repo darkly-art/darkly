@@ -573,6 +573,16 @@ so the previous rendering needs no erase. The redraw keeps the stroke's seed,
 view scale and rotation, so it reproduces the stroke when nothing changed;
 it re-runs the stabilizer, so a stabilizer change reshapes the stroke.
 
+Entering stroke edit first copies the layer's pixels over the stroke's
+footprint into a footprint-sized texture (`StrokeRevert`). Apply leaves edit
+mode and drops that copy without settling: the stroke stays the `LastStroke`,
+editable again until the next action settles it. Discard returns the layer to
+its pre-stroke snapshot, copies the kept rect back and restores the footprint,
+so the stroke is exactly as it looked at entry, whatever the edit did. Leaving
+the brush tool applies. Stroke edit is one of the engine's `PendingEdit` kinds
+(`engine/pending_edit.rs`), so the canvas's session frame and the generic
+Enter / Escape reach it the way they reach a transform or a paste.
+
 ## Preview regen
 
 When the brush tool is active and the cursor hovers without pressing, the

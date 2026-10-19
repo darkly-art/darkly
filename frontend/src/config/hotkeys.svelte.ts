@@ -45,6 +45,12 @@ export function registerHotkeys() {
 
     for (const [chord, entries] of chordIndex) {
         bindings[chord] = (e: KeyboardEvent) => {
+            // A key some component already consumed is not a hotkey. A
+            // component that consumes a key (Escape closing a popup, ending a
+            // drag) listens in the capture phase and prevents its default:
+            // a window capture listener runs before this bubble one whatever
+            // the registration order.
+            if (e.defaultPrevented) return;
             // Suppress global hotkeys while a modal dialog is open so the
             // dialog's own keys (Esc to close, etc.) work and modal-scoped
             // shortcuts don't leak to the canvas.

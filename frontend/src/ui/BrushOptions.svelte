@@ -3,7 +3,7 @@
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
-    import { brushSession, focusedBrushTool, toggleStrokeEdit } from '../tools/brush.svelte';
+    import { brushSession, focusedBrushTool, strokeEditOpen, toggleStrokeEdit } from '../tools/brush.svelte';
     import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
@@ -200,14 +200,15 @@
         {/if}
 
         <!-- Stroke edit: while on, every change to the brush or colour
-             redraws the last stroke. The engine owns the mode and reports it
-             in `engineState`, which any edit of the document also clears. -->
+             redraws the last stroke; toggling it off applies the edit. The
+             engine owns the mode and reports it in `engineState`, which any
+             edit of the document also clears. -->
         <Scrub
             mode="toggle"
             icon="fa6-solid:pen-nib"
             label="Edit stroke"
-            valueLabel={app.engineState?.strokeEditActive ? 'On' : 'Off'}
-            active={app.engineState?.strokeEditActive ?? false}
+            valueLabel={strokeEditOpen(app.engineState) ? 'On' : 'Off'}
+            active={strokeEditOpen(app.engineState)}
             onToggle={() => void toggleStrokeEdit()}
             title={tooltipForAction('Edit last stroke', 'toggleStrokeEdit')}
         />

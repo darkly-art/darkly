@@ -298,6 +298,33 @@ impl StrokeBuffer {
         )
     }
 
+    /// Return the whole of `target`, the paint target this stroke paints, to
+    /// its pre-stroke pixels, in the target's own format: a hardware copy
+    /// for an RGBA8 target, and for an R8 mask the blit that narrows the
+    /// broadcast snapshot back to one channel.
+    pub fn restore_pre_stroke(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &BrushPipelines,
+        target: &GpuPaintTarget<'_>,
+    ) {
+        use crate::brush::paint_target_ext::BrushPaintTargetExt;
+        let extent = target.layer_extent();
+        debug_assert_eq!(
+            (self.width, self.height),
+            (extent.width, extent.height),
+            "the pre-stroke snapshot is aligned to the paint target"
+        );
+        target.commit_scratch_blit(
+            device,
+            encoder,
+            pipelines,
+            &self.pre_stroke_view,
+            &self.pre_stroke_texture,
+        );
+    }
+
     /// Save a snapshot of the paint target's pixels into the pre-stroke
     /// snapshot texture. Format-aware via `GpuPaintTarget`'s extension trait:
     /// RGBA8 sources use `copy_texture_to_texture` (hardware-fast); R8 mask

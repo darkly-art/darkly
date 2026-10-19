@@ -48,12 +48,14 @@ hotkeys:
   # `paste` here and `pasteInPlace` per-overlay).
   pasteAsSmartObject: $mod+Alt+Shift+KeyV
   selectAll: $mod+KeyA
-  # Floating-selection commit / cancel. Enter / Escape are the universal
-  # commit/cancel keys across PS, Krita, and GIMP's floating-selection
-  # handlers, and Clip Studio Paint's transform confirm / cancel.
   clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
+  # Apply / discard the open edit session (a transform, pasted content,
+  # stroke edit). Enter / Escape are the universal commit/cancel keys:
+  # Krita's tool-invocation Confirm / Cancel, GIMP's tool-widget CONFIRM /
+  # CANCEL, PS's floating-selection handlers, and Clip Studio Paint's
+  # transform confirm / cancel.
+  applyEditSession: Enter
+  discardEditSession: Escape
   # Colors: every reference editor uses X to swap. (Reset is per-overlay:
   # Clip Studio Paint has no reset and spends D on a tool.)
   swapColors: KeyX

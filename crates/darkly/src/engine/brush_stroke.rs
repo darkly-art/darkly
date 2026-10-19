@@ -7,7 +7,9 @@
 //! until the next action settles it into an undo entry. Until then the
 //! artist can edit it: in stroke edit, every change to the brush or the
 //! foreground colour redraws it from its events with the brush as it then
-//! is.
+//! is. Applying the edit leaves stroke edit and keeps the stroke, still
+//! editable until it settles; discarding it puts back the pixels the stroke
+//! had when the artist entered.
 //!
 //! The undo entry is committed from the stroke's own pre-stroke snapshot,
 //! over the union of its dabs' write footprints: the rect every terminal
@@ -18,6 +20,7 @@
 
 use darkly_macros::handlers;
 
+use super::pending_edit::{EditSessionKind, PendingEdit};
 use super::rendering::commit_undo_entry;
 use super::DarklyEngine;
 use crate::brush::eval::BrushGraphRunner;
@@ -29,6 +32,7 @@ use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::coord::CanvasRect;
 use crate::document::{canvas_per_reference_px, Document};
+use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -73,14 +77,60 @@ pub(crate) struct LastStroke {
     /// Union of the write footprints of the latest rendering's dabs, in
     /// canvas pixels: the undo entry's rect. `None` when no dab wrote.
     footprint: Option<CanvasRect>,
-    /// Whether the artist is editing it, so brush and colour changes
-    /// redraw it.
-    editing: bool,
+    /// While the artist is editing it, so brush and colour changes redraw
+    /// it: what Discard puts back.
+    edit: Option<StrokeRevert>,
 }
 
 impl LastStroke {
     pub(crate) fn editing(&self) -> bool {
-        self.editing
+        self.edit.is_some()
+    }
+}
+
+/// The stroke as it looked when the artist entered stroke edit: what
+/// Discard puts back.
+struct StrokeRevert {
+    /// The target's pixels over the footprint of that rendering, in the
+    /// target's format, with the footprint they cover; `None` when no dab
+    /// wrote. Outside the footprint the target held its pre-stroke pixels.
+    pixels: Option<(wgpu::Texture, CanvasRect)>,
+}
+
+/// The last brush stroke: pending until it settles, and open as a session
+/// while the artist is editing it.
+pub(crate) struct StrokeEdit;
+
+impl PendingEdit for StrokeEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "strokeEdit",
+            display_name: "Stroke edit",
+            icon: "fa6-solid:pen-nib",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.last_stroke.is_some()
+    }
+
+    fn presented(&self, engine: &DarklyEngine) -> bool {
+        engine.last_stroke.as_ref().is_some_and(LastStroke::editing)
+    }
+
+    fn apply(&self, engine: &mut DarklyEngine) {
+        engine.stroke_edit_end();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.discard_stroke_edit();
+    }
+
+    /// Settling, not Apply: Apply only leaves edit mode, and the stroke
+    /// stays pending.
+    fn resolve(&self, engine: &mut DarklyEngine) -> bool {
+        engine.settle_last_stroke();
+        true
     }
 }
 
@@ -395,7 +445,7 @@ impl DarklyEngine {
             conditions,
             buffer,
             footprint,
-            editing: false,
+            edit: None,
         });
         self.doc.mark_changed();
     }
@@ -463,8 +513,11 @@ impl DarklyEngine {
         let Some(mut stroke) = self.last_stroke.take() else {
             return;
         };
-        stroke.conditions.color = self.foreground_color;
-        let mut engine = self.build_stroke_engine(runner, &stroke.conditions);
+        let conditions = StrokeConditions {
+            color: self.foreground_color,
+            ..stroke.conditions
+        };
+        let mut engine = self.build_stroke_engine(runner, &conditions);
         for event in &stroke.events {
             engine.stabilize(*event);
         }
@@ -479,15 +532,9 @@ impl DarklyEngine {
         if engine.samples_source() {
             // A merged source reads the composite, which must not hold the
             // rendering being replaced: return the target to its pre-stroke
-            // pixels (the prologue with no dabs, then the commit) before the
-            // source is frozen, as it was when the stroke began.
-            if let Some(setup) = self.redraw_gpu_setup(&stroke) {
-                let mut ctx = setup.ctx(&mut stroke.buffer, "stroke-edit-restore");
-                engine.begin_stroke(&mut ctx, None);
-                engine.commit(&mut ctx);
-                perf += ctx.submit_final();
-            }
-            self.compositor.mark_node_pixels_dirty(stroke.layer_id);
+            // pixels before the source is frozen, as it was when the stroke
+            // began.
+            self.restore_pre_stroke(&stroke, None);
         }
         self.capture_source_snapshot(stroke.layer_id, &mut stroke.buffer, engine.samples_source());
 
@@ -511,6 +558,79 @@ impl DarklyEngine {
         self.last_stroke = Some(stroke);
     }
 
+    /// Return `stroke`'s target to its pre-stroke pixels, then copy `kept`
+    /// (a texture and the canvas rect it covers) back over that rect.
+    fn restore_pre_stroke(
+        &mut self,
+        stroke: &LastStroke,
+        kept: Option<&(wgpu::Texture, CanvasRect)>,
+    ) {
+        let Some(layer_tex) = self.compositor.node_texture(stroke.layer_id) else {
+            return;
+        };
+        let target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
+        self.gpu.encode("stroke-edit-restore", |encoder| {
+            stroke.buffer.restore_pre_stroke(
+                &self.gpu.device,
+                encoder,
+                &self.brush_pipelines,
+                &target,
+            );
+            if let Some((texture, rect)) = kept {
+                CanvasFrame {
+                    texture,
+                    canvas_extent: *rect,
+                }
+                .copy_rect_to(encoder, &target.canvas_frame(), *rect);
+            }
+        });
+        self.compositor.mark_node_pixels_dirty(stroke.layer_id);
+    }
+
+    /// What Discard puts back: `stroke`'s target pixels over its footprint,
+    /// copied into a footprint-sized texture in the target's format.
+    fn capture_stroke_revert(&self, stroke: &LastStroke) -> StrokeRevert {
+        let pixels = stroke.footprint.and_then(|footprint| {
+            let layer_tex = self.compositor.node_texture(stroke.layer_id)?;
+            let target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
+            let (texture, _) = crate::gpu::create_texture_with_view(
+                &self.gpu.device,
+                footprint.width,
+                footprint.height,
+                target.format(),
+                "stroke-edit-revert",
+                wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            );
+            self.gpu.encode("stroke-edit-revert-capture", |encoder| {
+                target.canvas_frame().copy_rect_to(
+                    encoder,
+                    &CanvasFrame {
+                        texture: &texture,
+                        canvas_extent: footprint,
+                    },
+                    footprint,
+                );
+            });
+            Some((texture, footprint))
+        });
+        StrokeRevert { pixels }
+    }
+
+    /// Leave stroke edit, putting the last stroke back as it looked when
+    /// the artist entered. The stroke stays pending. A no-op unless the
+    /// artist is editing it.
+    pub(crate) fn discard_stroke_edit(&mut self) {
+        let Some(mut stroke) = self.last_stroke.take() else {
+            return;
+        };
+        if let Some(revert) = stroke.edit.take() {
+            self.restore_pre_stroke(&stroke, revert.pixels.as_ref());
+            stroke.footprint = revert.pixels.map(|(_, rect)| rect);
+            self.doc.mark_changed();
+        }
+        self.last_stroke = Some(stroke);
+    }
+
     /// The GPU setup a redraw of `stroke` renders with: the stroke's own
     /// view rotation, the session's selection and blend mode.
     fn redraw_gpu_setup(&self, stroke: &LastStroke) -> Option<StrokeGpuSetup<'_>> {
@@ -528,28 +648,36 @@ impl DarklyEngine {
 
 #[handlers]
 impl DarklyEngine {
-    /// Enter stroke edit on the last brush stroke: until it settles, every
-    /// change to the brush or the foreground colour redraws it from its raw
-    /// pen events with the brush as it then is. Redraws once on entry, so a
+    /// Enter stroke edit on the last brush stroke: until the artist applies
+    /// or discards, every change to the brush or the foreground colour
+    /// redraws it from its raw pen events with the brush as it then is.
+    /// Keeps the stroke as it looks now for Discard, then redraws once, so a
     /// change made since pen-up applies too. `false` when there is no stroke
-    /// to edit.
+    /// to edit; already editing, it changes nothing.
     #[handler]
     pub fn stroke_edit_begin(&mut self) -> bool {
-        let Some(stroke) = self.last_stroke.as_mut() else {
+        let Some(stroke) = self.last_stroke.as_ref() else {
             return false;
         };
-        stroke.editing = true;
+        if stroke.editing() {
+            return true;
+        }
+        let revert = self.capture_stroke_revert(stroke);
+        if let Some(stroke) = self.last_stroke.as_mut() {
+            stroke.edit = Some(revert);
+        }
         self.redraw_last_stroke();
         true
     }
 
-    /// Leave stroke edit, committing the last stroke as it now stands as one
-    /// undo entry. Also what the frontend sends when the artist leaves the
-    /// brush tool or the layer, so it settles a stroke that was never
-    /// edited too; a no-op when there is none.
+    /// Apply stroke edit: leave it, keeping the last stroke as it now
+    /// stands. The stroke stays pending, and editable again, until the next
+    /// action settles it. A no-op when the artist is not editing.
     #[handler]
     pub fn stroke_edit_end(&mut self) {
-        self.settle_last_stroke();
+        if let Some(stroke) = self.last_stroke.as_mut() {
+            stroke.edit = None;
+        }
     }
 
     /// Set the foreground colour every following brush stroke paints with:

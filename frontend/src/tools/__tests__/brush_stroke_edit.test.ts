@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stroke edit's frontend half: a toggle that enters or leaves the engine's
-// mode, read back from `engineState`, and the brush tool ending the edit when
-// the artist leaves it.
+// mode, read back from `engineState`, and the brush tool applying the edit
+// when the artist leaves it.
 
 const { fakeInst, toastShow } = vi.hoisted(() => ({
     fakeInst: {
         activeToolId: 'brush',
         engine: null as unknown,
         session: undefined as unknown,
-        engineState: null as { strokeEditActive: boolean } | null,
+        engineState: null as { editSession: { id: string } | null } | null,
         canvasEl: {},
         toolCursor: null as string | null,
         zoom: 1,
@@ -50,7 +50,7 @@ function fakeApi(beginResult: boolean) {
 describe('stroke edit toggle', () => {
     beforeEach(() => {
         fakeInst.activeToolId = 'brush';
-        fakeInst.engineState = { strokeEditActive: false };
+        fakeInst.engineState = { editSession: null };
         fakeInst.requestFrame.mockClear();
         toastShow.mockClear();
     });
@@ -74,10 +74,18 @@ describe('stroke edit toggle', () => {
     it('leaves the edit when the engine reports one', async () => {
         const api = fakeApi(true);
         fakeInst.engine = { api };
-        fakeInst.engineState = { strokeEditActive: true };
+        fakeInst.engineState = { editSession: { id: 'strokeEdit' } };
         await toggleStrokeEdit();
         expect(api.strokeEditEnd).toHaveBeenCalledOnce();
         expect(api.strokeEditBegin).not.toHaveBeenCalled();
+    });
+
+    it('enters when another session is open', async () => {
+        const api = fakeApi(true);
+        fakeInst.engine = { api };
+        fakeInst.engineState = { editSession: { id: 'transform' } };
+        await toggleStrokeEdit();
+        expect(api.strokeEditBegin).toHaveBeenCalledOnce();
     });
 
     it('does nothing from another tool', async () => {
@@ -89,7 +97,7 @@ describe('stroke edit toggle', () => {
         expect(api.strokeEditEnd).not.toHaveBeenCalled();
     });
 
-    it('ends when the artist leaves the brush tool', () => {
+    it('applies when the artist leaves the brush tool', () => {
         const api = fakeApi(true);
         fakeInst.session = { api };
         const tool = brushTool.create(fakeInst as never);

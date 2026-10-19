@@ -251,6 +251,16 @@ export type DuplicateNodeReq = { source_id: number, };
 
 export type DuplicateNodesReq = { ids: Array<number>, };
 
+export type EditSessionKind = { 
+/**
+ * Stable id the frontend keys per-kind controls by.
+ */
+id: string, displayName: string, 
+/**
+ * Iconify id.
+ */
+icon: string, };
+
 export type EngineState = { 
 /**
  * Compositor master tick (post-increment for this frame). Drives JS-side
@@ -271,10 +281,11 @@ dirty: boolean,
  */
 hasSelection: boolean, 
 /**
- * The last brush stroke is being edited (stroke edit): brush and colour
- * changes redraw it. Backs the stroke-edit toggle's active state.
+ * The kind of the edit session open for the artist to apply or
+ * discard (stroke edit, a transform, pasted content), if any. Backs the
+ * canvas's session frame and the stroke-edit toggle's active state.
  */
-strokeEditActive: boolean, 
+editSession: EditSessionKind | null, 
 /**
  * The canvas window rect in plane coordinates (`Document::canvas_rect`):
  * where the window sits and how big it is. Rides the frame snapshot
@@ -1094,6 +1105,7 @@ export type RequestKind =
     | 'add_void'
     | 'alpha_to_selection'
     | 'antialias_selection'
+    | 'apply_edit_session'
     | 'apply_filter'
     | 'apply_mask'
     | 'begin_shape'
@@ -1164,6 +1176,7 @@ export type RequestKind =
     | 'copy_layer_rich'
     | 'crop_to_selection'
     | 'cut'
+    | 'discard_edit_session'
     | 'document_dpi'
     | 'document_name'
     | 'duplicate_node'
@@ -1304,6 +1317,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_void',
     'alpha_to_selection',
     'antialias_selection',
+    'apply_edit_session',
     'apply_filter',
     'apply_mask',
     'begin_shape',
@@ -1374,6 +1388,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'copy_layer_rich',
     'crop_to_selection',
     'cut',
+    'discard_edit_session',
     'document_dpi',
     'document_name',
     'duplicate_node',
@@ -1522,6 +1537,7 @@ export interface EngineApi {
     addVoid(req: AddVoidReq): Promise<number | null>;
     alphaToSelection(req: AlphaToSelectionReq): void;
     antialiasSelection(): void;
+    applyEditSession(): Promise<boolean>;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
     beginShape(req: BeginShapeReq): void;
@@ -1592,6 +1608,7 @@ export interface EngineApi {
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
     cut(req: CutReq): Promise<ClipboardExport | null>;
+    discardEditSession(): Promise<boolean>;
     documentDpi(): Promise<number>;
     documentName(): Promise<string>;
     duplicateNode(req: DuplicateNodeReq): Promise<number | null>;
@@ -1734,6 +1751,7 @@ export function makeApi(t: Transport): EngineApi {
         addVoid: (req) => t.request('add_void', req),
         alphaToSelection: (req) => t.postFF('alpha_to_selection', req),
         antialiasSelection: () => t.postFF('antialias_selection'),
+        applyEditSession: () => t.request('apply_edit_session'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),
         beginShape: (req) => t.postFF('begin_shape', req),
@@ -1804,6 +1822,7 @@ export function makeApi(t: Transport): EngineApi {
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),
         cut: (req) => t.request('cut', req),
+        discardEditSession: () => t.request('discard_edit_session'),
         documentDpi: () => t.request('document_dpi'),
         documentName: () => t.request('document_name'),
         duplicateNode: (req) => t.request('duplicate_node', req),

@@ -27,17 +27,21 @@
         const onUp = () => {
             if (workspaces.drag) workspaces.endTabDrag();
         };
+        // Capture phase, so the Escape this consumes never reaches the
+        // hotkeys (where it would discard an open edit session).
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && workspaces.drag) workspaces.abortTabDrag();
+            if (e.key !== 'Escape' || !workspaces.drag) return;
+            e.preventDefault();
+            workspaces.abortTabDrag();
         };
 
         win.addEventListener('pointermove', onMove);
         win.addEventListener('pointerup', onUp);
-        win.addEventListener('keydown', onKey);
+        win.addEventListener('keydown', onKey, true);
         return () => {
             win.removeEventListener('pointermove', onMove);
             win.removeEventListener('pointerup', onUp);
-            win.removeEventListener('keydown', onKey);
+            win.removeEventListener('keydown', onKey, true);
         };
     });
 

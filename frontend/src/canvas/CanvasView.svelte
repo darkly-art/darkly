@@ -18,6 +18,8 @@
     import { isEditableTarget } from '../lib/isEditableTarget';
     import { colorToRgba01 } from '../lib/color';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
+    import EditSessionFrame from './EditSessionFrame.svelte';
+    import { actions } from '../actions/registry';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -490,6 +492,14 @@
     <!-- Right-click mode-switch menu for the transform tool. The tool sets
          `app.transformModeMenu`; this renders against it. -->
     <TransformModeMenu />
+
+    <!-- The open edit session's frame, from this instance's own engine. Its
+         buttons dispatch the same actions as Enter and Escape. -->
+    <EditSessionFrame
+        session={inst.engineState?.editSession ?? null}
+        onapply={() => actions.dispatch('applyEditSession')}
+        ondiscard={() => actions.dispatch('discardEditSession')}
+    />
 </div>
 
 <style>

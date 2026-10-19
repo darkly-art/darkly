@@ -21,6 +21,7 @@ import {
 } from './clone_source_cursor';
 import { isToolHoverSuppressed } from './modifier_cursor';
 import { toast } from '../state/toast.svelte';
+import type { EngineState } from '../engine/protocol';
 
 /** Brush-tool session state: an app-global artist preference (not per-document),
  *  so it stays module-level even though the brush *tool* is per-instance.
@@ -229,7 +230,8 @@ class BrushTool extends ToolBase {
         // (the engine anchor persists as session state).
         clearCloneSourceCursor();
         // Stroke edit belongs to the brush tool, whose options bar shows it:
-        // leaving the tool commits the stroke as it stands.
+        // leaving the tool applies the edit. The stroke stays kept, and
+        // editable again from the brush tool, until the next action.
         this.engine?.api.strokeEditEnd();
     }
 
@@ -323,16 +325,25 @@ class BrushTool extends ToolBase {
     }
 }
 
+/** The id the engine's stroke-edit session kind reports in
+ *  `engineState.editSession`. */
+const STROKE_EDIT_SESSION = 'strokeEdit';
+
+/** Whether `state` reports stroke edit as the open edit session. */
+export function strokeEditOpen(state: EngineState | null | undefined): boolean {
+    return state?.editSession?.id === STROKE_EDIT_SESSION;
+}
+
 /** Enter or leave stroke edit on the focused instance's last brush stroke;
- *  leaving commits the stroke as it now stands. The engine owns the mode and
- *  reports it in `engineState.strokeEditActive`, which every edit of the
- *  document also clears. Only the brush tool edits strokes (leaving it ends
- *  the edit), so from any other tool this does nothing. */
+ *  leaving applies the edit, keeping the stroke as it now stands. The engine
+ *  owns the mode and reports it in `engineState.editSession`, which every
+ *  edit of the document also clears. Only the brush tool edits strokes
+ *  (leaving it applies the edit), so from any other tool this does nothing. */
 export async function toggleStrokeEdit(): Promise<void> {
     const inst = getActiveInstance();
     const engine = inst?.engine;
     if (!inst || !engine || inst.activeToolId !== 'brush') return;
-    if (inst.engineState?.strokeEditActive) {
+    if (strokeEditOpen(inst.engineState)) {
         engine.api.strokeEditEnd();
     } else if (!(await engine.api.strokeEditBegin())) {
         toast.show('info', 'No stroke to edit');

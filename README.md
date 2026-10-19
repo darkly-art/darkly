@@ -181,6 +181,7 @@ For a feature to count, it must be:
 - [x] Group blend mode / opacity
 - [x] Dockable / tiled panels (drag to reorder, tab, split-dock)
 - [x] Pop out panels into separate OS windows (cross-window drag)
+- [x] Stroke edit (redraw the last stroke with the current brush)
 - [ ] Oklab / Oklch foundational color system
 - [ ] Brush save/load + editable nodes/wires
 - [ ] Recent files

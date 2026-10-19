@@ -1,6 +1,7 @@
 //! Stroke edit: the last brush stroke, redrawn from its raw pen events with
 //! the brush and colour as they now are, until it settles into one undo
-//! entry.
+//! entry. Apply leaves the edit and keeps the stroke editable; Discard puts
+//! back the stroke as it looked when the edit was entered.
 //!
 //! The oracle throughout is a fresh engine painting the same events with
 //! the edited brush from the start, at the same seed: a redraw must land
@@ -62,7 +63,19 @@ fn fresh(
 }
 
 fn editing(engine: &DarklyEngine) -> bool {
-    engine.engine_state().stroke_edit_active
+    engine
+        .engine_state()
+        .edit_session
+        .is_some_and(|kind| kind.id == "strokeEdit")
+}
+
+/// The Ink Pen stroke `curve()` paints at `size`, from a fresh engine.
+fn fresh_at(size: f32) -> (Vec<u8>, CanvasRect) {
+    fresh(
+        "Ink Pen",
+        |e| set_input(e, "brush_settings", "size", size),
+        &curve(),
+    )
 }
 
 /// Entering stroke edit with nothing changed redraws the stroke as it was;
@@ -215,10 +228,10 @@ fn colour_change_redraws_with_the_same_jitter() {
     set_jitter(0.0);
 }
 
-/// However many redraws an edit runs, leaving it pushes exactly one undo
+/// However many redraws an edit runs, settling it pushes exactly one undo
 /// entry, which restores the pre-stroke pixels; redo restores the edit.
 #[test]
-fn leaving_the_edit_pushes_one_undo_entry() {
+fn settling_an_edited_stroke_pushes_one_undo_entry() {
     for brush in ["Ink Pen", "Liquify"] {
         let ops = curve();
         let (mut engine, layer) = engine_with("Ink Pen");
@@ -228,7 +241,7 @@ fn leaving_the_edit_pushes_one_undo_entry() {
             layer,
             &[event(40.0, 40.0, 0.0), event(120.0, 90.0, 16.0)],
         );
-        engine.stroke_edit_end();
+        engine.commit_pending_edits();
         install_builtin(&mut engine, brush);
         set_input(&mut engine, "brush_settings", "stabilize", 0.0);
         let before = readback(&mut engine, layer);
@@ -238,7 +251,7 @@ fn leaving_the_edit_pushes_one_undo_entry() {
         engine.stroke_edit_begin();
         set_input(&mut engine, "brush_settings", "size", 0.4);
         set_input(&mut engine, "brush_settings", "size", 0.3);
-        engine.stroke_edit_end();
+        engine.commit_pending_edits();
         assert!(!editing(&engine));
         assert_eq!(
             engine.test_undo_len(),
@@ -304,7 +317,7 @@ fn mask_stroke_edit_undoes_to_the_pre_stroke_mask() {
     headless(&mut engine, mask, &ops);
     engine.stroke_edit_begin();
     set_input(&mut engine, "brush_settings", "size", 0.4);
-    engine.stroke_edit_end();
+    engine.commit_pending_edits();
     assert_eq!(engine.test_undo_len(), steps + 1);
     engine.test_flush_readbacks();
     assert_ne!(
@@ -367,12 +380,13 @@ fn the_next_action_ends_the_edit() {
         "the stroke settled first"
     );
 
-    // An explicit end, after which there is nothing left to edit.
+    // Leaving the edit is not an action: the stroke stays editable.
     let (mut engine, layer) = engine_with("Ink Pen");
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
     engine.stroke_edit_end();
-    assert!(!engine.stroke_edit_begin(), "the stroke has settled");
+    assert!(!editing(&engine));
+    assert!(engine.stroke_edit_begin(), "the stroke is still kept");
 }
 
 /// Undo while editing ends the edit and undoes the stroke.
@@ -400,7 +414,7 @@ fn terminal_change_reallocates_the_scratch() {
     let ground = [event(30.0, 50.0, 0.0), event(110.0, 80.0, 16.0)];
     let paint_ground = |e: &mut DarklyEngine, layer: LayerId| {
         headless(e, layer, &ground);
-        e.stroke_edit_end();
+        e.commit_pending_edits();
         set_input(e, "brush_settings", "stabilize", 0.0);
     };
 
@@ -468,4 +482,216 @@ fn an_edit_stays_in_its_own_engine() {
     assert!(editing(&a));
     assert!(!editing(&b));
     assert_eq!(readback(&mut b, layer_b), b_before);
+}
+
+/// Apply leaves the edit without settling: the stroke stays editable, a
+/// second edit redraws it from its events as before, and it still settles
+/// as one undo entry.
+#[test]
+fn apply_keeps_the_stroke_editable() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    let before = readback(&mut engine, layer);
+    let steps = engine.test_undo_len();
+    headless(&mut engine, layer, &curve());
+
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.4);
+    assert!(engine.apply_edit_session(), "stroke edit is open");
+    assert!(!editing(&engine));
+    assert_eq!(engine.engine_state().edit_session, None);
+    assert_eq!(engine.test_undo_len(), steps, "Apply does not settle");
+
+    assert!(engine.stroke_edit_begin(), "the stroke is still editable");
+    set_input(&mut engine, "brush_settings", "size", 0.3);
+    assert_same(
+        "applied at 0.4, edited again to 0.3",
+        "the edited stroke",
+        readback(&mut engine, layer),
+        "a fresh stroke at 0.3",
+        fresh_at(0.3),
+    );
+
+    engine.commit_pending_edits();
+    assert_eq!(
+        engine.test_undo_len(),
+        steps + 1,
+        "one entry for the stroke"
+    );
+    engine.undo();
+    engine.render(0.0);
+    let undone = readback(&mut engine, layer);
+    assert_eq!(undone.0, engine_grown_ground(&before, undone.1));
+}
+
+/// Discard puts back the stroke as it looked when the edit was entered,
+/// before the entry redraw, and leaves the brush and colour alone.
+#[test]
+fn discard_reverts_to_the_stroke_as_entered() {
+    let red = [0.9, 0.2, 0.1, 1.0];
+    let (mut engine, layer) = engine_with("Ink Pen");
+    set_input(&mut engine, "brush_settings", "size", 0.2);
+    headless(&mut engine, layer, &curve());
+    let original = readback(&mut engine, layer);
+
+    // Not editing: no redraw.
+    set_input(&mut engine, "brush_settings", "size", 0.5);
+    engine.stroke_edit_begin();
+    assert_same(
+        "entered after a size change",
+        "the entry redraw",
+        readback(&mut engine, layer),
+        "a fresh stroke at 0.5",
+        fresh_at(0.5),
+    );
+    set_input(&mut engine, "brush_settings", "size", 0.3);
+    engine.set_foreground_color(red);
+    assert!(engine.discard_edit_session(), "stroke edit is open");
+    assert!(!editing(&engine));
+    assert_same(
+        "discarded",
+        "the discarded stroke",
+        readback(&mut engine, layer),
+        "the stroke as painted",
+        original,
+    );
+
+    engine.stroke_edit_begin();
+    assert_same(
+        "re-entered after a discard",
+        "the entry redraw",
+        readback(&mut engine, layer),
+        "a fresh red stroke at 0.3",
+        fresh(
+            "Ink Pen",
+            |e| {
+                set_input(e, "brush_settings", "size", 0.3);
+                e.set_foreground_color(red);
+            },
+            &curve(),
+        ),
+    );
+}
+
+/// Discard after an Apply and a second entry gives back the applied
+/// version.
+#[test]
+fn discard_after_apply_returns_the_applied_version() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    headless(&mut engine, layer, &curve());
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.4);
+    engine.apply_edit_session();
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.15);
+    engine.discard_edit_session();
+    assert_same(
+        "applied at 0.4, then 0.15 discarded",
+        "the discarded stroke",
+        readback(&mut engine, layer),
+        "a fresh stroke at 0.4",
+        fresh_at(0.4),
+    );
+}
+
+/// An edit that grows the stroke past its entry footprint is discarded
+/// entirely, and the settled entry still undoes to the pre-stroke pixels
+/// and redoes to the stroke as entered.
+#[test]
+fn discard_restores_beyond_a_grown_footprint() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    let before = readback(&mut engine, layer);
+    set_input(&mut engine, "brush_settings", "size", 0.1);
+    headless(&mut engine, layer, &curve());
+    let original = readback(&mut engine, layer);
+
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.8);
+    assert_ne!(readback(&mut engine, layer).0, original.0);
+    engine.discard_edit_session();
+    assert_same(
+        "0.1 edited to 0.8, discarded",
+        "the discarded stroke",
+        readback(&mut engine, layer),
+        "the stroke as painted",
+        original.clone(),
+    );
+
+    engine.commit_pending_edits();
+    engine.undo();
+    engine.render(0.0);
+    let undone = readback(&mut engine, layer);
+    assert_eq!(undone.0, engine_grown_ground(&before, undone.1));
+    engine.redo();
+    engine.render(0.0);
+    assert_eq!(readback(&mut engine, layer).0, original.0);
+}
+
+/// An edit that shrinks the stroke inside its entry footprint: Discard must
+/// put the entry footprint back with the pixels, or the settled entry
+/// would undo only the shrunk rect and leave the ring around it painted.
+#[test]
+fn discard_restores_a_shrunk_footprint() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    let before = readback(&mut engine, layer);
+    set_input(&mut engine, "brush_settings", "size", 0.8);
+    headless(&mut engine, layer, &curve());
+
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.05);
+    engine.discard_edit_session();
+    engine.commit_pending_edits();
+    engine.undo();
+    engine.render(0.0);
+    let undone = readback(&mut engine, layer);
+    assert_eq!(
+        undone.0,
+        engine_grown_ground(&before, undone.1),
+        "undo must restore the whole entry footprint"
+    );
+}
+
+/// On a mask, Discard restores the mask's bytes as they were at entry.
+#[test]
+fn mask_discard_restores_the_mask() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    engine.add_mask(layer).expect("add mask");
+    let mask = engine.host_mask_id(layer).expect("mask exists");
+    // Inside the mask, so it does not grow.
+    let ops: Vec<_> = (0..12)
+        .map(|i| event(20.0 + i as f32 * 8.0, 64.0, i as f64 * 16.0))
+        .collect();
+    headless(&mut engine, mask, &ops);
+    engine.test_flush_readbacks();
+    let painted = engine.test_readback_layer(mask);
+
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.6);
+    engine.test_flush_readbacks();
+    assert_ne!(engine.test_readback_layer(mask), painted);
+    engine.discard_edit_session();
+    engine.test_flush_readbacks();
+    assert_eq!(
+        engine.test_readback_layer(mask),
+        painted,
+        "Discard must restore the mask's bytes"
+    );
+}
+
+/// Entering while already editing keeps the first revert point.
+#[test]
+fn entering_twice_keeps_the_first_revert_point() {
+    let (mut engine, layer) = engine_with("Ink Pen");
+    headless(&mut engine, layer, &curve());
+    let original = readback(&mut engine, layer);
+    engine.stroke_edit_begin();
+    set_input(&mut engine, "brush_settings", "size", 0.4);
+    assert!(engine.stroke_edit_begin());
+    engine.discard_edit_session();
+    assert_same(
+        "entered twice, discarded",
+        "the discarded stroke",
+        readback(&mut engine, layer),
+        "the stroke as painted",
+        original,
+    );
 }

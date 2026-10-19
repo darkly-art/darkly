@@ -33,6 +33,8 @@
     function close() {
         openTitle = null;
     }
+    // Capture phase, so the Escape this consumes never reaches the hotkeys
+    // (where it would discard an open edit session) or the canvas.
     function onKeydown(e: KeyboardEvent) {
         if (openTitle && e.key === 'Escape') {
             e.preventDefault();
@@ -45,7 +47,7 @@
     $effect(() => watchDismiss('menu', close));
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} />
 
 <div class="menu-bar">
     <button

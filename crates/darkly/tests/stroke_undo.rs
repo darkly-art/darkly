@@ -190,7 +190,7 @@ fn a_stroke_is_unsaved_from_pen_up_until_saved() {
 
     save(&mut engine);
     let steps = engine.test_undo_len();
-    engine.stroke_edit_end();
+    engine.commit_pending_edits();
     assert_eq!(engine.test_undo_len(), steps + 1, "the stroke settled");
     assert!(
         !engine.is_dirty(),
