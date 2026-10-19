@@ -106,24 +106,21 @@ pub fn request_readback(
 
 impl ReadbackRequest {
     /// Wrap an externally-allocated buffer that the caller has already
-    /// filled via `encoder.copy_texture_to_buffer`. Used by the undo
-    /// region path, where the entry owns the staging buffer so the
-    /// restore-from-Pending branch can copy from it GPU-to-GPU.
+    /// filled, to be read back byte for byte. Used by the undo region path,
+    /// whose packed layout of several runs is the layout it keeps on the
+    /// host, so nothing is stripped.
     ///
-    /// Caller is responsible for ensuring the buffer has at least
-    /// `MAP_READ | COPY_DST` usage (plus `COPY_SRC` if the buffer is also
-    /// going to feed `copy_buffer_to_texture`).
-    pub fn from_buffer(
-        buffer: wgpu::Buffer,
-        height: u32,
-        padded_row_bytes: u32,
-        unpadded_row_bytes: u32,
-    ) -> Self {
+    /// Caller is responsible for ensuring the buffer has `MAP_READ |
+    /// COPY_DST` usage.
+    pub fn from_buffer(buffer: wgpu::Buffer) -> Self {
+        // One unpadded row spanning the whole buffer: extraction copies it
+        // verbatim.
+        let len = u32::try_from(buffer.size()).expect("undo region buffer exceeds 4 GiB");
         ReadbackRequest {
             buffer,
-            height,
-            padded_row_bytes,
-            unpadded_row_bytes,
+            height: 1,
+            padded_row_bytes: len,
+            unpadded_row_bytes: len,
             rx: None,
         }
     }

@@ -12,11 +12,11 @@
 //! had when the artist entered.
 //!
 //! The undo entry is committed from the stroke's own pre-stroke snapshot,
-//! over the union of its dabs' write footprints: the rect every terminal
-//! publishes for each dab it queues (`DabBatch::record_dab_footprint`), and
-//! the same one the checkpoint ring restores by. Settling needs no readback,
-//! and nothing that runs between pen-up and the settle can change what the
-//! entry holds.
+//! over the undo-storage tiles its dabs' write footprints touch: the rect
+//! every terminal publishes for each dab it queues
+//! (`DabBatch::record_dab_footprint`), and the same one the checkpoint ring
+//! restores by. Settling needs no diff and no readback, and nothing that runs
+//! between pen-up and the settle can change what the entry holds.
 
 use darkly_macros::handlers;
 
@@ -30,12 +30,12 @@ use crate::brush::pipeline::BrushPipelines;
 use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
-use crate::coord::CanvasRect;
 use crate::document::{canvas_per_reference_px, Document};
-use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::paint_target::GpuPaintTarget;
+use crate::gpu::region_runs::{bytes_per_pixel, RegionRuns, TileGrid};
+use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -74,9 +74,10 @@ pub(crate) struct LastStroke {
     /// Scratch plus the pre-stroke snapshot: what a redraw composites onto
     /// and what the undo entry is committed from.
     buffer: StrokeBuffer,
-    /// Union of the write footprints of the latest rendering's dabs, in
-    /// canvas pixels: the undo entry's rect. `None` when no dab wrote.
-    footprint: Option<CanvasRect>,
+    /// The undo-storage tiles the latest rendering's dabs wrote, clipped to
+    /// their footprints' union: the undo entry's region. `None` when no dab
+    /// wrote.
+    footprint: Option<RegionRuns>,
     /// While the artist is editing it, so brush and colour changes redraw
     /// it: what Discard puts back.
     edit: Option<StrokeRevert>,
@@ -91,10 +92,10 @@ impl LastStroke {
 /// The stroke as it looked when the artist entered stroke edit: what
 /// Discard puts back.
 struct StrokeRevert {
-    /// The target's pixels over the footprint of that rendering, in the
-    /// target's format, with the footprint they cover; `None` when no dab
-    /// wrote. Outside the footprint the target held its pre-stroke pixels.
-    pixels: Option<(wgpu::Texture, CanvasRect)>,
+    /// The target's pixels over the footprint of that rendering, held the
+    /// way an undo entry holds them; `None` when no dab wrote. Outside the
+    /// footprint the target held its pre-stroke pixels.
+    pixels: Option<UndoRegionEntry>,
 }
 
 /// The last brush stroke: pending until it settles, and open as a session
@@ -438,7 +439,7 @@ impl DarklyEngine {
             buffer,
             conditions,
         } = stroke;
-        let footprint = engine.save_points.full_bbox();
+        let footprint = self.dab_region(layer_id, &engine);
         self.last_stroke = Some(LastStroke {
             layer_id,
             events: engine.end().events,
@@ -453,11 +454,14 @@ impl DarklyEngine {
     /// Settle the last stroke: commit its undo entry, from its pre-stroke
     /// snapshot over its footprint, and drop it. Runs before anything that
     /// pushes another undo entry or edits the document, so entries keep the
-    /// order their edits happened in.
+    /// order their edits happened in. The queued undo diffs of fills and
+    /// gradients are older than any kept stroke (each one's start settled
+    /// the stroke before it), so they are committed first.
     pub(crate) fn settle_last_stroke(&mut self) {
         let Some(stroke) = self.last_stroke.take() else {
             return;
         };
+        self.flush_pending_undo_commits();
         let Some(footprint) = stroke.footprint else {
             return;
         };
@@ -465,13 +469,6 @@ impl DarklyEngine {
             return;
         };
         let target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
-        // Each dab's footprint is clamped to the target as it stood then,
-        // and a target only grows while a stroke is kept, so this changes
-        // nothing in practice; it keeps the copy inside the texture
-        // regardless.
-        let Some(rect) = footprint.intersect(target.canvas_extent()) else {
-            return;
-        };
         let entry = commit_undo_entry(
             &self.gpu,
             &mut self.readbacks,
@@ -481,9 +478,10 @@ impl DarklyEngine {
                     &self.gpu.device,
                     encoder,
                     &self.brush_pipelines,
+                    &self.region_scratch,
                     stroke.layer_id,
                     &target,
-                    rect,
+                    footprint,
                 )
             },
         );
@@ -550,7 +548,7 @@ impl DarklyEngine {
             let mut ctx = setup.ctx(&mut stroke.buffer, "stroke-edit-redraw");
             engine.render_whole(&mut ctx);
             perf += ctx.submit_final();
-            stroke.footprint = engine.save_points.full_bbox();
+            stroke.footprint = self.dab_region(stroke.layer_id, &engine);
         }
         self.brush_perf += perf;
         self.compositor.mark_node_pixels_dirty(stroke.layer_id);
@@ -558,13 +556,23 @@ impl DarklyEngine {
         self.last_stroke = Some(stroke);
     }
 
-    /// Return `stroke`'s target to its pre-stroke pixels, then copy `kept`
-    /// (a texture and the canvas rect it covers) back over that rect.
-    fn restore_pre_stroke(
-        &mut self,
-        stroke: &LastStroke,
-        kept: Option<&(wgpu::Texture, CanvasRect)>,
-    ) {
+    /// The region `engine`'s dabs wrote on `layer_id`: the undo-storage tiles
+    /// their footprints touch, clipped to the footprints' union. `None` when
+    /// no dab wrote.
+    fn dab_region(&self, layer_id: LayerId, engine: &StrokeEngine) -> Option<RegionRuns> {
+        let tex = self.compositor.node_texture(layer_id)?;
+        let format = tex.format();
+        RegionRuns::covering(
+            engine.save_points.points().iter().map(|p| p.canvas_bbox),
+            TileGrid::for_format(format),
+            tex.canvas_frame().canvas_extent,
+            bytes_per_pixel(format),
+        )
+    }
+
+    /// Return `stroke`'s target to its pre-stroke pixels, then upload `kept`
+    /// back over its region.
+    fn restore_pre_stroke(&mut self, stroke: &LastStroke, kept: Option<&UndoRegionEntry>) {
         let Some(layer_tex) = self.compositor.node_texture(stroke.layer_id) else {
             return;
         };
@@ -576,42 +584,40 @@ impl DarklyEngine {
                 &self.brush_pipelines,
                 &target,
             );
-            if let Some((texture, rect)) = kept {
-                CanvasFrame {
-                    texture,
-                    canvas_extent: *rect,
-                }
-                .copy_rect_to(encoder, &target.canvas_frame(), *rect);
+            if let Some(entry) = kept {
+                self.region_scratch.upload_region(
+                    encoder,
+                    &self.gpu.device,
+                    entry,
+                    &target.canvas_frame(),
+                );
             }
         });
         self.compositor.mark_node_pixels_dirty(stroke.layer_id);
     }
 
     /// What Discard puts back: `stroke`'s target pixels over its footprint,
-    /// copied into a footprint-sized texture in the target's format.
-    fn capture_stroke_revert(&self, stroke: &LastStroke) -> StrokeRevert {
-        let pixels = stroke.footprint.and_then(|footprint| {
+    /// captured as an undo entry is.
+    fn capture_stroke_revert(&mut self, stroke: &LastStroke) -> StrokeRevert {
+        let pixels = stroke.footprint.clone().and_then(|footprint| {
             let layer_tex = self.compositor.node_texture(stroke.layer_id)?;
-            let target = GpuPaintTarget::from_node(layer_tex, self.doc.canvas_rect());
-            let (texture, _) = crate::gpu::create_texture_with_view(
-                &self.gpu.device,
-                footprint.width,
-                footprint.height,
-                target.format(),
-                "stroke-edit-revert",
-                wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
-            );
-            self.gpu.encode("stroke-edit-revert-capture", |encoder| {
-                target.canvas_frame().copy_rect_to(
-                    encoder,
-                    &CanvasFrame {
-                        texture: &texture,
-                        canvas_extent: footprint,
-                    },
-                    footprint,
-                );
-            });
-            Some((texture, footprint))
+            let frame = layer_tex.canvas_frame();
+            let format = layer_tex.format();
+            Some(commit_undo_entry(
+                &self.gpu,
+                &mut self.readbacks,
+                "stroke-edit-revert-capture",
+                |encoder| {
+                    self.region_scratch.capture_region(
+                        encoder,
+                        &self.gpu.device,
+                        stroke.layer_id,
+                        format,
+                        &frame,
+                        footprint,
+                    )
+                },
+            ))
         });
         StrokeRevert { pixels }
     }
@@ -625,7 +631,7 @@ impl DarklyEngine {
         };
         if let Some(revert) = stroke.edit.take() {
             self.restore_pre_stroke(&stroke, revert.pixels.as_ref());
-            stroke.footprint = revert.pixels.map(|(_, rect)| rect);
+            stroke.footprint = revert.pixels.map(|entry| entry.runs);
             self.doc.mark_changed();
         }
         self.last_stroke = Some(stroke);
@@ -656,16 +662,13 @@ impl DarklyEngine {
     /// to edit; already editing, it changes nothing.
     #[handler]
     pub fn stroke_edit_begin(&mut self) -> bool {
-        let Some(stroke) = self.last_stroke.as_ref() else {
+        let Some(mut stroke) = self.last_stroke.take() else {
             return false;
         };
-        if stroke.editing() {
-            return true;
+        if !stroke.editing() {
+            stroke.edit = Some(self.capture_stroke_revert(&stroke));
         }
-        let revert = self.capture_stroke_revert(stroke);
-        if let Some(stroke) = self.last_stroke.as_mut() {
-            stroke.edit = Some(revert);
-        }
+        self.last_stroke = Some(stroke);
         self.redraw_last_stroke();
         true
     }

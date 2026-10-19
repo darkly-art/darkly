@@ -58,6 +58,7 @@ use crate::clipboard::Clipboard;
 use crate::document::{auto_dpi, Document, MAX_DPI, MIN_DPI, REFERENCE_DPI};
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
+use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::preview::{PreviewBackdrop, PreviewTarget};
@@ -139,6 +140,14 @@ pub(crate) struct RichCopyMask {
     pub bounds: crate::coord::CanvasRect,
 }
 
+/// Deferred undo commit: an operation's pre-operation snapshot waiting on the
+/// GPU diff that says which of its tiles changed.
+pub(crate) struct PendingUndoCommit {
+    pub layer_id: LayerId,
+    pub snapshot: crate::gpu::region_store::Snapshot,
+    pub diff: crate::gpu::diff_rect::PendingDiff,
+}
+
 /// Context for a pending async GPU readback: travels with the request and
 /// is returned alongside the pixel data on completion.
 ///
@@ -158,6 +167,8 @@ pub(crate) enum ReadbackContext {
         /// window-local R8 buffer. See
         /// `crate::gpu::layer_readback::LayerReadbackExtent`.
         extent: crate::gpu::layer_readback::LayerReadbackExtent,
+        /// The target's pre-fill pixels, diffed for undo once the fill lands.
+        snapshot: crate::gpu::region_store::Snapshot,
     },
     ColorPick,
     Copy {
@@ -448,9 +459,10 @@ pub struct DarklyEngine {
     pub(crate) region_scratch: RegionScratch,
     pub(crate) paint_pipelines: PaintPipelines,
     /// Region-scratch snapshot for the current stroke's gradient or flood
-    /// fill, saved on its first op and committed at end_stroke (gradient) or
-    /// when the fill's readback lands. A brush stroke keeps its pre-stroke
-    /// pixels in its own stroke buffer instead.
+    /// fill, saved on its first op. A gradient queues it as a diff in
+    /// `pending_undo_commits` at end_stroke; a flood fill carries it in its
+    /// readback context until the fill lands. A brush stroke keeps its
+    /// pre-stroke pixels in its own stroke buffer instead.
     pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
     /// Selection-texture snapshot held between `save_selection_for_undo` and
     /// the matching `commit_selection_undo`. Some selection ops (magic wand,
@@ -599,6 +611,12 @@ pub struct DarklyEngine {
     /// pin. Stroke start validates it: a dead or group id falls back to
     /// the painted layer.
     pub(crate) clone_source_layer: Option<LayerId>,
+
+    // --- Diff rect (undo region computation) ---
+    pub(crate) diff_rect: DiffRectPass,
+    /// Undo commits waiting on their diffs, in the order the operations
+    /// happened; committed in that order.
+    pub(crate) pending_undo_commits: Vec<PendingUndoCommit>,
 
     // --- Selection ---
     /// Reusable GPU pipelines for selection boolean / invert operations.
@@ -773,6 +791,7 @@ impl DarklyEngine {
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
         let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, &selection_mask_bgl);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
+        let diff_rect = DiffRectPass::new(&gpu.device);
 
         let mut engine = DarklyEngine {
             doc,
@@ -823,6 +842,8 @@ impl DarklyEngine {
             clone_source_anchor: None,
             stroke_seed: None,
             clone_source_layer: None,
+            diff_rect,
+            pending_undo_commits: Vec::new(),
             selection_pipelines,
             pending_transform: None,
             transform_setup_generation: 0,
@@ -1046,6 +1067,18 @@ impl DarklyEngine {
             .map(|p| p.bounds)
     }
 
+    /// Test-only: number of steps on the undo stack.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_len(&self) -> usize {
+        self.undo_stack.test_undo_len()
+    }
+
+    /// Test-only: total byte cost charged to the undo budget.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_total_bytes(&self) -> u64 {
+        self.undo_stack.total_bytes()
+    }
+
     /// Test-only: whether the undo / redo stacks have anything to apply.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_can_undo(&self) -> bool {
@@ -1055,12 +1088,6 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn test_can_redo(&self) -> bool {
         self.undo_stack.can_redo()
-    }
-
-    /// Number of steps on the undo stack. Test-only.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_undo_len(&self) -> usize {
-        self.undo_stack.test_undo_len()
     }
 
     /// Test-only: whether the document still holds the entity at all, linked

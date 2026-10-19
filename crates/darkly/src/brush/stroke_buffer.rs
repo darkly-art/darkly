@@ -15,8 +15,10 @@ use crate::brush::node::DabPass;
 use crate::brush::pipeline::{BrushPipelines, CanvasCopyLayout};
 use crate::brush::scratch::Scratch;
 use crate::coord::CanvasRect;
+use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback::ReadbackRequest;
+use crate::gpu::region_runs::RegionRuns;
 use crate::gpu::region_store::{RegionScratch, UndoRegionEntry};
 use crate::layer::LayerId;
 
@@ -235,9 +237,9 @@ impl StrokeBuffer {
         &self.pre_stroke_bind_group
     }
 
-    /// Encode an undo entry for `canvas_rect` of `target`, the paint target
-    /// this stroke paints, from the pre-stroke snapshot: the target's pixels
-    /// as they were before the stroke, in the target's own format. An RGBA8
+    /// Encode an undo entry for `runs` of `target`, the paint target this
+    /// stroke paints, from the pre-stroke snapshot: the target's pixels as
+    /// they were before the stroke, in the target's own format. An RGBA8
     /// target commits straight from the snapshot. An R8 mask's snapshot is
     /// the broadcast `(r, r, r, 1)`, so it is narrowed back to one channel
     /// in a transient texture first, through the same blit a commit to an R8
@@ -247,27 +249,35 @@ impl StrokeBuffer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &BrushPipelines,
+        region_scratch: &RegionScratch,
         layer_id: LayerId,
         target: &GpuPaintTarget<'_>,
-        canvas_rect: CanvasRect,
+        runs: RegionRuns,
     ) -> (UndoRegionEntry, ReadbackRequest) {
         use crate::brush::paint_target_ext::BrushPaintTargetExt;
-        let frame = target.canvas_frame();
+        let canvas_extent = target.canvas_extent();
         let format = target.format();
-        if format == self.pre_stroke_texture.format() {
-            return RegionScratch::commit_aligned(
+        // The snapshot is aligned to the target: its texel `(x, y)` holds the
+        // target's layer-local pixel `(x, y)`.
+        let capture = |pixels: &wgpu::Texture, encoder: &mut wgpu::CommandEncoder| {
+            region_scratch.capture_region(
                 encoder,
                 device,
                 layer_id,
-                &frame,
                 format,
-                &self.pre_stroke_texture,
-                canvas_rect,
-            );
+                &CanvasFrame {
+                    texture: pixels,
+                    canvas_extent,
+                },
+                runs,
+            )
+        };
+        if format == self.pre_stroke_texture.format() {
+            return capture(&self.pre_stroke_texture, encoder);
         }
         debug_assert_eq!(
             (self.width, self.height),
-            (frame.canvas_extent.width, frame.canvas_extent.height),
+            (canvas_extent.width, canvas_extent.height),
             "the pre-stroke snapshot is aligned to the paint target"
         );
         let (narrow, narrow_view) = crate::gpu::create_texture_with_view(
@@ -287,15 +297,7 @@ impl StrokeBuffer {
                 &self.pre_stroke_view,
                 &self.pre_stroke_texture,
             );
-        RegionScratch::commit_aligned(
-            encoder,
-            device,
-            layer_id,
-            &frame,
-            format,
-            &narrow,
-            canvas_rect,
-        )
+        capture(&narrow, encoder)
     }
 
     /// Return the whole of `target`, the paint target this stroke paints, to

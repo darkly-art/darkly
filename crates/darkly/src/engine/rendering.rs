@@ -3,12 +3,13 @@
 use darkly_macros::handlers;
 
 use super::{DarklyEngine, ReadbackContext};
-use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
+use crate::coord::{CanvasPoint, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::preview::PreviewBackdrop;
 use crate::gpu::readback::{self, ReadbackRequest, ReadbackScheduler};
+use crate::gpu::region_runs::RegionRuns;
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
@@ -276,6 +277,9 @@ impl DarklyEngine {
     /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
+        // Commit, in order, the deferred undo entries whose diffs landed.
+        self.resolve_pending_undo_commits();
+
         // Poll content bounds compute readbacks.
         let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
         // Poll histogram compute readbacks (the Levels editor's input histogram).
@@ -297,6 +301,25 @@ impl DarklyEngine {
         }
 
         self.drain_readbacks() || any_completed
+    }
+
+    /// Test-only: block until every in-flight undo commit and readback has
+    /// resolved, dispatching each as the frame loop would. A single
+    /// `render` may poll a mapping before the GPU has finished, so tests
+    /// that inspect the undo stack after a stroke settle through this.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_settle_pending(&mut self) {
+        for _ in 0..64 {
+            let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            self.poll_pending();
+            if self.pending_undo_commits.is_empty() && !self.readbacks.has_pending() {
+                return;
+            }
+        }
+        panic!("test_settle_pending: undo commits or readbacks never resolved");
     }
 
     /// Poll the GPU readback scheduler once (non-blocking `device.poll`)
@@ -329,7 +352,16 @@ impl DarklyEngine {
                 color,
                 tolerance,
                 extent,
-            } => self.complete_flood_fill(node_id, seed_canvas, color, tolerance, extent, pixels),
+                snapshot,
+            } => self.complete_flood_fill(
+                node_id,
+                seed_canvas,
+                color,
+                tolerance,
+                extent,
+                snapshot,
+                pixels,
+            ),
             ReadbackContext::ColorPick => {
                 if pixels.len() >= 4 {
                     self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
@@ -511,9 +543,8 @@ impl DarklyEngine {
             }
             ReadbackContext::UndoRegionReady { cell } => {
                 // Flip the entry from VRAM-staging to DRAM-Vec, dropping the
-                // staging buffer. `pixels` here is unpadded (extract_pixels
-                // strips row padding); restore re-pads into a temp upload
-                // buffer.
+                // staging buffer. `pixels` is the buffer verbatim, so a
+                // restore uploads it unchanged.
                 *cell.borrow_mut() = EntryPixels::Ready(pixels);
             }
             ReadbackContext::RecordingFrame {
@@ -706,6 +737,7 @@ impl DarklyEngine {
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.compositor.has_pending_histogram()
+                    || !self.pending_undo_commits.is_empty()
                     || self.recorder.needs_frames();
             }
         };
@@ -767,6 +799,7 @@ impl DarklyEngine {
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
+            || !self.pending_undo_commits.is_empty()
             || self.recorder.needs_frames()
     }
 
@@ -795,6 +828,12 @@ impl DarklyEngine {
     }
 
     fn apply_undo(&mut self, direction: UndoDirection) {
+        // Force-flush any pending diff-based undo commit so the most recent
+        // stroke's entry is on the stack before we pop.  Without this, an
+        // undo fired in the same frame as end_stroke (or before poll_pending
+        // runs) would skip the just-finished stroke entirely.
+        self.flush_pending_undo_commits();
+
         let action = match direction {
             UndoDirection::Undo => self.undo_stack.pop_for_undo(),
             UndoDirection::Redo => self.undo_stack.pop_for_redo(),
@@ -846,7 +885,7 @@ impl DarklyEngine {
             // uploaded (the per-node analogue of the canvas-rect reconcile).
             // Normal actions keep doc bounds == texture extent (growth is
             // document-led), so `target_extent` is `None` and this is the plain
-            // path. `entry.canvas_rect` is a sub-rect for paint, so it can't be
+            // path. `entry.runs` covers a sub-region for paint, so it can't be
             // used to detect the extent change: the doc bounds are the signal.
             let target_extent = self
                 .doc
@@ -1139,27 +1178,27 @@ fn restore_gpu_region(
     );
 }
 
-/// Commit a saved-scratch sub-rect into a fresh undo entry and submit the
-/// staging-buffer readback that flips it `Pending → Ready`. Returns the
-/// entry for the caller to wrap in whichever action they're pushing (raw
-/// `GpuRegionAction`, selection action, mask compound action, etc).
+/// Commit `runs` of a snapshot's saved pixels into a fresh undo entry and
+/// submit the staging-buffer readback that flips it `Pending → Ready`.
+/// Returns the entry for the caller to wrap in whichever action they're
+/// pushing (raw `GpuRegionAction`, selection action, mask compound action,
+/// etc).
 ///
-/// Free function (not a `&mut self` method) so callers can hold a
-/// `CanvasFrame<'_>` borrowed from `&self.compositor` while passing in
-/// `&self.region_scratch` and `&mut self.readbacks`: three disjoint
-/// field-level borrows that an `&mut self` method couldn't express.
+/// Free function (not a `&mut self` method) so callers can hold borrows of
+/// other engine fields while passing in `&self.region_scratch` and
+/// `&mut self.readbacks`: disjoint field-level borrows that an `&mut self`
+/// method couldn't express.
 pub(crate) fn commit_undo_region(
     gpu: &GpuContext,
     region_scratch: &RegionScratch,
     scheduler: &mut ReadbackScheduler<ReadbackContext>,
     label: &'static str,
     layer_id: LayerId,
-    frame: &CanvasFrame<'_>,
     snapshot: &Snapshot,
-    canvas_rect: CanvasRect,
+    runs: impl Into<RegionRuns>,
 ) -> UndoRegionEntry {
     commit_undo_entry(gpu, scheduler, label, |encoder| {
-        region_scratch.commit_region(encoder, &gpu.device, layer_id, frame, snapshot, canvas_rect)
+        region_scratch.commit_region(encoder, &gpu.device, layer_id, snapshot, runs)
     })
 }
 
@@ -1258,7 +1297,7 @@ const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 /// max_x, max_y]` (inclusive) or `None` when no pixel qualifies.
 ///
 /// This is the single CPU implementation of "bounding box of the changed
-/// pixels": the same min/max reduction the GPU [`BboxReduction`] runs, on
+/// pixels": the same min/max reduction the GPU [`reduction`] runs, on
 /// the CPU side of an already-read-back buffer. The two thumbnail framers
 /// pass a "differs from the backdrop" predicate; the cursor-preview coverage
 /// scan passes an alpha-threshold predicate. Keeping the scan in one place
@@ -1268,7 +1307,7 @@ const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 /// stroke staged over a field is only "changed" relative to what that field put
 /// at that position.
 ///
-/// [`BboxReduction`]: crate::gpu::bbox::BboxReduction
+/// [`reduction`]: crate::gpu::reduction
 pub(crate) fn changed_pixels_bbox(
     pixels: &[u8],
     width: u32,

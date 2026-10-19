@@ -108,7 +108,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             "filter-commit",
             node_id,
-            &frame,
             &snap,
             region,
         );

@@ -10,8 +10,6 @@ use super::UndoAction;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
-use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Undo action for GPU paint operations (paint, erase, fill, …).
 ///
@@ -31,22 +29,18 @@ impl GpuRegionAction {
 }
 
 impl UndoAction for GpuRegionAction {
-    fn undo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, _doc: &mut Document) {
         // GPU restore is handled by the engine via gpu_region_entry_mut().
-        // Return empty map: no CPU tiles to mark dirty.
-        HashMap::new()
     }
 
-    fn redo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        HashMap::new()
-    }
+    fn redo(&mut self, _doc: &mut Document) {}
 
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
         Some(&mut self.entry)
     }
 
     fn byte_cost(&self) -> u64 {
-        self.entry.byte_size
+        self.entry.byte_size()
     }
 
     fn on_evict(&mut self, _compositor: &mut Compositor) {

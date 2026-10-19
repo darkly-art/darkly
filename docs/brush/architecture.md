@@ -553,16 +553,19 @@ A stroke's undo entry comes from two structures it already has:
   the stroke's first event. Owned by the stroke buffer, which grows it with
   the layer, filling new area with what the layer grows with.
 - **`SavePoints`** - a per-dab log of write footprints + render-state
-  checkpoints. Its `full_bbox()` is the union of every dab's footprint: the
-  rect each terminal publishes for the dab it queues, and the same rect the
-  checkpoint ring restores by.
+  checkpoints. Each footprint is the rect the terminal publishes for the dab
+  it queues, and the same rect the checkpoint ring restores by.
 
 At `end_stroke` the stroke is kept as the engine's `LastStroke`: its raw pen
 events, the conditions it started under (foreground colour, seed, view scale
 and rotation) and its stroke buffer. The next action that pushes an undo entry
 or edits the document settles it first: the entry is committed from the
-pre-stroke snapshot over `full_bbox`, with no readback, and the stroke is
-dropped. Undo then restores that rect.
+pre-stroke snapshot over the undo-storage tiles the dab footprints touch
+(`RegionRuns::covering`, clipped to the footprints' union), with no diff and
+no readback, and the stroke is dropped. Undo then restores those tiles. A
+fill or gradient instead diffs against its region-scratch snapshot to find
+its changed tiles; those diffs are queued, and always older than a kept
+stroke, so settling commits them first.
 
 Until it settles, the artist can edit it (stroke edit). Every brush change
 (`compile_active`), erase toggle, clone-source change, or foreground colour
@@ -573,11 +576,12 @@ so the previous rendering needs no erase. The redraw keeps the stroke's seed,
 view scale and rotation, so it reproduces the stroke when nothing changed;
 it re-runs the stabilizer, so a stabilizer change reshapes the stroke.
 
-Entering stroke edit first copies the layer's pixels over the stroke's
-footprint into a footprint-sized texture (`StrokeRevert`). Apply leaves edit
-mode and drops that copy without settling: the stroke stays the `LastStroke`,
-editable again until the next action settles it. Discard returns the layer to
-its pre-stroke snapshot, copies the kept rect back and restores the footprint,
+Entering stroke edit first captures the layer's pixels over the stroke's
+footprint tiles, held the way an undo entry holds them (`StrokeRevert`).
+Apply leaves edit mode and drops that copy without settling: the stroke stays
+the `LastStroke`, editable again until the next action settles it. Discard
+returns the layer to its pre-stroke snapshot, uploads the kept tiles back and
+restores the footprint,
 so the stroke is exactly as it looked at entry, whatever the edit did. Leaving
 the brush tool applies. Stroke edit is one of the engine's `PendingEdit` kinds
 (`engine/pending_edit.rs`), so the canvas's session frame and the generic

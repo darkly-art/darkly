@@ -6817,3 +6817,187 @@ fn duplicate_preserves_mask_link_state() {
     let duplicate = engine.duplicate_node(host).expect("duplicate succeeded");
     assert!(!projected_mask_link(&engine, duplicate));
 }
+
+// ============================================================================
+// Undo entry size: an entry costs the tiles an operation changed, not the
+// bounding box of the change, and not the whole layer.
+// ============================================================================
+
+/// A default-brush `StrokeOp` at `(x, y)`, in the foreground colour.
+fn brush_op(x: f32, y: f32) -> StrokeOp {
+    StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+    }
+}
+
+/// Regression: a thin diagonal stroke's undo entry was the bounding box of
+/// every changed pixel (about 971x971 px, 3.6 MB at 1024²) although it only
+/// changed a band of tiles along the diagonal (about 0.7 MB).
+#[test]
+fn diagonal_stroke_undo_entry_is_tile_granular() {
+    let mut engine = test_engine(1024, 1024);
+    let layer_id = engine.add_raster_layer(None);
+    engine.test_settle_pending();
+    let before = engine.test_readback_layer(layer_id);
+    let (len0, bytes0) = (engine.test_undo_len(), engine.test_undo_total_bytes());
+
+    engine.begin_stroke(layer_id).unwrap();
+    for i in 0..=40 {
+        let t = 50.0 + i as f32 * 23.0;
+        engine.stroke_to(brush_op(t, t));
+    }
+    engine.end_stroke();
+    // The stroke's entry lands when it settles.
+    engine.commit_pending_edits();
+    engine.test_settle_pending();
+
+    assert_eq!(
+        engine.test_undo_len(),
+        len0 + 1,
+        "the stroke pushes one entry"
+    );
+    let entry_bytes = engine.test_undo_total_bytes() - bytes0;
+    assert!(
+        entry_bytes > 0 && entry_bytes < 1_500_000,
+        "diagonal stroke undo entry should cost its changed tiles, got {entry_bytes} B"
+    );
+
+    engine.undo();
+    engine.test_settle_pending();
+    assert!(
+        engine.test_readback_layer(layer_id) == before,
+        "undo restores the pre-stroke layer exactly"
+    );
+}
+
+/// Regression: a flood fill committed the whole layer extent as its undo
+/// entry whatever it filled, so a 100x100 fill on a 1024² layer cost 4 MB,
+/// and refilling a region with its own color pushed another 4 MB entry.
+#[test]
+fn flood_fill_undo_entry_covers_only_changed_tiles() {
+    let mut engine = test_engine(1024, 1024);
+    let layer_id = engine.add_raster_layer(None);
+    // `select_rect` with no prior selection pushes its own full-canvas
+    // selection entry; measure the fill against the state after it.
+    engine.select_rect(
+        400.0,
+        400.0,
+        100.0,
+        100.0,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.test_settle_pending();
+    let before = engine.test_readback_layer(layer_id);
+    let (len0, bytes0) = (engine.test_undo_len(), engine.test_undo_total_bytes());
+
+    let fill = StrokeOp::FloodFill {
+        x: 450.0,
+        y: 450.0,
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+        tolerance: 0,
+    };
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(fill);
+    engine.end_stroke();
+    engine.test_settle_pending();
+
+    assert_eq!(
+        engine.test_undo_len(),
+        len0 + 1,
+        "the fill pushes one entry"
+    );
+    let entry_bytes = engine.test_undo_total_bytes() - bytes0;
+    assert!(
+        entry_bytes > 0 && entry_bytes < 200_000,
+        "a 100x100 fill's undo entry should cost its changed tiles, got {entry_bytes} B"
+    );
+    let filled = engine.test_readback_layer(layer_id);
+    assert_eq!(alpha_at(&filled, 1024, 450, 450), 255, "the fill landed");
+    assert_eq!(
+        alpha_at(&filled, 1024, 100, 100),
+        0,
+        "the selection bounded it"
+    );
+
+    // Refilling with the same opaque color changes nothing: no entry.
+    engine.begin_stroke(layer_id).unwrap();
+    engine.stroke_to(fill);
+    engine.end_stroke();
+    engine.test_settle_pending();
+    assert_eq!(
+        engine.test_undo_len(),
+        len0 + 1,
+        "a no-op fill pushes nothing"
+    );
+
+    engine.undo();
+    engine.test_settle_pending();
+    assert!(
+        engine.test_readback_layer(layer_id) == before,
+        "undo restores the pre-fill layer exactly"
+    );
+}
+
+/// Regression: `end_stroke` returned early while a flood fill's readback was
+/// pending, skipping the stroke engine teardown, so the next stroke continued
+/// the previous one and the two were joined. The stroke that ended in that
+/// window also got no undo entry, because the fill held its snapshot slot.
+#[test]
+fn stroke_after_pending_fill_starts_a_new_stroke() {
+    let w = 256;
+    let mut engine = test_engine(w, w);
+    let a = engine.add_raster_layer(None);
+    let b = engine.add_raster_layer(None);
+    engine.test_settle_pending();
+    let len0 = engine.test_undo_len();
+
+    // Fill A, then stroke B before the fill's readback lands.
+    engine.begin_stroke(a).unwrap();
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 10.0,
+        y: 10.0,
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.begin_stroke(b).unwrap();
+    engine.stroke_to(brush_op(40.0, 40.0));
+    engine.stroke_to(brush_op(50.0, 50.0));
+    engine.end_stroke();
+    engine.test_settle_pending();
+    // The stroke's entry lands when it settles.
+    engine.commit_pending_edits();
+    assert_eq!(
+        engine.test_undo_len(),
+        len0 + 2,
+        "the fill and the stroke each push their own entry"
+    );
+
+    engine.begin_stroke(b).unwrap();
+    engine.stroke_to(brush_op(200.0, 200.0));
+    engine.stroke_to(brush_op(210.0, 210.0));
+    engine.end_stroke();
+    engine.test_settle_pending();
+
+    let pixels = engine.test_readback_layer(b);
+    assert_eq!(
+        alpha_at(&pixels, w, 125, 125),
+        0,
+        "the second stroke must not be joined to the first"
+    );
+}

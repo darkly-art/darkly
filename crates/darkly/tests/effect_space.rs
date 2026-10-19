@@ -41,7 +41,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
 /// Let async pixel work land before a readback. A flood fill is a GPU write
 /// whose result is not observable until the readbacks drain and a frame runs.
 fn settle(engine: &mut DarklyEngine) {
-    engine.test_flush_readbacks();
+    engine.test_settle_pending();
     engine.render(0.0);
 }
 

@@ -15,18 +15,27 @@ impl DarklyEngine {
     /// leaves the stack as a result (the cleared redo history plus anything
     /// overflowed past `max_steps`).
     ///
-    /// Settles the last brush stroke first, so the on-stack action ordering
-    /// matches the artist's temporal order: a "paint, then duplicate, then
-    /// undo" sequence first undoes the duplicate.
+    /// Commits what is still pending first, oldest first (the queued diff
+    /// commits of finished fills and gradients, then the last brush stroke),
+    /// so the on-stack action ordering matches the artist's temporal order:
+    /// a "paint, then duplicate, then undo" sequence first undoes the
+    /// duplicate.
     pub(crate) fn push_undo(&mut self, action: Box<dyn UndoAction>) {
+        self.flush_pending_undo_commits();
         self.settle_last_stroke();
+        self.push_undo_without_flush(action);
+    }
+
+    /// [`Self::push_undo`] without committing what is pending, for the paths
+    /// that commit it in order.
+    pub(crate) fn push_undo_without_flush(&mut self, action: Box<dyn UndoAction>) {
         let evicted = self.undo_stack.push(&mut self.doc, action);
         self.release_evicted(evicted);
     }
 
     /// Push the undo entry of an edit whose change the document already
     /// recorded (see [`crate::undo::UndoStack::push_recorded`]). The last
-    /// stroke's settle is its only caller, so it does not settle first.
+    /// stroke's settle is its only caller, and commits what precedes it.
     pub(crate) fn push_recorded_undo(&mut self, action: Box<dyn UndoAction>) {
         let evicted = self.undo_stack.push_recorded(action);
         self.release_evicted(evicted);
@@ -35,6 +44,7 @@ impl DarklyEngine {
     /// Coalesce variant. Mirrors [`Self::push_undo`] for property-change
     /// actions that may merge into the existing top step.
     pub(crate) fn coalesce_property_undo(&mut self, action: PropertyAction) {
+        self.flush_pending_undo_commits();
         self.settle_last_stroke();
         let evicted = self.undo_stack.coalesce_property(&mut self.doc, action);
         self.release_evicted(evicted);
