@@ -78,7 +78,7 @@ You need: a clean `dev` checkout in sync with `origin/dev`, an authenticated
 Everything else happens on its own. The tag push runs `publish.yml`
 (publishes `darkly-macros` and `darkly` to crates.io at `X.Y.Z`) and
 `docs-artifact.yml` (creates the draft pre-release `vX.Y.Z` with GitHub's
-generated notes and attaches the documentation tarball). A separate, private
+generated notes and attaches the built docs site). A separate, private
 pipeline that holds the signing keys picks up the new tag within a few hours,
 builds and smoke-tests the signed desktop bundles, attaches them to the draft,
 and publishes the release once every platform has passed. Until then the

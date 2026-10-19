@@ -22,6 +22,12 @@ make wasm
 
 # Frontend dev server
 (cd frontend && npm run dev)
+
+# Docs site (darkly.art/docs), served at localhost:4321/docs/. The export runs
+# at start: restart to see manual or registry edits. DOCS_PREVIEWS=0 skips the
+# GPU preview render.
+(cd docs-site && npm ci)    # once
+make docs-dev
 ```
 
 Before opening a PR, run the full suite under [Lint / CI Checks](#lint--ci-checks) and read the [Testing Principle](#testing-principle).
@@ -99,6 +105,12 @@ crates/darkly/presets/  Bundled config overlays (gimp, krita, photoshop)
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
   graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
+docs-site/              darkly.art/docs: Astro site built from docs/manual/
+                        and the registries (`make docs`). The manual names
+                        keys only as `:hotkey[id]` / `:action[id]`
+  src/shared/           pieces other sites import too; shipped as source in
+                        the release asset, so a renamed file or changed prop
+                        is a breaking change for them
 desktop/                Electron host: main, preload, storage bridge, forge
 packaging/              Desktop-integration resources shared by every
                         channel (desktop entry, AppStream metainfo, icons)
@@ -269,6 +281,8 @@ make wasm
 (cd frontend && npm run build)
 (cd frontend && npm test)
 (cd desktop && npm ci && npx tsc --noEmit && npm test)
+DOCS_PREVIEWS=0 make docs && (cd docs-site && npm test)
+(cd docs-site && npm run test:browser)
 ```
 
 Every flag above is load-bearing. What each one defends against, the shape Vitest tests have to take with no DOM, and the `cargo sweep` housekeeping that keeps `target/` from ballooning are in [`docs/checks.md`](docs/checks.md).

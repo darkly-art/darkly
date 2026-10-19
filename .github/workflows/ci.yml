@@ -170,6 +170,42 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  docs-site:
+    name: docs site build
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: page footers carry build.rs's `git describe`.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install fontconfig (export-docs links it through fontique)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: npm ci (frontend, for the icon resolver)
+        working-directory: frontend
+        run: npm ci
+      - name: npm ci
+        working-directory: docs-site
+        run: npm ci
+      # No previews: they need a GPU device and ffmpeg, and are rendered at
+      # release time. Everything else a release runs, runs here.
+      - name: build
+        env:
+          DOCS_PREVIEWS: '0'
+        run: make docs
+      - name: links, search index, shared contract, hotkey markup
+        working-directory: docs-site
+        run: npm test
+      # The runner image ships Google Chrome.
+      - name: hotkey choice in a browser
+        working-directory: docs-site
+        run: npm run test:browser
+
   desktop:
     name: desktop host typecheck + tests
     runs-on: ubuntu-latest

@@ -151,10 +151,6 @@ pub struct Asset {
 /// A thin index of what was written, not a second copy of the metadata export.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
-    /// The same value the metadata export stamps, and the only thing that lets
-    /// a consumer check that a JSON artifact and an asset directory came from
-    /// one build.
-    pub version: String,
     /// Catalog id → entry type id → what was written for it.
     pub assets: BTreeMap<String, BTreeMap<String, Asset>>,
 }
@@ -706,10 +702,7 @@ pub fn render_all(out: &Path) -> Result<Manifest, DocsRenderError> {
         }
     }
 
-    let manifest = Manifest {
-        version: crate::VERSION.to_string(),
-        assets,
-    };
+    let manifest = Manifest { assets };
     std::fs::create_dir_all(out)?;
     std::fs::write(
         out.join("assets.json"),

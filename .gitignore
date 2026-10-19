@@ -15,5 +15,12 @@ desktop/out/
 desktop/resources/app/
 desktop/test-results/
 
+# Docs site build output, and what scripts/gen-docs.mjs generates into it
+docs-site/dist/
+docs-site/.astro/
+docs-site/src/content/docs/
+docs-site/src/generated/
+docs-site/public/previews/
+
 # Planning documents are working notes, never committed
 docs/plans/

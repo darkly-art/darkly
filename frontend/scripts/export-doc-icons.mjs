@@ -6,9 +6,8 @@
  * This exists because an icon name is not a glyph. `metadata.json` says an
  * entry's icon is `fa6-solid:paintbrush`; turning that into artwork means owning
  * an icon toolchain and pinning the same icon-set versions this build used.
- * Resolving here follows the standing rule for this effort: where a consumer
- * would otherwise have to re-derive something, the producer stores it, and it
- * keeps the artifact's promise that reading it needs no particular renderer.
+ * Resolving here keeps the docs site free of an icon toolchain of its own: it
+ * reads resolved SVG from the export, the same way it reads everything else.
  *
  * It lives beside `gen-icon-bundle.mjs`, which does the same resolution for the
  * app's offline icon bundle (its throw-on-missing typo net is mirrored here),

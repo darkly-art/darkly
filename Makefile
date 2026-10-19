@@ -60,9 +60,10 @@ endif
 # root Cargo.toml; this reads the version Cargo.lock resolved from it.
 WASM_BINDGEN_VERSION = $(shell sed -n '/^name = "wasm-bindgen"$$/{n;s/^version = "\(.*\)"$$/\1/p;}' Cargo.lock)
 
-# `frontend` and `desktop` are also directory names: without .PHONY, make
-# would answer "is up to date" and build nothing.
-.PHONY: app wasm frontend desktop bundle install install-app install-data tools deps clean wasm-bindgen-version
+# `frontend`, `desktop` and `docs` are also directory names: without .PHONY,
+# make would answer "is up to date" and build nothing.
+.PHONY: app wasm frontend desktop bundle install install-app install-data tools deps clean wasm-bindgen-version \
+  docs docs-dev docs-content
 
 app: bundle
 
@@ -135,5 +136,31 @@ deps:
 	cd frontend && npm ci
 	cd desktop && npm ci
 
+# The docs site's content, from this checkout: registry metadata, resolved
+# icons, rendered previews unless DOCS_PREVIEWS=0, and the manual. That
+# directory is all docs-site/ reads, handed to it as DOCS_EXPORT. Needs
+# frontend/ node_modules for the icon resolver, and a GPU plus ffmpeg for the
+# previews. Contributors' and CI's targets, not a channel's.
+DOCS_PREVIEWS ?= 1
+DOCS_EXPORT   := $(TARGET_DIR)/docs-site
+
+docs-content:
+	rm -rf $(DOCS_EXPORT)
+	cargo run -q -p darkly --bin export-docs -- --out $(DOCS_EXPORT)/metadata.json
+	node frontend/scripts/export-doc-icons.mjs --metadata $(DOCS_EXPORT)/metadata.json --out $(DOCS_EXPORT)/icons.json
+ifneq ($(DOCS_PREVIEWS),0)
+	cargo run -q --release -p darkly --features testing --bin render_docs -- --out $(DOCS_EXPORT)/frames
+	node scripts/encode-doc-previews.mjs --frames $(DOCS_EXPORT)/frames --out $(DOCS_EXPORT)
+endif
+	cp -r docs/manual $(DOCS_EXPORT)/manual
+
+# The static site, type-checked, into docs-site/dist.
+docs: docs-content
+	cd docs-site && DOCS_EXPORT=$(abspath $(DOCS_EXPORT)) npm run build
+
+# The dev server at localhost:4321/docs/. The export runs once, at start.
+docs-dev: docs-content
+	cd docs-site && DOCS_EXPORT=$(abspath $(DOCS_EXPORT)) npm run dev
+
 clean:
-	rm -rf $(PKG) frontend/dist desktop/dist desktop/resources/app desktop/out
+	rm -rf $(PKG) frontend/dist desktop/dist desktop/resources/app desktop/out docs-site/dist

@@ -1,0 +1,97 @@
+---
+/*
+ * The document shell every page wraps: `<html>`, the whole `<head>` (SEO, Open
+ * Graph, favicon, fonts, the pre-paint theme script) and `<body>`, with the
+ * page's own layout in the slot. The element rules every page shares come in
+ * with styles/global.css.
+ *
+ * `title` is required and `description` has no default: both are each site's
+ * own copy. `ogType` and `ogImage` default to what any page on the site wants
+ * in a link preview.
+ */
+import './styles/global.css';
+import icon from './darkly-icon.png';
+import banner from './darkly-banner-opaque.png';
+
+interface Props {
+    title: string;
+    description?: string;
+    ogType?: 'website' | 'article';
+    /** A path or URL, resolved against the site. Defaults to the brand card. */
+    ogImage?: string;
+    article?: {
+        publishedTime: string;
+        modifiedTime?: string;
+    };
+}
+
+const { title, description, ogType = 'website', ogImage, article } = Astro.props;
+
+const site = Astro.site ?? 'https://darkly.art';
+const canonical = new URL(Astro.url.pathname, site).toString();
+// Opaque variant: social cards composite onto white, so a transparent banner
+// would render as black-on-white there.
+const ogImageUrl = new URL(ogImage ?? banner.src, site).toString();
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {description && <meta name="description" content={description} />}
+        <link rel="canonical" href={canonical} />
+        <link rel="icon" type="image/png" href={icon.src} />
+        <title>{title}</title>
+
+        <meta property="og:type" content={ogType} />
+        <meta property="og:title" content={title} />
+        {description && <meta property="og:description" content={description} />}
+        <meta property="og:url" content={canonical} />
+        <meta property="og:image" content={ogImageUrl} />
+        <meta property="og:site_name" content="Darkly" />
+        {article?.publishedTime && (
+            <meta property="article:published_time" content={article.publishedTime} />
+        )}
+        {article?.modifiedTime && (
+            <meta property="article:modified_time" content={article.modifiedTime} />
+        )}
+
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={title} />
+        {description && <meta name="twitter:description" content={description} />}
+        <meta name="twitter:image" content={ogImageUrl} />
+
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500&display=swap"
+        />
+        <script is:inline>
+            /*
+             * Apply the persisted theme before first paint, so a light page
+             * never flashes dark. The contract, shared by every page on the
+             * origin: `localStorage['darkly-theme']` holds `dark` or `light`,
+             * applied as `data-theme` on <html> and as a class on <body>.
+             * ThemeToggle writes it.
+             */
+            (function () {
+                try {
+                    var t = localStorage.getItem('darkly-theme') || 'dark';
+                    document.documentElement.setAttribute('data-theme', t);
+                    document.addEventListener('DOMContentLoaded', function () {
+                        document.body.classList.add(t);
+                    });
+                } catch (e) {}
+            })();
+        </script>
+    </head>
+    <body class="dark">
+        <slot />
+    </body>
+</html>
