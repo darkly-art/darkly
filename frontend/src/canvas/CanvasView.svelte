@@ -16,6 +16,7 @@
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isToolHoverSuppressed } from '../tools/modifier_cursor';
     import { isEditableTarget } from '../lib/isEditableTarget';
+    import { colorToRgba01 } from '../lib/color';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -440,6 +441,14 @@
             });
             inst.requestFrame();
         }
+    });
+
+    // Push the foreground whenever it changes: brush strokes paint with the
+    // engine's copy, and a stroke being edited redraws in it. A pointerdown is
+    // a later task than this effect's flush, so the colour always reaches the
+    // engine's request queue before the stroke that uses it.
+    $effect(() => {
+        inst.engine?.api.setForegroundColor({ rgba: colorToRgba01(inst.foreground) });
     });
 
     // HMR'ing this component re-runs onMount and creates a second WASM

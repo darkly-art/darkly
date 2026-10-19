@@ -55,6 +55,7 @@ fn inv(p: [u8; 4]) -> [u8; 4] {
 /// Paint a single grayscale brush dab onto a node so an R8 mask becomes
 /// non-uniform: `value` lands in the mask's R channel.
 fn paint_dab(engine: &mut DarklyEngine, node_id: LayerId, x: f32, y: f32, value: f32) {
+    engine.set_foreground_color([value, value, value, 1.0]);
     engine.begin_stroke(node_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -65,10 +66,6 @@ fn paint_dab(engine: &mut DarklyEngine, node_id: LayerId, x: f32, y: f32, value:
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: value,
-        cg: value,
-        cb: value,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);

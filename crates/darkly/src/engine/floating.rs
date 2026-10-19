@@ -122,8 +122,8 @@ impl DarklyEngine {
             && self.doc.validate_pixel_transform_plan(plan)
     }
 
-    /// Commit any pending edit (floating content, a transform session, a
-    /// shape placement) before performing other edits. Call this before
+    /// Commit any pending edit (the last brush stroke, floating content, a
+    /// transform session, a shape placement) before performing other edits. Call this before
     /// operations that would conflict with one (layer switch, paint, undo,
     /// etc.).
     pub fn commit_pending_edits(&mut self) {
@@ -134,6 +134,9 @@ impl DarklyEngine {
     /// edit: transform topology, capability, selection, target resources, or
     /// a layer that exists in the document but has no undo record yet.
     pub(crate) fn resolve_pending_edits(&mut self) -> bool {
+        // First, and unconditionally: it cannot fail or be refused, and the
+        // edits below push undo entries the stroke's must precede.
+        self.settle_last_stroke();
         if self.pending_transform.take().is_some() {
             self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
         }

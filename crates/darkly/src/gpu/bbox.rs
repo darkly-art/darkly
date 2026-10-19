@@ -11,9 +11,8 @@
 //! `div_ceil(16)` dispatch tiling, the `map_async` → poll → decode round-trip,
 //! and the "`min_x > max_x` ⇒ empty" convention. What stays per-caller is the
 //! *predicate* (a WGSL shader + bind-group layout) and the *post-processing*
-//! of the returned rect. [`DiffRectPass`](super::diff_rect::DiffRectPass) and
-//! [`ContentBoundsPass`](super::content_bounds::ContentBoundsPass) are thin
-//! wrappers over this primitive; the CPU-side twin lives in
+//! of the returned rect. [`ContentBoundsPass`](super::content_bounds::ContentBoundsPass)
+//! is a thin wrapper over this primitive; the CPU-side twin lives in
 //! [`changed_pixels_bbox`](crate::engine::rendering::changed_pixels_bbox).
 
 /// Initial values for the atomic bounds buffer: min = MAX, max = 0.

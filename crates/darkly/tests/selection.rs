@@ -36,6 +36,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
 fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -48,10 +49,6 @@ fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u3
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -470,6 +467,7 @@ fn selection_intersect_mode() {
     );
 
     // Paint horizontal strokes at two heights: y=32 (top) and y=96 (bottom).
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -482,14 +480,11 @@ fn selection_intersect_mode() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
 
+    engine.set_foreground_color([0.0, 1.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -502,10 +497,6 @@ fn selection_intersect_mode() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 0.0,
-            cg: 1.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -592,6 +583,7 @@ fn selection_clear() {
     assert!(!engine.has_selection());
 
     // Paint at right side: should work (no selection masking).
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for step in 0..5 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -603,10 +595,6 @@ fn selection_clear() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -727,6 +715,7 @@ fn clear_selection_contents() {
 
     // Paint at center: default brush (scale=0.1, size=0.5) at pressure=1.0
     // produces ~26px diameter dab, centered at (64,64).
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 64.0,
@@ -737,13 +726,9 @@ fn clear_selection_contents() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
-    engine.render(0.0); // flush pending diff undo
+    engine.render(0.0);
 
     // Select left half and delete.  The dab straddles the boundary at x=64.
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
@@ -775,7 +760,7 @@ fn flood_fill_floods_layer_emptied_by_clear_selection_contents() {
     // Paint content, then Ctrl+A + Delete: the canvas is now visually empty
     // but the texture still holds the stroke's RGB with alpha = 0.
     paint_full_stroke(&mut engine, layer_id, w, h);
-    engine.render(0.0); // flush pending diff undo
+    engine.render(0.0);
     engine.select_all();
     engine.clear_selection_contents(layer_id);
 
@@ -835,6 +820,7 @@ fn no_selection_paints_normally() {
 
     assert!(!engine.has_selection());
 
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 32.0,
@@ -845,10 +831,6 @@ fn no_selection_paints_normally() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
 

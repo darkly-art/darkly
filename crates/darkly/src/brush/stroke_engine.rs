@@ -308,6 +308,12 @@ impl StrokeEngine {
         self.runner.dab_pass()
     }
 
+    /// Whether the stroke's brush samples a frozen source (clone): see
+    /// [`BrushGraphRunner::samples_source`](crate::brush::eval::BrushGraphRunner::samples_source).
+    pub fn samples_source(&self) -> bool {
+        self.runner.samples_source()
+    }
+
     pub fn random_seed() -> u32 {
         web_time::SystemTime::now()
             .duration_since(web_time::SystemTime::UNIX_EPOCH)

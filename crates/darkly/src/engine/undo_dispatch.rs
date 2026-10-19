@@ -15,23 +15,33 @@ impl DarklyEngine {
     /// leaves the stack as a result (the cleared redo history plus anything
     /// overflowed past `max_steps`).
     ///
-    /// Flushes any pending diff-based undo commit from a just-finished brush
-    /// stroke first, so the on-stack action ordering matches the artist's
-    /// temporal order: a "paint, then duplicate, then undo" sequence first
-    /// undoes the duplicate.
+    /// Settles the last brush stroke first, so the on-stack action ordering
+    /// matches the artist's temporal order: a "paint, then duplicate, then
+    /// undo" sequence first undoes the duplicate.
     pub(crate) fn push_undo(&mut self, action: Box<dyn UndoAction>) {
-        self.flush_pending_undo_commit();
+        self.settle_last_stroke();
         let evicted = self.undo_stack.push(&mut self.doc, action);
-        for mut e in evicted {
-            e.on_evict(&mut self.compositor);
-        }
+        self.release_evicted(evicted);
+    }
+
+    /// Push the undo entry of an edit whose change the document already
+    /// recorded (see [`crate::undo::UndoStack::push_recorded`]). The last
+    /// stroke's settle is its only caller, so it does not settle first.
+    pub(crate) fn push_recorded_undo(&mut self, action: Box<dyn UndoAction>) {
+        let evicted = self.undo_stack.push_recorded(action);
+        self.release_evicted(evicted);
     }
 
     /// Coalesce variant. Mirrors [`Self::push_undo`] for property-change
     /// actions that may merge into the existing top step.
     pub(crate) fn coalesce_property_undo(&mut self, action: PropertyAction) {
-        self.flush_pending_undo_commit();
+        self.settle_last_stroke();
         let evicted = self.undo_stack.coalesce_property(&mut self.doc, action);
+        self.release_evicted(evicted);
+    }
+
+    /// Run `on_evict` on every action that left the stack.
+    fn release_evicted(&mut self, evicted: Vec<Box<dyn UndoAction>>) {
         for mut e in evicted {
             e.on_evict(&mut self.compositor);
         }

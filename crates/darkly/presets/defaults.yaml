@@ -73,6 +73,12 @@ hotkeys:
   resizeCanvas: $mod+Alt+KeyC
   # Darkly-original (brush builder): no reference-editor prior art.
   addBrushNode: Shift+KeyA
+  # Darkly-original (stroke edit): no reference editor redraws a finished
+  # raster stroke with new brush settings. Plain Y follows the nearest
+  # analog, Clip Studio Paint's Correct Line tools (Redraw vector line) on
+  # Y. GIMP (MyPaint Brush) and Photoshop (History Brush) spend Y on tools
+  # Darkly lacks, and no overlay binds plain Y.
+  toggleStrokeEdit: KeyY
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
   # belongs here rather than a per-editor overlay. Follows the VS Code
   # convention for a command palette ($mod+Shift+P), plus $mod+F as a

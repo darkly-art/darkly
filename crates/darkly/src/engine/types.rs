@@ -34,6 +34,9 @@ pub struct EngineState {
     pub dirty: bool,
     /// Document has an active selection. Backs selection-gated menu items.
     pub has_selection: bool,
+    /// The last brush stroke is being edited (stroke edit): brush and colour
+    /// changes redraw it. Backs the stroke-edit toggle's active state.
+    pub stroke_edit_active: bool,
     /// The canvas window rect in plane coordinates (`Document::canvas_rect`):
     /// where the window sits and how big it is. Rides the frame snapshot
     /// because the frontend's copy of it has to follow every op that moves or
@@ -526,12 +529,6 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as raw sRGB RGBA floats (0-1), as picked; the
-        /// compositor is display-referred, so no gamma conversion is applied.
-        cr: f32,
-        cg: f32,
-        cb: f32,
-        ca: f32,
     },
 }
 
@@ -816,10 +813,6 @@ mod tests {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: 0.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         }
     }
 

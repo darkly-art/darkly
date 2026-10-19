@@ -582,6 +582,7 @@ fn effect_instances_are_not_rebuilt_every_frame() {
     // Now paint, which dirties the composite every frame: the case that was
     // slow. Nothing structural changes, so nothing may be rebuilt.
     for i in 0..8 {
+        engine.set_foreground_color([0.0, 0.0, 1.0, 1.0]);
         engine.begin_stroke(raster).unwrap();
         engine.stroke_to(StrokeOp::BrushStroke {
             x: 10.0 + i as f32,
@@ -592,10 +593,6 @@ fn effect_instances_are_not_rebuilt_every_frame() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: 0.0,
-            cr: 0.0,
-            cg: 0.0,
-            cb: 1.0,
-            ca: 1.0,
         });
         engine.end_stroke();
         engine.render(0.0);

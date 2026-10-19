@@ -211,8 +211,9 @@ pub struct Document {
     /// [`CanvasGeometryAction`]: crate::undo::CanvasGeometryAction
     pub dpi: f32,
 
-    /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
-    /// chokepoint: any new undoable mutation flips it true. Cleared
+    /// Sticky "has unsaved changes" bit. Set by [`Self::mark_changed`], which
+    /// the [`UndoStack::push`] chokepoint runs: any new undoable mutation
+    /// flips it true. Cleared
     /// only by a successful save (`poll_save_result`) or a load
     /// (`open_document` installs a fresh staging doc with `dirty = false`).
     /// Not undoable on purpose: an undo back to the original state
@@ -220,9 +221,9 @@ pub struct Document {
     /// flag describes editor session state, not file content.
     pub dirty: bool,
 
-    /// Monotonic mutation counter, bumped at the same chokepoints that set
-    /// [`Self::dirty`] ([`UndoStack::push`] / `coalesce_property`) plus
-    /// undo/redo application (which deliberately leave `dirty` alone).
+    /// Monotonic mutation counter, bumped with [`Self::dirty`] by
+    /// [`Self::mark_changed`] plus by undo/redo application (which
+    /// deliberately leaves `dirty` alone).
     /// Observers that need "did the document change since I last looked?"
     /// (e.g. the process recorder) sample and compare it. Not serialized,
     /// not undoable: it describes session history, not file content.
@@ -271,6 +272,16 @@ pub struct Document {
 }
 
 impl Document {
+    /// Record a new mutation: the document now has unsaved changes, and
+    /// observers comparing [`Self::revision`] see it. The undo stack runs
+    /// this for every pushed action; an edit whose undo entry is pushed
+    /// later (a brush stroke, which settles after pen-up) runs it when its
+    /// pixels change.
+    pub fn mark_changed(&mut self) {
+        self.dirty = true;
+        self.revision += 1;
+    }
+
     /// A bare document at the reference DPI, so its reference-to-canvas
     /// factor is exactly 1.0 and brush constants read in canvas pixels
     /// unchanged. The engine constructors install the artist's DPI or the

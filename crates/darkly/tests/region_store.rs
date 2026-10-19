@@ -306,7 +306,7 @@ fn region_store_save_full_commit_subrect() {
     }
     write_texture(&queue, &tex, w, h, 4, &painted);
 
-    // Stroke end: diff_rect would return the painted center; commit that sub-rect.
+    // Commit only the painted center sub-rect.
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
         &mut enc,

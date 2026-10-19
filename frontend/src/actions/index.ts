@@ -15,7 +15,7 @@ import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
 import { toolRegistry } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
-import { brushSession } from '../tools/brush.svelte';
+import { brushSession, toggleStrokeEdit } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
 import { registerPalettePopupAction } from './palette_popup';
@@ -564,6 +564,13 @@ export function registerActions() {
             brushSession.eraseMode = !brushSession.eraseMode;
             app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
         },
+    });
+
+    // Stroke edit lives on the brush tool and is reported by the engine.
+    actions.register({
+        id: 'toggleStrokeEdit',
+        status: () => (app.engineState?.strokeEditActive ? 'fa6-solid:check' : undefined),
+        handler: () => toggleStrokeEdit(),
     });
 
     // -- Layers --

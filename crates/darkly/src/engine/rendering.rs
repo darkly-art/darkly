@@ -8,11 +8,10 @@ use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::preview::PreviewBackdrop;
-use crate::gpu::readback::{self, ReadbackScheduler};
+use crate::gpu::readback::{self, ReadbackRequest, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
-use crate::undo::GpuRegionAction;
 
 /// Which surface the color picker samples from. Type-owned dispatch via
 /// `resolve`: `pick_color` never matches on the variant.
@@ -277,34 +276,6 @@ impl DarklyEngine {
     /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
-        // Poll pending diff rect for deferred undo commit.
-        if self.diff_rect.is_pending() {
-            if let Some(result) = self.diff_rect.poll(&self.gpu.device) {
-                if let Some(commit) = self.pending_undo_commit.take() {
-                    if let Some(rect) = result {
-                        if let Some(layer_frame) = self
-                            .compositor
-                            .node_texture(commit.layer_id)
-                            .map(|t| t.canvas_frame())
-                        {
-                            let entry = commit_undo_region(
-                                &self.gpu,
-                                &self.region_scratch,
-                                &mut self.readbacks,
-                                "brush-stroke-end",
-                                commit.layer_id,
-                                &layer_frame,
-                                &commit.snapshot,
-                                rect,
-                            );
-                            self.push_undo(Box::new(GpuRegionAction::new(entry)));
-                        }
-                    }
-                    // else: textures identical, no undo entry needed.
-                }
-            }
-        }
-
         // Poll content bounds compute readbacks.
         let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
         // Poll histogram compute readbacks (the Levels editor's input histogram).
@@ -735,7 +706,6 @@ impl DarklyEngine {
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.compositor.has_pending_histogram()
-                    || self.diff_rect.is_pending()
                     || self.recorder.needs_frames();
             }
         };
@@ -797,7 +767,6 @@ impl DarklyEngine {
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
             || self.compositor.has_pending_histogram()
-            || self.diff_rect.is_pending()
             || self.recorder.needs_frames()
     }
 
@@ -826,12 +795,6 @@ impl DarklyEngine {
     }
 
     fn apply_undo(&mut self, direction: UndoDirection) {
-        // Force-flush any pending diff-based undo commit so the most recent
-        // stroke's entry is on the stack before we pop.  Without this, an
-        // undo fired in the same frame as end_stroke (or before poll_pending
-        // runs) would skip the just-finished stroke entirely.
-        self.flush_pending_undo_commit();
-
         let action = match direction {
             UndoDirection::Undo => self.undo_stack.pop_for_undo(),
             UndoDirection::Redo => self.undo_stack.pop_for_redo(),
@@ -1195,9 +1158,22 @@ pub(crate) fn commit_undo_region(
     snapshot: &Snapshot,
     canvas_rect: CanvasRect,
 ) -> UndoRegionEntry {
-    let (entry, request) = gpu.encode_ret(label, |encoder| {
+    commit_undo_entry(gpu, scheduler, label, |encoder| {
         region_scratch.commit_region(encoder, &gpu.device, layer_id, frame, snapshot, canvas_rect)
-    });
+    })
+}
+
+/// Encode an undo entry with `encode` in one submission labelled `label`, and
+/// schedule the readback that moves its pixels from VRAM to DRAM. The shape
+/// every GPU region commit shares, whatever the entry's pixels are copied
+/// from.
+pub(crate) fn commit_undo_entry(
+    gpu: &GpuContext,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
+    label: &'static str,
+    encode: impl FnOnce(&mut wgpu::CommandEncoder) -> (UndoRegionEntry, ReadbackRequest),
+) -> UndoRegionEntry {
+    let (entry, request) = gpu.encode_ret(label, encode);
     scheduler.submit(
         request,
         ReadbackContext::UndoRegionReady {

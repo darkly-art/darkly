@@ -15,6 +15,10 @@ use crate::brush::node::DabPass;
 use crate::brush::pipeline::{BrushPipelines, CanvasCopyLayout};
 use crate::brush::scratch::Scratch;
 use crate::coord::CanvasRect;
+use crate::gpu::paint_target::GpuPaintTarget;
+use crate::gpu::readback::ReadbackRequest;
+use crate::gpu::region_store::{RegionScratch, UndoRegionEntry};
+use crate::layer::LayerId;
 
 /// A frozen texture for the brush program's sampled source slot
 /// (`@group(3)`), captured once at stroke start by
@@ -57,6 +61,10 @@ pub struct StrokeBuffer {
     /// the pre-stroke snapshot is the source (same-layer clone) or the
     /// brush doesn't sample one at all. See [`SourceSnapshot`].
     source_snapshot: Option<SourceSnapshot>,
+
+    /// How the stroke's terminal dispatches dabs; with the scratch's format,
+    /// what decides whether a scratch suits a given brush.
+    dab_pass: DabPass,
 
     width: u32,
     height: u32,
@@ -133,9 +141,46 @@ impl StrokeBuffer {
             pre_stroke_view,
             pre_stroke_bind_group,
             source_snapshot: None,
+            dab_pass,
             width,
             height,
         }
+    }
+
+    /// Texel format of the stroke scratch.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        self.scratch.format()
+    }
+
+    /// Dab pass the scratch was allocated for.
+    pub fn dab_pass(&self) -> DabPass {
+        self.dab_pass
+    }
+
+    /// Give the scratch the format and dab pass a brush's terminal needs,
+    /// replacing it at the current dimensions when they differ. The
+    /// pre-stroke snapshot and any source snapshot are kept: they hold the
+    /// layer's pixels, which do not depend on the brush. A replaced scratch
+    /// starts empty; the terminal's `begin_stroke` initialises it.
+    pub fn ensure_scratch(
+        &mut self,
+        device: &wgpu::Device,
+        pipelines: &BrushPipelines,
+        scratch_format: wgpu::TextureFormat,
+        dab_pass: DabPass,
+    ) {
+        if self.scratch.format() == scratch_format && self.dab_pass == dab_pass {
+            return;
+        }
+        self.scratch = Scratch::new(
+            device,
+            self.width,
+            self.height,
+            pipelines.canvas_copy_layouts(),
+            scratch_format,
+            dab_pass,
+        );
+        self.dab_pass = dab_pass;
     }
 
     /// The embedded scratch (write + read mirror).  Borrow mutably: the
@@ -188,6 +233,69 @@ impl StrokeBuffer {
     /// the composite pipeline binds this as the background at commit time.
     pub fn pre_stroke_bind_group(&self) -> &wgpu::BindGroup {
         &self.pre_stroke_bind_group
+    }
+
+    /// Encode an undo entry for `canvas_rect` of `target`, the paint target
+    /// this stroke paints, from the pre-stroke snapshot: the target's pixels
+    /// as they were before the stroke, in the target's own format. An RGBA8
+    /// target commits straight from the snapshot. An R8 mask's snapshot is
+    /// the broadcast `(r, r, r, 1)`, so it is narrowed back to one channel
+    /// in a transient texture first, through the same blit a commit to an R8
+    /// target uses.
+    pub fn commit_pre_stroke_undo(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &BrushPipelines,
+        layer_id: LayerId,
+        target: &GpuPaintTarget<'_>,
+        canvas_rect: CanvasRect,
+    ) -> (UndoRegionEntry, ReadbackRequest) {
+        use crate::brush::paint_target_ext::BrushPaintTargetExt;
+        let frame = target.canvas_frame();
+        let format = target.format();
+        if format == self.pre_stroke_texture.format() {
+            return RegionScratch::commit_aligned(
+                encoder,
+                device,
+                layer_id,
+                &frame,
+                format,
+                &self.pre_stroke_texture,
+                canvas_rect,
+            );
+        }
+        debug_assert_eq!(
+            (self.width, self.height),
+            (frame.canvas_extent.width, frame.canvas_extent.height),
+            "the pre-stroke snapshot is aligned to the paint target"
+        );
+        let (narrow, narrow_view) = crate::gpu::create_texture_with_view(
+            device,
+            self.width,
+            self.height,
+            format,
+            "pre-stroke-undo-narrow",
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        target
+            .retargeted(&narrow, &narrow_view)
+            .commit_scratch_blit(
+                device,
+                encoder,
+                pipelines,
+                &self.pre_stroke_view,
+                &self.pre_stroke_texture,
+            );
+        RegionScratch::commit_aligned(
+            encoder,
+            device,
+            layer_id,
+            &frame,
+            format,
+            &narrow,
+            canvas_rect,
+        )
     }
 
     /// Save a snapshot of the paint target's pixels into the pre-stroke
@@ -266,6 +374,12 @@ impl StrokeBuffer {
         self.source_snapshot.as_ref().map(|cs| cs.frame)
     }
 
+    /// Drop the frozen source snapshot, so the pre-stroke snapshot fills the
+    /// sampled source slot again.
+    pub fn clear_source_snapshot(&mut self) {
+        self.source_snapshot = None;
+    }
+
     /// Current scratch dimensions in pixels (the write side, which is layer-sized).
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
@@ -285,6 +399,12 @@ impl StrokeBuffer {
     ///
     /// `source_snapshot` is also left alone: it lives in the *sampled*
     /// texture's frozen frame, and destination growth doesn't move it.
+    ///
+    /// The pre-stroke snapshot's new area is filled with what the paint
+    /// target (of `target_format`) grows with, [`crate::gpu::default_fill`]:
+    /// the target had nothing there before the stroke, so that default is
+    /// its pre-stroke value, and the commit composites onto it.
+    #[allow(clippy::too_many_arguments)]
     pub fn grow_preserving(
         &mut self,
         device: &wgpu::Device,
@@ -294,6 +414,7 @@ impl StrokeBuffer {
         dst_offset_x: u32,
         dst_offset_y: u32,
         canvas_copy: &CanvasCopyLayout,
+        target_format: wgpu::TextureFormat,
     ) {
         if new_w == self.width && new_h == self.height && dst_offset_x == 0 && dst_offset_y == 0 {
             return;
@@ -332,8 +453,14 @@ impl StrokeBuffer {
         let new_pre_stroke_view =
             new_pre_stroke_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Copy existing pre-stroke contents into the new texture at the
-        // canvas-anchored offset.
+        // Fill the new area with the target's default, then copy the
+        // existing pre-stroke contents in at the canvas-anchored offset.
+        crate::gpu::clear_view(
+            encoder,
+            &new_pre_stroke_view,
+            crate::gpu::default_fill(target_format),
+            "pre-stroke-grow-fill",
+        );
         if self.width > 0 && self.height > 0 {
             crate::gpu::blit_region(
                 encoder,

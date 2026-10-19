@@ -271,6 +271,11 @@ dirty: boolean,
  */
 hasSelection: boolean, 
 /**
+ * The last brush stroke is being edited (stroke edit): brush and colour
+ * changes redraw it. Backs the stroke-edit toggle's active state.
+ */
+strokeEditActive: boolean, 
+/**
  * The canvas window rect in plane coordinates (`Document::canvas_rect`):
  * where the window sits and how big it is. Rides the frame snapshot
  * because the frontend's copy of it has to follow every op that moves or
@@ -983,6 +988,8 @@ export type SetDocumentNameReq = { name: string, };
 
 export type SetFilterParamsReq = { id: number, params: JsonValue, };
 
+export type SetForegroundColorReq = { rgba: [number, number, number, number], };
+
 export type SetGroupCollapsedReq = { id: number, collapsed: boolean, };
 
 export type SetGroupPassthroughReq = { id: number, passthrough: boolean, };
@@ -1050,12 +1057,7 @@ export type SmoothSelectionReq = { radius: number, };
 
 export type StartSaveDocumentReq = { snapshot: boolean, };
 
-export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, 
-/**
- * Foreground color as raw sRGB RGBA floats (0-1), as picked; the
- * compositor is display-referred, so no gamma conversion is applied.
- */
-cr: number, cg: number, cb: number, ca: number, };
+export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, };
 
 export type StrokeToReq = { op: StrokeOp, };
 
@@ -1248,6 +1250,7 @@ export type RequestKind =
     | 'set_clone_source'
     | 'set_document_name'
     | 'set_filter_params'
+    | 'set_foreground_color'
     | 'set_group_collapsed'
     | 'set_group_passthrough'
     | 'set_isolated_node'
@@ -1275,6 +1278,8 @@ export type RequestKind =
     | 'start_export'
     | 'start_preview'
     | 'start_save_document'
+    | 'stroke_edit_begin'
+    | 'stroke_edit_end'
     | 'stroke_to'
     | 'take_transform_setup_error'
     | 'text_objects'
@@ -1455,6 +1460,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_clone_source',
     'set_document_name',
     'set_filter_params',
+    'set_foreground_color',
     'set_group_collapsed',
     'set_group_passthrough',
     'set_isolated_node',
@@ -1482,6 +1488,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_export',
     'start_preview',
     'start_save_document',
+    'stroke_edit_begin',
+    'stroke_edit_end',
     'stroke_to',
     'take_transform_setup_error',
     'text_objects',
@@ -1670,6 +1678,7 @@ export interface EngineApi {
     setCloneSource(req: SetCloneSourceReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setFilterParams(req: SetFilterParamsReq): void;
+    setForegroundColor(req: SetForegroundColorReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
     setIsolatedNode(req: SetIsolatedNodeReq): Promise<number | null>;
@@ -1697,6 +1706,8 @@ export interface EngineApi {
     startExport(): void;
     startPreview(req: PreviewReq): void;
     startSaveDocument(req: StartSaveDocumentReq): Promise<void>;
+    strokeEditBegin(): Promise<boolean>;
+    strokeEditEnd(): void;
     strokeTo(req: StrokeToReq): void;
     takeTransformSetupError(): Promise<TransformCapabilityError | null>;
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
@@ -1879,6 +1890,7 @@ export function makeApi(t: Transport): EngineApi {
         setCloneSource: (req) => t.postFF('set_clone_source', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setFilterParams: (req) => t.postFF('set_filter_params', req),
+        setForegroundColor: (req) => t.postFF('set_foreground_color', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
         setIsolatedNode: (req) => t.request('set_isolated_node', req),
@@ -1906,6 +1918,8 @@ export function makeApi(t: Transport): EngineApi {
         startExport: () => t.postFF('start_export'),
         startPreview: (req) => t.postFF('start_preview', req),
         startSaveDocument: (req) => t.request('start_save_document', req),
+        strokeEditBegin: () => t.request('stroke_edit_begin'),
+        strokeEditEnd: () => t.postFF('stroke_edit_end'),
         strokeTo: (req) => t.postFF('stroke_to', req),
         takeTransformSetupError: () => t.request('take_transform_setup_error'),
         textObjects: (req) => t.request('text_objects', req),

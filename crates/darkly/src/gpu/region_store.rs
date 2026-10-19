@@ -189,7 +189,7 @@ impl RegionScratch {
     /// > After the call, the scratch holds valid pre-stroke state over the
     /// > **entire new extent**: the old extent's snapshot rebased to the new
     /// > frame, and the format default (transparent for RGBA, **white** for an
-    /// > R8 mask, see [`scratch_default_clear`](Self::scratch_default_clear))
+    /// > R8 mask, see [`default_fill`](crate::gpu::default_fill))
     /// > everywhere else.
     ///
     /// The scratch is texture-aligned to the layer (see
@@ -342,19 +342,12 @@ impl RegionScratch {
                 // below then overwrites the preserved region, leaving the newly-
                 // grown area at its correct default rather than zero (black).
                 let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
-                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("scratch-grow-clear"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &new_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(Self::scratch_default_clear(format)),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
+                crate::gpu::clear_view(
+                    encoder,
+                    &new_view,
+                    crate::gpu::default_fill(format),
+                    "scratch-grow-clear",
+                );
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: field,
@@ -498,16 +491,42 @@ impl RegionScratch {
             canvas_rect,
             snapshot.saved,
         );
+        // Scratch is texture-aligned to the source (see `save_region`): the
+        // snapshot of pixels at layer-space `(x, y)` lives at scratch `(x, y)`.
+        Self::commit_aligned(
+            encoder,
+            device,
+            layer_id,
+            source,
+            snapshot.format,
+            self.scratch_for(snapshot.format),
+            canvas_rect,
+        )
+    }
+
+    /// The copy half of [`commit_region`](Self::commit_region), from any
+    /// texture `pixels` aligned to the node `source` frames: texel `(x, y)`
+    /// of `pixels` holds the node's layer-local pixel `(x, y)`, in the
+    /// node's own `format`. For an op that keeps its own copy of the node's
+    /// pixels rather than saving them into the shared scratch.
+    pub fn commit_aligned(
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        source: &CanvasFrame<'_>,
+        format: wgpu::TextureFormat,
+        pixels: &wgpu::Texture,
+        canvas_rect: CanvasRect,
+    ) -> (UndoRegionEntry, ReadbackRequest) {
         let layer_rect = source
             .canvas_to_layer_rect(canvas_rect)
             .expect("commit_region rect must overlap the source's canvas extent");
-        let bpp = snapshot.format.block_copy_size(None).unwrap_or(1);
+        let bpp = format.block_copy_size(None).unwrap_or(1);
         let unpadded_row_bytes = layer_rect.width * bpp;
         let padded_row_bytes = padded_row(layer_rect.width, bpp);
         let byte_size = padded_row_bytes as u64 * layer_rect.height as u64;
 
         let (readback, staging) = allocate_pending_buffers(device, byte_size);
-        let scratch = self.scratch_for(snapshot.format);
         let texel_layout = wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(padded_row_bytes),
@@ -524,14 +543,12 @@ impl RegionScratch {
             z: 0,
         };
 
-        // Scratch is texture-aligned to the source (see `save_region`): the
-        // snapshot of pixels at layer-space `(x, y)` lives at scratch `(x, y)`.
         // Two writes: one per buffer. WebGPU doesn't let a single buffer be
         // both MAP_READ and COPY_SRC, so the readback and the in-flight
         // GPU-to-GPU restore each need their own.
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: scratch,
+                texture: pixels,
                 mip_level: 0,
                 origin,
                 aspect: wgpu::TextureAspect::All,
@@ -544,7 +561,7 @@ impl RegionScratch {
         );
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: scratch,
+                texture: pixels,
                 mip_level: 0,
                 origin,
                 aspect: wgpu::TextureAspect::All,
@@ -556,7 +573,7 @@ impl RegionScratch {
             extent,
         );
 
-        let pixels = Rc::new(RefCell::new(EntryPixels::Pending {
+        let entry_pixels = Rc::new(RefCell::new(EntryPixels::Pending {
             readback: readback.clone(),
             staging,
         }));
@@ -570,11 +587,11 @@ impl RegionScratch {
         let entry = UndoRegionEntry {
             layer_id,
             canvas_rect,
-            format: snapshot.format,
+            format,
             padded_row_bytes,
             unpadded_row_bytes,
             byte_size,
-            pixels,
+            pixels: entry_pixels,
         };
         (entry, request)
     }
@@ -881,13 +898,6 @@ impl RegionScratch {
         self.scratch_height = height;
     }
 
-    /// Create a texture view for the scratch texture of the given format.
-    /// Used by `DiffRectPass` to compare pre-stroke state against current canvas.
-    pub fn scratch_view(&self, format: wgpu::TextureFormat) -> wgpu::TextureView {
-        self.scratch_for(format)
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
     /// Canvas dimensions of the scratch textures.
     pub fn scratch_dimensions(&self) -> (u32, u32) {
         (self.scratch_width, self.scratch_height)
@@ -937,17 +947,6 @@ impl RegionScratch {
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
-    }
-
-    /// The pre-stroke value a freshly-grown region of a scratch texture holds,
-    /// mirroring the live texture's default fill: R8 masks default to white
-    /// (255 = reveal), everything else to transparent/zero. Getting this wrong
-    /// for an R8 mask corrupts undo: the grown region would restore to black.
-    fn scratch_default_clear(format: wgpu::TextureFormat) -> wgpu::Color {
-        match format {
-            wgpu::TextureFormat::R8Unorm => wgpu::Color::WHITE,
-            _ => wgpu::Color::TRANSPARENT,
-        }
     }
 }
 
