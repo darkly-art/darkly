@@ -25,7 +25,7 @@ Darkly is **desktop-first** which means it works best with a keyboard. Hotkeys a
 
 ### Hotkey Presets (Photoshop, Krita, etc.)
 
-Almost ***everything has a hotkey.*** The first time you start Darkly, you can choose which hotkey preset you want - Photoshop, Krita, Clip Studio, or GIMP. You can change this anytime in settings.
+Almost ***everything has a hotkey.*** The first time you start Darkly, you can choose which hotkey preset you want - Photoshop, GIMP, Krita, or Clip Studio Paint. You can change this anytime in settings.
 
 <video src="https://github.com/user-attachments/assets/21cca542-a803-40e0-ac8e-0a6fa09b6e4b" controls playsinline preload="metadata" style="width:100%;height:auto"></video>
 
