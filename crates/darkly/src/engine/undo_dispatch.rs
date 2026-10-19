@@ -15,12 +15,18 @@ impl DarklyEngine {
     /// leaves the stack as a result (the cleared redo history plus anything
     /// overflowed past `max_steps`).
     ///
-    /// Flushes any pending diff-based undo commit from a just-finished brush
-    /// stroke first, so the on-stack action ordering matches the artist's
+    /// Flushes any pending diff-based undo commits from just-finished strokes
+    /// and fills first, so the on-stack action ordering matches the artist's
     /// temporal order: a "paint, then duplicate, then undo" sequence first
     /// undoes the duplicate.
     pub(crate) fn push_undo(&mut self, action: Box<dyn UndoAction>) {
-        self.flush_pending_undo_commit();
+        self.flush_pending_undo_commits();
+        self.push_undo_without_flush(action);
+    }
+
+    /// [`Self::push_undo`] without flushing the pending undo commits, for the
+    /// path that commits them in order.
+    pub(crate) fn push_undo_without_flush(&mut self, action: Box<dyn UndoAction>) {
         let evicted = self.undo_stack.push(&mut self.doc, action);
         for mut e in evicted {
             e.on_evict(&mut self.compositor);
@@ -30,7 +36,7 @@ impl DarklyEngine {
     /// Coalesce variant. Mirrors [`Self::push_undo`] for property-change
     /// actions that may merge into the existing top step.
     pub(crate) fn coalesce_property_undo(&mut self, action: PropertyAction) {
-        self.flush_pending_undo_commit();
+        self.flush_pending_undo_commits();
         let evicted = self.undo_stack.coalesce_property(&mut self.doc, action);
         for mut e in evicted {
             e.on_evict(&mut self.compositor);

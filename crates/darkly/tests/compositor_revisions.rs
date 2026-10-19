@@ -38,7 +38,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Let async pixel work land before a readback.
 fn settle(engine: &mut DarklyEngine) {
-    engine.test_flush_readbacks();
+    engine.test_settle_pending();
     engine.render(0.0);
 }
 

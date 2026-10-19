@@ -1,7 +1,6 @@
 use super::UndoAction;
 use crate::document::{Document, FilterKind};
 use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Undo action for relationship properties owned by a mask filter entity.
 pub struct MaskLinkedToHostAction {
@@ -26,13 +25,11 @@ impl MaskLinkedToHostAction {
 }
 
 impl UndoAction for MaskLinkedToHostAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 }

@@ -2,8 +2,6 @@ use super::UndoAction;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
-use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Groups multiple undo actions into a single step.
 ///
@@ -20,24 +18,16 @@ impl CompoundAction {
 }
 
 impl UndoAction for CompoundAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        let mut all = HashMap::new();
+    fn undo(&mut self, doc: &mut Document) {
         for action in self.actions.iter_mut().rev() {
-            for (id, coords) in action.undo(doc) {
-                all.entry(id).or_insert_with(HashSet::new).extend(coords);
-            }
+            action.undo(doc);
         }
-        all
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        let mut all = HashMap::new();
+    fn redo(&mut self, doc: &mut Document) {
         for action in self.actions.iter_mut() {
-            for (id, coords) in action.redo(doc) {
-                all.entry(id).or_insert_with(HashSet::new).extend(coords);
-            }
+            action.redo(doc);
         }
-        all
     }
 
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
