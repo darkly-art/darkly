@@ -17,3 +17,6 @@ desktop/test-results/
 
 # Planning documents are working notes, never committed
 docs/plans/
+
+# Krita autosaves next to edited resources
+*-autosave.kra
