@@ -553,6 +553,52 @@ mod tests {
         reset_state();
     }
 
+    /// The Clip Studio Paint preset exists and binds the keys that encode its
+    /// own decisions: shared tool letters folded onto one Darkly tool, the
+    /// transparent-color toggle as erase mode, the documented aliases, and the
+    /// Alt eyedropper. Inherited rows are covered by the generic preset tests.
+    #[test]
+    fn clip_studio_paint_preset_binds_its_documented_keys() {
+        const CSP: &str = "Clip Studio Paint";
+        assert!(base_names().iter().any(|n| n == CSP));
+
+        let bindings = preset_bindings(Some(CSP));
+        let raw = |id: &str| -> Vec<String> {
+            bindings
+                .get(id)
+                .unwrap_or_else(|| panic!("`{id}` is unbound under {CSP}"))
+                .iter()
+                .map(|b| b.raw.clone())
+                .collect()
+        };
+        assert_eq!(raw("brushTool"), ["KeyP", "KeyB"]);
+        assert_eq!(raw("toggleEraseMode"), ["KeyE", "KeyC"]);
+        assert_eq!(raw("copy"), ["$mod+KeyC", "F3"]);
+        assert_eq!(raw("mergeDown"), ["$mod+KeyE", "Alt+Shift+KeyE"]);
+        assert_eq!(raw("transformPerspectiveTool"), ["$mod+Shift+KeyT"]);
+        assert_eq!(raw("sampleColor"), ["canvas@paint:alt+drag"]);
+
+        reset_state();
+        pick(CSP);
+        assert_eq!(get_str("tools.colorPickerSampleSource"), "merged");
+        reset_state();
+    }
+
+    /// File > New is $mod+N in every reference editor, so the agnostic layer
+    /// binds it and every preset inherits it.
+    #[test]
+    fn new_document_is_bound_in_every_preset() {
+        let mut presets: Vec<Option<&str>> = vec![None];
+        presets.extend(presets_gen::OVERLAYS.iter().map(|(name, _)| Some(*name)));
+        for preset in presets {
+            let raw: Vec<String> = preset_bindings(preset)
+                .get("newDocument")
+                .map(|list| list.iter().map(|b| b.raw.clone()).collect())
+                .unwrap_or_default();
+            assert_eq!(raw, ["$mod+KeyN"], "{preset:?}");
+        }
+    }
+
     #[test]
     fn user_wins_over_overlay_and_defaults() {
         reset_state();
@@ -794,6 +840,105 @@ mod tests {
         assert!(
             checked > 0,
             "no bindings found in any preset: the scan is looking in the wrong place"
+        );
+    }
+
+    /// No preset binds two actions to one chord at the same binding site, tool
+    /// scope and brush. Identical bindings resolve first-match-wins by
+    /// registration order, so one of the two actions is silently dead while
+    /// tooltips and the cheat sheet still advertise it. One chord at different
+    /// specificities is the designed override mechanism (`Delete` against
+    /// `layerPanel:Delete`, the clone brush over the sampler), not a collision.
+    ///
+    /// Chords are compared as rendered for each platform, so spellings that
+    /// render alike (`Shift`/`shift`, `$mod`/`ctrl` off mac) collide too.
+    ///
+    /// REGRESSION: Photoshop bound M to `rectSelectTool` and inherited M for
+    /// `mirrorViewH` from the agnostic layer, so Mirror View's M never fired.
+    #[test]
+    fn no_preset_binds_one_chord_to_two_actions() {
+        type ChordKey = (Option<String>, Option<String>, Option<String>, String);
+        let renders: [fn(&Binding) -> String; 2] = [|b| b.other.clone(), |b| b.mac.clone()];
+
+        let mut presets: Vec<Option<&str>> = vec![None];
+        presets.extend(presets_gen::OVERLAYS.iter().map(|(name, _)| Some(*name)));
+
+        let mut collisions = std::collections::BTreeSet::new();
+        for preset in presets {
+            let label = preset.unwrap_or("defaults");
+            let bindings = preset_bindings(preset);
+            for render in renders {
+                let mut owners: BTreeMap<ChordKey, std::collections::BTreeSet<&str>> =
+                    BTreeMap::new();
+                for (id, list) in &bindings {
+                    for b in list {
+                        let key = (b.site.clone(), b.scope.clone(), b.brush.clone(), render(b));
+                        owners.entry(key).or_default().insert(id);
+                    }
+                }
+                for ((site, scope, brush, chord), ids) in owners {
+                    if ids.len() > 1 {
+                        collisions.insert(format!(
+                            "{label}: {site:?}@{scope:?}@{brush:?} `{chord}` -> {ids:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            collisions.is_empty(),
+            "chords bound to more than one action:\n{}",
+            collisions.into_iter().collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    /// Ids each preset leaves unbound on purpose: its editor ships no default
+    /// for them, or spends their key on something else. Rule 3 in
+    /// `defaults.yaml` keeps contested bindings out of the agnostic layer, and
+    /// this is what notices one drifting back in, which the collision test
+    /// cannot when the chord happens to be free under that preset.
+    ///
+    /// REGRESSION: the agnostic layer bound `mirrorViewH` (M) and
+    /// `polygonSelectTool` (Shift+L), so Photoshop and GIMP inherited keys
+    /// their overlays documented as unbound.
+    #[test]
+    fn intentionally_unbound_ids_stay_unbound() {
+        let table: &[(&str, &[&str])] = &[
+            ("Photoshop", &["mirrorViewH"]),
+            ("GIMP", &["mirrorViewH", "polygonSelectTool"]),
+            (
+                "Clip Studio Paint",
+                &[
+                    "resetColors",
+                    "mirrorViewH",
+                    "lassoSelectTool",
+                    "polygonSelectTool",
+                    "pasteInPlace",
+                    "gradientTool",
+                    "resetView",
+                ],
+            ),
+        ];
+
+        let names = base_names();
+        let mut leaked = Vec::new();
+        for (preset, ids) in table {
+            if !names.iter().any(|n| n == preset) {
+                leaked.push(format!("no preset named `{preset}`"));
+                continue;
+            }
+            let bindings = preset_bindings(Some(preset));
+            for id in *ids {
+                if let Some(list) = bindings.get(*id) {
+                    let raw: Vec<&str> = list.iter().map(|b| b.raw.as_str()).collect();
+                    leaked.push(format!("{preset} binds `{id}` to {raw:?}"));
+                }
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "ids meant to be unbound are bound:\n{}",
+            leaked.join("\n")
         );
     }
 }

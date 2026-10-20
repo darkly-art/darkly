@@ -7,11 +7,13 @@
 //! routes through [`BrushPaintTargetExt::commit_brush_dab`], which
 //! calls this pipeline.
 //!
-//! Owns two render pipelines: one targeting `Rgba8Unorm` (raster
-//! layer destinations) and one targeting `R8Unorm` (mask
-//! destinations). Same WGSL; the GPU writes only `.r` to R8 targets.
-//! Per the type-owned-dispatch principle, the format branch lives in
-//! [`CompositePipeline::pipeline`], not at every call site.
+//! Owns four render pipelines: two destinations (`Rgba8Unorm` for raster
+//! layers, `R8Unorm` for masks; same WGSL, the GPU writes only `.r` to
+//! R8 targets) by two foreground formats (float, read by `fs_main`
+//! through the float canvas-copy layout; the packed `r32uint` ground a
+//! compute terminal accumulates, read by `fs_packed` through the uint
+//! layout). Per the type-owned-dispatch principle, both format branches
+//! live in [`CompositePipeline::pipeline`], not at every call site.
 
 use std::any::Any;
 
@@ -47,11 +49,28 @@ pub struct CompositeUniforms {
     /// Stroke opacity of the foreground composited source-over on top.
     /// `0.0` means that slot is absent and is not read.
     pub build_opacity: f32,
+    /// Which law the two slots commit under; see [`CommitLaw`].
+    pub law: u32,
+}
+
+/// The law the commit (and the appearance snapshot) lays a terminal's two
+/// slots under. The numbering is the shader's (`lib/commit_law.wgsl`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitLaw {
+    /// The first slot deposits through the ceiling, the second composites
+    /// source-over on top: the accumulation dial's two halves.
+    Deposit = 0,
+    /// The first slot's alpha is the coverage a finger displaced, the
+    /// second the pigment it brought, laid over `1 - coverage` of the
+    /// background.
+    Move = 1,
 }
 
 pub struct CompositePipeline {
-    pipeline_rgba: wgpu::RenderPipeline,
-    pipeline_r8: wgpu::RenderPipeline,
+    /// `[float, packed]` foregrounds onto an `Rgba8Unorm` destination.
+    pipelines_rgba: [wgpu::RenderPipeline; 2],
+    /// `[float, packed]` foregrounds onto an `R8Unorm` destination.
+    pipelines_r8: [wgpu::RenderPipeline; 2],
     ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
 }
@@ -69,81 +88,104 @@ impl CompositePipeline {
                     concat!(
                         include_str!("../../shaders/source_over.wgsl"),
                         "\n",
+                        include_str!("../../shaders/lib/deposit_ceiling.wgsl"),
+                        "\n",
+                        include_str!("../../shaders/lib/commit_law.wgsl"),
+                        "\n",
                         include_str!("../../shaders/brush/composite.wgsl"),
                     )
                     .into(),
                 ),
             });
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("brush-composite-layout"),
-                // group(1) and group(2) are the two foreground slots,
-                // group(3) the pre-stroke background: all three are a
-                // `texture_2d<f32> + sampler` over the canvas-copy layout,
-                // so a scratch's write side and any of its channels can
-                // each fill either slot.
-                bind_group_layouts: &[
-                    Some(ctx.uniform_bgl),
-                    Some(ctx.canvas_copy_bgl),
-                    Some(ctx.canvas_copy_bgl),
-                    Some(ctx.canvas_copy_bgl),
-                ],
-                immediate_size: 0,
-            });
-        let make = |format: wgpu::TextureFormat, label: &'static str| {
-            ctx.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(label),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        buffers: &[],
-                        compilation_options: Default::default(),
-                    },
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend: Some(wgpu::BlendState::REPLACE),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: Default::default(),
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
+        // group(1) and group(2) are the two foreground slots, group(3)
+        // the pre-stroke background. The background is always a
+        // `texture_2d<f32> + sampler` over the float canvas-copy layout;
+        // the foregrounds are both float or both packed, over the layout
+        // their scratch was built against, so a scratch's write side and
+        // any of its channels can each fill either slot.
+        let foreground_layouts = [
+            (ctx.canvas_copy, "fs_main", "float"),
+            (
+                ctx.canvas_copy_layouts
+                    .for_format(crate::brush::node::PACKED_GROUND_FORMAT),
+                "fs_packed",
+                "packed",
+            ),
+        ];
+        let make = |dest: wgpu::TextureFormat| -> [wgpu::RenderPipeline; 2] {
+            foreground_layouts.map(|(fg, entry, fg_label)| {
+                let layout = ctx
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some(&format!("brush-composite-{fg_label}-layout")),
+                        bind_group_layouts: &[
+                            Some(ctx.uniform_bgl),
+                            Some(&fg.bgl),
+                            Some(&fg.bgl),
+                            Some(&ctx.canvas_copy.bgl),
+                        ],
+                        immediate_size: 0,
+                    });
+                ctx.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some(&format!("brush-composite-{fg_label}-{dest:?}")),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            buffers: &[],
+                            compilation_options: Default::default(),
+                        },
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleList,
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some(entry),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: dest,
+                                blend: Some(wgpu::BlendState::REPLACE),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                            compilation_options: Default::default(),
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    })
+            })
         };
-        let pipeline_rgba = make(wgpu::TextureFormat::Rgba8Unorm, "brush-composite-rgba");
-        let pipeline_r8 = make(wgpu::TextureFormat::R8Unorm, "brush-composite-r8");
+        let pipelines_rgba = make(wgpu::TextureFormat::Rgba8Unorm);
+        let pipelines_r8 = make(wgpu::TextureFormat::R8Unorm);
         let (ring, uniform_bind_group) = ctx.make_uniform_ring::<CompositeUniforms>(
             "brush-composite-uniforms",
             "brush-composite-uniform-bg",
         );
         Self {
-            pipeline_rgba,
-            pipeline_r8,
+            pipelines_rgba,
+            pipelines_r8,
             ring,
             uniform_bind_group,
         }
     }
 
-    /// Look up the composite pipeline for a destination format. Stroke
-    /// scratch composites hit the RGBA variant; stroke→layer commits hit
-    /// the variant matching the layer's storage format.
-    pub fn pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
-        match format {
-            wgpu::TextureFormat::R8Unorm => &self.pipeline_r8,
-            _ => &self.pipeline_rgba,
-        }
+    /// Look up the composite pipeline for a destination format and the
+    /// foregrounds' format. Stroke→layer commits hit the destination
+    /// variant matching the layer's storage format; a uint foreground is
+    /// the packed ground, anything else is sampled as float.
+    pub fn pipeline(
+        &self,
+        dest: wgpu::TextureFormat,
+        foreground: wgpu::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
+        let by_dest = match dest {
+            wgpu::TextureFormat::R8Unorm => &self.pipelines_r8,
+            _ => &self.pipelines_rgba,
+        };
+        let packed = foreground.sample_type(None, None) == Some(wgpu::TextureSampleType::Uint);
+        &by_dest[usize::from(packed)]
     }
 
     pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {

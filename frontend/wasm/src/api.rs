@@ -339,7 +339,7 @@ impl DarklyHandle {
             let p = e.last_render_phases();
             log::warn!(
                 "[frame-perf] slow frame={:.2}ms drain={:.2}ms (pending-img={:.2}ms x{} | fifo={:.2}ms x{}) render={:.2}ms \
-                 [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
+                 [render breakdown: stroke={:.2}ms poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
                 frame_us as f32 / 1000.0,
                 drain_us as f32 / 1000.0,
                 pending_us as f32 / 1000.0,
@@ -347,6 +347,7 @@ impl DarklyHandle {
                 (drain_us.saturating_sub(pending_us)) as f32 / 1000.0,
                 fifo_count,
                 render_us as f32 / 1000.0,
+                p.stroke_us as f32 / 1000.0,
                 p.poll_us as f32 / 1000.0,
                 p.thumb_us as f32 / 1000.0,
                 p.anim_us as f32 / 1000.0,

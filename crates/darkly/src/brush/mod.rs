@@ -1,7 +1,9 @@
 //! Node-graph composable brush engine.
 
+pub mod appearance_snapshot;
 pub mod builtin_brushes;
 pub mod checkpoint_ring;
+pub mod color_jitter;
 pub mod composite_pipeline;
 pub mod curve_math;
 pub mod eval;
@@ -24,6 +26,7 @@ pub mod pipeline;
 pub mod portable;
 pub mod preview_renderer;
 pub mod read_mirror_terminal;
+pub mod resampler;
 pub mod save_points;
 pub mod scalar_binary;
 pub mod scratch;
@@ -203,9 +206,10 @@ pub struct BrushGraphCapabilities {
     /// options bar hides the erase toggle when false.
     pub supports_erase: bool,
     /// Iconify icon to show in the dab slot in place of a baked thumbnail,
-    /// contributed by the first node whose registration declares
-    /// `preview_staging`: content-dependent nodes (clone, blur, smudge,
-    /// liquify) whose still-dab bake renders blank.
+    /// contributed by the first node that stages its preview (its
+    /// evaluator's [`eval::BrushNodeEvaluator::preview_staging`]):
+    /// content-dependent nodes (clone, blur, liquify, the live canvas
+    /// sampler) whose still-dab bake renders blank.
     pub preview_fallback_icon: Option<&'static str>,
     /// Field the stroke preview is rendered over, from the same declaration
     /// the icon comes from. [`PreviewBackdrop::Flat`] for a brush that deposits
@@ -216,8 +220,9 @@ pub struct BrushGraphCapabilities {
 /// Derive [`BrushGraphCapabilities`] from a graph in one registry walk.
 ///
 /// Type-owned dispatch: each node's `register()` declares its own
-/// `supports_erase` / `preview_staging`; nothing here knows which
-/// node types exist. Nodes are visited terminals-first, then ascending
+/// `supports_erase`, and each node instance answers its own preview
+/// staging (the registration's, unless a setting on the instance changes
+/// what it samples); nothing here knows which node types exist. Nodes are visited terminals-first, then ascending
 /// id ([`Graph::nodes`] is a HashMap, so raw iteration order would make
 /// the "first staging wins" rule nondeterministic on multi-staging graphs).
 pub fn graph_capabilities(
@@ -227,14 +232,10 @@ pub fn graph_capabilities(
     let mut nodes: Vec<_> = graph
         .nodes()
         .values()
-        .filter_map(|n| {
-            registry
-                .get(&n.type_id)
-                .map(|reg| (n.id.clone(), &reg.node))
-        })
+        .filter_map(|n| registry.get(&n.type_id).map(|reg| (n, reg)))
         .collect();
-    nodes.sort_by(|(a_id, a_reg), (b_id, b_reg)| {
-        (!a_reg.is_terminal, &a_id.0).cmp(&(!b_reg.is_terminal, &b_id.0))
+    nodes.sort_by(|(a, a_reg), (b, b_reg)| {
+        (!a_reg.node.is_terminal, &a.id.0).cmp(&(!b_reg.node.is_terminal, &b.id.0))
     });
 
     let mut caps = BrushGraphCapabilities {
@@ -243,11 +244,15 @@ pub fn graph_capabilities(
         preview_backdrop: PreviewBackdrop::Flat,
     };
     let mut staged = false;
-    for (_, reg) in nodes {
-        if reg.is_terminal && !reg.supports_erase {
+    for (node, reg) in nodes {
+        if reg.node.is_terminal && !reg.node.supports_erase {
             caps.supports_erase = false;
         }
-        if let (false, Some(staging)) = (staged, reg.preview_staging) {
+        if staged {
+            continue;
+        }
+        let staging = (reg.evaluator)().preview_staging(&node.ports, reg.node.preview_staging);
+        if let Some(staging) = staging {
             caps.preview_fallback_icon = Some(staging.icon);
             caps.preview_backdrop = staging.backdrop;
             staged = true;
@@ -344,7 +349,10 @@ pub fn compile_graph(
         // Build a fresh evaluators map for the compiler; the runner
         // owns the live one. Cheap (just trait-object constructors).
         let compile_evals = registry.evaluators();
-        let compiled = wgsl::compile_brush_to_wgsl(&rewritten, &plan, &compile_evals)
+        let terminal = runner
+            .terminal_registration()
+            .ok_or_else(|| "graph has a terminal step with no registration".to_string())?;
+        let compiled = wgsl::compile_brush_to_wgsl(&rewritten, &plan, &compile_evals, terminal)
             .map_err(|e| format!("paint WGSL compilation failed: {e}"))?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));
     }

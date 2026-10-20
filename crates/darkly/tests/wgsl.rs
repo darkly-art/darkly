@@ -1,5 +1,5 @@
 //! Framework tests for `crate::brush::wgsl`: the brush-graph
-//! → WGSL fragment shader compiler.
+//! → WGSL stroke shader compiler.
 //!
 //! Asserts:
 //!
@@ -29,12 +29,24 @@ fn evals() -> HashMap<String, Box<dyn BrushNodeEvaluator>> {
     darkly::brush::registry().evaluators()
 }
 
+/// The registration of `graph`'s terminal: what `compile_graph` hands the
+/// compiler for the stroke skeleton and the scratch format.
+fn terminal_of(graph: &Graph<BrushWireType>) -> &'static darkly::brush::BrushNodeRegistration {
+    let reg = registry();
+    graph
+        .nodes()
+        .values()
+        .find_map(|n| reg.get(&n.type_id).filter(|r| r.is_terminal))
+        .expect("graph has a registered terminal")
+}
+
 #[test]
 fn empty_graph_errors_cleanly() {
     let graph = Graph::<BrushWireType>::new();
     let reg = registry();
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let err = compile_brush_to_wgsl(&graph, &plan, &evals())
+    let paint = registry().get("paint").expect("paint registered");
+    let err = compile_brush_to_wgsl(&graph, &plan, &evals(), paint)
         .expect_err("empty graph has no terminal, must error");
     assert!(matches!(err, CompileError::NoTerminal));
 }
@@ -51,10 +63,16 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
         .expect("Rough Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
-    let compiled =
-        compile_brush_to_wgsl(&rough_ink.metadata.graph, &plan, &evals()).expect("compiles");
-    assert!(compiled.stroke_wgsl.contains("@fragment"));
-    assert!(compiled.stroke_wgsl.contains("fn fs_main"));
+    let compiled = compile_brush_to_wgsl(
+        &rough_ink.metadata.graph,
+        &plan,
+        &evals(),
+        terminal_of(&rough_ink.metadata.graph),
+    )
+    .expect("compiles");
+    assert!(compiled.stroke_wgsl.contains("@compute"));
+    assert!(compiled.stroke_wgsl.contains("fn cs_main"));
+    assert!(!compiled.stroke_wgsl.contains("@fragment"));
     assert!(compiled.stroke_wgsl.contains("shape_r_theta")); // perlin shape
     assert!(compiled.stroke_wgsl.contains("DabRecord"));
     assert!(compiled.stroke_wgsl.contains("Uniforms"));
@@ -87,8 +105,13 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
         .expect("Rough Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
-    let compiled =
-        compile_brush_to_wgsl(&rough_ink.metadata.graph, &plan, &evals()).expect("compiles");
+    let compiled = compile_brush_to_wgsl(
+        &rough_ink.metadata.graph,
+        &plan,
+        &evals(),
+        terminal_of(&rough_ink.metadata.graph),
+    )
+    .expect("compiles");
     for (label, wgsl) in [
         ("stroke_wgsl", &compiled.stroke_wgsl),
         ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
@@ -165,7 +188,8 @@ fn stamp_rotation_counteracts_view_rotation() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
 
     for (label, wgsl) in [
         ("stroke_wgsl", &compiled.stroke_wgsl),
@@ -214,8 +238,20 @@ fn topology_hash_is_stable_for_identical_graphs() {
     let reg = registry();
     let plan_a = compile(&rough_a.metadata.graph, reg.as_map()).unwrap();
     let plan_b = compile(&rough_b.metadata.graph, reg.as_map()).unwrap();
-    let a = compile_brush_to_wgsl(&rough_a.metadata.graph, &plan_a, &evals()).unwrap();
-    let b = compile_brush_to_wgsl(&rough_b.metadata.graph, &plan_b, &evals()).unwrap();
+    let a = compile_brush_to_wgsl(
+        &rough_a.metadata.graph,
+        &plan_a,
+        &evals(),
+        terminal_of(&rough_a.metadata.graph),
+    )
+    .unwrap();
+    let b = compile_brush_to_wgsl(
+        &rough_b.metadata.graph,
+        &plan_b,
+        &evals(),
+        terminal_of(&rough_b.metadata.graph),
+    )
+    .unwrap();
     assert_eq!(a.topology_hash, b.topology_hash);
     assert_eq!(a.dab_record_size, b.dab_record_size);
     assert_eq!(a.uniform_size, b.uniform_size);
@@ -261,7 +297,7 @@ fn extent_protocol_composes_along_chain() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     // amplitude port has natural_range = (0.0, 0.5); the wire bumps
     // factor to 1.5.
     assert!(
@@ -319,7 +355,7 @@ fn extent_is_unchanged_by_aspect_anisotropy() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     // base = 1 (sine, amplitude 0), and anisotropy contributes nothing.
     assert!(
         (compiled.brush_extent_factor - 1.0).abs() < 1e-3,
@@ -340,7 +376,7 @@ fn extent_is_unchanged_by_aspect_anisotropy() {
         },
     );
     let plan = compile(&unwired, reg.as_map()).unwrap();
-    let bare = compile_brush_to_wgsl(&unwired, &plan, &evals()).unwrap();
+    let bare = compile_brush_to_wgsl(&unwired, &plan, &evals(), terminal_of(&unwired)).unwrap();
     assert!(
         (compiled.brush_extent_factor - bare.brush_extent_factor).abs() < 1e-4,
         "wiring `aspect` changed the extent: {} wired vs {} unwired",
@@ -397,7 +433,7 @@ fn extent_neutral_when_aspect_unwired() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     assert!(
         (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
         "unwired aspect (default 1.0) must leave factor at 1.5, got {}",
@@ -429,7 +465,7 @@ fn extent_default_identity_when_no_shape() {
         )
         .unwrap();
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     assert!(
         (compiled.brush_extent_factor - 1.0).abs() < 1e-6,
         "no shape upstream, factor must be 1.0, got {}",
@@ -464,7 +500,7 @@ fn paint_only_graph_falls_through_to_disc() {
         )
         .unwrap();
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals())
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
         .expect("paint with no rgba wire still compiles");
     assert!(compiled.stroke_wgsl.contains("local_dist"));
     assert!(compiled
@@ -486,8 +522,13 @@ fn clone_brush_reserves_a_live_source_slot() {
         .expect("Clone brush registered");
     let reg = registry();
     let plan = compile(&clone.metadata.graph, reg.as_map()).unwrap();
-    let compiled =
-        compile_brush_to_wgsl(&clone.metadata.graph, &plan, &evals()).expect("clone compiles");
+    let compiled = compile_brush_to_wgsl(
+        &clone.metadata.graph,
+        &plan,
+        &evals(),
+        terminal_of(&clone.metadata.graph),
+    )
+    .expect("clone compiles");
 
     assert_eq!(
         compiled.graph_sources,
@@ -587,7 +628,8 @@ fn noise_static_color_bakes_to_single_sample() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("noise compiles");
 
     // Baked: no per-fragment fBm call site (the lib's `fn fbm_tile`
     // definition is always concatenated, so match the call prefix).
@@ -652,7 +694,8 @@ fn noise_wired_field_falls_back_to_live_kernel() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("wired noise compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("wired noise compiles");
 
     assert!(
         compiled.stroke_wgsl.contains("fbm_tile(noise"),
@@ -703,7 +746,8 @@ fn noise_static_value_bakes_grayscale() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise value compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("noise value compiles");
 
     // Baked: one grayscale tile, one sample, no live fBm kernel.
     assert!(!compiled.stroke_wgsl.contains("fbm_tile(noise"));
@@ -761,7 +805,8 @@ fn noise_both_outputs_share_one_coord() {
             .unwrap();
     }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("noise both compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("noise both compiles");
 
     // Two baked tiles (grayscale + RGBA), each sampled once, off one coord.
     assert!(!compiled.stroke_wgsl.contains("fbm_tile(noise"));
@@ -813,7 +858,8 @@ fn polygon_node_compiles_and_emits_sdf() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("polygon compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("polygon compiles");
     for (label, w) in [
         ("stroke_wgsl", &compiled.stroke_wgsl),
         ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
@@ -981,7 +1027,7 @@ fn polygon_extent_is_unchanged_by_a_wired_squeeze() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     assert!(
         (compiled.brush_extent_factor - 1.0).abs() < 1e-3,
         "wired squeeze must leave the bbox at the disc (1.0), got {}",
@@ -1013,7 +1059,8 @@ fn polygon_is_view_rotation_invariant() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("polygon compiles");
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph))
+        .expect("polygon compiles");
     for (label, w) in [
         ("stroke_wgsl", &compiled.stroke_wgsl),
         ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
@@ -1399,7 +1446,8 @@ fn noise_canvas_space_is_byte_identical() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     // `scale` is a Scalar *input* read via `cctx.input("scale").as_f32()`, and
     // `sample_frame` interpolates the scale expression parenthesized, so an
     // unwired 32.0 default emits `(32.000000)`. The numeric literal is
@@ -1453,7 +1501,8 @@ fn settings_size_source_reaches_compiled_brush() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
 
     // `noise.scale` now divides by the wired size dab field, not the 32.0
     // default literal, which proves the source flows through the compiled path.
@@ -1494,7 +1543,8 @@ fn noise_scale_wired_emits_upstream_expr_and_validates() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     // The literal default must be gone: the divide now reads the wired dab
     // field (`d.n0_pressure` or similar), parenthesized.
     assert!(
@@ -1531,7 +1581,8 @@ fn invert_wired_emits_complement_and_validates() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     assert!(
         !compiled.stroke_wgsl.contains("target_pos / (32.000000)"),
         "wired scale must not fall back to the literal default",
@@ -1569,7 +1620,8 @@ fn noise_octaves_wired_emits_i32_clamp_and_validates() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     assert!(
         compiled.stroke_wgsl.contains("clamp(i32(round("),
         "wired octaves must emit an i32 round+clamp guard",
@@ -1598,7 +1650,8 @@ fn noise_dab_space_emits_oriented_frame_and_variation() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     let w = &compiled.stroke_wgsl;
     assert!(
         w.contains("dab_local"),
@@ -1639,7 +1692,8 @@ fn noise_dab_reconstructs_pixels_from_radius() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     assert!(
         compiled
             .stroke_wgsl
@@ -1668,7 +1722,8 @@ fn noise_rotation_input_wires_per_dab() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
     assert!(
         compiled
             .stroke_wgsl
@@ -1708,15 +1763,21 @@ fn image_dab_tip_needs_no_shape_node() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+    let compiled =
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles");
+    assert!(
+        compiled.stroke_wgsl.contains("@compute") && compiled.stroke_wgsl.contains("fn cs_main"),
+        "stroke_wgsl must be a complete compute shader"
+    );
+    assert!(
+        compiled.cursor_preview_wgsl.contains("@fragment")
+            && compiled.cursor_preview_wgsl.contains("fn fs_main"),
+        "cursor_preview_wgsl must be a complete fragment shader"
+    );
     for (label, w) in [
         ("stroke_wgsl", &compiled.stroke_wgsl),
         ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
     ] {
-        assert!(
-            w.contains("@fragment") && w.contains("fn fs_main"),
-            "{label} must be a complete fragment shader"
-        );
         assert!(
             w.contains("dab_local"),
             "{label} image tip must sample the oriented Dab frame"
@@ -1773,7 +1834,7 @@ fn polygon_extent_is_the_rounded_silhouette_support() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     // a = 1 − 0.9·0.5 = 0.55, cr = ρ = 0.5. Under the contraction `diag(a, 1)`
     // the worst mapped vertex magnitude is 0.80933, so the support is
     // 0.5·0.80933 + 0.5. Below 1: the squeezed silhouette is tighter than the
@@ -1814,7 +1875,7 @@ fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
         ],
     );
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).unwrap();
     // cr·1 + ρ = 0.5 + 0.5. Tight rather than conservative: `diag(a, 1)`
     // contracts unit base vertices, so the largest magnitude any unknown axis
     // can produce is exactly 1, attained when a vertex lands on the unsqueezed
@@ -1826,17 +1887,19 @@ fn polygon_extent_falls_back_when_squeeze_axis_is_wired() {
     );
 }
 
-/// What the accumulation dial compiles to, end to end and without a GPU:
-/// the scratch's blend state, whether a second accumulation is declared,
-/// and what the fragment body returns.
+/// A brush's authored `buildup` decides, when the brush compiles, which law
+/// the ground accumulates under, whether a second accumulation is declared,
+/// and what the compute body stores.
 ///
-/// At either end one share is zero, so the pass is a single target under
-/// that end's law and the body returns a bare vec4, exactly as it did
-/// before the dial existed. Between, both halves exist: the scratch keeps
-/// the ceiling and the `build` channel carries the source-over half.
+/// At either end one share is zero, so the pass stores into the ground
+/// alone under that end's law. Between, both halves exist: the ground takes
+/// the wash share and the `build` storage channel carries the build share.
+/// The hover preview stays a single-output fragment module throughout.
 #[test]
-fn paint_terminal_compiles_the_accumulation_dial_to_targets_and_a_body() {
-    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
+fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
+    use darkly::brush::node::{DabPass, PACKED_GROUND_FORMAT};
+    use darkly::brush::scratch::ChannelUse;
+    use darkly::brush::wgsl::StorageBinding;
 
     let mut brush = darkly::brush::builtin_brushes::all()
         .into_iter()
@@ -1853,21 +1916,59 @@ fn paint_terminal_compiles_the_accumulation_dial_to_targets_and_a_body() {
 
     let compile_it = |graph: &Graph<BrushWireType>| {
         let plan = compile(graph, registry().as_map()).unwrap();
-        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+        compile_brush_to_wgsl(graph, &plan, &evals(), terminal_of(graph)).expect("compiles")
+    };
+    let ground = StorageBinding {
+        binding: 2,
+        name: "ground",
+        format: PACKED_GROUND_FORMAT,
+    };
+    // A ground's read-modify-write: the law runs on the loaded texel and
+    // the packed result is stored only where it differs from what was
+    // there, so a refused dab costs a load and no store.
+    let guarded_store = |target: &str, law: &str, src: &str| {
+        format!(
+            "    let {target}_was = textureLoad({target}, layer_px);\n\
+             \x20   let {target}_now = pack_ground({law}({src}, unpack_ground({target}_was)));\n\
+             \x20   if ({target}_now.r != {target}_was.r) {{\n\
+             \x20       textureStore({target}, layer_px, {target}_now);\n\
+             \x20   }}\n"
+        )
+    };
+    let build_store = |src: &str| guarded_store("build", "accumulate_build", src);
+    let wash_store = |src: &str| guarded_store("ground", "accumulate_wash", src);
+    let ground_store = |src: &str| guarded_store("ground", "accumulate_build", src);
+    // A thread whose dab has no coverage at its pixel returns before it
+    // touches any ground: the first texture load comes after the return.
+    let returns_before_any_load = |wgsl: &str| {
+        let body = &wgsl[wgsl.find("fn cs_main").expect("compute entry")..];
+        let ret = body
+            .find("    if (rgba.a * sel == 0.0) {\n        return;\n    }\n")
+            .expect("empty-coverage return");
+        let load = body.find("textureLoad(").expect("ground load");
+        ret < load
     };
 
     // Rough Ink never mentions `buildup`, so it is on the registration
-    // default. That must be the pre-existing law, bit for bit.
+    // default: build-up alone, stored into the ground.
     let default = compile_it(graph);
-    assert_eq!(
-        default.dab_blend, PREMULTIPLIED_SOURCE_OVER,
-        "a graph that never mentions `buildup` must keep painting as it always did"
-    );
+    assert_eq!(default.dab_pass, DabPass::DispatchPerDab);
+    assert_eq!(default.scratch_format, PACKED_GROUND_FORMAT);
+    assert_eq!(default.storage_bindings(), [ground]);
     assert!(default.channels.is_empty());
     assert!(default
         .stroke_wgsl
-        .contains("return rgba * build_flow * sel;"));
+        .contains("let src = rgba * build_flow * sel;"));
+    assert!(default.stroke_wgsl.contains(&ground_store("src")));
+    assert!(!default.stroke_wgsl.contains(&wash_store("src")));
+    assert!(returns_before_any_load(&default.stroke_wgsl));
+    naga_validate(&default.stroke_wgsl, "paint build-up stroke");
     assert!(!default.stroke_wgsl.contains("FsOut"));
+    assert!(!default.stroke_wgsl.contains("@fragment"));
+    // The laws reach the module through the terminal's decls, with the
+    // ceiling they share with the commit.
+    assert!(default.stroke_wgsl.contains("fn accumulate_build("));
+    assert!(default.stroke_wgsl.contains("fn ceiling_t("));
 
     let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
         graph
@@ -1884,36 +1985,122 @@ fn paint_terminal_compiles_the_accumulation_dial_to_targets_and_a_body() {
 
     set(graph, 0.0);
     let wash = compile_it(graph);
-    assert_eq!(wash.dab_blend, COVERAGE_CEILING);
+    assert_eq!(wash.storage_bindings(), [ground]);
     assert!(wash.channels.is_empty());
-    assert!(wash.stroke_wgsl.contains("return rgba * wash_flow * sel;"));
+    assert!(wash
+        .stroke_wgsl
+        .contains("let src = rgba * wash_flow * sel;"));
+    assert!(wash.stroke_wgsl.contains(&wash_store("src")));
+    assert!(returns_before_any_load(&wash.stroke_wgsl));
+    naga_validate(&wash.stroke_wgsl, "paint wash stroke");
     assert!(!wash.stroke_wgsl.contains("build_flow"));
     assert!(!wash.stroke_wgsl.contains("FsOut"));
 
     set(graph, 0.5);
     let mid = compile_it(graph);
     assert_eq!(
-        mid.dab_blend, COVERAGE_CEILING,
-        "the scratch stays the washing half inside the dial"
+        mid.storage_bindings(),
+        [
+            ground,
+            StorageBinding {
+                binding: 3,
+                name: "build",
+                format: PACKED_GROUND_FORMAT,
+            }
+        ],
+        "inside the dial the build half gets its own ground beside the scratch"
     );
     assert_eq!(mid.channels.len(), 1);
     assert_eq!(mid.channels[0].name, "build");
-    assert_eq!(mid.channels[0].format, wgpu::TextureFormat::Rgba8Unorm);
-    assert_eq!(mid.channels[0].blend, PREMULTIPLIED_SOURCE_OVER);
-    assert!(mid.stroke_wgsl.contains(
-        "return FsOut(rgba * wash_flow * sel * 0.500000, rgba * build_flow * sel * 0.500000);"
-    ));
-    // The preview skeleton is single-output, so the preview body must not
-    // carry the two-accumulation return.
+    assert_eq!(mid.channels[0].format, PACKED_GROUND_FORMAT);
+    assert_eq!(mid.channels[0].kind, ChannelUse::Storage);
+    assert!(mid
+        .stroke_wgsl
+        .contains("@group(1) @binding(3) var build: texture_storage_2d<r32uint, read_write>;"));
+    assert!(mid
+        .stroke_wgsl
+        .contains("let wash_src = rgba * wash_flow * sel * 0.500000;"));
+    assert!(mid
+        .stroke_wgsl
+        .contains("let build_src = rgba * build_flow * sel * 0.500000;"));
+    assert!(mid.stroke_wgsl.contains(&wash_store("wash_src")));
+    assert!(mid.stroke_wgsl.contains(&build_store("build_src")));
+    assert_eq!(mid.stroke_wgsl.matches("textureStore(").count(), 2);
+    assert!(returns_before_any_load(&mid.stroke_wgsl));
+    naga_validate(&mid.stroke_wgsl, "paint mid-dial stroke");
+    assert!(!mid.stroke_wgsl.contains("FsOut"));
+    // The preview skeleton is a single-output fragment module and has no
+    // ground to store into.
+    assert!(mid.cursor_preview_wgsl.contains("@fragment"));
+    assert!(mid.cursor_preview_wgsl.contains("fn fs_main"));
+    assert!(!mid.cursor_preview_wgsl.contains("textureStore"));
     assert!(!mid.cursor_preview_wgsl.contains("FsOut"));
     assert!(mid
         .cursor_preview_wgsl
         .contains("mix(wash_flow, build_flow, 0.500000)"));
 
     set(graph, 0.25);
-    assert!(compile_it(graph).stroke_wgsl.contains(
-        "return FsOut(rgba * wash_flow * sel * 0.750000, rgba * build_flow * sel * 0.250000);"
-    ));
+    let quarter = compile_it(graph);
+    assert!(quarter
+        .stroke_wgsl
+        .contains("let wash_src = rgba * wash_flow * sel * 0.750000;"));
+    assert!(quarter
+        .stroke_wgsl
+        .contains("let build_src = rgba * build_flow * sel * 0.250000;"));
+}
+
+/// An instanced terminal keeps the fragment stroke skeleton: the port of
+/// `paint` to a compute pass changes nothing for watercolor, smudge, blur
+/// or liquify, whose registrations still declare an instanced draw.
+#[test]
+fn watercolor_keeps_the_fragment_stroke_skeleton() {
+    use darkly::brush::node::DabPass;
+
+    let brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Smooth Watercolor")
+        .expect("Smooth Watercolor brush registered");
+    let graph = &brush.metadata.graph;
+    let plan = compile(graph, registry().as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(graph, &plan, &evals(), terminal_of(graph)).expect("compiles");
+    assert_eq!(compiled.dab_pass, DabPass::InstancedDraw);
+    assert!(compiled.storage_bindings().is_empty());
+    assert!(compiled.stroke_wgsl.contains("@fragment"));
+    assert!(compiled.stroke_wgsl.contains("fn fs_main"));
+    assert!(compiled.stroke_wgsl.contains("FsOut"));
+    assert!(!compiled.stroke_wgsl.contains("@compute"));
+    assert!(!compiled.stroke_wgsl.contains("texture_storage_2d"));
+}
+
+/// A compute pass has no colour targets, so a terminal that dispatches per
+/// dab cannot declare an attachment channel: the compile refuses, naming
+/// the channel, rather than assembling a module the pipeline build would
+/// reject.
+#[test]
+fn attachment_channel_under_dispatch_per_dab_is_rejected() {
+    use darkly::brush::node::DabPass;
+
+    // Watercolor declares its `deposit` accumulation as an attachment;
+    // compiling it as if its registration dispatched per dab is the case.
+    let brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Smooth Watercolor")
+        .expect("Smooth Watercolor brush registered");
+    let graph = &brush.metadata.graph;
+    let plan = compile(graph, registry().as_map()).unwrap();
+    let mut terminal = terminal_of(graph).clone();
+    terminal.dab_pass = DabPass::DispatchPerDab;
+    let err = compile_brush_to_wgsl(graph, &plan, &evals(), &terminal)
+        .expect_err("an attachment channel has no target in a compute pass");
+    match err {
+        CompileError::NodeNotCompilable { type_id, reason } => {
+            assert_eq!(type_id, "watercolor");
+            assert!(reason.contains("`deposit`"), "{reason}");
+            assert!(reason.contains("ChannelUse::Storage"), "{reason}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 /// Each flow drives its own half, and neither is emitted where its half
@@ -1939,7 +2126,7 @@ fn each_flow_scales_its_own_half() {
         .expect("paint build_flow port");
     let compile_it = |graph: &Graph<BrushWireType>| {
         let plan = compile(graph, registry().as_map()).unwrap();
-        compile_brush_to_wgsl(graph, &plan, &evals()).expect("compiles")
+        compile_brush_to_wgsl(graph, &plan, &evals(), terminal_of(graph)).expect("compiles")
     };
     let set = |graph: &mut Graph<BrushWireType>, dial: f32| {
         graph
@@ -2049,18 +2236,17 @@ fn the_buildup_port_cannot_be_wired() {
 /// to, and all three shapes are reachable from YAML. Checked without a GPU.
 ///
 /// The three cases are the whole of the compile-time read. At the top of the
-/// dial the scratch composites and is the only accumulation. Strictly inside
-/// it, the scratch carries the washing half with `Max` and the stacking half
-/// gets a declared channel of its own. At the bottom there is no stacking
-/// half to declare. A brush that never mentions the port must land on the
-/// registration default, which is the top.
+/// dial the ground composites and is the only accumulation. Strictly inside
+/// it, the ground carries the washing half under the per-dab ceiling and
+/// the stacking half gets a declared channel of its own. At the bottom there
+/// is no stacking half to declare. A brush that never mentions the port must
+/// land on the registration default, which is the top.
 ///
 /// Driven from a fixture rather than from shipped brushes: which law a given
 /// brush is tuned to is art, and pinning it here would mean an artist could
 /// not change their mind without a test failing. The shapes are engine.
 #[test]
 fn authored_buildup_picks_the_accumulation_shape() {
-    use darkly::brush::node::{COVERAGE_CEILING, PREMULTIPLIED_SOURCE_OVER};
     use darkly::brush::portable::PortableBrush;
 
     const ANALYTIC_DISC: &str = include_str!("fixtures/analytic_disc.yaml");
@@ -2079,34 +2265,46 @@ fn authored_buildup_picks_the_accumulation_shape() {
             .into_graph(darkly::brush::registry())
             .expect("fixture builds");
         let plan = compile(&graph, registry().as_map()).unwrap();
-        compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles")
+        compile_brush_to_wgsl(&graph, &plan, &evals(), terminal_of(&graph)).expect("compiles")
+    };
+
+    // The law a ground accumulates under, as the line that computes its
+    // next texel.
+    let stores = |compiled: &darkly::brush::wgsl::CompiledBrush, target: &str, law: &str| {
+        compiled
+            .stroke_wgsl
+            .contains(&format!("let {target}_now = pack_ground({law}("))
     };
 
     let top = compiled_at(Some(1.0));
-    assert_eq!(
-        top.dab_blend, PREMULTIPLIED_SOURCE_OVER,
-        "at the top of the dial the scratch composites"
+    assert!(
+        stores(&top, "ground", "accumulate_build"),
+        "at the top of the dial the ground composites"
     );
     assert!(
         top.channels.is_empty(),
-        "at the top of the dial the scratch is the only accumulation"
+        "at the top of the dial the ground is the only accumulation"
     );
 
     let middle = compiled_at(Some(0.5));
-    assert_eq!(
-        middle.dab_blend, COVERAGE_CEILING,
-        "inside the dial the scratch carries the washing half"
+    assert!(
+        stores(&middle, "ground", "accumulate_wash"),
+        "inside the dial the ground carries the washing half"
     );
     assert_eq!(
         middle.channels.iter().map(|c| c.name).collect::<Vec<_>>(),
         ["build"],
         "inside the dial the stacking half needs its own accumulation"
     );
+    assert!(
+        stores(&middle, "build", "accumulate_build"),
+        "inside the dial the stacking half composites into its channel"
+    );
 
     let bottom = compiled_at(Some(0.0));
-    assert_eq!(
-        bottom.dab_blend, COVERAGE_CEILING,
-        "at the bottom of the dial the scratch is the washing half"
+    assert!(
+        stores(&bottom, "ground", "accumulate_wash"),
+        "at the bottom of the dial the ground is the washing half"
     );
     assert!(
         bottom.channels.is_empty(),
@@ -2115,12 +2313,7 @@ fn authored_buildup_picks_the_accumulation_shape() {
 
     let unset = compiled_at(None);
     assert_eq!(
-        unset.dab_blend, top.dab_blend,
-        "a brush that never mentions the port keeps the registration default"
-    );
-    assert_eq!(
-        unset.channels.len(),
-        top.channels.len(),
+        unset.stroke_wgsl, top.stroke_wgsl,
         "a brush that never mentions the port keeps the registration default"
     );
 }

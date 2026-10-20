@@ -47,7 +47,7 @@ pub struct NodeRegistration<W: WireKind> {
     pub is_terminal: bool,
     /// Whether this terminal honours erase mode (paint vs. erase).
     /// Defaults `true`; smear/displace terminals that sample existing
-    /// pixels (smudge, watercolor, liquify) override to `false` so the
+    /// pixels (blur, watercolor, liquify) override to `false` so the
     /// brush-tool options bar hides the erase toggle.
     pub supports_erase: bool,
     /// How a preview of any brush containing this node must be staged. Set by

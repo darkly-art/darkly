@@ -105,6 +105,7 @@ fn stripe(engine: &mut DarklyEngine, layer: LayerId) {
     let json = serde_json::to_string(&graph).expect("serialize graph");
     install(engine, &json, "the fixture");
     for x in (8..W - 8).step_by(8) {
+        engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer).unwrap();
         for i in 0..12 {
             engine.stroke_to(StrokeOp::BrushStroke {
@@ -116,10 +117,6 @@ fn stripe(engine: &mut DarklyEngine, layer: LayerId) {
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 0.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();
@@ -135,6 +132,7 @@ fn stroke(engine: &mut DarklyEngine, layer: LayerId) {
 }
 
 fn stroke_at(engine: &mut DarklyEngine, layer: LayerId, y: f32, rgb: [f32; 3]) {
+    engine.set_foreground_color([rgb[0], rgb[1], rgb[2], 1.0]);
     engine.begin_stroke(layer).unwrap();
     for i in 0..24 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -146,10 +144,6 @@ fn stroke_at(engine: &mut DarklyEngine, layer: LayerId, y: f32, rgb: [f32; 3]) {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: rgb[0],
-            cg: rgb[1],
-            cb: rgb[2],
-            ca: 1.0,
         });
     }
     engine.end_stroke();

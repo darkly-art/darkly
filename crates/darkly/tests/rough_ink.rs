@@ -141,12 +141,14 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
+    let runner = compile_graph(&graph).expect("graph compiles");
     let stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
         CANVAS,
         &pipelines,
-        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+        runner.scratch_format(),
+        runner.dab_pass(),
     );
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
@@ -160,8 +162,6 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
     queue.submit([enc.finish()]);
-
-    let runner = compile_graph(&graph).expect("graph compiles");
 
     Harness {
         device,
@@ -217,7 +217,7 @@ macro_rules! make_ctx {
 impl Harness {
     fn begin_stroke(&mut self) {
         let mut ctx = make_ctx!(self, "rough-ink-test-begin");
-        self.runner.begin_stroke(&mut ctx);
+        self.runner.begin_stroke(&mut ctx, None);
         self.queue.submit([ctx.encoder.finish()]);
     }
 
@@ -370,25 +370,6 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let stroke_buffer = StrokeBuffer::new(
-        &device,
-        CANVAS,
-        CANVAS,
-        &pipelines,
-        darkly::brush::node::COLOR_SCRATCH_FORMAT,
-    );
-    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
-        &layer_texture,
-        &layer_view,
-        wgpu::TextureFormat::Rgba8Unorm,
-        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
-    );
-    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("rough-ink-builtin-pre-stroke"),
-    });
-    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
-    queue.submit([enc.finish()]);
-
     // Override the brush's size port so the dab fits in the test
     // canvas, since the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
@@ -402,6 +383,26 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         .unwrap();
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        CANVAS,
+        CANVAS,
+        &pipelines,
+        runner.scratch_format(),
+        runner.dab_pass(),
+    );
+    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+        &layer_texture,
+        &layer_view,
+        wgpu::TextureFormat::Rgba8Unorm,
+        darkly::coord::CanvasRect::from_xywh(0, 0, CANVAS, CANVAS),
+    );
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("rough-ink-builtin-pre-stroke"),
+    });
+    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
+    queue.submit([enc.finish()]);
+
     let compiled = runner.compiled_brush().expect("compiled brush attached");
     // Rough Ink wires `random → circle.amplitude` (natural_range max
     // = 0.5) so the brush extent factor composes to 1.5.

@@ -17,7 +17,7 @@ import { validateOverrides } from './validate';
  * Three layers, all sourced from Rust at runtime:
  *
  *   defaults    ← editor-AGNOSTIC defaults.yaml (always applied)
- *   overlay     ← one of {Krita, Photoshop, GIMP}, selected by `app.baseSettings`
+ *   overlay     ← one editor overlay from `presets/`, selected by `app.baseSettings`
  *   user        ← personal customizations on top
  *
  * Resolution: `user[key] ?? overlay[active][key] ?? defaults[key]`.

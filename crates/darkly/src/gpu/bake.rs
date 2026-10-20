@@ -55,6 +55,7 @@ impl Compositor {
             self.canvas_height,
             self.canvas_origin,
             bake_parent,
+            1,
         );
         self.group_state.insert(bake_parent, gs);
 

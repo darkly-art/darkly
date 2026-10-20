@@ -367,14 +367,44 @@ impl TextProps {
     }
 }
 
-/// What a [`VectorObject`] draws. Two variants and no growth axis: shapes are
-/// plain [`BezPath`]s (rectangles/ellipses convert into one), and the only
-/// editable, non-path source is [`TextProps`]. No trait, no registry: a third
-/// kind would only ever be another bespoke editable source, added here.
+/// A parametric shape: a generator family plus its schema-ordered parameter
+/// values, drawn into a local box. The path is derived at scene-build time
+/// ([`crate::shape::tessellate`]) and never stored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapeProps {
+    /// Stable `type_id` from [`crate::shape::registry`] (`"polygon"`, ...).
+    pub family: String,
+    /// Parameter values matching the family's `ParamDef` schema, in order.
+    pub params: Vec<ParamValue>,
+    /// The shape's local bounding box is `[0, width] x [0, height]`, in
+    /// object-local pixels. The object affine places and transforms it.
+    pub width: f32,
+    pub height: f32,
+}
+
+/// What a [`VectorObject`] draws. Each variant is a bespoke kind of source,
+/// and the enum has no growth axis: a baked outline is a [`BezPath`], editable
+/// text is [`TextProps`], and a parametric shape is [`ShapeProps`]. A shape is
+/// not a `Path` because its generator parameters stay editable after
+/// placement, which a baked path cannot offer; the variation across shape
+/// families lives behind [`ShapeProps::family`], not in further variants.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ObjectSource {
     Path(BezPath),
     Text(TextProps),
+    Shape(ShapeProps),
+}
+
+impl ObjectSource {
+    /// The geometry this source fills and strokes, in object-local
+    /// coordinates. `None` for text, which draws glyph runs instead.
+    pub fn outline(&self) -> Option<std::borrow::Cow<'_, BezPath>> {
+        match self {
+            ObjectSource::Path(p) => Some(std::borrow::Cow::Borrowed(p)),
+            ObjectSource::Shape(s) => Some(std::borrow::Cow::Owned(crate::shape::tessellate(s))),
+            ObjectSource::Text(_) => None,
+        }
+    }
 }
 
 /// Stable identity of a [`VectorObject`] within its owning [`VectorLayer`].
@@ -383,6 +413,7 @@ pub enum ObjectSource {
 /// alias a stale reference. Object addressing uses this rather than a list
 /// index, which would shift under reorder/insert/delete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ObjectId(pub u64);
 
 impl ObjectId {
@@ -421,10 +452,27 @@ impl VectorObject {
             source: ObjectSource::Text(text),
         }
     }
+
+    /// A shape object placed by `transform`, with an optional solid fill and
+    /// border. The id is left [`ObjectId::UNASSIGNED`] until pushed.
+    pub fn shape(
+        shape: ShapeProps,
+        transform: Affine,
+        fill: Option<Brush>,
+        stroke: Option<(Stroke, Brush)>,
+    ) -> Self {
+        VectorObject {
+            id: ObjectId::UNASSIGNED,
+            transform,
+            fill,
+            stroke,
+            source: ObjectSource::Shape(shape),
+        }
+    }
 }
 
 /// A vector-object layer: a layer owning an ordered list of [`VectorObject`]s
-/// (text today; paths/shapes later, reusing this layer and renderer). The
+/// (text and parametric shapes, sharing this layer and renderer). The
 /// objects are the authoritative, editable, serializable description; the GPU
 /// texture is a rebuildable realization. Darkly is raster-first: the texture
 /// regenerates only when objects/style/transform change, never on view zoom.
@@ -1116,6 +1164,41 @@ impl Layer {
         match self {
             Layer::Void(v) => Some((&v.params, &v.transform)),
             Layer::Raster(_) | Layer::Filter(_) | Layer::Vector(_) | Layer::Divider(_) => None,
+        }
+    }
+
+    /// Move this layer's content by a plane-space affine (a canvas flip,
+    /// rotate or rescale) through its document transform, returning the
+    /// `(old, new)` transform for undo. `None` for a layer whose content does
+    /// not move this way: raster pixels move on the GPU, and filters and
+    /// dividers have no content of their own.
+    pub fn apply_plane_affine(
+        &mut self,
+        m: &crate::transform::Affine2D,
+    ) -> Option<(crate::transform::Transform, crate::transform::Transform)> {
+        match self {
+            Layer::Vector(v) => {
+                let old = v.transform;
+                v.transform = old.then_affine(m);
+                Some((old, v.transform))
+            }
+            // A void's transform lives in the window-local frame (the gizmo
+            // edits it where `FragCoord.xy` is, so `canvas_origin` cancels in
+            // the shader), and a void without live transform keeps it at
+            // identity. A plane affine composed onto it would land off by the
+            // window origin, so voids are not moved here.
+            Layer::Void(_) => None,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Divider(_) => None,
+        }
+    }
+
+    /// Install a document transform: the undo side of a transform edit.
+    /// Ignored by layers that carry none.
+    pub fn set_transform(&mut self, transform: crate::transform::Transform) {
+        match self {
+            Layer::Vector(v) => v.transform = transform,
+            Layer::Void(v) => v.transform = transform,
+            Layer::Raster(_) | Layer::Filter(_) | Layer::Divider(_) => {}
         }
     }
 }

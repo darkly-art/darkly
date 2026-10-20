@@ -13,10 +13,14 @@
  * and the toast arrives whenever the drain resolves.
  */
 import type { EngineRequests } from '../engine/protocol';
+import { brushGraph } from '../state/brush_graph.svelte';
 import { toast } from '../state/toast.svelte';
 import { ToolSessionCancelled } from './tool_session';
 
 export function beginPaintStroke(engine: EngineRequests, layerId: number): void {
+    // Painting is the painter settling on a brush: a recent-brush chain ends
+    // here and records the brush it landed on.
+    brushGraph.settleRecentCycle();
     void engine.api.beginStroke({ id: layerId }).catch((e: unknown) => {
         // A stroke opened through a session that died before the response
         // landed is a no-op, not a refusal; there's nothing to tell the artist.

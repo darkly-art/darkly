@@ -58,26 +58,42 @@ fn all_wgsl_shaders_compile() {
             continue;
         }
 
-        // Prepend any preamble whose symbols are referenced by this shader.
+        // Prepend any preamble whose symbols are referenced by this shader,
+        // or by a preamble already prepended (`lib/commit_law.wgsl` calls
+        // `ceiling_t` and `source_over`), until nothing more is pulled in.
         // A preamble that exports multiple helpers (e.g. `lib/fbm.wgsl` ships
         // `fbm`, `fbm_warp`, `fbm_warp_offset`, etc.) might be referenced by
         // any of its names; collect them all and match against the union.
+        let mut included = vec![false; preambles.len()];
+        let mut referencing = source.clone();
         let mut full_source = String::new();
-        for (_, preamble_src) in &preambles {
-            let fn_names: Vec<&str> = preamble_src
-                .lines()
-                .filter_map(|line| {
-                    let line = line.trim();
-                    if line.starts_with("fn ") {
-                        line.strip_prefix("fn ")?.split('(').next()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if fn_names.iter().any(|n| source.contains(n)) {
-                full_source.push_str(preamble_src);
-                full_source.push('\n');
+        loop {
+            let mut grew = false;
+            for (i, (_, preamble_src)) in preambles.iter().enumerate() {
+                if included[i] {
+                    continue;
+                }
+                let fn_names: Vec<&str> = preamble_src
+                    .lines()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        if line.starts_with("fn ") {
+                            line.strip_prefix("fn ")?.split('(').next()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if fn_names.iter().any(|n| referencing.contains(n)) {
+                    included[i] = true;
+                    grew = true;
+                    full_source.push_str(preamble_src);
+                    full_source.push('\n');
+                    referencing.push_str(preamble_src);
+                }
+            }
+            if !grew {
+                break;
             }
         }
         full_source.push_str(&source);

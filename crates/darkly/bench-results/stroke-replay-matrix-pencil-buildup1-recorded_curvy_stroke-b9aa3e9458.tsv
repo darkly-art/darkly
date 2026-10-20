@@ -1,0 +1,3 @@
+canvas_w	canvas_h	dab_radius_px	event_count	stroke_duration_ms	wall_total_ms	behind_by_ms	max_event_behind_ms	cpu_median_us	cpu_p95_us	cpu_max_us	submit_median_us	submit_p95_us	submit_max_us	flushes_per_event_avg	dispatches_per_event_avg	dabs_per_event_avg	union_bbox_area_per_event_avg
+1920	1080	250	204	3536.000	3545.144	9.144	25.263	8656.00	15035.80	46263	1681.00	2765.80	4232	5.848	116.515	116.515	374850
+1920	1080	500	204	3536.000	3545.242	9.242	27.008	11444.00	20731.80	41608	1488.00	2187.00	3438	5.828	58.260	58.260	1196443

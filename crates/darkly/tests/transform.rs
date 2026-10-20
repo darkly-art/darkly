@@ -363,7 +363,6 @@ fn transform_commit_translate_undo() {
         &mut enc,
         &device,
         LayerId::from_ffi(1),
-        &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
     );
@@ -654,7 +653,6 @@ fn paste_commit_undo() {
         &mut enc,
         &device,
         LayerId::from_ffi(1),
-        &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
     );
@@ -1198,8 +1196,8 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
 /// layer's canvas extent changes between setup and cancel. This simulates
 /// that scenario directly with `RegionStore`: save into a 256×256 layer at
 /// canvas (0, 0), simulate a negative-direction grow that shifts the layer's
-/// local-coord origin to (256, 256) in a 512×512 texture, then
-/// `restore_from_scratch` using the canvas-coord snapshot. With a layer-local
+/// local-coord origin to (256, 256) in a 512×512 texture and rebase the
+/// snapshot to it, then `restore_from_scratch` using the canvas-coord snapshot. With a layer-local
 /// `Snapshot.saved` the saved rect would still name the pre-grow frame and
 /// write to the wrong texels in the new frame; canvas-coord storage
 /// round-trips cleanly via
@@ -1276,18 +1274,13 @@ fn cancel_floating_after_layer_grow() {
             depth_or_array_layers: 1,
         },
     );
-    store.grow_scratch_preserving(
+    store.rebase(
         &device,
         &mut enc,
-        CanvasRect::from_xywh(0, 0, init_w, init_h),
+        &mut cancel_snapshot,
         CanvasRect::from_xywh(-256, -256, new_w, new_h),
     );
     submit(&queue, enc);
-
-    // After grow, the engine widens snap.saved to the full new canvas
-    // extent so commits/restores that touch newly-grown areas are still
-    // contained. The original saved canvas region is untouched.
-    cancel_snapshot.saved = CanvasRect::from_xywh(-256, -256, new_w, new_h);
 
     let new_frame = CanvasFrame {
         texture: &new_tex,

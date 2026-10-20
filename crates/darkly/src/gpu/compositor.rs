@@ -6,26 +6,15 @@ use crate::gpu::compose_walk::{blend_bind_group, ProjectionState};
 use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::effect_layers::EffectInstance;
 use crate::gpu::histogram::HistogramPass;
+use crate::gpu::layer_content::{ContentBackends, LayerContent};
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::revisions::{Revisions, Tick};
 use crate::gpu::screen_run::ScreenRun;
-use crate::gpu::vector_content::VectorSubsystem;
-use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
+use crate::gpu::view::{PixelFilter, ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::VoidRegistry;
-use crate::gpu::void_content::LayerContent;
 use crate::gpu::{blit_region, create_texture_with_view, create_uniform_buffer};
 use crate::layer::{Layer, LayerId, RasterLayer, VectorLayer, VoidLayer};
 use std::collections::HashMap;
-
-/// Convert a `display.pixelFilter` string value to the float code stamped
-/// into `ViewTransform.flags[0]`. Unknown values fall back to auto.
-fn pixel_filter_from_str(mode: &str) -> f32 {
-    match mode {
-        "linear" => 0.0,
-        "nearest" => 1.0,
-        _ => 2.0,
-    }
-}
 
 /// Maximum allowed layer texture dimension in either axis. Strokes that
 /// would push the layer past this are clipped to current bounds.
@@ -50,6 +39,18 @@ pub(crate) fn scaled_extent_about(
     let nw = ((e.width as f32 * sx).round() as i32).max(1) as u32;
     let nh = ((e.height as f32 * sy).round() as i32).max(1) as u32;
     crate::coord::CanvasRect::from_xywh(nx0, ny0, nw, nh)
+}
+
+/// The plane-space affine scaling about `origin` by `(sx, sy)`: the point
+/// form of [`scaled_extent_about`], for content that moves through a plane
+/// transform rather than pixels.
+pub(crate) fn scale_affine_about(
+    origin: crate::coord::CanvasPoint,
+    sx: f32,
+    sy: f32,
+) -> crate::transform::Affine2D {
+    let (ox, oy) = (origin.x as f32, origin.y as f32);
+    [sx, 0.0, ox - ox * sx, 0.0, sy, oy - oy * sy]
 }
 
 /// Map a node's canvas extent `e` through an orthogonal transform applied to
@@ -287,8 +288,8 @@ impl GroupState {
 }
 
 /// Per-instance GPU scaffolding shared by every layer that participates in
-/// the standard blend pipeline (raster + void). Both kinds need a blend
-/// uniform buffer and the same CPU-side mirror of opacity/blend/isolated;
+/// the standard blend pipeline (raster, void, vector). Every kind needs a
+/// blend uniform buffer and the same CPU-side mirror of opacity/blend/isolated;
 /// only the *source of pixels* differs and that's split out into
 /// [`LayerContent`]. One pool keyed by [`LayerId`] replaces the previous
 /// `raster_cache` + `void_layers` split, so the compositor's lookup paths
@@ -306,9 +307,8 @@ pub(super) struct LayerCache {
     /// compositor never branches on which mode it is (the shader does) so
     /// the raw shader integer is mirrored rather than a registration pointer.
     pub(super) last_uniforms: BlendUniforms,
-    /// Where this layer's pixels come from. Raster pixels arrive via paint;
-    /// procedural pixels are regenerated on demand by a [`Void`] trait
-    /// object before each composite.
+    /// Where this layer's pixels come from: painted (raster), or regenerated
+    /// before each composite that needs it (a void, a vector scene).
     pub(super) content: LayerContent,
 }
 
@@ -343,9 +343,9 @@ impl LayerKindGpu for Layer {
 
 impl LayerKindGpu for VectorLayer {
     fn realize_in(&self, compositor: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue) {
-        // Allocate the storage texture + blend cache. The scene itself is
-        // pushed separately by the engine (it owns fonts + shaping); this only
-        // guarantees the GPU slot exists.
+        // Allocate the storage texture, blend cache and an empty scene. The
+        // scene itself is pushed separately by the engine (it owns fonts +
+        // shaping); this only guarantees the GPU slot exists.
         compositor.ensure_vector_layer(device, queue, self.id);
     }
 }
@@ -482,7 +482,7 @@ impl StagedNodeTexture {
 ///
 /// - **Disposed in [`Self::dispose_node_texture`]** when the node is
 ///   permanently removed: the node slot (`node_textures`, texture + mask
-///   bind group), `layer_cache`, the vector scene (`vector.scenes`),
+///   bind group), `layer_cache` (with its content: void, vector scene),
 ///   `projection_states` (host delete), and the node's `revisions` entry.
 /// - **Swept against the document in its own sync phase**, so entries whose
 ///   document-side reason has lapsed are dropped or re-ensured each frame:
@@ -586,11 +586,21 @@ pub struct Compositor {
     /// The clock value the last frame that actually reached the surface
     /// reflected. Compared against [`Revisions::latest_visual`].
     pub(super) presented: Tick,
+    /// The `composite_built` value the root composite's mip chain was
+    /// generated from. A minifying present compares the two and regenerates
+    /// the chain when they differ; a 1:1 or magnifying present never consults
+    /// it, so the chain is only ever paid for while zoomed out.
+    pub(super) present_mips_built: Tick,
     /// Composites actually encoded. Lets a test distinguish "produced the
     /// right pixels" from "produced them by recompositing when it should
     /// have skipped", which a pixel assertion alone cannot see.
     #[cfg(any(test, feature = "testing"))]
     pub(super) composite_runs: u64,
+    /// Root mip chains actually regenerated for the present. Distinguishes
+    /// "sampled the right level" from "rebuilt the chain on a present that
+    /// should have reused it", which pixels alone cannot see.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) present_mip_runs: u64,
     /// Group walks that resumed from a captured prefix, and walks that found
     /// nothing changed at all. Anti-vacuity instruments: a reuse test that
     /// silently full-walks proves nothing, and only these can tell the two
@@ -675,11 +685,9 @@ pub struct Compositor {
     /// rectangle. Stamped onto every transform on upload, so changing it
     /// only requires re-uploading the cached transform.
     pub(super) viewport_bg: [f32; 4],
-    /// Pixel filter mode for the present shader's canvas-to-screen sample.
-    /// 0 = linear (smooth), 1 = nearest (hard pixels), 2 = auto (nearest
-    /// when zoom > 1, linear otherwise, decided in the shader from the
-    /// matrix). Stamped onto `flags[0]` of the transform on upload.
-    pub(super) pixel_filter: f32,
+    /// Magnification policy for the present shader's canvas-to-screen sample,
+    /// resolved into the transform's `flags` on every upload.
+    pub(super) pixel_filter: PixelFilter,
 
     // --- Content Bounds (GPU compute) ---
     pub(super) content_bounds: ContentBoundsPass,
@@ -701,15 +709,15 @@ pub struct Compositor {
     /// Last wall-clock time for dt computation.
     pub(super) last_wall_time: f32,
 
-    /// Reused buffer for the "ids of dirty procedural layers" pass in
+    /// Reused buffer for the "ids of dirty content layers" pass in
     /// `encode_dirty_layer_content`. Cleared at the top of the pass and
     /// drained before returning, so the only retained allocation is the
     /// `Vec` capacity itself.
-    pub(super) dirty_procedural_scratch: Vec<LayerId>,
+    pub(super) dirty_content_scratch: Vec<LayerId>,
 
-    /// Vector-layer realization state: the shared Vello renderer plus the
-    /// per-layer scenes ([`VectorSubsystem`]).
-    pub(super) vector: VectorSubsystem,
+    /// Renderers shared by every layer of a content kind (the Vello renderer
+    /// for vector layers), created on first use.
+    pub(super) backends: ContentBackends,
 }
 
 impl Compositor {
@@ -720,20 +728,56 @@ impl Compositor {
         padded_h: u32,
         label: &str,
     ) -> (wgpu::Texture, wgpu::TextureView) {
-        create_texture_with_view(
-            device,
-            padded_w,
-            padded_h,
-            wgpu::TextureFormat::Rgba8Unorm,
-            label,
-            wgpu::TextureUsages::RENDER_ATTACHMENT
+        Self::make_accum_texture_with_levels(device, padded_w, padded_h, label, 1)
+    }
+
+    /// Create an accumulator texture with `mip_levels` levels. The returned
+    /// view covers level 0 only: render attachments must be single-level, and
+    /// every 1:1 consumer wants the full-resolution image. The present, the
+    /// one consumer that minifies, builds its own all-level view.
+    fn make_accum_texture_with_levels(
+        device: &wgpu::Device,
+        padded_w: u32,
+        padded_h: u32,
+        label: &str,
+        mip_levels: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: padded_w,
+                height: padded_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
-        )
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        (texture, view)
     }
 
-    /// Create a GroupState (accum pair + uniforms).
+    /// Mip levels a group's accumulators carry: the root pair is the present's
+    /// source and the only accumulator ever sampled at a scale other than 1:1,
+    /// so it alone gets the chain minification reads through.
+    fn accum_mip_levels(&self, group_id: LayerId, w: u32, h: u32) -> u32 {
+        if group_id == self.root_id {
+            crate::gpu::rescale::levels_for(w, h)
+        } else {
+            1
+        }
+    }
+
+    /// Create a GroupState (accum pair with `mip_levels` levels + uniforms).
     pub(super) fn create_group_state(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -741,11 +785,22 @@ impl Compositor {
         padded_h: u32,
         canvas_origin: crate::coord::CanvasPoint,
         group_id: LayerId,
+        mip_levels: u32,
     ) -> GroupState {
-        let (a0, v0) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-0"));
-        let (a1, v1) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-1"));
+        let (a0, v0) = Self::make_accum_texture_with_levels(
+            device,
+            padded_w,
+            padded_h,
+            &format!("accum-{group_id:?}-0"),
+            mip_levels,
+        );
+        let (a1, v1) = Self::make_accum_texture_with_levels(
+            device,
+            padded_w,
+            padded_h,
+            &format!("accum-{group_id:?}-1"),
+            mip_levels,
+        );
 
         let normal = crate::gpu::blend_mode::registry().default().gpu_value;
         // The group's window-sized accumulator occupies exactly the canvas
@@ -782,6 +837,10 @@ impl Compositor {
     /// is built against a specific view, and which half holds the composite
     /// depends on how many times the walk flipped. Building both once is the
     /// same trade `blend_bind_groups` already makes for children.
+    ///
+    /// The present samples an all-level view (the group's own views are
+    /// level 0 only), so a minified present can read the box-reduced level
+    /// its footprint calls for.
     fn make_present_cache_bind_groups(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -790,10 +849,12 @@ impl Compositor {
         view_uniform_buf: &wgpu::Buffer,
     ) -> [wgpu::BindGroup; 2] {
         std::array::from_fn(|half| {
+            let all_levels = root_state.accum.textures[half]
+                .create_view(&wgpu::TextureViewDescriptor::default());
             Self::make_present_cache_bind_group(
                 device,
                 layout,
-                &root_state.accum.views[half],
+                &all_levels,
                 sampler,
                 view_uniform_buf,
             )
@@ -1049,8 +1110,15 @@ impl Compositor {
         // Create root GroupState (root is always a non-passthrough group)
         // A fresh document's canvas window is anchored at the plane origin.
         let canvas_origin = crate::coord::CanvasPoint::new(0, 0);
-        let root_state =
-            Self::create_group_state(device, queue, padded_w, padded_h, canvas_origin, root_id);
+        let root_state = Self::create_group_state(
+            device,
+            queue,
+            padded_w,
+            padded_h,
+            canvas_origin,
+            root_id,
+            crate::gpu::rescale::levels_for(padded_w, padded_h),
+        );
 
         // Shared canvas-geometry uniform (group 2): the single copy of
         // canvas_size + canvas_origin for every composite draw.
@@ -1087,7 +1155,7 @@ impl Compositor {
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
         let transform_pass = crate::gpu::transform::TransformPass::new(device, queue);
-        let rescale_pass = crate::gpu::rescale::RescalePass::new(device);
+        let rescale_pass = crate::gpu::rescale::RescalePass::new(device, queue);
         let ortho_pass = crate::gpu::ortho_transform::OrthoTransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
         let histogram = HistogramPass::new(device);
@@ -1116,8 +1184,11 @@ impl Compositor {
             revisions: Revisions::new(),
             composite_built: 0,
             presented: 0,
+            present_mips_built: 0,
             #[cfg(any(test, feature = "testing"))]
             composite_runs: 0,
+            #[cfg(any(test, feature = "testing"))]
+            present_mip_runs: 0,
             #[cfg(any(test, feature = "testing"))]
             walk_resumes: 0,
             #[cfg(any(test, feature = "testing"))]
@@ -1151,14 +1222,11 @@ impl Compositor {
             // Auto until the engine pushes the persisted preference via
             // `set_pixel_filter`: config is session/host state the
             // compositor never reads itself.
-            pixel_filter: 2.0,
+            pixel_filter: PixelFilter::default(),
             frame_count: 0,
             last_wall_time: 0.0,
-            dirty_procedural_scratch: Vec::new(),
-            vector: VectorSubsystem {
-                renderer: None,
-                scenes: HashMap::new(),
-            },
+            dirty_content_scratch: Vec::new(),
+            backends: ContentBackends::default(),
         };
         // Nothing has been composited yet, and the frame gate deliberately
         // ignores the target bumps construction performs: without this the
@@ -1213,8 +1281,7 @@ impl Compositor {
     /// and write the uniform buffer, and insert the node-texture and
     /// layer-cache entries. Guards and dirty-marking stay with the per-kind
     /// entry points (raster marks node pixels (thumbnail invariant),
-    /// void/vector mark the document) as do per-kind extras (procedural
-    /// sidecar, vector scene).
+    /// void/vector mark the document) as does building the `content`.
     pub(super) fn insert_content_layer(
         &mut self,
         device: &wgpu::Device,
@@ -1250,8 +1317,8 @@ impl Compositor {
     /// Resize a node's GPU texture (raster layer or mask filter) to a new
     /// canvas extent, copying old contents into the new texture at the offset
     /// that preserves their canvas-space anchor. Thin wrapper over
-    /// [`realloc_node_texture`](Self::realloc_node_texture) with `copy_old =
-    /// true`.
+    /// [`realloc_node_texture`](Self::realloc_node_texture) copying through
+    /// `encoder`.
     ///
     /// **Lockstep growth across host + filters is the engine's job**: it
     /// owns the document and walks `host.filters` to call this helper for
@@ -1264,43 +1331,42 @@ impl Compositor {
         node_id: LayerId,
         new_extent: CanvasRect,
     ) {
-        self.realloc_node_texture(device, queue, encoder, node_id, new_extent, true);
+        self.realloc_node_texture(device, queue, node_id, new_extent, Some(encoder));
     }
 
-    /// Reallocate a node's GPU texture (raster layer or mask filter) to a new
-    /// canvas extent.
+    /// Reallocate a node's GPU texture (raster layer, mask filter, or
+    /// regenerated content) to a new canvas extent.
     ///
     /// **Pure realization.** A faithful reflection of the requested extent; it
     /// does not compute unions or chunk-align; the caller chooses `new_extent`.
     /// Format-agnostic: the existing texture's format drives reallocation. If
     /// the node is unknown or already at `new_extent`, this is a no-op.
     ///
-    /// When `copy_old` is `true`, the old contents are
-    /// `copy_texture_to_texture`'d into the new texture at the canvas-anchored
-    /// offset; uncovered pixels start zeroed for RGBA (transparent) and
-    /// white-filled for R8 (full reveal). When `copy_old` is `false`, the new
-    /// texture is left at its allocation default (cleared), used by undo
-    /// restores that immediately upload the authoritative pixels themselves.
+    /// With `copy_from`, the old contents are copied into the new texture at
+    /// the canvas-anchored offset, recorded into that encoder; uncovered
+    /// pixels start zeroed for RGBA (transparent) and white-filled for R8
+    /// (full reveal). Without it, the new texture is left at its allocation
+    /// default (cleared): for undo restores that upload the authoritative
+    /// pixels themselves, and for content the compositor regenerates.
     pub fn realloc_node_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
         node_id: LayerId,
         new_extent: CanvasRect,
-        copy_old: bool,
+        copy_from: Option<&mut wgpu::CommandEncoder>,
     ) {
-        let (current, format) = match self.node_textures.get(&node_id) {
-            Some(s) => (s.texture.canvas_extent(), s.texture.format()),
-            None => return,
+        let Some(slot) = self.node_textures.get(&node_id) else {
+            return;
         };
+        let current = slot.texture.canvas_extent();
         if current == new_extent {
             return;
         }
 
-        let new_tex = LayerTexture::new_for_format(device, queue, format, new_extent);
+        let new_tex = slot.texture.reallocated(device, queue, new_extent);
 
-        if copy_old {
+        if let Some(encoder) = copy_from {
             let old_tex = &self
                 .node_textures
                 .get(&node_id)
@@ -1338,7 +1404,7 @@ impl Compositor {
         new_extent: CanvasRect,
     ) -> Option<StagedNodeTexture> {
         let current = &self.node_textures.get(&node_id)?.texture;
-        let texture = LayerTexture::new_for_format(device, queue, current.format(), new_extent);
+        let texture = current.reallocated(device, queue, new_extent);
         let overlap = current.canvas_extent().intersect(new_extent)?;
         let src = current.canvas_to_layer_rect(overlap)?;
         let dst_x = (overlap.x0() - new_extent.x0()) as u32;
@@ -1781,6 +1847,7 @@ impl Compositor {
             self.canvas_height,
             self.canvas_origin,
             group_id,
+            self.accum_mip_levels(group_id, self.canvas_width, self.canvas_height),
         );
         self.group_state.insert(group_id, gs);
     }
@@ -1791,9 +1858,11 @@ impl Compositor {
     /// Window-sized resources: every group's ping-pong accumulators + composite
     /// cache, the passthrough-mask snapshots, the present bind group, and the
     /// selection mask (re-realized at the moved window, preserving its plane
-    /// anchor). Node textures (layers, masks) are plane-anchored and left
-    /// untouched; crop/resize preserves off-window pixels. Pipelines are
-    /// format- not dimension-dependent, so they are not rebuilt.
+    /// anchor), and the textures of regenerated content (voids, vector
+    /// layers), which are the canvas window by definition. Other node
+    /// textures (raster layers, masks) are plane-anchored and left untouched;
+    /// crop/resize preserves off-window pixels. Pipelines are format- not
+    /// dimension-dependent, so they are not rebuilt.
     ///
     /// Group blend uniforms reset to defaults here; `sync_compositor_layers`
     /// rewrites them before the next composite. Marks a full recomposite.
@@ -1819,9 +1888,10 @@ impl Compositor {
             canvas_size: [width as f32, height as f32],
             canvas_origin: [origin.x as f32, origin.y as f32],
         };
-        // Voids sample through a window-local uniform, so the shared canvas
-        // uniform above is not enough: each one has to rewrite its own.
-        self.resync_voids_to_canvas(device, queue);
+        // Regenerated content is window-sized and voids sample through a
+        // window-local uniform, so the shared canvas uniform above is not
+        // enough: each one follows the window itself.
+        self.resync_window_content_to_canvas(device, queue);
         queue.write_buffer(
             &self.canvas_uniform_buf,
             0,
@@ -1832,7 +1902,8 @@ impl Compositor {
         let group_ids: Vec<LayerId> = self.group_state.keys().copied().collect();
         for gid in group_ids {
             self.revisions.bump_targets();
-            let gs = Self::create_group_state(device, queue, width, height, origin, gid);
+            let levels = self.accum_mip_levels(gid, width, height);
+            let gs = Self::create_group_state(device, queue, width, height, origin, gid, levels);
             self.group_state.insert(gid, gs);
         }
 
@@ -1984,6 +2055,13 @@ impl Compositor {
     #[cfg(any(test, feature = "testing"))]
     pub fn composite_runs(&self) -> u64 {
         self.composite_runs
+    }
+
+    /// Root mip chains regenerated for the present. See
+    /// [`Self::present_mip_runs`] on the struct for what it distinguishes.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn present_mip_runs(&self) -> u64 {
+        self.present_mip_runs
     }
 
     /// Group walks that resumed from a captured prefix since construction.
@@ -2430,8 +2508,6 @@ impl Compositor {
         self.blend_bind_groups
             .retain(|(parent, child, _), _| *parent != node_id && *child != node_id);
         self.layer_cache.remove(&node_id);
-        // Drop any vector-layer realization input; no-op for other kinds.
-        self.vector.scenes.remove(&node_id);
         // A deleted host's projection is released immediately; a deleted mask
         // is caught by the next `sync_projection_states` stale sweep.
         self.projection_states.remove(&node_id);
@@ -2518,11 +2594,22 @@ impl Compositor {
     /// workspace background color and the pixel-filter mode, so it stamps
     /// them onto the uploaded copy rather than relying on every caller.
     pub fn update_view_transform(&mut self, queue: &wgpu::Queue, transform: &ViewTransform) {
-        let mut t = *transform;
-        t.bg = self.viewport_bg;
-        t.flags[0] = self.pixel_filter;
-        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
-        self.cached_view_transform = t;
+        self.cached_view_transform = *transform;
+        self.upload_view_transform(queue);
+    }
+
+    /// Stamp the compositor-owned present inputs (workspace colour, sampling
+    /// decisions for the current zoom and filter mode) onto the cached view
+    /// transform and upload it. The one path by which the present shader's
+    /// uniform is written.
+    fn upload_view_transform(&mut self, queue: &wgpu::Queue) {
+        self.cached_view_transform.bg = self.viewport_bg;
+        self.cached_view_transform.stamp_sampling(self.pixel_filter);
+        queue.write_buffer(
+            &self.view_uniform_buf,
+            0,
+            bytemuck::bytes_of(&self.cached_view_transform),
+        );
     }
 
     /// Set the workspace background color (the area shown outside the canvas
@@ -2533,10 +2620,7 @@ impl Compositor {
             return;
         }
         self.viewport_bg = bg;
-        let mut t = self.cached_view_transform;
-        t.bg = bg;
-        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
-        self.cached_view_transform = t;
+        self.upload_view_transform(queue);
         self.revisions.bump_present_inputs();
     }
 
@@ -2545,15 +2629,12 @@ impl Compositor {
     /// the cached transform and forces a re-present so the change takes
     /// effect on the next frame.
     pub fn set_pixel_filter(&mut self, queue: &wgpu::Queue, mode: &str) {
-        let new_mode = pixel_filter_from_str(mode);
-        if (self.pixel_filter - new_mode).abs() < f32::EPSILON {
+        let filter = PixelFilter::parse(mode);
+        if self.pixel_filter == filter {
             return;
         }
-        self.pixel_filter = new_mode;
-        let mut t = self.cached_view_transform;
-        t.flags[0] = new_mode;
-        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
-        self.cached_view_transform = t;
+        self.pixel_filter = filter;
+        self.upload_view_transform(queue);
         self.revisions.bump_present_inputs();
     }
 
@@ -2618,6 +2699,42 @@ impl Compositor {
     /// lives in.
     pub(super) fn present_cache_bind_group(&self) -> &wgpu::BindGroup {
         &self.present_cache_bind_groups[self.root_output_half()]
+    }
+
+    /// Bring the root composite's mip chain up to date for the present about
+    /// to be encoded into `encoder`, when that present minifies. Encoded ahead
+    /// of the present in the same encoder, after the composite's own
+    /// submission, so queue order serialises composite, chain, present. No
+    /// readback is involved.
+    ///
+    /// `present_mips_built` is the composite tick the chain derives from; a
+    /// chain built for the current composite is reused across pans, zooms and
+    /// repeat presents, and a composite that changed while zoomed in costs
+    /// nothing until the first minifying present.
+    pub(super) fn ensure_present_mips(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        if self.cached_view_transform.present_lod() <= 0.0 {
+            return;
+        }
+        if self.present_mips_built == self.composite_built {
+            return;
+        }
+        let texture = self.composited_texture();
+        self.rescale_pass.generate_mip_chain(
+            device,
+            encoder,
+            texture,
+            texture.mip_level_count(),
+            false,
+        );
+        self.present_mips_built = self.composite_built;
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.present_mip_runs += 1;
+        }
     }
 
     /// Whether a group has the accumulator its children compose into.
@@ -2721,6 +2838,11 @@ impl Compositor {
         surface_view: &wgpu::TextureView,
         isolated: Option<LayerId>,
     ) {
+        // Both the direct present and the veil-chain present below bind the
+        // same present bind group, so the chain is ensured once, ahead of the
+        // branch.
+        self.ensure_present_mips(device, encoder);
+
         // Membership, order and visibility all come from the document; the run
         // owns only the textures. An empty or wholly hidden run presents
         // straight to the surface, which is the common case.
@@ -2847,18 +2969,13 @@ impl Compositor {
 
         let scissor = (0, 0, self.canvas_width, self.canvas_height);
 
-        // Rasterize any dirty vector-layer scenes (Vello submits its own
-        // command buffer) before building the composite encoder, so the blend
-        // walk below samples up-to-date pixels.
-        self.realize_dirty_vector_layers(device, queue);
-
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("composite"),
         });
 
-        // Regenerate any dirty void textures before the tree walk so the
-        // downstream blend pass samples up-to-date pixels.
-        self.encode_dirty_layer_content(&mut encoder);
+        // Regenerate any dirty void textures and vector scenes before the
+        // tree walk so the downstream blend pass samples up-to-date pixels.
+        self.encode_dirty_layer_content(device, queue, &mut encoder);
 
         // Allocate + refresh per-host projection uniforms (needs `queue`)
         // before the compose walk, which only binds.

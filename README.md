@@ -1,4 +1,4 @@
-<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
+<a href="https://darkly.art"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Hidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
@@ -11,12 +11,19 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/darkly-art/darkly/ci.yml?branch=master&label=Tests&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/darkly/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
+[![itch.io](https://img.shields.io/badge/itch.io-black?logo=itchdotio&logoColor=9500ff&style=for-the-badge&labelColor=black)](https://darklyart.itch.io/darkly)
+[![Flathub](https://img.shields.io/flathub/v/art.darkly.Darkly?label=Flathub&logo=flathub&logoColor=6914ff&style=for-the-badge&labelColor=black&color=6914ff)](https://flathub.org/en/apps/art.darkly.Darkly)
+
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
+Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-Darkly is a Photoshop alternative where painters are first-class citizens. It has a powerful brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+I made Darkly because I wanted something as fun as Procreate, but for PC. Painting should feel like play, not work. It should be smooth and satisfying, and maybe a little mesmerizing, so you end up exploring, and creating something unexpected.
+
+Darkly makes painting fun again - on Linux, Windows, macOS, and anything with a web browser. It is not a Photoshop clone, and does not want to be.
+
+That doesn't mean it's not serious. Darkly has a list of professional features that's growing every day. Most importantly, it has a state-of-the-art brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
@@ -70,7 +77,7 @@ Voids are a type of layer that specializes in pulling inspiration from outside s
 
 You can use the `Noise` void to generate entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you need a quick reference, or want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-Voids support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
+Voids support masks and blend modes. They are the natural complement to veils, and a natural integration point for other art programs like Blender, which has its own [dedicated void](https://extensions.blender.org/add-ons/darkly-stream/) 🧡
 
 ## Feature Roadmap
 
@@ -96,10 +103,12 @@ For a feature to count, it must be:
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill, gradient, color picker
 - [x] Text tool
+- [x] Vector shapes
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 - [x] HSV picker, foreground/background swatches
 - [x] Color picker
+- [x] Color jitter
 - [x] Raster layers + groups
 - [x] 16 blend modes
 - [x] Layer masks
@@ -144,6 +153,7 @@ For a feature to count, it must be:
 - [x] Flip layer / selection H / V
 - [x] Smart objects
 - [x] Recent colors
+- [x] Recent brushes
 - [ ] Saved swatches / palettes
 - [x] Palette popup
 - [ ] Navigator / overview window
@@ -156,7 +166,7 @@ For a feature to count, it must be:
 - [ ] 100% / zoom presets
 - [ ] Symmetry / mirror painting
 - [x] Installable PWA
-- [x] Krita / Photoshop / GIMP hotkey presets
+- [x] Krita / Photoshop / GIMP / Clip Studio Paint hotkey presets
 - [x] Settings modal
 - [x] Theme system
 - [x] Hotkey system + searchable cheatsheet
@@ -172,6 +182,7 @@ For a feature to count, it must be:
 - [x] Group blend mode / opacity
 - [x] Dockable / tiled panels (drag to reorder, tab, split-dock)
 - [x] Pop out panels into separate OS windows (cross-window drag)
+- [x] Stroke edit (redraw the last stroke with the current brush)
 - [ ] Oklab / Oklch foundational color system
 - [ ] Brush save/load + editable nodes/wires
 - [ ] Recent files
@@ -216,13 +227,15 @@ npm --prefix frontend run dev -- --host
 
 The dev server builds the decorative demo that demo.darkly.art serves; add `-- --mode app` for the plain editor the app ships. Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
 
-**GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. Launch Chromium with GPU and Vulkan support:
+**GPU backend configuration (Linux):** On Wayland with an Intel GPU from 12th gen on (Mesa 22 or newer) or an NVIDIA GPU (driver 535 or newer), Chromium's defaults run WebGPU and nothing needs changing. On X11, or with an AMD or older Intel GPU, Chromium also needs its Vulkan backend:
 
 ```sh
-chromium --enable-features=Vulkan --enable-unsafe-webgpu
+chromium --enable-features=Vulkan
 ```
 
-You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
+(or `chrome://flags/#enable-vulkan`). On a laptop with two GPUs, a black canvas usually means Vulkan picked the GPU that does not drive the display; `MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE=1` in Chromium's environment keeps it on the display GPU. You can verify the active backend at `chrome://gpu`. On macOS and Windows none of this is needed (Metal and D3D12 are used by default).
+
+The desktop app does all of this itself: it starts on Chromium's defaults under Wayland and on the Vulkan backend under X11, falls back to Vulkan once if the defaults give no adapter, and on a multi-GPU machine keeps Vulkan on the display GPU. `DARKLY_GPU_PROFILE=defaults|vulkan` forces a profile; any of `MESA_VK_DEVICE_SELECT`, `DRI_PRIME`, `NODEVICE_SELECT` or `VK_LOADER_DRIVERS_DISABLE` in its environment takes device selection out of its hands.
 
 ## Use it in your own project
 

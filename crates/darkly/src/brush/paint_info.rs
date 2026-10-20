@@ -6,6 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Per-axis [`PaintInformation::motion`] magnitude, in canvas pixels, below
+/// which a dab has not moved from the previous one: there is no "one dab
+/// ago" to read, so a reader of the stroke at `-motion` (the live canvas
+/// sampler) contributes nothing for it.
+pub const STATIONARY_MOTION_PX: f32 = 0.5;
+
 /// All sensor data for a single pen sample.
 ///
 /// Modelled after Krita's `KisPaintInformation`: every field the tablet
@@ -88,9 +94,8 @@ impl PaintInformation {
     /// fill; they depend only on this sample.
     ///
     /// Segment-derived sensors (`drawing_angle`, `distance`, `speed`) fill
-    /// only when `prev` is present. `segment_length` is the arc length
-    /// between prev and this sample: use the chord length for straight
-    /// paths (preview) or the Catmull-Rom arc length for smoothed strokes.
+    /// only when `prev` is present. `segment_length` is the chord length
+    /// between prev and this sample.
     /// `motion` is NOT filled here; it's a per-dab quantity owned by
     /// `StrokeEngine::place_dab`.
     pub fn derive_sensors(&mut self, prev: Option<&Self>, segment_length: f32) {

@@ -103,7 +103,14 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     // Compile first: the terminal's declared scratch format decides how
     // the scratch is allocated, and a warp terminal's is not colour.
     let mut runner: BrushGraphRunner = compile_graph(graph).expect("brush compiles");
-    let mut stroke_buffer = StrokeBuffer::new(&device, W, H, &pipelines, runner.scratch_format());
+    let mut stroke_buffer = StrokeBuffer::new(
+        &device,
+        W,
+        H,
+        &pipelines,
+        runner.scratch_format(),
+        runner.dab_pass(),
+    );
     // Dummy paint target: `apply_lifecycle` never reads it, but the new
     // `StrokeResources` shape requires it. Reuse the pre-stroke texture as
     // a stand-in (same RGBA8 / W×H format).
@@ -170,7 +177,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
         preview: None,
         dab_batch: DabBatch::default(),
     };
-    runner.begin_stroke(&mut ctx);
+    runner.begin_stroke(&mut ctx, None);
     queue.submit([ctx.encoder.finish()]);
 
     readback_texture(
@@ -247,8 +254,8 @@ fn watercolor_terminal_clears_scratch_to_transparent() {
 }
 
 #[test]
-fn smudge_terminal_seeds_scratch_from_pre_stroke() {
-    let rgba = run_begin_stroke(&builtin_graph("Smudge"), Setup::PreStrokeWithSentinel);
+fn blur_terminal_seeds_scratch_from_pre_stroke() {
+    let rgba = run_begin_stroke(&builtin_graph("Blur"), Setup::PreStrokeWithSentinel);
     assert_all(&rgba, SENTINEL_RGBA);
 }
 

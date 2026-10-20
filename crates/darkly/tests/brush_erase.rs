@@ -45,6 +45,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
 }
 
 fn paint_stroke_across(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
+    engine.set_foreground_color([1.0, 1.0, 1.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -57,10 +58,6 @@ fn paint_stroke_across(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: 
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0,
-            cg: 1.0,
-            cb: 1.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();

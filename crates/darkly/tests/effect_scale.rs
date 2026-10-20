@@ -65,6 +65,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
 /// A single opaque dab, leaving the rest of the layer transparent: the alpha
 /// edge the resampling assertions need.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
+    engine.set_foreground_color([color[0], color[1], color[2], 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -75,10 +76,6 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: color[0],
-        cg: color[1],
-        cb: color[2],
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.test_flush_readbacks();

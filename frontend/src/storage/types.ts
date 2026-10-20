@@ -56,11 +56,3 @@ export interface ElectronStorageBridge {
     remove(path: string): Promise<void>;
     exists(path: string): Promise<boolean>;
 }
-
-declare global {
-    interface Window {
-        electronAPI?: {
-            storage: ElectronStorageBridge;
-        };
-    }
-}

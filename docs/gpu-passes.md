@@ -118,13 +118,14 @@ The whole flow: compile shader → bake into pipeline → record "clear `target`
 
 ## Applied: where dab rendering spends its time
 
-Each dab in our brush pipeline issues roughly:
+The read-mirror terminals (smudge, blur, liquify) issue per dab:
 
-1. **Dab-gen pass**: `stamp.wgsl` or the inlined `shape` node rasterizes the brush mark into a pool texture.
-2. **Read-mirror sync**: `copy_texture_to_texture` from scratch's write side to its read mirror.
-3. **Composite pass**: `color_output` shader reads the dab + reads the mirror + writes scratch.
+1. **Read-mirror sync**: `copy_texture_to_texture` from scratch's write side to its read mirror.
+2. **Composite pass**: the terminal's shader reads the mirror and writes the scratch.
 
-So ~2 passes + 1 copy per dab, minimum. Smudge adds another. At a few hundred dabs per frame, the GPU likely spends most of its time at pass boundaries rather than in shader code.
+One pass plus one copy per dab. At a few hundred dabs per frame, the GPU spends most of its time at pass boundaries rather than in shader code.
+
+The `paint` terminal pays none of that: one compute pass per flush, one `dispatch_workgroups` per dab over the dab's footprint, against the stroke scratch bound as a read-write storage texture. Dispatches in a pass are ordered and a dispatch's stores are visible to the next, so dab `i + 1` reads what dab `i` wrote with no copy and no pass boundary; the per-dispatch cost is a few microseconds (`docs/paint-compute-perf-tracking.md`, attempts #5 and #6).
 
 ## Optimizations available
 
@@ -138,6 +139,8 @@ So ~2 passes + 1 copy per dab, minimum. Smudge adds another. At a few hundred da
 - **Breaks for:** smudge, watercolor pickup, anything sampling the cumulative read mirror.
 
 Practical version: walk the stabilized polyline, group consecutive non-overlapping dabs (or those whose blend mode is associative + commutative), emit each group as one instanced draw. Flush with a `copy_texture_to_texture` when the next dab overlaps or needs a fresh mirror. Roughly what Krita does in `KisDabRenderingQueue`.
+
+This was the shipped `paint` terminal (attempt #4 in `docs/paint-compute-perf-tracking.md`) until the dispatch-per-dab compute pass replaced it: the constraint above is what the compute shape removes, since its dispatches are ordered.
 
 ### 2. Inline procedural dab-gen into composite
 

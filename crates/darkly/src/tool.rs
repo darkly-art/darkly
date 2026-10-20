@@ -49,7 +49,9 @@ pub fn catalog() -> Catalog {
             .map(ToolRegistration::catalog_entry)
             .collect(),
     )
-    .with_description("What a pointer does on the canvas: painting, filling, picking, selecting.")
+    .with_description(
+        "What a pointer does on the canvas: painting, filling, picking, selecting, drawing shapes.",
+    )
 }
 
 /// Auto-discovered tool registry. Owns the human-friendly display name surface
@@ -75,7 +77,9 @@ impl ToolRegistry {
     pub fn new() -> Self {
         let mut entries = HashMap::new();
         for reg in crate::tools::registrations() {
-            entries.insert(reg.type_id, ToolEntry { reg });
+            let id = reg.type_id;
+            let clash = entries.insert(id, ToolEntry { reg });
+            assert!(clash.is_none(), "two tools register the id `{id}`");
         }
         ToolRegistry { entries }
     }

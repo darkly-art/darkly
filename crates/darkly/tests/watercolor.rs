@@ -144,12 +144,14 @@ fn render_flush_groups(
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
     let mut stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
         CANVAS,
         &pipelines,
-        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+        runner.scratch_format(),
+        runner.dab_pass(),
     );
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
@@ -164,7 +166,6 @@ fn render_flush_groups(
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
 
-    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
     macro_rules! make_ctx {
         ($label:expr) => {{
             let (scratch, pre_stroke_tex, pre_stroke_bg, source_override) =
@@ -207,7 +208,7 @@ fn render_flush_groups(
     for (gi, g) in groups.iter().enumerate() {
         let mut ctx = make_ctx!("watercolor-compiled-test-flush");
         if gi == 0 || g.restart {
-            runner.begin_stroke(&mut ctx);
+            runner.begin_stroke(&mut ctx, None);
         }
         for (x, y) in g.dabs {
             let info = PaintInformation {

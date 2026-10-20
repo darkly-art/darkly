@@ -1,3 +1,5 @@
+import type { ElectronGpuBridge } from './host';
+
 export interface AdapterInfo {
     vendor: string;
     architecture: string;
@@ -63,4 +65,32 @@ export async function checkGpu(): Promise<GpuCheckResult> {
     }
 
     return { ok: true, adapterInfo };
+}
+
+/** What the renderer tells the desktop host about its adapter check. */
+export type GpuReport =
+    | { ok: false; reason: GpuCheckFailure['reason'] }
+    | { ok: true; adapter: AdapterInfo };
+
+/** The desktop host's answer. `relaunching`: the host is restarting the app
+ *  with other Chromium flags, so nothing should mount. `exhausted`: no launch
+ *  profile produced an adapter; `diagnostics` belong on the error page. */
+export type HostVerdict =
+    | { verdict: 'continue' }
+    | { verdict: 'relaunching' }
+    | { verdict: 'exhausted'; diagnostics: string[] };
+
+/** Report a check to the desktop host and return its verdict. A host that
+ *  fails to answer must not keep the app from booting, so that reads as
+ *  `continue`. */
+export async function reportToHost(check: GpuCheckResult, bridge: ElectronGpuBridge): Promise<HostVerdict> {
+    const report: GpuReport = check.ok
+        ? { ok: true, adapter: check.adapterInfo }
+        : { ok: false, reason: check.reason };
+    try {
+        return await bridge.report(report);
+    } catch (err) {
+        console.error('Darkly: the desktop host did not answer the GPU report:', err);
+        return { verdict: 'continue' };
+    }
 }

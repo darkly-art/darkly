@@ -31,22 +31,33 @@ fight frame-to-frame.
 
 A brush graph compiles (`compile_brush_to_wgsl` → `assemble_shader`,
 [`crates/darkly/src/brush/wgsl/mod.rs`](../crates/darkly/src/brush/wgsl/mod.rs))
-into **two** WGSL fragment shaders on one `CompiledBrush`: `stroke_wgsl` and
-`cursor_preview_wgsl`.
+into **two** WGSL shaders on one `CompiledBrush`: `stroke_wgsl` and
+`cursor_preview_wgsl`. The stroke variant's skeleton is the terminal's
+declared `DabPass`: a compute module (`cs_main`, one thread per pixel of
+each dab, the scratch bound as read-write storage) for `paint`, an
+instanced fragment module (`fs_main`) for the other terminals. The preview
+variant is a fragment module for every terminal.
 
 - **Non-terminal node bodies are spliced verbatim into both variants.** Only the
   *terminal* differs: it emits the stroke body from `compile_wgsl` and the preview
   body from `compile_cursor_preview_body`
   ([`crates/darkly/src/brush/eval.rs`](../crates/darkly/src/brush/eval.rs)). The
-  default returns the same body; `watercolor`/`smudge`/`liquify` override it to
+  default returns the same body; `watercolor`/`blur`/`liquify` override it to
   emit a neutral fill that samples no stroke-only bindings.
 - **The preview variant has no live stroke.** It drops `@group(2)` selection
-  (hard-codes `sel = 1.0`) and swaps every stroke-only binding (scratch,
-  selection, the frozen clone source snapshot) for a registry fallback (e.g. the
-  1×1 white `_fallback` tile); stroke-seeded uniforms read their unseeded defaults.
+  (hard-codes `sel = 1.0`), declares no ground or storage channel (a compute
+  terminal's preview body returns a colour, it has nothing to store into), and
+  swaps every stroke-only binding (scratch, selection, the frozen clone source
+  snapshot, the live stroke appearance) for a registry fallback (e.g. the 1×1 white `_fallback` tile);
+  stroke-seeded uniforms read their unseeded defaults.
 
 **Gotcha:** a non-terminal node *cannot* render differently at hover; its single
 body runs in both modes. A non-terminal that samples a stroke-only resource will,
 at hover, sample the fallback with default uniforms and produce a meaningless (or
 transparent) dab. Preview-specific behavior lives on the *terminal*; if upstream
 data must change for the preview, that is a design constraint, not a small tweak.
+The one escape is `compile_cursor_preview_body`, which the compiler calls for
+every step: the canvas sampler (`clone_source`) overrides it on both of its
+sources to emit a neutral grey instead of sampling the snapshot or the live
+stroke, so a clone brush and the Smudge both hover as the tip's shape in
+grey.

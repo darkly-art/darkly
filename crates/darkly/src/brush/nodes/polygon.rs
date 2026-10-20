@@ -33,6 +33,7 @@ pub fn register() -> BrushNodeRegistration {
         evaluator: || Box::new(PolygonEvaluator),
         lifecycle: crate::brush::node::Lifecycle::None,
         scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
+        dab_pass: crate::brush::node::DabPass::InstancedDraw,
         node: NodeRegistration {
             type_id: TYPE_ID,
             // Shared UI grouping with `circle` and `stamp` (the tip

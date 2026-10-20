@@ -34,6 +34,10 @@ pub struct EngineState {
     pub dirty: bool,
     /// Document has an active selection. Backs selection-gated menu items.
     pub has_selection: bool,
+    /// The kind of the edit session open for the artist to apply or
+    /// discard (stroke edit, a transform, pasted content), if any. Backs the
+    /// canvas's session frame and the stroke-edit toggle's active state.
+    pub edit_session: Option<crate::engine::EditSessionKind>,
     /// The canvas window rect in plane coordinates (`Document::canvas_rect`):
     /// where the window sits and how big it is. Rides the frame snapshot
     /// because the frontend's copy of it has to follow every op that moves or
@@ -319,6 +323,11 @@ pub struct ParamInfo {
     #[cfg_attr(feature = "ts-export", ts(type = "JsonValue | null"))]
     pub options: Option<serde_json::Value>,
     pub display: ParamDisplay,
+    /// `[name, allowed]`: show this parameter only while the named sibling's
+    /// integer value is in `allowed`. See `ParamDef::visible_when`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(type = "[string, Array<number>] | null"))]
+    pub visible_when: Option<(&'static str, &'static [i32])>,
 }
 
 impl ParamInfo {
@@ -403,6 +412,7 @@ impl ParamInfo {
             value: value.cloned(),
             options,
             display,
+            visible_when: def.visible_when,
         }
     }
 
@@ -478,11 +488,12 @@ impl ParamInfo {
             default,
             value: None,
             options,
+            visible_when: None,
         }
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone, Copy)]
 #[serde(tag = "op", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub enum StrokeOp {
@@ -519,12 +530,6 @@ pub enum StrokeOp {
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
-        /// Foreground color as raw sRGB RGBA floats (0-1), as picked; the
-        /// compositor is display-referred, so no gamma conversion is applied.
-        cr: f32,
-        cg: f32,
-        cb: f32,
-        ca: f32,
     },
 }
 
@@ -787,6 +792,18 @@ pub(crate) fn modifier_to_info(
 mod tests {
     use super::*;
 
+    /// A ruled parameter carries its `visible_when` onto the wire; an unruled
+    /// one omits the key, so every other schema serializes exactly as before.
+    #[test]
+    fn param_info_carries_visible_when_only_when_declared() {
+        const RULED: ParamDef = ParamDef::int("m", 0, 8, 5).with_visible_when("style", &[2]);
+        const PLAIN: ParamDef = ParamDef::int("m", 0, 8, 5);
+        let ruled = serde_json::to_value(ParamInfo::from_def(&RULED, None)).unwrap();
+        assert_eq!(ruled["visible_when"], serde_json::json!(["style", [2]]));
+        let plain = serde_json::to_value(ParamInfo::from_def(&PLAIN, None)).unwrap();
+        assert!(plain.get("visible_when").is_none());
+    }
+
     fn brush_at(x: f32, y: f32) -> StrokeOp {
         StrokeOp::BrushStroke {
             x,
@@ -797,10 +814,6 @@ mod tests {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: 0.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         }
     }
 

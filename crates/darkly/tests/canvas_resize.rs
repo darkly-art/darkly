@@ -27,6 +27,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 
 /// Paint a horizontal brush stroke at plane-y `py`, sweeping plane-x `[x0, x1)`.
 fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let steps = 48;
     for i in 0..=steps {
@@ -40,10 +41,6 @@ fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1:
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -439,7 +436,7 @@ fn resize_rebuilds_view_transform_for_new_dims() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     // Sanity: screen center maps to the original canvas center (32, 32).
     let (cx0, cy0) = engine.screen_to_plane(sw / 2.0, sh / 2.0);
@@ -484,7 +481,7 @@ fn screen_to_plane_includes_canvas_origin() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     // Crop to a NON-ZERO origin window at plane (8, 4), size 40×40.
     engine.resize_canvas(CanvasRect::from_xywh(8, 4, 40, 40));
@@ -599,7 +596,7 @@ fn transform_preview_matches_pretransform_present_after_crop() {
     let (vw, vh) = (192u32, 192u32);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
 
     // Crop to a non-zero origin, then paint a small mark at the window center.
     engine.resize_canvas(CanvasRect::from_xywh(24, 16, 48, 48));
@@ -857,6 +854,7 @@ fn crop_to_selection_matches_selection_bounds() {
 /// present yields equal arms, an anisotropic (squashed) present unequal arms.
 fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, arm: f32) {
     for horizontal in [true, false] {
+        engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer_id).unwrap();
         let steps = 48;
         for i in 0..=steps {
@@ -875,10 +873,6 @@ fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, a
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 1.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();
@@ -920,7 +914,7 @@ fn presented_cross_ratio(crop: Option<CanvasRect>) -> f32 {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
     // Production-like view: viewport 400, zoom 1, no pan/rotation/mirror.
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
     // resize_canvas rebuilds the view transform internally (production path);
     // the frontend $effect does NOT re-push set_view_transform on crop.
     let center = match crop {
@@ -971,7 +965,7 @@ fn successive_crops_do_not_compound_squash() {
     let (vw, vh) = (400u32, 400u32);
     let mut engine = test_engine(200, 200);
     let layer_id = engine.add_raster_layer(None);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, vw as f32, vh as f32, 1.0);
     engine.resize_canvas(CanvasRect::from_xywh(40, 30, 160, 100));
     engine.resize_canvas(CanvasRect::from_xywh(60, 50, 110, 70));
     paint_cross(&mut engine, layer_id, 115.0, 85.0, 8.0);

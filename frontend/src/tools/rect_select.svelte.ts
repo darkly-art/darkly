@@ -9,7 +9,8 @@
  */
 import { ToolBase, type ToolDescriptor } from './registry';
 import type { DarklyInstance } from '../state/app.svelte';
-import { KIND_RECT, FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR, prim, selectionMode } from './selection_helpers';
+import { selectionMode } from './selection_helpers';
+import { drawRubberBand, clearRubberBand } from './rubber_band';
 
 class RectSelectTool extends ToolBase {
     private dragStart: [number, number] | null = null;
@@ -28,19 +29,13 @@ class RectSelectTool extends ToolBase {
         const sy0 = Math.round(y0);
         const sx1 = Math.round(x1);
         const sy1 = Math.round(y1);
-        const tl: [number, number] = [Math.min(sx0, sx1), Math.min(sy0, sy1)];
-        const br: [number, number] = [Math.max(sx0, sx1), Math.max(sy0, sy1)];
-        engine.api.setOverlay({
-            primitives: [
-                prim(KIND_RECT, FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR, tl, br, { dashLen: 6, thickness: 1 }),
-            ],
-        });
+        drawRubberBand(engine, sx0, sy0, sx1, sy1);
     }
 
     private clearPreviewOverlay(): void {
         this.dragStart = null;
         this.dragEnd = null;
-        this.engine?.api.clearOverlay();
+        if (this.engine) clearRubberBand(this.engine);
     }
 
     onDeactivate(): void {

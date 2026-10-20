@@ -3,6 +3,7 @@
     import LayerProperties from './LayerProperties.svelte';
     import GroupProperties from './GroupProperties.svelte';
     import TextProperties from './TextProperties.svelte';
+    import ShapeProperties from './ShapeProperties.svelte';
     import VoidProperties from '../voids/VoidProperties.svelte';
     import FilterProperties from '../filters/FilterProperties.svelte';
 
@@ -24,6 +25,7 @@
                 <FilterProperties node={activeLayer} />
             {:else if activeLayer.type === 'vector'}
                 <TextProperties node={activeLayer} />
+                <ShapeProperties node={activeLayer} />
             {/if}
         {:else}
             <div class="empty">No selection</div>

@@ -7,9 +7,9 @@
 //!
 //! ## Where to add new measurements
 //!
-//! New *fine-grained* timing should grow the GPU-timestamp slot pattern in
-//! `PaintComputeTimestamps` (6 slots today, easily grown), **not** new CPU
-//! `record_*` methods on `BrushPerfCounters`. `Instant::now()` brackets in
+//! New *fine-grained* timing should be GPU pass timestamps owned by the
+//! pipeline entry that records the pass, **not** new CPU `record_*`
+//! methods on `BrushPerfCounters`. `Instant::now()` brackets in
 //! the brush hot path are non-zero overhead in production and sprawl
 //! during investigations; the previous `[stab-perf]` log carried ~25
 //! sub-buckets that all paid that cost. Keep `BrushPerfCounters` small
@@ -34,6 +34,9 @@ pub struct BrushPerfDelta {
     pub dab_flushes: u32,
     /// Total dabs that flowed through the compute path during the interval.
     pub flushed_dabs: u64,
+    /// Draws or compute dispatches issued into the scratch during the
+    /// interval.
+    pub dispatches: u32,
     /// Sum of `union_w * union_h` across every flush during the interval.
     pub dab_union_bbox_area_total: u64,
     /// Per-flush dab counts for the flushes that landed during this
@@ -56,6 +59,7 @@ impl BrushPerfDelta {
             submits: curr.submits.saturating_sub(prev.submits),
             dab_flushes: curr.dab_flushes.saturating_sub(prev.dab_flushes),
             flushed_dabs: (curr.flushed_dabs as u64).saturating_sub(prev.flushed_dabs as u64),
+            dispatches: curr.dispatches.saturating_sub(prev.dispatches),
             dab_union_bbox_area_total: curr
                 .dab_union_bbox_area
                 .saturating_sub(prev.dab_union_bbox_area),
@@ -71,6 +75,9 @@ impl BrushPerfDelta {
 /// without having to plumb a return value out of `render`.
 #[derive(Default, Clone, Copy)]
 pub struct FrameRenderPhases {
+    /// The brush stroke's per-frame flush: rewind, replay and commit of the
+    /// events that arrived since the last frame.
+    pub stroke_us: u64,
     pub poll_us: u64,
     pub thumb_us: u64,
     pub anim_us: u64,

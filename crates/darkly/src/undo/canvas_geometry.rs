@@ -15,6 +15,9 @@
 //! both. A folded selection entry lets an op with an active selection undo in
 //! a single step.
 //!
+//! Layers whose content moves through a document transform instead of pixels
+//! (vector layers) get their transform swapped in the same step.
+//!
 //! Why dedicated rather than reusing [`CanvasResizeAction`]: this one must
 //! additionally swap per-node `PixelBuffer.bounds` (a canvas-window move never
 //! touches layer extents) and the canvas dimensions independently of origin.
@@ -27,7 +30,7 @@ use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
+use crate::transform::Transform;
 
 /// The selection clear/transform folded into a geometry edit, so undo restores
 /// the selection in the same step. Mirrors [`super::SelectionAction`]'s fields.
@@ -57,6 +60,8 @@ pub struct CanvasGeometryAction {
     bounds: Vec<(LayerId, CanvasRect, CanvasRect)>,
     /// Old-direction pixel snapshots, one per node (same order as `bounds`).
     regions: Vec<UndoRegionEntry>,
+    /// Per layer moved through its document transform: `(id, old, new)`.
+    transforms: Vec<(LayerId, Transform, Transform)>,
     /// Present only if a selection was active and cleared/transformed by the op.
     selection: Option<SelectionPart>,
 }
@@ -72,6 +77,7 @@ impl CanvasGeometryAction {
         new_dpi: f32,
         bounds: Vec<(LayerId, CanvasRect, CanvasRect)>,
         regions: Vec<UndoRegionEntry>,
+        transforms: Vec<(LayerId, Transform, Transform)>,
         selection: Option<(bool, UndoRegionEntry)>,
     ) -> Self {
         CanvasGeometryAction {
@@ -85,13 +91,14 @@ impl CanvasGeometryAction {
             new_dpi,
             bounds,
             regions,
+            transforms,
             selection: selection.map(|(was_active, entry)| SelectionPart { was_active, entry }),
         }
     }
 }
 
 impl UndoAction for CanvasGeometryAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         doc.width = self.old_w;
         doc.height = self.old_h;
         doc.canvas_origin = self.old_origin;
@@ -99,12 +106,16 @@ impl UndoAction for CanvasGeometryAction {
         for (id, old_extent, _) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *old_extent);
         }
+        for (id, old, _) in &self.transforms {
+            if let Some(layer) = doc.layer_mut(*id) {
+                layer.set_transform(*old);
+            }
+        }
         // GPU pixel + selection restores are handled by the engine via
         // `gpu_region_entries_mut` / `selection_region_entry_mut`.
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         doc.width = self.new_w;
         doc.height = self.new_h;
         doc.canvas_origin = self.new_origin;
@@ -112,7 +123,11 @@ impl UndoAction for CanvasGeometryAction {
         for (id, _, new_extent) in &self.bounds {
             doc.set_node_pixel_bounds(*id, *new_extent);
         }
-        HashMap::new()
+        for (id, _, new) in &self.transforms {
+            if let Some(layer) = doc.layer_mut(*id) {
+                layer.set_transform(*new);
+            }
+        }
     }
 
     fn gpu_region_entries_mut(&mut self) -> Vec<&mut UndoRegionEntry> {
@@ -135,12 +150,12 @@ impl UndoAction for CanvasGeometryAction {
         let regions: u64 = self
             .regions
             .iter()
-            .map(|e| e.byte_size)
+            .map(|e| e.byte_size())
             .fold(0, u64::saturating_add);
         let sel = self
             .selection
             .as_ref()
-            .map(|s| s.entry.byte_size)
+            .map(|s| s.entry.byte_size())
             .unwrap_or(0);
         regions.saturating_add(sel)
     }

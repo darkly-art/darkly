@@ -1,36 +1,69 @@
 //! Ring buffer of GPU texture checkpoints for partial stroke re-render.
 //!
-//! Each checkpoint captures the stroke buffer's bbox region at a specific
-//! save point. On divergence, the best checkpoint before the divergence
-//! index is restored (clear stroke buffer + copy bbox region back), and
-//! only dabs after the checkpoint are re-rendered.
+//! Each slot holds the stroke scratch (and the terminal's channels) as of
+//! one save point, over a canvas-anchored frame. A save copies only the
+//! region in which the scratch changed since the slot's textures were
+//! last brought up to date, and a restore copies back only the region the
+//! rewind undoes (the footprint of every dab after the checkpoint), so
+//! the per-event cost follows the dabs between two indices rather than
+//! the stroke's cumulative bbox. On divergence, the best checkpoint before
+//! the divergence index is restored and only dabs after it are
+//! re-rendered.
 //!
 //! The ring capacity is fixed (8 slots). Spacing between checkpoints
 //! autoscales based on the stabilizer's max divergence window, so the
 //! oldest checkpoint is typically just past the divergence boundary and
 //! the remaining slots are densely packed in the volatile zone.
 
+use super::save_points::SavePointStore;
 use super::stroke_engine::RenderCheckpoint;
 use crate::coord::CanvasRect;
 use crate::gpu::atlas::CanvasFrame;
 
 const RING_CAPACITY: usize = 8;
 
-/// Metadata returned when restoring from a checkpoint.
-pub struct CheckpointRestore {
+/// What a rewind undoes: the restore point's save-point index and the
+/// canvas-space footprint of every dab after it, under the history being
+/// discarded.
+#[derive(Clone, Copy, Debug)]
+pub struct Rewind {
     pub save_point_index: usize,
+    pub region: CanvasRect,
+}
+
+/// The checkpoint [`CheckpointRing::find_before`] chose, and what restoring
+/// it takes.
+pub struct CheckpointRestore {
+    /// The polyline vector index at the checkpoint; re-rendering resumes
+    /// from the next one.
     pub vector_index: usize,
+    /// Engine render state at the checkpoint.
     pub render_state: RenderCheckpoint,
+    pub rewind: Rewind,
+    /// The rewound region when the slot's frame does not cover all of it:
+    /// the caller resets it to the terminal's baseline before
+    /// [`CheckpointRing::restore`] copies the covered part back. `None`
+    /// when the frame covers the region and no reset is needed.
+    pub reset: Option<CanvasRect>,
+    slot: usize,
+}
+
+/// What a slot's textures are known to hold.
+struct SlotContent {
+    /// The textures equal the scratch as of this save point, relative to
+    /// the current dab list, everywhere in the frame outside `stale`.
+    save_point_index: usize,
+    /// Where they do not: the footprint of dabs a rewind discarded after
+    /// this slot was written. Copied along with the dirtied range on the
+    /// next save into the slot.
+    stale: CanvasRect,
 }
 
 /// A single checkpoint slot in the ring buffer.
 struct CheckpointSlot {
-    /// Bbox-sized GPU texture holding the stroke buffer snapshot.
-    /// Lazily allocated; reallocated when the bbox outgrows it.
+    /// Frame-sized GPU texture holding the stroke buffer snapshot. Lazily
+    /// allocated; reallocated when the layer grows or the formats change.
     texture: Option<wgpu::Texture>,
-    /// Dimensions of the allocated texture (may be larger than bbox).
-    tex_w: u32,
-    tex_h: u32,
     /// Format the slot was allocated in. The ring snapshots the stroke
     /// scratch, whose format is the terminal's business (color for most
     /// brushes, a float displacement field for warp terminals), and
@@ -45,14 +78,27 @@ struct CheckpointSlot {
     /// discarded dabs, and the dabs replayed over those pixels would read
     /// values describing a stroke that no longer exists.
     extra: Vec<wgpu::Texture>,
-    /// The bbox region this checkpoint covers, in canvas pixel coords.
-    /// Stable across mid-stroke layer growth.
-    canvas_bbox: CanvasRect,
+    /// The canvas rect the textures cover, the layer's extent when the
+    /// slot was allocated: texel `(0, 0)` is the frame's origin. Canvas
+    /// coordinates are stable across mid-stroke layer growth, so a frame
+    /// never moves; a save under a grown extent reallocates. Sized to the
+    /// layer rather than to the stroke's bbox so that a stroke never
+    /// reallocates its slots mid-way (every slot would do so in the same
+    /// event, each a fresh texture plus a frame-sized copy, which showed
+    /// as a dropped frame), at the price of one layer-sized copy per slot
+    /// the first time a stroke uses it.
+    frame: CanvasRect,
+    /// What the textures hold; `None` when nothing in them can be trusted
+    /// (never written, reallocated, or left over from a previous stroke).
+    content: Option<SlotContent>,
     /// Which save point this checkpoint was captured at.
     save_point_index: usize,
     /// The polyline vector index at that save point.
     vector_index: usize,
-    /// Engine render state for resuming from this checkpoint.
+    /// Engine render state for resuming from this checkpoint. Captured at
+    /// the save call site, not read from the save points: a segment that
+    /// placed no dab finalizes no save point, so the store can lag behind
+    /// the state the resume needs.
     render_state: RenderCheckpoint,
     /// Whether this slot contains valid data.
     valid: bool,
@@ -62,10 +108,10 @@ impl CheckpointSlot {
     fn empty() -> Self {
         Self {
             texture: None,
-            tex_w: 0,
-            tex_h: 0,
             tex_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
-            canvas_bbox: CanvasRect::from_xywh(0, 0, 0, 0),
+            extra: Vec::new(),
+            frame: CanvasRect::empty(),
+            content: None,
             save_point_index: 0,
             vector_index: 0,
             render_state: RenderCheckpoint {
@@ -78,24 +124,23 @@ impl CheckpointSlot {
                 stamp_angle: None,
             },
             valid: false,
-            extra: Vec::new(),
         }
     }
 
-    /// Ensure the stroke-buffer snapshot is at least `w × h` and in
-    /// `format`, plus one channel snapshot per entry in `extra_formats`.
-    /// Reallocate if needed, including on a format change, since a slot
-    /// cached from a color stroke cannot receive a warp field. The whole
-    /// set is reallocated together so a slot's snapshots always share
-    /// dimensions.
-    fn ensure_texture(
+    /// Make the slot's frame the layer's `extent`, in `format`, with one
+    /// channel snapshot per entry in `extra_formats`. Reallocates, and
+    /// returns `true`, when the extent differs from the frame (the layer
+    /// grew), on a format change (a slot cached from a color stroke cannot
+    /// receive a warp field), or when the slot holds nothing yet. The
+    /// whole set is reallocated together so a slot's snapshots always
+    /// share a frame. A reallocated slot's content is unknown.
+    fn ensure_frame(
         &mut self,
         device: &wgpu::Device,
-        w: u32,
-        h: u32,
+        extent: CanvasRect,
         format: wgpu::TextureFormat,
         extra_formats: &[wgpu::TextureFormat],
-    ) {
+    ) -> bool {
         // Slots outlive strokes (`clear()` only flips `valid`), so a slot
         // allocated for one terminal is reused by the next. Comparing the
         // formats, not just the count, is what stops a `paint` stroke's
@@ -107,23 +152,27 @@ impl CheckpointSlot {
                 .iter()
                 .zip(extra_formats)
                 .all(|(t, f)| t.format() == *f);
-        if self.tex_w >= w
-            && self.tex_h >= h
+        if self.texture.is_some()
             && self.tex_format == format
-            && self.texture.is_some()
             && formats_match
+            && self.frame == extent
         {
-            return;
+            return false;
         }
-        // Allocate with some headroom to reduce reallocation frequency.
-        let alloc_w = w.next_power_of_two().max(64);
-        let alloc_h = h.next_power_of_two().max(64);
+        self.content = None;
+        self.tex_format = format;
+        self.frame = extent;
+        if self.frame.is_empty() {
+            self.texture = None;
+            self.extra.clear();
+            return true;
+        }
         let make = |format: wgpu::TextureFormat| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("checkpoint-slot"),
                 size: wgpu::Extent3d {
-                    width: alloc_w,
-                    height: alloc_h,
+                    width: self.frame.width,
+                    height: self.frame.height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -136,9 +185,39 @@ impl CheckpointSlot {
         };
         self.texture = Some(make(format));
         self.extra = extra_formats.iter().copied().map(make).collect();
-        self.tex_w = alloc_w;
-        self.tex_h = alloc_h;
-        self.tex_format = format;
+        true
+    }
+
+    /// The region a save at `save_point_index` copies into this slot to
+    /// make its textures exact over the whole frame: where they are stale,
+    /// plus where the scratch changed since the save point they hold.
+    ///
+    /// The content's index is never above the one being saved: every
+    /// valid slot sits at or below a rewind's restore point, every save
+    /// during the replay is above it, and a rewritten content carries the
+    /// restore point's own index.
+    fn copy_region(&self, save_points: &SavePointStore, save_point_index: usize) -> CanvasRect {
+        match &self.content {
+            Some(c) if c.save_point_index <= save_point_index => c
+                .stale
+                .union(save_points.dirty_between(c.save_point_index, save_point_index))
+                .intersect(self.frame)
+                .unwrap_or(CanvasRect::empty()),
+            _ => {
+                debug_assert!(
+                    self.content.is_none(),
+                    "checkpoint slot content is ahead of the save point being written"
+                );
+                self.frame
+            }
+        }
+    }
+
+    fn frame<'a>(&'a self, texture: &'a wgpu::Texture) -> CanvasFrame<'a> {
+        CanvasFrame {
+            texture,
+            canvas_extent: self.frame,
+        }
     }
 }
 
@@ -150,7 +229,7 @@ impl CheckpointSlot {
 ///
 /// 1. **Coverage (correctness).** After every save, there exists a valid
 ///    slot with `vi ≤ tip_vi − max_divergence_window`. That single slot
-///    guarantees `restore_before(div_idx)` finds something for every
+///    guarantees `find_before(div_idx)` finds something for every
 ///    reachable `div_idx ∈ [tip_vi − max_div, tip_vi]`.
 ///
 /// 2. **Density (performance).** Consecutive valid slot gaps (sorted by
@@ -162,6 +241,17 @@ impl CheckpointSlot {
 ///    point and the divergence index are still valid (the stroke buffer
 ///    content there didn't change). Preserving them lets the restore point
 ///    advance toward the tip on subsequent frames.
+///
+/// A fourth, on what the textures hold, makes the region copies sound:
+///
+/// 4. **Content.** A slot with `content = Some(c)` equals the scratch as
+///    of save point `c.save_point_index` (relative to the current dab
+///    list) everywhere in its frame outside `c.stale`; a valid slot has
+///    `c.save_point_index == save_point_index` and an empty `c.stale`.
+///    A save copies `c.stale` plus the range dirtied since `c`; a rewind
+///    that discards dabs after a slot's index rewrites `c` to the restore
+///    point and adds the discarded footprint to `c.stale`; a reallocation
+///    or `clear()` sets `content = None`.
 ///
 /// The eviction policy in [`pick_slot`] protects the sole anchor while it
 /// is the only slot satisfying the coverage invariant, then picks the
@@ -228,7 +318,7 @@ impl CheckpointRing {
         by_vi.sort_by_key(|&(_, v)| v);
 
         let anchor_boundary = tip_vi.saturating_sub(max_div_window);
-        // `restore_before(div_idx)` returns the slot with the largest
+        // `find_before(div_idx)` returns the slot with the largest
         // `vi < div_idx`. The worst-case reachable `div_idx` is
         // `anchor_boundary`, so coverage requires `vi < anchor_boundary`.
         // The anchor is "redundant" (and the lowest slot may be evicted)
@@ -277,13 +367,21 @@ impl CheckpointRing {
         best.map(|(i, _)| i).unwrap_or(anchor_slot)
     }
 
-    /// Save a checkpoint: copy the bbox region from the stroke texture into
-    /// a ring slot chosen by [`pick_slot`]. `stroke` is the stroke buffer
+    /// Save a checkpoint at `save_point_index` into a ring slot chosen by
+    /// [`pick_slot`], copying only what the slot's textures lack
+    /// ([`CheckpointSlot::copy_region`]). `stroke` is the stroke buffer
     /// paired with the active layer's canvas extent (the stroke buffer is
-    /// texture-aligned to the layer texture). `canvas_bbox` is the
-    /// canvas-space rect to snapshot. `tip_vi` and `max_div_window` are the
-    /// stabilizer's current tip index and bound (used by the eviction
-    /// policy and the post-save coverage assertion).
+    /// texture-aligned to the layer texture); `extra` are its channels.
+    /// `tip_vi` and `max_div_window` are the stabilizer's current tip
+    /// index and bound (used by the eviction policy and the post-save
+    /// coverage assertion).
+    ///
+    /// A checkpoint at which nothing has been painted yet is a *valid*
+    /// checkpoint: it records exactly that, and a rewind to it restores
+    /// the baseline. Claiming the slot keeps the `vi = 0` anchor present
+    /// when a stroke's first dab is an identity write (a stationary
+    /// smudge, say); without it every early divergence falls back to a
+    /// full re-render.
     #[allow(clippy::too_many_arguments)]
     pub fn save(
         &mut self,
@@ -293,101 +391,48 @@ impl CheckpointRing {
         extra: &[&wgpu::Texture],
         save_point_index: usize,
         vector_index: usize,
-        canvas_bbox: CanvasRect,
+        save_points: &SavePointStore,
         render_state: RenderCheckpoint,
         tip_vi: usize,
         max_div_window: usize,
     ) {
-        // The region to snapshot, as a texture-local rect paired with the
-        // clipped canvas rect (so the stored bbox matches the texels
-        // actually copied). `None` when the checkpoint covers no texels.
-        //
-        // An empty region is a *valid* checkpoint: it records "nothing had
-        // been painted at this index", and restoring it is fully served by
-        // the caller's reset to the terminal's baseline. Claiming the slot
-        // anyway is what keeps the `vi = 0` anchor present when a stroke's
-        // first dab is an identity write (a stationary smudge, say);
-        // without it every early divergence falls back to a full re-render.
-        let region = stroke
-            .canvas_to_layer_rect(canvas_bbox)
-            .filter(|r| !r.is_empty())
-            .zip(stroke.canvas_extent.intersect(canvas_bbox));
-
         let extra_formats: Vec<wgpu::TextureFormat> = extra.iter().map(|t| t.format()).collect();
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
-        slot.canvas_bbox =
-            region.map_or_else(|| CanvasRect::from_xywh(0, 0, 0, 0), |(_, clipped)| clipped);
+        let reallocated = slot.ensure_frame(
+            device,
+            stroke.canvas_extent,
+            stroke.texture.format(),
+            &extra_formats,
+        );
+        let region = if reallocated {
+            slot.frame
+        } else {
+            slot.copy_region(save_points, save_point_index)
+        };
+
+        if let Some(texture) = slot.texture.as_ref() {
+            stroke.copy_rect_to(encoder, &slot.frame(texture), region);
+            // Same region, same coordinates: the channels are layer-sized
+            // and grown in lockstep with the stroke buffer, so one rect
+            // addresses all of them.
+            for (src, dst) in extra.iter().zip(&slot.extra) {
+                CanvasFrame {
+                    texture: src,
+                    canvas_extent: stroke.canvas_extent,
+                }
+                .copy_rect_to(encoder, &slot.frame(dst), region);
+            }
+        }
+
+        slot.content = Some(SlotContent {
+            save_point_index,
+            stale: CanvasRect::empty(),
+        });
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;
         slot.render_state = render_state;
         slot.valid = true;
-
-        // Copy bbox region from stroke texture to slot texture.
-        if let Some((layer_rect, _)) = region {
-            slot.ensure_texture(
-                device,
-                layer_rect.width,
-                layer_rect.height,
-                stroke.texture.format(),
-                &extra_formats,
-            );
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: stroke.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: layer_rect.x0(),
-                        y: layer_rect.y0(),
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: slot
-                        .texture
-                        .as_ref()
-                        .expect("ensure_texture just allocated the slot"),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: layer_rect.width,
-                    height: layer_rect.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            // Same region, same coordinates: the accumulators are layer-sized
-            // and grown in lockstep with the stroke buffer, so one rect
-            // addresses all of them.
-            for (src, dst) in extra.iter().zip(slot.extra.iter()) {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: src,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: layer_rect.x0(),
-                            y: layer_rect.y0(),
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: dst,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: layer_rect.width,
-                        height: layer_rect.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-        }
 
         // Coverage invariant: after every save, at least one valid slot
         // must sit at or below the divergence boundary. If this fires, the
@@ -416,7 +461,7 @@ impl CheckpointRing {
     /// Whether the ring satisfies the coverage invariant for the given
     /// stabilizer state: a valid slot exists with `vi < tip_vi − max_div`.
     ///
-    /// Strict inequality because `restore_before(div_idx)` returns the slot
+    /// Strict inequality because `find_before(div_idx)` returns the slot
     /// with the largest `vi < div_idx`, and the worst-case `div_idx` is
     /// `tip_vi − max_div`. At stroke start (when `tip_vi ≤ max_div`), the
     /// reachable divergence window includes `vi = 0` and no anchor below it
@@ -450,119 +495,111 @@ impl CheckpointRing {
         best.map(|(idx, _)| idx)
     }
 
-    /// Find and restore the best checkpoint before `div_vector_index`.
+    /// Find the best checkpoint strictly before `div_vector_index` and
+    /// work out what restoring it takes: the region a rewind to it undoes
+    /// is the footprint of every dab after it, read from `save_points`
+    /// *before* the caller truncates them.
     ///
-    /// Copies the checkpoint's bbox region back onto the stroke buffer.
-    /// **Does not clear outside the bbox**: the caller must establish the
-    /// outside-bbox initial state before calling this (e.g. via
-    /// `StrokeEngine::begin_stroke`, which delegates to the active
-    /// terminal's lifecycle hook). For paint, that's a transparent clear;
-    /// for a warp/smudge terminal, it's a copy of the pre-stroke layer; the
-    /// ring doesn't care which; it only restores the mutated region.
-    ///
-    /// Returns the checkpoint metadata for the caller to restore engine
-    /// state.
+    /// Returns `None` when no valid slot precedes the index (the caller
+    /// then re-renders the whole stroke).
+    pub fn find_before(
+        &self,
+        div_vector_index: usize,
+        save_points: &SavePointStore,
+    ) -> Option<CheckpointRestore> {
+        let slot_idx = self.best_slot_before(div_vector_index)?;
+        let slot = &self.slots[slot_idx];
+        let region = save_points.dirty_after(slot.save_point_index);
+        Some(CheckpointRestore {
+            vector_index: slot.vector_index,
+            render_state: slot.render_state.clone(),
+            rewind: Rewind {
+                save_point_index: slot.save_point_index,
+                region,
+            },
+            reset: (!slot.frame.contains(region)).then_some(region),
+            slot: slot_idx,
+        })
+    }
+
+    /// Copy the rewound region back from the checkpoint `find_before`
+    /// chose, for the stroke buffer and each channel. Outside the region
+    /// the scratch already equals the checkpoint; inside it, the part the
+    /// slot's frame covers is exact by the content invariant and the rest
+    /// (`CheckpointRestore::reset`) is the terminal's baseline, which the
+    /// caller must have established first (`StrokeEngine::begin_stroke`
+    /// over that rect: a transparent clear for paint, a copy of the
+    /// pre-stroke layer for a warp or smudge terminal; the ring does not
+    /// care which).
     ///
     /// `stroke` pairs the stroke buffer with the active layer's *current*
-    /// canvas extent, used to translate the slot's canvas-coord bbox to
-    /// texture-local coords (which may differ from save time if the layer
+    /// canvas extent, which may be larger than at save time if the layer
     /// has grown in the meantime; the stroke buffer's contents are rebased
-    /// by `StrokeBuffer::grow_preserving` to track the new frame, so this
-    /// translation produces the matching texture origin).
-    pub fn restore_before(
+    /// by `StrokeBuffer::grow_preserving` to track the new frame, and the
+    /// slot's frame is in canvas coordinates, so the copy lands where it
+    /// should, and `reset` covers the grown part. Must run before any
+    /// save changes the ring.
+    pub fn restore(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         stroke: &CanvasFrame<'_>,
         extra: &[&wgpu::Texture],
-        div_vector_index: usize,
-    ) -> Option<CheckpointRestore> {
-        let slot_idx = self.best_slot_before(div_vector_index)?;
-        let slot = &self.slots[slot_idx];
-
-        // Copy checkpoint bbox region back to stroke buffer. The caller has
-        // already reset outside-bbox pixels to the terminal's starting
-        // state, so only the mutated region needs restoring here, and a
-        // checkpoint that snapshotted no texels (nothing had been painted
-        // yet) is fully restored by that reset alone.
-        if let Some((layer_rect, texture)) = stroke
-            .canvas_to_layer_rect(slot.canvas_bbox)
-            .filter(|r| !r.is_empty())
-            .zip(slot.texture.as_ref())
-        {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+        cp: &CheckpointRestore,
+    ) {
+        let slot = &self.slots[cp.slot];
+        debug_assert!(
+            slot.valid && slot.save_point_index == cp.rewind.save_point_index,
+            "checkpoint slot changed between find_before and restore"
+        );
+        let Some(texture) = slot.texture.as_ref() else {
+            return;
+        };
+        slot.frame(texture)
+            .copy_rect_to(encoder, stroke, cp.rewind.region);
+        // Restore the accumulators the stroke buffer's pixels were derived
+        // from, or the next resolve recomputes this region from state
+        // describing dabs that were just discarded.
+        for (dst, src) in extra.iter().zip(&slot.extra) {
+            slot.frame(src).copy_rect_to(
+                encoder,
+                &CanvasFrame {
+                    texture: dst,
+                    canvas_extent: stroke.canvas_extent,
                 },
-                wgpu::TexelCopyTextureInfo {
-                    texture: stroke.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: layer_rect.x0(),
-                        y: layer_rect.y0(),
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: layer_rect.width,
-                    height: layer_rect.height,
-                    depth_or_array_layers: 1,
-                },
+                cp.rewind.region,
             );
-
-            // Restore the accumulators the stroke buffer's pixels were
-            // derived from, or the next resolve recomputes this region from
-            // state describing dabs that were just discarded.
-            for (dst, src) in extra.iter().zip(slot.extra.iter()) {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: src,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: dst,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: layer_rect.x0(),
-                            y: layer_rect.y0(),
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: layer_rect.width,
-                        height: layer_rect.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
         }
-
-        Some(CheckpointRestore {
-            save_point_index: slot.save_point_index,
-            vector_index: slot.vector_index,
-            render_state: slot.render_state.clone(),
-        })
     }
 
-    /// Invalidate all checkpoints with vector_index >= threshold.
-    pub fn invalidate_from(&mut self, vector_index: usize) {
+    /// Invalidate all checkpoints with vector_index >= threshold, and
+    /// record on every invalid slot written after the rewind's restore
+    /// point that it now equals that point everywhere outside the rewound
+    /// region (content invariant 4): its dabs after the restore point were
+    /// discarded, and all of them lie inside `rewind.region`.
+    pub fn invalidate_from(&mut self, vector_index: usize, rewind: Rewind) {
         for slot in &mut self.slots {
             if slot.valid && slot.vector_index >= vector_index {
                 slot.valid = false;
             }
+            if slot.valid {
+                continue;
+            }
+            if let Some(c) = slot.content.as_mut() {
+                if c.save_point_index > rewind.save_point_index {
+                    c.save_point_index = rewind.save_point_index;
+                    c.stale = c.stale.union(rewind.region);
+                }
+            }
         }
     }
 
-    /// Invalidate all checkpoints.
+    /// Invalidate all checkpoints. The textures survive for reuse but
+    /// nothing in them is trusted: the next save into a slot copies its
+    /// whole frame.
     pub fn clear(&mut self) {
         for slot in &mut self.slots {
             slot.valid = false;
+            slot.content = None;
         }
     }
 
@@ -592,7 +629,7 @@ impl CheckpointRing {
     /// at `vi=0` and all subsequent events can restore from it.
     ///
     /// Without this anchor, the first ~`spacing` events of every stroke
-    /// fall back to full re-render (`restore_before` finds nothing for
+    /// fall back to full re-render (`find_before` finds nothing for
     /// `div_idx ∈ [1..spacing]`), the ring clears on fallback, and the
     /// cycle repeats until `tip_vi` crosses `spacing`. Empirically, that
     /// produced ~15 catastrophic full re-renders per stroke at high
@@ -603,15 +640,15 @@ impl CheckpointRing {
         max_divergence_window: usize,
     ) -> Vec<usize> {
         let spacing = Self::spacing(max_divergence_window);
-        let range = tip_vi.saturating_sub(start_vi);
-        if range == 0 {
-            return vec![];
-        }
-
         let mut boundaries = Vec::new();
-        // Coverage anchor: see invariant above.
+        // Coverage anchor: see invariant above. Pushed even when the range
+        // holds only `vi = 0`: a stroke's first flush can render a single
+        // vertex, and the anchor is what its later rewinds restore to.
         if start_vi == 0 {
             boundaries.push(0);
+        }
+        if tip_vi <= start_vi {
+            return boundaries;
         }
         let mut pos = start_vi + spacing;
         while pos < tip_vi {
@@ -627,6 +664,277 @@ impl CheckpointRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cp() -> RenderCheckpoint {
+        RenderCheckpoint {
+            last_point: None,
+            accumulated_distance: 0.0,
+            leftover_distance: 0.0,
+            last_dab_size: [0.0, 0.0],
+            last_dab_pos: None,
+            dab_count: 0,
+            stamp_angle: None,
+        }
+    }
+
+    fn r(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+        CanvasRect::from_xywh(x, y, w, h)
+    }
+
+    /// Put `slot` at save point `sp` (vector index `sp` too) with exact
+    /// content over `frame`, as a save leaves it.
+    fn seed_content(ring: &mut CheckpointRing, slot: usize, sp: usize, frame: CanvasRect) {
+        let s = &mut ring.slots[slot];
+        s.frame = frame;
+        s.content = Some(SlotContent {
+            save_point_index: sp,
+            stale: CanvasRect::empty(),
+        });
+        s.save_point_index = sp;
+        s.vector_index = sp;
+        s.valid = true;
+    }
+
+    fn content_of(ring: &CheckpointRing, slot: usize) -> Option<(usize, CanvasRect)> {
+        ring.slots[slot]
+            .content
+            .as_ref()
+            .map(|c| (c.save_point_index, c.stale))
+    }
+
+    /// Content invariant 4 through two rewinds: what a save copies is the
+    /// slot's stale rect plus the range dirtied since its content index,
+    /// clipped to the frame; a slot with unknown content copies its whole
+    /// frame.
+    #[test]
+    fn copy_region_tracks_stale_and_dirty_through_rewinds() {
+        // Dab `i` at x = 10 i, one per vector index.
+        let mut store = SavePointStore::new();
+        for i in 0..6 {
+            store.push(r(i as i32 * 10, 0, 10, 10), i, cp());
+        }
+        let frame = r(0, 0, 256, 256);
+        let mut ring = CheckpointRing::new();
+        seed_content(&mut ring, 0, 1, frame);
+        seed_content(&mut ring, 2, 4, frame);
+        ring.slots[1].frame = frame; // content unknown
+
+        // A save at 4 into the slot at 1 copies dabs 2..=4 only.
+        assert_eq!(ring.slots[0].copy_region(&store, 4), r(20, 0, 30, 10));
+        assert_eq!(ring.slots[1].copy_region(&store, 4), frame);
+
+        // Rewind to save point 2 from tip 5 with divergence at 3: the slot
+        // at 4 is invalidated and now equals point 2 outside dabs 3..=5.
+        let region = store.dirty_after(2);
+        assert_eq!(region, r(30, 0, 30, 10));
+        ring.invalidate_from(
+            3,
+            Rewind {
+                save_point_index: 2,
+                region,
+            },
+        );
+        assert!(!ring.slots[2].valid);
+        assert_eq!(content_of(&ring, 2), Some((2, region)));
+        assert!(
+            ring.slots[0].valid,
+            "a slot below the divergence keeps its content"
+        );
+        assert_eq!(content_of(&ring, 0), Some((1, CanvasRect::empty())));
+
+        // The replay rewrites dabs 3 and 4 elsewhere.
+        store.truncate(3);
+        store.push(r(100, 0, 10, 10), 3, cp());
+        store.push(r(110, 0, 10, 10), 4, cp());
+        // A save at 4 into the invalidated slot copies stale plus (2, 4].
+        assert_eq!(ring.slots[2].copy_region(&store, 4), r(30, 0, 90, 10));
+        // Into the valid slot at 1: (1, 4] only.
+        assert_eq!(ring.slots[0].copy_region(&store, 4), r(20, 0, 100, 10));
+
+        // A second rewind to an earlier point (0) widens the already-stale
+        // slot and catches the slot at 1 as well.
+        let region2 = store.dirty_after(0);
+        assert_eq!(region2, r(10, 0, 110, 10));
+        ring.invalidate_from(
+            1,
+            Rewind {
+                save_point_index: 0,
+                region: region2,
+            },
+        );
+        assert_eq!(content_of(&ring, 2), Some((0, region.union(region2))));
+        assert_eq!(content_of(&ring, 0), Some((0, region2)));
+        assert_eq!(content_of(&ring, 1), None);
+
+        // The copy is clipped to the frame.
+        ring.slots[3].frame = r(0, 0, 64, 64);
+        ring.slots[3].content = Some(SlotContent {
+            save_point_index: 0,
+            stale: CanvasRect::empty(),
+        });
+        assert_eq!(ring.slots[3].copy_region(&store, 4), r(10, 0, 54, 10));
+
+        // `clear()` forgets everything: every slot copies its whole frame.
+        ring.clear();
+        for i in 0..4 {
+            assert_eq!(content_of(&ring, i), None);
+            assert_eq!(ring.slots[i].copy_region(&store, 4), ring.slots[i].frame);
+        }
+    }
+
+    /// On a device: a slot invalidated by a rewind still holds the texels
+    /// of the discarded dabs. The next save into it must copy its stale
+    /// rect along with the newly dirtied range, or a later restore from
+    /// it resurrects a dab that no longer exists.
+    #[test]
+    fn resave_of_an_invalidated_slot_overwrites_discarded_dabs() {
+        use crate::gpu::test_utils::{readback_texture, test_device};
+        let (device, queue) = test_device();
+        let extent = r(0, 0, 128, 128);
+        let scratch = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scratch"),
+            size: wgpu::Extent3d {
+                width: extent.width,
+                height: extent.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let frame = CanvasFrame {
+            texture: &scratch,
+            canvas_extent: extent,
+        };
+        // A "dab": a solid rect written straight into the scratch.
+        let paint = |rect: CanvasRect, value: u8| {
+            let bytes = vec![value; (rect.width * rect.height * 4) as usize];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &scratch,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: rect.x0() as u32,
+                        y: rect.y0() as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(rect.width * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: rect.width,
+                    height: rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        let mut store = SavePointStore::new();
+        let mut ring = CheckpointRing::new();
+        let save = |ring: &mut CheckpointRing, store: &SavePointStore, index: usize| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            ring.save(
+                &device,
+                &mut encoder,
+                &frame,
+                &[],
+                index,
+                index,
+                store,
+                cp(),
+                index,
+                0,
+            );
+            queue.submit([encoder.finish()]);
+        };
+
+        let (a, b, c, d) = (
+            r(10, 10, 8, 8),
+            r(60, 60, 8, 8),
+            r(100, 100, 8, 8),
+            r(56, 56, 16, 16),
+        );
+        paint(a, 0xAA);
+        store.push(a, 0, cp());
+        save(&mut ring, &store, 0);
+        paint(b, 0xBB);
+        store.push(b, 1, cp());
+        save(&mut ring, &store, 1);
+
+        // Rewind to index 0: dab 1 is discarded. The frame covers the
+        // region, so no reset; the restore writes the slot's zeros over B.
+        let found = ring.find_before(1, &store).unwrap();
+        assert_eq!(found.rewind.region, b);
+        assert_eq!(found.reset, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        ring.restore(&mut encoder, &frame, &[], &found);
+        queue.submit([encoder.finish()]);
+        store.truncate(1);
+        ring.invalidate_from(1, found.rewind);
+
+        // The replay puts dab 1 at C instead, and the save at index 1 lands
+        // in the invalidated slot, which still holds dab 1 at B.
+        paint(c, 0xCC);
+        store.push(c, 1, cp());
+        save(&mut ring, &store, 1);
+        // Dab 2 covers B, so a rewind to index 1 restores B from that slot.
+        paint(d, 0xDD);
+        store.push(d, 2, cp());
+        let found = ring.find_before(2, &store).unwrap();
+        assert_eq!(found.rewind.region, d);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        ring.restore(&mut encoder, &frame, &[], &found);
+        queue.submit([encoder.finish()]);
+
+        let out = readback_texture(
+            &device,
+            &queue,
+            &scratch,
+            wgpu::TextureFormat::Rgba8Unorm,
+            extent.width,
+            extent.height,
+        );
+        let px = |x: i32, y: i32| out[((y as u32 * extent.width + x as u32) * 4) as usize];
+        assert_eq!(px(12, 12), 0xAA, "dab 0 is untouched");
+        assert_eq!(px(102, 102), 0xCC, "the replayed dab 1 is untouched");
+        assert_eq!(px(58, 58), 0, "dab 2 is undone");
+        assert_eq!(
+            px(62, 62),
+            0,
+            "the discarded dab 1 must not come back through the re-saved slot"
+        );
+    }
+
+    /// `find_before` reports the dabs after the checkpoint as the region
+    /// to restore, and asks for a reset only when the slot's frame does
+    /// not cover it.
+    #[test]
+    fn find_before_reports_region_and_reset() {
+        let mut store = SavePointStore::new();
+        for i in 0..4 {
+            store.push(r(i as i32 * 100, 0, 10, 10), i, cp());
+        }
+        let mut ring = CheckpointRing::new();
+        seed_content(&mut ring, 0, 1, r(0, 0, 256, 256));
+        let found = ring.find_before(2, &store).expect("slot at 1 precedes 2");
+        assert_eq!(found.vector_index, 1);
+        assert_eq!(found.rewind.save_point_index, 1);
+        assert_eq!(found.rewind.region, r(200, 0, 110, 10));
+        assert_eq!(found.reset, Some(r(200, 0, 110, 10)));
+
+        ring.slots[0].frame = r(0, 0, 512, 256);
+        let found = ring.find_before(2, &store).unwrap();
+        assert_eq!(found.reset, None, "the frame covers the rewound region");
+
+        assert!(ring.find_before(1, &store).is_none());
+    }
 
     /// Seed the ring's valid slots with the given `vi` values. Test-only;
     /// `pick_slot` and `has_anchor` only read `vector_index` and `valid`, so
@@ -781,7 +1089,13 @@ mod tests {
                 .map(|v| v + 1)
                 .unwrap_or(0);
             // Invalidate slots at or after div_idx (mirrors painting.rs).
-            ring.invalidate_from(div_idx);
+            ring.invalidate_from(
+                div_idx,
+                Rewind {
+                    save_point_index: 0,
+                    region: CanvasRect::empty(),
+                },
+            );
             // Replay segment boundaries.
             let boundaries = CheckpointRing::compute_segment_boundaries(start_vi, tip, max_div);
             let mut seg_start = start_vi;
@@ -801,7 +1115,7 @@ mod tests {
                 vis_sorted(&ring)
             );
             // Density: every reachable div_idx in [tip-max_div, tip] should
-            // find a slot strictly before it (no `restore_before` returning
+            // find a slot strictly before it (no `find_before` returning
             // None within the window).
             for d in tip.saturating_sub(max_div)..=tip {
                 let has = ring.slots.iter().any(|s| s.valid && s.vector_index < d);

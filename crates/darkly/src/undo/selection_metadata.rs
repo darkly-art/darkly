@@ -1,8 +1,5 @@
-use std::collections::{HashMap, HashSet};
-
 use crate::coord::WindowRect;
 use crate::document::Document;
-use crate::layer::LayerId;
 
 use super::UndoAction;
 
@@ -36,14 +33,12 @@ impl SelectionMetadataAction {
 }
 
 impl UndoAction for SelectionMetadataAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
     fn restores_selection_metadata(&self) -> bool {

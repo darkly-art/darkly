@@ -38,6 +38,12 @@ pub struct LayerTexture {
     /// have to reach into `texture.format()`; matches what the document-side
     /// `PixelBuffer` records.
     format: wgpu::TextureFormat,
+    /// Usage flags beyond the common set every layer texture carries (e.g.
+    /// `STORAGE_BINDING` for a vector layer), and the debug label. Kept so
+    /// [`reallocated`](Self::reallocated) can produce the same kind of
+    /// texture at another extent.
+    extra_usage: wgpu::TextureUsages,
+    label: &'static str,
 }
 
 impl LayerTexture {
@@ -109,21 +115,27 @@ impl LayerTexture {
         t
     }
 
-    /// Allocate a texture at `extent` matching an existing node texture's
-    /// `format`: the reallocation constructor behind resize/staging paths,
-    /// which are format-agnostic. The format is this type's own fact, so the
-    /// per-format dispatch (and its unsupported-format panic) lives here.
-    pub fn new_for_format(
+    /// A texture like this one (format, usage, label, default fill) at
+    /// `extent`: the reallocation constructor behind resize, staging and
+    /// resample paths, which don't care what kind of texture they move.
+    pub fn reallocated(
+        &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
         extent: CanvasRect,
     ) -> Self {
-        match format {
-            wgpu::TextureFormat::R8Unorm => Self::new_mask_with_extent(device, queue, extent),
-            wgpu::TextureFormat::Rgba8Unorm => Self::with_bounds(device, extent),
-            other => panic!("LayerTexture::new_for_format: unsupported format {other:?}"),
-        }
+        let mut t = Self::with_format(
+            device,
+            Some(queue),
+            extent.width,
+            extent.height,
+            self.format,
+            self.extra_usage,
+            self.label,
+        );
+        t.offset_x = extent.origin.x;
+        t.offset_y = extent.origin.y;
+        t
     }
 
     fn with_format(
@@ -133,7 +145,7 @@ impl LayerTexture {
         height: u32,
         format: wgpu::TextureFormat,
         extra_usage: wgpu::TextureUsages,
-        label: &str,
+        label: &'static str,
     ) -> Self {
         let bpp = format.block_copy_size(None).unwrap_or(1);
         let fill_byte = match format {
@@ -197,6 +209,8 @@ impl LayerTexture {
             offset_x: 0,
             offset_y: 0,
             format,
+            extra_usage,
+            label,
         }
     }
 
@@ -241,6 +255,15 @@ impl LayerTexture {
         } else {
             None
         }
+    }
+
+    /// The affine taking canvas-space coordinates into this texture's local
+    /// frame, for renderers that draw through a transform instead of
+    /// addressing texels. The unbounded sibling of
+    /// [`canvas_to_layer`](Self::canvas_to_layer): points outside the extent
+    /// map outside the texture rather than to `None`.
+    pub fn canvas_to_layer_affine(&self) -> kurbo::Affine {
+        kurbo::Affine::translate((-self.offset_x as f64, -self.offset_y as f64))
     }
 
     /// Intersect a canvas-space rect with the texture's extent and translate
@@ -303,6 +326,40 @@ impl<'a> CanvasFrame<'a> {
         let ly = (clipped.origin.y - self.canvas_extent.origin.y) as u32;
         Some(LayerRect::from_xywh(lx, ly, clipped.width, clipped.height))
     }
+
+    /// Copy the canvas rect `rect` from this frame into `dst`: the rect is
+    /// clipped to both extents and each side is addressed in its own
+    /// texture-local coordinates, so two frames at different canvas
+    /// origins exchange a region by its canvas position alone. A rect
+    /// disjoint from either frame copies nothing.
+    pub fn copy_rect_to(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &CanvasFrame<'_>,
+        rect: CanvasRect,
+    ) {
+        let Some(clipped) = rect
+            .intersect(self.canvas_extent)
+            .and_then(|r| r.intersect(dst.canvas_extent))
+        else {
+            return;
+        };
+        let (Some(src), Some(dst_local)) = (
+            self.canvas_to_layer_rect(clipped),
+            dst.canvas_to_layer_rect(clipped),
+        ) else {
+            return;
+        };
+        crate::gpu::blit_region(
+            encoder,
+            self.texture,
+            (src.x0(), src.y0()),
+            dst.texture,
+            (dst_local.x0(), dst_local.y0()),
+            clipped.width,
+            clipped.height,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +370,104 @@ mod tests {
     fn make_layer(off_x: i32, off_y: i32, w: u32, h: u32) -> LayerTexture {
         let (device, _queue) = test_device();
         LayerTexture::with_bounds(&device, CanvasRect::from_xywh(off_x, off_y, w, h))
+    }
+
+    /// Two frames at different negative canvas origins exchange a rect by
+    /// its canvas position: the copy lands at each side's own local
+    /// offset and is clipped to both extents and the rect.
+    #[test]
+    fn copy_rect_to_addresses_each_frame_by_its_own_origin() {
+        use crate::gpu::test_utils::readback_texture;
+        let (device, queue) = test_device();
+        let (w, h) = (64u32, 64u32);
+        let make = |label| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let (src_tex, dst_tex) = (make("src"), make("dst"));
+        // Source pixel = its own local coordinates, so a readback of the
+        // destination says exactly which source texel landed where.
+        let pattern: Vec<u8> = (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| [x as u8, y as u8, 7, 255]))
+            .collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pattern,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let src = CanvasFrame {
+            texture: &src_tex,
+            canvas_extent: CanvasRect::from_xywh(-100, 50, w, h),
+        };
+        let dst = CanvasFrame {
+            texture: &dst_tex,
+            canvas_extent: CanvasRect::from_xywh(-80, 40, w, h),
+        };
+        // Partly outside both frames, so the clip to each extent matters.
+        let rect = CanvasRect::from_xywh(-200, 0, 150, 70);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        src.copy_rect_to(&mut encoder, &dst, rect);
+        queue.submit([encoder.finish()]);
+        let out = readback_texture(
+            &device,
+            &queue,
+            &dst_tex,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+        );
+        let landed = rect
+            .intersect(src.canvas_extent)
+            .and_then(|r| r.intersect(dst.canvas_extent))
+            .unwrap();
+        assert_eq!(landed, CanvasRect::from_xywh(-80, 50, 30, 20));
+        for dy in 0..h {
+            for dx in 0..w {
+                let (cx, cy) = (
+                    dst.canvas_extent.x0() + dx as i32,
+                    dst.canvas_extent.y0() + dy as i32,
+                );
+                let i = ((dy * w + dx) * 4) as usize;
+                let got = [out[i], out[i + 1], out[i + 2], out[i + 3]];
+                let expected = if landed.contains(CanvasRect::from_xywh(cx, cy, 1, 1)) {
+                    let sx = (cx - src.canvas_extent.x0()) as u8;
+                    let sy = (cy - src.canvas_extent.y0()) as u8;
+                    [sx, sy, 7, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
+                assert_eq!(
+                    got, expected,
+                    "destination local ({dx}, {dy}), canvas ({cx}, {cy})"
+                );
+            }
+        }
     }
 
     #[test]

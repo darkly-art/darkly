@@ -136,6 +136,7 @@ pub fn register() -> BrushNodeRegistration {
         // scratch holds offsets, not colour.
         lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
         scratch_format: crate::brush::warp_field::FIELD_FORMAT,
+        dab_pass: crate::brush::node::DabPass::InstancedDraw,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",

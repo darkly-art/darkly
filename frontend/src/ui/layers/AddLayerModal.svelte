@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import Tabs from '../Tabs.svelte';
     import { catalogs } from '../../state/catalogs.svelte';
     import { addLayerModal } from '../../state/addLayerModal.svelte';
     import { actions } from '../../actions/registry';
@@ -146,16 +147,12 @@
 
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="add-layer" role="dialog" tabindex="-1" onkeydown={onKeyDown}>
-        <nav class="tab-strip">
-            {#each shown as tab, i (tab.title)}
-                <button
-                    type="button"
-                    class="tab"
-                    class:active={i === activeTab}
-                    onclick={() => jumpTo(i)}
-                >{tab.title}</button>
-            {/each}
-        </nav>
+        <Tabs
+            orientation="column"
+            tabs={shown.map((t) => ({ id: t.title, label: t.title }))}
+            active={shown[activeTab]?.title ?? ''}
+            onselect={(id) => jumpTo(shown.findIndex((t) => t.title === id))}
+        />
 
         <div class="scroll" bind:this={scrollEl} onscroll={onScroll}>
             {#each shown as tab, ti (tab.title)}
@@ -194,38 +191,6 @@
         outline: none;
     }
 
-    .tab-strip {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 8px 0;
-        border-right: 1px solid var(--bg-hover);
-        flex-shrink: 0;
-        min-width: 150px;
-    }
-    .tab {
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        font-size: 14px;
-        font-weight: 500;
-        padding: 9px 16px;
-        cursor: pointer;
-        position: relative;
-        border-radius: 0;
-        text-align: left;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active { color: var(--text); }
-    .tab.active::after {
-        content: '';
-        position: absolute;
-        top: 6px;
-        bottom: 6px;
-        right: -1px;
-        width: 2px;
-        background: var(--accent);
-    }
 
     .scroll {
         flex: 1;

@@ -46,8 +46,8 @@ nodes:
       scale: 500
       space: 0
       texture_name: paper
-  levels:
-    type: levels
+  remap:
+    type: remap
     inputs:
       in_low: 0.72
   multiply:
@@ -70,12 +70,12 @@ nodes:
       select: true
 connections:
 - circle.mask -> multiply.b
-- curve.output -> levels.in_low
+- curve.output -> remap.in_low
 - curve_2.output -> paint.build_flow
 - curve_3.output -> multiply.a
 - image.color -> split_color.color
-- levels.output -> stamp.tip
-- multiply.result -> levels.input
+- remap.output -> stamp.tip
+- multiply.result -> remap.input
 - paint_color.color -> stamp.color
 - pen_input.drawing_angle -> switch.in_0_scalar
 - pen_input.position -> paint.position

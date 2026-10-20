@@ -2,6 +2,7 @@
 
 use darkly_macros::handlers;
 
+use super::pending_edit::{EditSessionKind, PendingEdit};
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
 use std::sync::Arc;
@@ -100,6 +101,59 @@ impl TransformTarget {
     }
 }
 
+/// A destructive transform session, open from `begin_transform` until it is
+/// committed or cancelled.
+pub(crate) struct TransformEdit;
+
+impl PendingEdit for TransformEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "transform",
+            display_name: "Transform",
+            icon: "fa6-solid:up-down-left-right",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.transform_session.is_some()
+    }
+
+    /// A refused commit keeps the session, so `resolve` reports it held.
+    fn apply(&self, engine: &mut DarklyEngine) {
+        engine.commit_transform_session();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.cancel_floating();
+    }
+}
+
+/// Pasted content floating over its target until it is committed or
+/// cancelled.
+pub(crate) struct FloatingEdit;
+
+impl PendingEdit for FloatingEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "floating",
+            display_name: "Pasted content",
+            icon: "fa6-solid:paste",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.floating.is_some()
+    }
+
+    fn apply(&self, engine: &mut DarklyEngine) {
+        engine.commit_floating();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.cancel_floating();
+    }
+}
+
 #[handlers]
 impl DarklyEngine {
     pub(crate) fn pixel_transform_link_policy(&self) -> TransformLinkPolicy {
@@ -120,29 +174,6 @@ impl DarklyEngine {
     fn validate_pixel_transform_plan(&self, plan: &PixelTransformPlan) -> bool {
         plan.link_policy == self.pixel_transform_link_policy()
             && self.doc.validate_pixel_transform_plan(plan)
-    }
-
-    /// Auto-commit any active floating content before performing other edits.
-    /// Call this before operations that would conflict with floating content
-    /// (layer switch, paint, undo, etc.).
-    pub fn auto_commit_floating(&mut self) {
-        let _ = self.resolve_transform_conflict();
-    }
-
-    /// Generic chokepoint for document edits that can invalidate transform
-    /// topology, capability, selection, or target resources.
-    pub(crate) fn resolve_transform_conflict(&mut self) -> bool {
-        if self.pending_transform.take().is_some() {
-            self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
-        }
-        if self.transform_session.is_some() {
-            return self.commit_transform_session() && self.transform_session.is_none();
-        }
-        if self.floating.is_some() {
-            self.commit_floating();
-            return self.floating.is_none();
-        }
-        true
     }
 
     /// Check if there is active floating content.
@@ -201,7 +232,7 @@ impl DarklyEngine {
             return false;
         }
         // Auto-commit any existing floating content first.
-        self.auto_commit_floating();
+        self.commit_pending_edits();
 
         // Pull pixels from either clipboard variant; a normal copy produces a
         // rich `Layer` clip, so reading only flat image clips here made
@@ -265,7 +296,7 @@ impl DarklyEngine {
         active_layer_id: Option<LayerId>,
     ) -> LayerId {
         // Auto-commit any existing floating content first.
-        self.auto_commit_floating();
+        self.commit_pending_edits();
 
         // Size the new layer to fit the paste, so off-canvas pixels are
         // preserved when the floating commits.
@@ -327,7 +358,7 @@ impl DarklyEngine {
     /// Begin one fixed-membership destructive transform session.
     #[handler]
     pub fn begin_transform(&mut self, id: LayerId) -> bool {
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
         self.transform_setup_error = None;
         let generation = self.transform_setup_generation;
@@ -847,7 +878,6 @@ impl DarklyEngine {
                 &mut self.readbacks,
                 "transform-stage-undo-entry",
                 target.node_id,
-                &frame,
                 &snapshot,
                 target.document_bounds,
             ));
@@ -883,7 +913,6 @@ impl DarklyEngine {
                     &mut self.readbacks,
                     "transform-selection-undo-entry",
                     filter_id,
-                    &frame,
                     &snapshot,
                     rect,
                 ),
@@ -1013,8 +1042,7 @@ impl DarklyEngine {
                 );
             });
 
-            let slot = self.doc.slot_of(layer_id).unwrap_or_default();
-            self.push_undo(Box::new(EntityAddAction::new(layer_id, slot)));
+            self.record_entity_add(layer_id);
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
@@ -1071,16 +1099,14 @@ impl DarklyEngine {
 
         // The undo entry has to be committed BEFORE the ClearShape + commit
         // pass writes to the target, because `commit_region` reads from the
-        // scratch (which holds the pre-clear state). Separate encode-and-
-        // submit so the clear/commit pass sees the scratch upload done.
-        let frame = layer_frame!();
+        // snapshot (which holds the pre-clear state). Separate encode-and-
+        // submit so the clear/commit pass sees the snapshot upload done.
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
             &mut self.readbacks,
             "transform-commit-undo",
             layer_id,
-            &frame,
             &commit_snap,
             affected_canvas_rect,
         );
@@ -1285,8 +1311,7 @@ impl DarklyEngine {
         // target, so there is nothing to restore.
         self.discard_floating();
 
-        let slot = self.doc.slot_of(id).unwrap_or_default();
-        self.push_undo(Box::new(crate::undo::EntityAddAction::new(id, slot)));
+        self.record_entity_add(id);
         self.compositor.mark_dirty();
         Ok(id)
     }
@@ -1408,8 +1433,7 @@ impl DarklyEngine {
         };
         let FloatingMode::Paste { created_layer_id } = fc.mode;
         if let Some(id) = created_layer_id {
-            self.doc.detach_for_undo(id);
-            self.compositor.dispose_layer(id);
+            self.discard_unrecorded_layer(id);
         }
         self.compositor.clear_floating_content();
         if let Some(selection) = self.selection_cpu_cache().map(<[u8]>::to_vec) {

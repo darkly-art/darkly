@@ -101,12 +101,14 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("clone compiles");
     let mut stroke_buffer = StrokeBuffer::new(
         &device,
         W,
         W,
         &pipelines,
-        darkly::brush::node::COLOR_SCRATCH_FORMAT,
+        runner.scratch_format(),
+        runner.dab_pass(),
     );
 
     let layer_rect = CanvasRect::from_xywh(p.origin[0], p.origin[1], W, W);
@@ -122,7 +124,6 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
 
-    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("clone compiles");
     assert!(
         runner.samples_source(),
         "Clone brush must report samples_source"
@@ -178,7 +179,7 @@ fn render_clone(p: &CloneParams) -> Vec<u8> {
 
     {
         let mut ctx = make_ctx!("clone-begin");
-        runner.begin_stroke(&mut ctx);
+        runner.begin_stroke(&mut ctx, None);
         queue.submit([ctx.encoder.finish()]);
     }
     {
@@ -299,6 +300,7 @@ fn install_clone_brush(engine: &mut DarklyEngine) {
 /// irrelevant for clone brushes (the source snapshot drives the colour)
 /// but meaningful for the default brush used to seed layer content.
 fn paint_dab(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: [f32; 3]) {
+    engine.set_foreground_color([rgb[0], rgb[1], rgb[2], 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -309,10 +311,6 @@ fn paint_dab(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: 
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: rgb[0],
-        cg: rgb[1],
-        cb: rgb[2],
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);

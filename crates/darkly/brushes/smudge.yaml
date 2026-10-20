@@ -1,27 +1,70 @@
 name: Smudge
-description: Drags existing pigment along the stroke, the way a finger pulls through wet paint.
+description: "A fingertip dragged through the pigment already on the canvas. Pulls it along the stroke and leaves nothing of its own."
 nodes:
   pen_input:
     type: pen_input
   brush_settings:
     type: brush_settings
+    comment: Each dab moves the pigment by exactly its own step, so the smear is continuous at any spacing
     inputs:
+      size: 0.1
       spacing: 0.01
       stabilize: 0.4
   circle:
     type: circle
+    name: Fingertip
     inputs:
-      softness: 0.4
-  smudge:
-    type: smudge
+      softness: 0.6
+  curve:
+    type: curve
+    name: Squash pen pressure
+    comment: A light touch still smears; pressure mostly widens the fingertip
+    inputs:
+      curve:
+      - - 0.0
+        - 0.35
+      - - 1.0
+        - 1.0
+  strength:
+    type: user_input
+    name: Strength
+    inputs:
+      value: 0.5
+  sampler:
+    type: clone_source
+    name: Live canvas
+    comment: Samples the stroke one dab behind along the pen's motion
+    inputs:
+      source: 1
+  footprint:
+    type: multiply
+    name: Finger footprint
+    comment: The fingertip where there is something to bring; a finger that has not moved displaces nothing
+  stamp:
+    type: stamp
+  paint:
+    type: paint
+    comment: Set to Move, so each touch swaps part of what is under the finger for what the finger brought along. A smear can thin an edge as well as thicken it
+    inputs:
+      mode: 1
 connections:
-- 'pen_input.motion -> smudge.motion'
-- 'pen_input.position -> smudge.position'
-- 'pen_input.pressure -> smudge.size'
-- 'circle.mask -> smudge.mask'
+- pen_input.position -> paint.position
+- pen_input.motion -> sampler.motion
+- pen_input.pressure -> curve.input
+- curve.output -> paint.size
+- circle.mask -> stamp.tip
+- circle.mask -> footprint.a
+- sampler.coverage -> footprint.b
+- footprint.result -> paint.coverage
+- sampler.color -> stamp.color
+- stamp.dab -> paint.rgba
+- strength.value -> paint.build_flow
 exposed_ports:
-  "brush_settings.stabilize": {}
-  "brush_settings.size": {}
-  "circle.softness": {}
-  "smudge.opacity": {}
-  "smudge.rate": {}
+  brush_settings.size: {}
+  brush_settings.stabilize: {}
+  circle.softness: {}
+  strength.value:
+    label: Strength
+    description: How much of what is under the finger moves with each touch
+    icon: fa6-solid:droplet
+  paint.opacity: {}

@@ -149,11 +149,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install wasm-bindgen CLI + binaryen
+      - name: Install binaryen + wasm-bindgen CLI
+        # binaryen first: `make tools` checks for wasm-opt.
         run: |
-          make tools
           sudo apt-get update
           sudo apt-get install -y binaryen
+          make tools
       - name: npm ci
         working-directory: frontend
         run: npm ci
@@ -207,11 +208,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install wasm-bindgen CLI, binaryen, xvfb
+      - name: Install binaryen, xvfb, wasm-bindgen CLI
+        # binaryen first: `make tools` checks for wasm-opt.
         run: |
-          make tools
           sudo apt-get update
           sudo apt-get install -y binaryen xvfb
+          make tools
       - run: make deps
       - run: make app
 

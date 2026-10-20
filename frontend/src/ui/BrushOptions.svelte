@@ -3,7 +3,7 @@
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
-    import { brushSession, focusedBrushTool } from '../tools/brush.svelte';
+    import { brushSession, focusedBrushTool, strokeEditOpen, toggleStrokeEdit } from '../tools/brush.svelte';
     import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
@@ -81,7 +81,7 @@
         app.engine?.api.setBrushBlendMode({ mode: brushSession.eraseMode ? 1 : 0 });
     }
 
-    // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
+    // Brushes whose terminal doesn't honor `gpu.blend_mode` (blur,
     // liquify, watercolor) report `supportsErase = false`. Reactively
     // force erase-mode off when the artist switches to one of them so the
     // session flag and the engine flag don't drift out of sync with the
@@ -128,9 +128,25 @@
                 </span>
                 <span class="bar-control-text">
                     <span class="bar-control-label">Brush</span>
-                    <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
+                    <span class="bar-control-value name">
+                        {brushGraph.activeBrush ?? 'Custom'}{#if brushGraph.modified}<span
+                                class="modified"
+                                title="Unsaved changes to this brush">*</span
+                            >{/if}
+                    </span>
                 </span>
             </button>
+            {#if brushGraph.modified}
+                <!-- Tweaks survive switching brushes, so picking a brush again
+                     no longer puts it back the way it was saved; this does. -->
+                <button
+                    class="icon-btn revert-brush"
+                    onclick={() => void brushGraph.revert()}
+                    title={tooltipForAction('Revert to saved brush', 'revertBrush')}
+                >
+                    <Icon name="fa6-solid:rotate-left" />
+                </button>
+            {/if}
         </div>
 
         <BrushExplorer bind:open={explorerOpen} />
@@ -183,7 +199,7 @@
 
         <!-- Erase-mode toggle. Brush-tool session state lives on the tool
              itself; this toggle just mirrors it and pushes the engine flag.
-             Hidden for brushes whose terminal opts out of erase (smudge,
+             Hidden for brushes whose terminal opts out of erase (blur,
              liquify, watercolor) via `supports_erase = false` on its node
              registration: for those brushes flipping `gpu.blend_mode`
              would do nothing, so the toggle would be a lie. -->
@@ -198,6 +214,20 @@
                 title={tooltipForAction('Erase mode', 'toggleEraseMode')}
             />
         {/if}
+
+        <!-- Stroke edit: while on, every change to the brush or colour
+             redraws the last stroke; toggling it off applies the edit. The
+             engine owns the mode and reports it in `engineState`, which any
+             edit of the document also clears. -->
+        <Scrub
+            mode="toggle"
+            icon="fa6-solid:pen-nib"
+            label="Edit stroke"
+            valueLabel={strokeEditOpen(app.engineState) ? 'On' : 'Off'}
+            active={strokeEditOpen(app.engineState)}
+            onToggle={() => void toggleStrokeEdit()}
+            title={tooltipForAction('Edit last stroke', 'toggleStrokeEdit')}
+        />
     {/snippet}
 
     {#snippet right()}
@@ -306,6 +336,12 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .revert-brush {
+        padding: 4px;
+        font-size: 12px;
+        flex-shrink: 0;
     }
 
     .error-badge {

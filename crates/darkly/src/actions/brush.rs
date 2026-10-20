@@ -20,10 +20,28 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:up-right-and-down-left-from-center",
     },
     ActionDef {
+        id: "toggleStrokeEdit",
+        display_name: "Edit Last Stroke",
+        description: "Redraw the last brush stroke with every change to the brush or colour until you apply or discard; it stays editable until your next action.",
+        icon: "fa6-solid:pen-nib",
+    },
+    ActionDef {
         id: "setCloneSource",
         display_name: "Set Clone Source",
         description: "Hold the modifier and click on the canvas to set the point the Clone brush copies from.",
         icon: "fa6-solid:crosshairs",
+    },
+    ActionDef {
+        id: "cycleRecentBrush",
+        display_name: "Cycle Recent Brushes",
+        description: "Switch to the brush you used before this one. Tap again right away to step further back through your recent brushes, wrapping around; pause to settle on one.",
+        icon: "fa6-solid:clock-rotate-left",
+    },
+    ActionDef {
+        id: "revertBrush",
+        display_name: "Revert to Saved Brush",
+        description: "Throw away your unsaved changes to the current brush and put it back the way it was saved.",
+        icon: "fa6-solid:rotate-left",
     },
     ActionDef {
         id: "addBrushNode",

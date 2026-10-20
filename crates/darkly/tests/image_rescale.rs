@@ -32,6 +32,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a short red horizontal stroke centred near plane `(cx, cy)`.
 fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let steps = 16;
     for i in 0..=steps {
@@ -45,10 +46,6 @@ fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32)
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -270,6 +267,7 @@ fn alpha_at(px: &[u8], w: u32, x: u32, y: u32) -> u8 {
 
 /// Paint a horizontal red brush row at plane-y `py`, sweeping plane-x `[x0, x1]`.
 fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let steps = 48;
     for i in 0..=steps {
@@ -283,10 +281,6 @@ fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1:
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -375,6 +369,7 @@ fn paint_lands_at_plane_coords_after_rescale() {
     let layer = engine.add_raster_layer(None);
 
     engine.rescale_image(2 * w, 2 * h, None); // 192x192, empty layer rescaled
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer).unwrap();
     for i in 0..2 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -386,10 +381,6 @@ fn paint_lands_at_plane_coords_after_rescale() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -785,7 +776,7 @@ fn screen_to_plane_tracks_dims_through_rescale_and_undo() {
     let _layer = engine.add_raster_layer(None);
 
     let (sw, sh) = (200.0_f32, 200.0_f32);
-    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh);
+    engine.set_view_transform(0.0, 0.0, 1.0, 0.0, false, sw, sh, 1.0);
 
     let (cx0, cy0) = engine.screen_to_plane(sw / 2.0, sh / 2.0);
     assert!(

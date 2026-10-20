@@ -108,6 +108,7 @@ fn replay_produces_paint_on_the_layer() {
         // wall-clock), so the *engine* behaves identically under either
         // pacing, only the harness's perf numbers differ.
         ReplayPacing::AsFastAsPossible,
+        None,
     );
 
     assert_eq!(timings.len(), recording.events.len());

@@ -175,16 +175,20 @@ impl TextureRegistry {
             .entry(n)
             .or_insert_with(|| {
                 let mut entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::with_capacity(n + 1);
+                // Fragment for the instanced skeletons and the cursor
+                // preview, compute for the dispatch-per-dab skeleton: the
+                // same node body samples from either.
+                let visibility = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
                 entries.push(wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 });
                 for i in 0..n {
                     entries.push(wgpu::BindGroupLayoutEntry {
                         binding: 1 + i as u32,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,

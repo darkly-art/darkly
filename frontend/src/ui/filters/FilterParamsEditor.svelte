@@ -14,7 +14,7 @@
         type CurvePoints,
         type LevelsValues,
     } from './filterParams';
-    import { channelLabel } from '../params/paramSchema';
+    import { channelLabel, visibleParams } from '../params/paramSchema';
 
     // The reusable param-editing surface for a filter's params (channel selector
     // + Curve/Levels editor + scalar rows). Both the layer properties panel and
@@ -143,7 +143,7 @@
         {/if}
     {/if}
 
-    {#each scalars as param (param.name)}
+    {#each visibleParams(scalars, params ?? []) as param (param.name)}
         {#if param.kind === 'list'}
             <ListParamEditor {param} {oninput} {onchange} />
         {:else}

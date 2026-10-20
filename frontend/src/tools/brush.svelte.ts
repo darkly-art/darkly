@@ -1,6 +1,5 @@
 import { ToolBase, type ToolDescriptor } from './registry';
 import { getActiveInstance, type DarklyInstance } from '../state/app.svelte';
-import type { Color } from '../lib/color';
 import { runHook } from './tool_session';
 import { beginPaintStroke } from './paint_stroke';
 import { brushGraph } from '../state/brush_graph.svelte';
@@ -21,6 +20,8 @@ import {
     clearCloneSourceCursor,
 } from './clone_source_cursor';
 import { isToolHoverSuppressed } from './modifier_cursor';
+import { toast } from '../state/toast.svelte';
+import type { EngineState } from '../engine/protocol';
 
 /** Brush-tool session state: an app-global artist preference (not per-document),
  *  so it stays module-level even though the brush *tool* is per-instance.
@@ -89,8 +90,9 @@ export const SIZE_STEP = 4;
 export const INITIAL_SIZE = 24;
 export const INITIAL_OPACITY = 1.0;
 
-/** Build a brush_stroke params object from a PointerEvent + the active foreground. */
-export function brushStrokeParams(e: PointerEvent, cx: number, cy: number, c: Color) {
+/** Build a brush_stroke params object from a PointerEvent. The colour is not
+ *  among them: the engine paints with the foreground the canvas view pushes. */
+export function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
     return {
         x: cx,
         y: cy,
@@ -100,10 +102,6 @@ export function brushStrokeParams(e: PointerEvent, cx: number, cy: number, c: Co
         rotation: (e.twist ?? 0) / 360, // normalize 0..359 → 0..1
         tangential_pressure: (e as any).tangentialPressure ?? 0,
         time_ms: e.timeStamp,
-        cr: c.r / 255,
-        cg: c.g / 255,
-        cb: c.b / 255,
-        ca: c.a / 255,
     };
 }
 
@@ -231,6 +229,10 @@ class BrushTool extends ToolBase {
         // Drop the on-canvas clone source marker with the tool that owns it
         // (the engine anchor persists as session state).
         clearCloneSourceCursor();
+        // Stroke edit belongs to the brush tool, whose options bar shows it:
+        // leaving the tool applies the edit. The stroke stays kept, and
+        // editable again from the brush tool, until the next action.
+        this.engine?.api.strokeEditEnd();
     }
 
     onPointerDown(e: PointerEvent, cx: number, cy: number): void {
@@ -244,7 +246,9 @@ class BrushTool extends ToolBase {
         engine.api.clearBrushCursorPreviewPose();
         this.clearHover();
         this.inst.toolCursor = 'none';
-        const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
+        // Records the foreground as recently used; the engine already has it.
+        this.inst.consumeForeground();
+        const params = brushStrokeParams(e, cx, cy);
         beginPaintStroke(engine, layerId);
         engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
         // Capture the clone dest anchor so the source marker tracks the cursor
@@ -258,14 +262,32 @@ class BrushTool extends ToolBase {
         const engine = this.engine;
         if (!engine) return;
         if (e.buttons & 1) {
-            const params = brushStrokeParams(e, cx, cy, this.inst.consumeForeground());
-            engine.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
-            strokeRecorder.addEvent(params);
+            // Device-rate samples the browser folded into this pointermove,
+            // oldest first; the dispatched event is the last of them. A
+            // browser without the method, or one that hands back an empty
+            // list, gets the dispatched event alone.
+            const coalesced = e.getCoalescedEvents?.() ?? [];
+            if (coalesced.length === 0) {
+                this.sendStrokeSample(e, cx, cy);
+            } else {
+                for (const sample of coalesced) {
+                    const p = this.screenToCanvas(sample.clientX, sample.clientY);
+                    this.sendStrokeSample(sample, p.x, p.y);
+                }
+            }
             onCloneStrokeMove(cx, cy);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
         void runHook(this.pushHoverOverlay(cursorPose(e), cx, cy));
+    }
+
+    /** Forward one pen sample of an in-progress stroke to the engine and
+     *  the stroke recorder. */
+    private sendStrokeSample(e: PointerEvent, cx: number, cy: number): void {
+        const params = brushStrokeParams(e, cx, cy);
+        this.engine?.api.strokeTo({ op: { op: 'brush_stroke', ...params } });
+        strokeRecorder.addEvent(params);
     }
 
     onPointerUp(): void {
@@ -301,6 +323,33 @@ class BrushTool extends ToolBase {
             ),
         );
     }
+}
+
+/** The id the engine's stroke-edit session kind reports in
+ *  `engineState.editSession`. */
+const STROKE_EDIT_SESSION = 'strokeEdit';
+
+/** Whether `state` reports stroke edit as the open edit session. */
+export function strokeEditOpen(state: EngineState | null | undefined): boolean {
+    return state?.editSession?.id === STROKE_EDIT_SESSION;
+}
+
+/** Enter or leave stroke edit on the focused instance's last brush stroke;
+ *  leaving applies the edit, keeping the stroke as it now stands. The engine
+ *  owns the mode and reports it in `engineState.editSession`, which every
+ *  edit of the document also clears. Only the brush tool edits strokes
+ *  (leaving it applies the edit), so from any other tool this does nothing. */
+export async function toggleStrokeEdit(): Promise<void> {
+    const inst = getActiveInstance();
+    const engine = inst?.engine;
+    if (!inst || !engine || inst.activeToolId !== 'brush') return;
+    if (strokeEditOpen(inst.engineState)) {
+        engine.api.strokeEditEnd();
+    } else if (!(await engine.api.strokeEditBegin())) {
+        toast.show('info', 'No stroke to edit');
+    }
+    // The flag reaches `engineState` with the next frame.
+    inst.requestFrame();
 }
 
 /** The focused instance's brush tool, if the brush tool is registered. Used by

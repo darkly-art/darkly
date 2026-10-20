@@ -162,13 +162,6 @@ pub fn registrations() -> Vec<RequestRegistration> {
         })
         .send()
         .resp_literal("JsonValue"),
-        RequestRegistration::new("brush_topology_version", |engine, _payload, _b| {
-            Ok(Response::json(
-                json!({ "value": engine.brush_topology_version() }),
-            ))
-        })
-        .send()
-        .resp_literal("{ value: number }"),
         RequestRegistration::new("brush_graph_validate", |engine, payload, _b| {
             let r: BrushGraphJsonReq = decode(payload)?;
             Ok(ok_or_error(engine.validate_brush_graph(&r.json)))

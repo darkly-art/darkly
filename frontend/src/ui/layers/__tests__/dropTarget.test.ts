@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-    ROW_BASE_PAD,
-    ROW_INDENT,
     bandToGap,
     gapDepthRange,
     resolveGapDrop,
+    rowIndent,
 } from '../dropTarget';
 import type { DropRow } from '../../../state/layerTree';
 
@@ -14,7 +13,7 @@ function row(id: number, depth: number, isGroup = false): DropRow {
 
 /** The pointer offset that asks for `depth`, in the panel's indent arithmetic. */
 function xFor(depth: number): number {
-    return ROW_BASE_PAD + depth * ROW_INDENT;
+    return rowIndent(depth);
 }
 
 /**
@@ -209,7 +208,7 @@ describe('the reported gesture', () => {
 });
 
 /**
- * Regression for the cross-divider drag bugs (`docs/plans/divider-as-a-node.md`).
+ * Regression for the cross-divider drag bugs.
  * The divider is a row, so the gap above it and the gap below it are distinct:
  * the user's reported panel: a veil in Viewport Effects → Group 2, then the
  * divider, then a canvas raster.

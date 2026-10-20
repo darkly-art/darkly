@@ -256,7 +256,7 @@ mod tests {
         let expected = [
             ("Clone", Some("fa6-solid:clone")),
             ("Blur", Some("mdi:blur")),
-            ("Smudge", Some("mdi:gesture-swipe")),
+            ("Smudge", Some("mdi:fingerprint")),
             ("Liquify", Some("tabler:ripple")),
             ("Ink Pen", None),
             ("Airbrush", None),

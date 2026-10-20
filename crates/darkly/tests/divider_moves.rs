@@ -1,7 +1,7 @@
 //! Moving nodes across the viewport divider.
 //!
 //! Regression coverage for the two drag bugs born of the boundary having no
-//! index in the tree (`docs/plans/divider-as-a-node.md`): a group dragged from
+//! index in the tree: a group dragged from
 //! screen space to just below the viewport threshold either landed at the
 //! bottom of screen space (reference-side inheritance) or refused with
 //! "Cannot move a layer into itself" (the boundary gap resolving into the
@@ -152,6 +152,32 @@ fn dragging_the_bottom_run_group_below_the_threshold_is_not_self_referential() {
         "the group must land in canvas space with its veil intact"
     );
     assert!(run_ids(&engine).is_empty(), "the run is empty");
+}
+
+/// The gesture in the drop-affordance report: with viewport space empty the
+/// divider is the top row, and the upper half of it is the gap above it, which
+/// the panel encodes as `After(divider)`. An effect dropped there enters
+/// screen space; a raster dropped there is refused and nothing moves.
+#[test]
+fn an_effect_dropped_on_the_empty_viewport_side_enters_screen_space() {
+    let mut engine = test_engine(16, 16);
+    let raster = engine.add_raster_layer(None);
+    let e1 = effect(&mut engine, "invert");
+    let _e2 = effect(&mut engine, "vhs");
+    assert!(run_ids(&engine).is_empty(), "viewport space starts empty");
+    let divider = divider_row_id(&engine);
+
+    engine
+        .move_layers(vec![e1], MoveTarget::After(divider))
+        .expect("an effect may enter viewport space");
+    assert_eq!(run_ids(&engine), vec![e1], "the effect is the run");
+
+    let before = tree_json(&engine);
+    let err = engine
+        .move_layers(vec![raster], MoveTarget::After(divider))
+        .expect_err("a raster cannot render in viewport space");
+    assert!(err.contains("viewport space"), "{err}");
+    assert_eq!(tree_json(&engine), before, "a refused move changes nothing");
 }
 
 /// Moving the divider itself is an ordinary layer move with ordinary undo:

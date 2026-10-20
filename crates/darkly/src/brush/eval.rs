@@ -249,26 +249,48 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
 /// established lifecycles; the four-way copy-paste that used to live
 /// in `paint`/`watercolor`/`smudge`/`liquify` collapses into one
 /// declaration plus the enum dispatch below.
-fn apply_lifecycle(lifecycle: super::node::Lifecycle, gpu: &mut BrushGpuContext) {
+///
+/// `region` is `None` to reset the whole scratch (stroke start, a full
+/// re-render) and `Some(rect)` (write-side local) to reset only that rect:
+/// a partial rewind, where every pixel outside it already holds the state
+/// being restored and the checkpoint ring copies the rest back.
+fn apply_lifecycle(
+    lifecycle: super::node::Lifecycle,
+    gpu: &mut BrushGpuContext,
+    region: Option<crate::coord::LayerRect>,
+) {
     use super::node::Lifecycle;
     let Some(stroke) = &gpu.stroke else { return };
-    match lifecycle {
-        Lifecycle::None => {}
-        Lifecycle::ClearScratchToTransparent => {
+    match (lifecycle, region) {
+        (Lifecycle::None, _) => {}
+        (Lifecycle::ClearScratchToTransparent, None) => {
             stroke.scratch.clear_to_transparent(&mut gpu.encoder);
         }
-        Lifecycle::SeedScratchFromPreStroke => {
+        (Lifecycle::ClearScratchToTransparent, Some(rect)) => {
+            stroke
+                .scratch
+                .clear_region(&mut gpu.encoder, gpu.pipelines.zero_buffer(), rect);
+        }
+        (Lifecycle::SeedScratchFromPreStroke, None) => {
             stroke
                 .scratch
                 .seed_from_pre_stroke(&mut gpu.encoder, stroke.pre_stroke_texture);
+        }
+        (Lifecycle::SeedScratchFromPreStroke, Some(rect)) => {
+            stroke.scratch.seed_region_from_pre_stroke(
+                &mut gpu.encoder,
+                stroke.pre_stroke_texture,
+                rect,
+            );
         }
     }
 }
 
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
-/// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
+/// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`
+/// and by the global colour jitter (`brush::color_jitter`).
 #[inline]
-fn prng_f32(seed: u32, index: u32) -> f32 {
+pub(crate) fn prng_f32(seed: u32, index: u32) -> f32 {
     let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
     h ^= h >> 16;
     h = h.wrapping_mul(0x45d9f3b);
@@ -344,8 +366,8 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// not per-dab sampling.
     fn begin_stroke(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
-    /// Per-pen-event commit. Called after every event's dabs have rendered
-    /// into the scratch. The terminal pushes the scratch onto the layer
+    /// Per-flush commit. Called after every stroke flush's dabs have
+    /// rendered into the scratch. The terminal pushes the scratch onto the layer
     /// however its semantics require. Non-terminal nodes default to no-op.
     ///
     /// Inputs reflect the LAST dab's evaluated slot values: `commit`
@@ -358,9 +380,8 @@ pub trait BrushNodeEvaluator: Send + Sync {
 
     /// Flush any per-rendering-phase work the terminal has queued during
     /// the preceding `evaluate_gpu` calls. Called at the end of every
-    /// dab-rendering phase (`render_from_stabilized_range_to`,
-    /// `render_from_stabilized_tail`) just before that phase's
-    /// `submit_final`.
+    /// dab-rendering phase (`render_from_stabilized_range_to`) just before
+    /// that phase's `submit_final`.
     ///
     /// Dab-batching terminals (paint, watercolor_batched) use this to dispatch their
     /// batched work; fragment-path terminals that already record per-dab
@@ -388,7 +409,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// modes.
     ///
     /// Terminals that sample scratch / atlas in their stroke body
-    /// (watercolor's pickup atlas, smudge / liquify's `scratch_mirror`)
+    /// (watercolor's pickup atlas, blur / liquify's `scratch_mirror`)
     /// override this to emit a body that doesn't need those bindings:
     /// typically a neutral-color mask of the brush footprint. Only the
     /// `body` field of the returned `NodeWgsl` is consumed; decls /
@@ -425,6 +446,34 @@ pub trait BrushNodeEvaluator: Send + Sync {
         _ctx: &crate::brush::wgsl::ExtentCtx,
     ) -> crate::brush::wgsl::ExtentContribution {
         crate::brush::wgsl::ExtentContribution::Identity
+    }
+
+    /// Canvas pixels this node reads beyond the dab's write footprint, per
+    /// axis, for the dab being evaluated. The per-dab counterpart of
+    /// [`Self::extent`]: `extent` bounds what a dab writes and is composed
+    /// once at compile time; this bounds what it reads and is composed per
+    /// dab, because a read offset such as the stroke's motion is per-dab
+    /// data with no compile-time bound. The runner takes the per-axis
+    /// maximum over the graph and hands it to the terminal, which sizes the
+    /// region it refreshes the stroke appearance under. One virtual call
+    /// per node per dab with an identity default; it cannot move to
+    /// compile time.
+    fn read_reach(&self, _ctx: &EvalContext) -> [f32; 2] {
+        [0.0, 0.0]
+    }
+
+    /// How a preview of a brush containing this node instance must be
+    /// staged, given the instance's ports. Defaults to `declared`, the
+    /// registration's static
+    /// [`preview_staging`](crate::nodegraph::NodeRegistration::preview_staging);
+    /// a node whose compile-time settings change what it samples answers
+    /// per instance.
+    fn preview_staging(
+        &self,
+        _ports: &[crate::nodegraph::PortDef<BrushWireType>],
+        declared: Option<crate::gpu::preview::PreviewStaging>,
+    ) -> Option<crate::gpu::preview::PreviewStaging> {
+        declared
     }
 }
 
@@ -560,6 +609,17 @@ pub struct BrushGraphRunner {
     /// `BrushGpuContext` at `dispatch_gpu` time so the terminal can
     /// read its dab/uniform layouts.
     compiled: Option<Arc<CompiledBrush>>,
+    /// Per-axis maximum of every node's [`BrushNodeEvaluator::read_reach`]
+    /// for the dab being evaluated: reset at the top of `execute_cpu`,
+    /// folded after each node's `evaluate_cpu`, and handed to the terminal
+    /// on [`crate::brush::gpu_context::DabBatch::read_reach`].
+    dab_read_reach: [f32; 2],
+}
+
+/// Fold one node's read reach into the dab's per-axis maximum.
+fn fold_read_reach(acc: &mut [f32; 2], reach: [f32; 2]) {
+    acc[0] = acc[0].max(reach[0]);
+    acc[1] = acc[1].max(reach[1]);
 }
 
 struct NodeData {
@@ -725,6 +785,7 @@ impl BrushGraphRunner {
             dabs_per_pass: 1.0,
             dpi: crate::document::REFERENCE_DPI,
             compiled: None,
+            dab_read_reach: [0.0, 0.0],
         })
     }
 
@@ -806,24 +867,40 @@ impl BrushGraphRunner {
         self.plan.steps.iter().any(|step| step.is_terminal)
     }
 
-    /// Texel format the stroke scratch must be allocated in for this
-    /// brush: the terminal's declared
-    /// [`scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format).
+    /// The registration of this graph's terminal, which is what declares
+    /// how the stroke scratch is allocated and written. `None` for a
+    /// terminal-less graph, which never renders.
     ///
     /// Type-owned dispatch, same shape as [`Self::has_terminal`]: the
-    /// terminal answers what its scratch holds, and callers
-    /// (`StrokeBuffer::new`, the preview renderer) just pass the answer
-    /// through. A terminal-less graph gets the colour default; it never
-    /// renders anyway.
-    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+    /// terminal answers what its scratch holds and how its pass writes it,
+    /// and callers (`StrokeBuffer::new`, the preview renderer, the WGSL
+    /// compiler) just pass the answer through.
+    pub fn terminal_registration(&self) -> Option<&'static super::node::BrushNodeRegistration> {
         let registry = crate::brush::registry();
         self.plan
             .steps
             .iter()
             .filter(|step| step.is_terminal)
             .find_map(|step| registry.get(&step.type_id))
+    }
+
+    /// Texel format the stroke scratch must be allocated in for this
+    /// brush: the terminal's declared
+    /// [`scratch_format`](crate::brush::node::BrushNodeRegistration::scratch_format).
+    /// A terminal-less graph gets the colour default.
+    pub fn scratch_format(&self) -> wgpu::TextureFormat {
+        self.terminal_registration()
             .map(|reg| reg.scratch_format)
             .unwrap_or(crate::brush::node::COLOR_SCRATCH_FORMAT)
+    }
+
+    /// How the terminal's per-dab pass writes the scratch: its declared
+    /// [`dab_pass`](crate::brush::node::BrushNodeRegistration::dab_pass).
+    /// A terminal-less graph gets the instanced default.
+    pub fn dab_pass(&self) -> super::node::DabPass {
+        self.terminal_registration()
+            .map(|reg| reg.dab_pass)
+            .unwrap_or_default()
     }
 
     /// Build a name → value map of every output slot in the graph,
@@ -928,6 +1005,7 @@ impl BrushGraphRunner {
     /// Call `seed_sensors()` first.  After this returns, output slots
     /// contain the final values for this dab.
     pub fn execute_cpu(&mut self) {
+        self.dab_read_reach = [0.0, 0.0];
         let n = self.plan.steps.len();
         for idx in 0..n {
             // Field accesses below all go through `self.<field>` directly so
@@ -977,6 +1055,7 @@ impl BrushGraphRunner {
             );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
+            fold_read_reach(&mut self.dab_read_reach, evaluator.read_reach(&ctx));
 
             // Write outputs to their assigned slots. `ctx`'s borrows on
             // `self.inputs_scratch` (immut) and `step.input_slots` (immut)
@@ -1098,6 +1177,11 @@ impl BrushGraphRunner {
             // Declared-GPU nodes take the opposite path: `evaluate_cpu`
             // returns empty, `evaluate_gpu` does the work.
             let mut outputs = evaluator.evaluate_cpu(&ctx);
+            fold_read_reach(&mut self.dab_read_reach, evaluator.read_reach(&ctx));
+            // Every reader upstream of the terminal precedes it in
+            // topological order, so the reach is complete by the time the
+            // terminal queues its dab.
+            gpu.dab_batch.read_reach = self.dab_read_reach;
             let gpu_outputs = f(evaluator.as_ref(), &ctx, gpu);
 
             outputs.extend(gpu_outputs);
@@ -1123,13 +1207,21 @@ impl BrushGraphRunner {
     /// The prologue is driven by the [`crate::brush::node::Lifecycle`]
     /// each node's registration declares: clearing the scratch to
     /// transparent (paint, watercolor) or seeding it from the
-    /// pre-stroke snapshot (smudge, liquify). This lives here, not in
+    /// pre-stroke snapshot (blur, liquify). This lives here, not in
     /// each terminal's `begin_stroke`, so adding a new terminal can't
     /// silently drift from the established lifecycles. The pending-dab
     /// queue is also reset here for the same reason: every terminal
     /// needs it cleared at stroke-start; no point copy-pasting that
     /// line per terminal.
-    pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
+    ///
+    /// `region` is `None` to reset the whole scratch and `Some(rect)` to
+    /// reset only that write-side rect (a partial rewind); see
+    /// [`apply_lifecycle`].
+    pub fn begin_stroke(
+        &mut self,
+        gpu: &mut BrushGpuContext,
+        region: Option<crate::coord::LayerRect>,
+    ) {
         gpu.dab_batch.clear();
 
         // Realize the terminal's declared accumulation channels before the
@@ -1146,11 +1238,18 @@ impl BrushGraphRunner {
             .as_ref()
             .map(|c| c.channels.clone())
             .unwrap_or_default();
+        let reads_appearance = self
+            .compiled
+            .as_ref()
+            .is_some_and(|c| c.reads_stroke_appearance());
         let device = gpu.device;
         if let Some(stroke) = gpu.stroke.as_mut() {
             stroke
                 .scratch
                 .ensure_channels(device, &mut gpu.encoder, &channels);
+            stroke
+                .scratch
+                .ensure_appearance_mirror(device, reads_appearance);
         }
 
         let registry = crate::brush::registry();
@@ -1159,13 +1258,13 @@ impl BrushGraphRunner {
                 .get(type_id)
                 .map(|r| r.lifecycle)
                 .unwrap_or(super::node::Lifecycle::None);
-            apply_lifecycle(lifecycle, gpu);
+            apply_lifecycle(lifecycle, gpu, region);
             ev.begin_stroke(ctx, gpu);
         });
     }
 
     /// Dispatch `commit` to every GPU node's evaluator in topological
-    /// order. Runs once per pen event after that event's dabs have
+    /// order. Runs once per stroke flush after that flush's dabs have
     /// finished compositing into the scratch.
     pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
         // Gather inputs from the slot table so terminals that read
@@ -1254,7 +1353,7 @@ impl BrushGraphRunner {
     /// Read the terminal's most recently published `dab_size` as a
     /// `(width, height)` pair of canvas pixels, or `None` if the graph
     /// has no terminal that publishes one yet. Each terminal owns the
-    /// unit of dab_size it returns: paint/watercolor/smudge/liquify
+    /// unit of dab_size it returns: paint/watercolor/blur/liquify
     /// all return the disc diameter for stroke spacing. The stroke
     /// engine uses this to size both dab spacing and save-point bboxes.
     ///

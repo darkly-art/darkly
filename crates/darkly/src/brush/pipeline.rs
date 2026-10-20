@@ -112,6 +112,97 @@ pub fn align_up(value: u64, alignment: u64) -> u64 {
     (value + alignment - 1) & !(alignment - 1)
 }
 
+// ── Canvas-copy layout ───────────────────────────────────────────────────
+
+/// How a texture of one sample class is bound for reading: the bind group
+/// layout, the binding its texture entry sits at, and the sampler the
+/// layout pairs it with, when it has one.
+///
+/// Three exist, one per class of scratch format (filterable float,
+/// non-filterable float, unsigned integer), built once by
+/// [`BrushPipelines::new`] and handed out by
+/// [`BrushPipelines::canvas_copy_layout_for`]. A `Scratch`, the
+/// pre-stroke snapshot, the format-bridging blits and the commit all bind
+/// through one of these, so the entry shape is decided here and nowhere
+/// else.
+#[derive(Clone)]
+pub struct CanvasCopyLayout {
+    pub bgl: wgpu::BindGroupLayout,
+    /// Binding of the texture entry. The float layouts put it at 0 beside
+    /// their sampler at 1; the uint layout puts it at 2, so a shader can
+    /// declare a float and a packed foreground in one module.
+    pub texture_binding: u32,
+    /// The sampler entry at binding 1, when the layout has one: the uint
+    /// layout is fetched with `textureLoad` and declares none.
+    pub sampler: Option<wgpu::Sampler>,
+}
+
+impl CanvasCopyLayout {
+    /// Bind `view` for reading. `sampler` fills the sampler entry when the
+    /// layout has one, falling back to the layout's own; it is ignored by
+    /// a layout that declares none.
+    pub fn bind(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        view: &wgpu::TextureView,
+        sampler: Option<&wgpu::Sampler>,
+    ) -> wgpu::BindGroup {
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: self.texture_binding,
+            resource: wgpu::BindingResource::TextureView(view),
+        }];
+        if let Some(own) = self.sampler.as_ref() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler.unwrap_or(own)),
+            });
+        }
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.bgl,
+            entries: &entries,
+        })
+    }
+}
+
+/// The three canvas-copy layout classes, keyed by scratch format through
+/// [`CanvasCopyLayouts::for_format`]: the single place the pairing of a
+/// format with its layout is decided.
+#[derive(Clone)]
+pub struct CanvasCopyLayouts {
+    /// Filterable float texture + linear sampler: colour scratches, the
+    /// pre-stroke snapshot, the blits.
+    pub filterable: CanvasCopyLayout,
+    /// Non-filtering twin with a nearest sampler, for scratches holding a
+    /// float32 warp field rather than colour.
+    pub unfilterable: CanvasCopyLayout,
+    /// Unsigned-integer texture at binding 2 and no sampler, for the
+    /// packed ground a compute dab pass accumulates into.
+    pub uint: CanvasCopyLayout,
+}
+
+impl CanvasCopyLayouts {
+    /// The layout a scratch of `format` must be built against. A packed
+    /// uint ground gets the sampler-less uint layout; colour scratches get
+    /// the filtering pair; float32 warp fields get the non-filtering pair,
+    /// because `Rg32Float` is not filterable without the optional
+    /// `float32-filterable` feature.
+    pub fn for_format(&self, format: wgpu::TextureFormat) -> &CanvasCopyLayout {
+        if format.sample_type(None, None) == Some(wgpu::TextureSampleType::Uint) {
+            &self.uint
+        } else if format
+            .guaranteed_format_features(wgpu::Features::empty())
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
+        {
+            &self.filterable
+        } else {
+            &self.unfilterable
+        }
+    }
+}
+
 // ── Per-node pipeline contract ───────────────────────────────────────────
 
 /// Borrowed view of all shared brush infra a per-node pipeline can read
@@ -127,13 +218,17 @@ pub struct BuildContext<'a> {
     /// fragment output by the selection mask.
     pub selection_bgl: &'a wgpu::BindGroupLayout,
     /// Texture + linear sampler: bound where shaders sample the per-dab
-    /// scratch read mirror snapshot (composite, smudge,
-    /// liquify, watercolor atlas). After the
-    /// `dab_pool` deletion this BGL is the single shape for every
-    /// `texture_2d<f32> + sampler` binding in the brush stack; the
-    /// scratch's write bind group also lives on it.
-    pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
-    pub canvas_copy_sampler: &'a wgpu::Sampler,
+    /// scratch read mirror snapshot (composite, smudge, liquify,
+    /// watercolor atlas). The single shape for every
+    /// `texture_2d<f32> + sampler` binding in the brush stack; a colour
+    /// scratch's write bind group also lives on it. A pipeline built for a
+    /// scratch of another format receives that format's layout instead
+    /// (see [`BrushPipelines::canvas_copy_layout_for`]).
+    pub canvas_copy: &'a CanvasCopyLayout,
+    /// Every canvas-copy layout class, for a pipeline that reads scratches
+    /// of more than one format (the commit reads float and packed
+    /// foregrounds).
+    pub canvas_copy_layouts: &'a CanvasCopyLayouts,
     pub min_uniform_align: u32,
     /// Named-texture registry for brush graphs (paper textures and
     /// similar assets sampled by `image` nodes). Brushes resolve their
@@ -224,6 +319,7 @@ pub struct BrushPipelineRegistration {
 pub fn plumbing_registrations() -> Vec<BrushPipelineRegistration> {
     vec![
         crate::brush::composite_pipeline::composite_pipeline_registration(),
+        crate::brush::appearance_snapshot::appearance_snapshot_registration(),
         crate::brush::warp_field::warp_field_resolve_registration(),
     ]
 }
@@ -252,15 +348,9 @@ pub struct BrushPipelines {
     // R8 and RGBA8 variants).
     uniform_bgl: wgpu::BindGroupLayout,
     selection_bgl: wgpu::BindGroupLayout,
-    canvas_copy_bgl: wgpu::BindGroupLayout,
-    /// Non-filtering twin of `canvas_copy_bgl`, for scratches holding a
-    /// float32 warp field rather than colour.
-    canvas_copy_unfilterable_bgl: wgpu::BindGroupLayout,
+    canvas_copy_layouts: CanvasCopyLayouts,
 
-    // ── Shared samplers / default bind groups ────────────────────────
-    canvas_copy_sampler: wgpu::Sampler,
-    /// Nearest sampler paired with `canvas_copy_unfilterable_bgl`.
-    canvas_copy_nearest_sampler: wgpu::Sampler,
+    // ── Default bind groups ──────────────────────────────────────────
     /// 1×1 white selection (= fully selected).  Bound when no selection
     /// is active.  `pub` because hot-path call sites take its address
     /// directly via `unwrap_or(&self.brush_pipelines.default_selection_bind_group)`.
@@ -276,6 +366,10 @@ pub struct BrushPipelines {
 
     // ── Per-node pipelines (modular, looked up by id) ────────────────
     entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>>,
+
+    /// Zero source for region clears of the stroke scratch and its
+    /// channels on a partial rewind; see [`crate::gpu::zero_fill`].
+    zero_buffer: wgpu::Buffer,
 
     // ── Engine-owned named-texture registry ──────────────────────────
     /// Named GPU textures sampled by `image` brush nodes (paper grain,
@@ -388,6 +482,25 @@ impl BrushPipelines {
                 ],
             });
 
+        // Unsigned-integer twin for the packed ground a compute dab pass
+        // accumulates into: fetched with `textureLoad`, so no sampler.
+        // Binding 2 rather than 0 so `composite.wgsl` can declare the
+        // packed and the float foregrounds in one module.
+        let canvas_copy_uint_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("brush-canvas-copy-uint-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
+
         // ── Default selection (1×1 white = fully selected) ─────────
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-default-selection"),
@@ -464,6 +577,24 @@ impl BrushPipelines {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        let canvas_copy_layouts = CanvasCopyLayouts {
+            filterable: CanvasCopyLayout {
+                bgl: canvas_copy_bgl,
+                texture_binding: 0,
+                sampler: Some(canvas_copy_sampler),
+            },
+            unfilterable: CanvasCopyLayout {
+                bgl: canvas_copy_unfilterable_bgl,
+                texture_binding: 0,
+                sampler: Some(canvas_copy_nearest_sampler),
+            },
+            uint: CanvasCopyLayout {
+                bgl: canvas_copy_uint_bgl,
+                texture_binding: 2,
+                sampler: None,
+            },
+        };
+        let canvas_copy = &canvas_copy_layouts.filterable;
 
         // ── Plumbing pipelines (no owning node) ────────────────────
 
@@ -472,12 +603,12 @@ impl BrushPipelines {
             label: Some("brush-blit"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/brush/blit.wgsl").into()),
         });
-        // `canvas_copy_bgl` is the canonical `texture_2d<f32> + sampler`
+        // `canvas_copy` is the canonical `texture_2d<f32> + sampler`
         // layout: same shape the old dab-pool BGL had, used here for
         // the blit's source texture binding.
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-blit-layout"),
-            bind_group_layouts: &[Some(&uniform_bgl), Some(&canvas_copy_bgl)],
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&canvas_copy.bgl)],
             immediate_size: 0,
         });
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -538,7 +669,7 @@ impl BrushPipelines {
         });
         let mask_blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-mask-blit-layout"),
-            bind_group_layouts: &[Some(&canvas_copy_bgl)],
+            bind_group_layouts: &[Some(&canvas_copy.bgl)],
             immediate_size: 0,
         });
         let mask_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -612,8 +743,8 @@ impl BrushPipelines {
             queue,
             uniform_bgl: &uniform_bgl,
             selection_bgl: &selection_bgl,
-            canvas_copy_bgl: &canvas_copy_bgl,
-            canvas_copy_sampler: &canvas_copy_sampler,
+            canvas_copy,
+            canvas_copy_layouts: &canvas_copy_layouts,
             min_uniform_align,
             texture_registry: &texture_registry,
             baked_sources: &baked_sources,
@@ -638,10 +769,7 @@ impl BrushPipelines {
         Self {
             uniform_bgl,
             selection_bgl,
-            canvas_copy_bgl,
-            canvas_copy_unfilterable_bgl,
-            canvas_copy_sampler,
-            canvas_copy_nearest_sampler,
+            canvas_copy_layouts,
             default_selection_bind_group,
             blit_pipeline,
             blit_uniform_ring,
@@ -649,10 +777,17 @@ impl BrushPipelines {
             mask_blit_pipeline,
             scratch_blit_r8_pipeline,
             entries,
+            zero_buffer: crate::gpu::zero_fill::create_zero_buffer(device),
             texture_registry,
             baked_sources,
             cursor_preview_pipeline_cache,
         }
+    }
+
+    /// The zero source [`crate::gpu::zero_fill::zero_fill_rect`] copies
+    /// from when a partial rewind clears a region of the scratch.
+    pub fn zero_buffer(&self) -> &wgpu::Buffer {
+        &self.zero_buffer
     }
 
     /// Named-texture registry for graph `image` nodes. Built-ins are
@@ -703,7 +838,7 @@ impl BrushPipelines {
     }
 
     /// R8 → RGBA8 broadcast pipeline.  Source bind group: single
-    /// texture+sampler using `canvas_copy_bgl`.  Used by
+    /// texture+sampler over the canvas-copy layout.  Used by
     /// `GpuPaintTarget::save_pre_stroke_snapshot` to populate the brush's
     /// RGBA8 pre-stroke snapshot from an R8 mask source.
     pub fn mask_blit_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -711,7 +846,7 @@ impl BrushPipelines {
     }
 
     /// RGBA8 → R8 passthrough pipeline.  Source bind group: single
-    /// texture+sampler using `canvas_copy_bgl`.  Used by
+    /// texture+sampler over the canvas-copy layout.  Used by
     /// `GpuPaintTarget::commit_scratch_blit` for direct scratch→mask
     /// commits (liquify-style terminals that don't go through the
     /// composite path).
@@ -729,20 +864,9 @@ impl BrushPipelines {
         device: &wgpu::Device,
         source_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-blit-source-bg"),
-            layout: &self.canvas_copy_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.canvas_copy_sampler),
-                },
-            ],
-        })
+        self.canvas_copy_layouts
+            .filterable
+            .bind(device, "brush-blit-source-bg", source_view, None)
     }
 
     // ── Shared infra accessors (BGLs and sampler) ───────────────────
@@ -751,40 +875,25 @@ impl BrushPipelines {
         &self.selection_bgl
     }
 
-    /// BGL used by the per-dab read-mirror bind group on every `Scratch`.
-    /// Brush composite pipelines bind a `Scratch::read_mirror_bind_group()`
-    /// against this layout.
-    pub fn canvas_copy_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.canvas_copy_bgl
+    /// The filterable float canvas-copy layout: what every colour texture
+    /// in the brush stack (a colour scratch, the pre-stroke snapshot, a
+    /// blit source) is read through, and what
+    /// [`CanvasCopyLayout::texture_binding`] 0 plus a sampler at 1 means
+    /// in a brush shader.
+    pub fn canvas_copy_layout(&self) -> &CanvasCopyLayout {
+        &self.canvas_copy_layouts.filterable
     }
 
-    /// Linear sampler shared by every `Scratch`'s read-mirror bind group.
-    pub fn canvas_copy_sampler(&self) -> &wgpu::Sampler {
-        &self.canvas_copy_sampler
+    /// Every canvas-copy layout class; see [`CanvasCopyLayouts`].
+    pub fn canvas_copy_layouts(&self) -> &CanvasCopyLayouts {
+        &self.canvas_copy_layouts
     }
 
-    /// The canvas-copy BGL + sampler a `Scratch` of `format` must be built
-    /// against. Color scratches get the filtering pair; float32 warp
-    /// fields get the non-filtering pair, because `Rg32Float` is not
-    /// filterable without the optional `float32-filterable` feature.
-    /// Callers pass the result straight to `Scratch::new`; this is the
-    /// single place the pairing is decided.
-    pub fn canvas_copy_layout_for(
-        &self,
-        format: wgpu::TextureFormat,
-    ) -> (&wgpu::BindGroupLayout, &wgpu::Sampler) {
-        if format
-            .guaranteed_format_features(wgpu::Features::empty())
-            .flags
-            .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
-        {
-            (&self.canvas_copy_bgl, &self.canvas_copy_sampler)
-        } else {
-            (
-                &self.canvas_copy_unfilterable_bgl,
-                &self.canvas_copy_nearest_sampler,
-            )
-        }
+    /// The canvas-copy layout a `Scratch` of `format` must be built
+    /// against ([`CanvasCopyLayouts::for_format`]). Callers pass the
+    /// result straight to `Scratch::new`.
+    pub fn canvas_copy_layout_for(&self, format: wgpu::TextureFormat) -> &CanvasCopyLayout {
+        self.canvas_copy_layouts.for_format(format)
     }
 
     /// The 1×1 white selection bind group: bound when no selection is

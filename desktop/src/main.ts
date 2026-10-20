@@ -7,12 +7,25 @@
  *   frontend/), staged by `make app` into resources/app/.
  * - Wires up the storage IPC handlers that back window.electronAPI.storage
  *   on the renderer side.
+ * - Chooses the Chromium GPU launch flags (gpu-launch.ts) and answers the
+ *   renderer's WebGPU adapter report on window.electronAPI.gpu.
  */
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createStorageHost } from './storage-host';
 import { externalLinkHandler } from './external-links';
+import {
+    afterAdapterCheck,
+    chooseProfile,
+    launchDiagnostics,
+    pinningEnv,
+    readLaunchState,
+    systemGpuCount,
+    writeLaunchState,
+    type GpuReport,
+    type LaunchState,
+} from './gpu-launch';
 
 // On Windows, handle Squirrel install/uninstall events at startup. If we
 // were launched as part of one, quit and let Squirrel do its thing.
@@ -37,6 +50,22 @@ if (dataDirOverride) {
     app.setPath('userData', path.resolve(dataDirOverride));
 }
 
+// Keep every Vulkan user in the GPU process on the display GPU of a machine
+// with more than one (see gpu-launch.ts). The variable only reaches the GPU
+// process from the environment the app starts with, so set it and relaunch
+// before anything else happens; app.exit ends this process on the spot, and
+// the relaunched one finds the variable already set.
+const gpuCount = process.platform === 'linux' ? systemGpuCount() : 0;
+if (process.platform === 'linux') {
+    const pin = pinningEnv(process.env, gpuCount);
+    if (Object.keys(pin).length > 0) {
+        console.log(`Darkly GPU launch: ${gpuCount} GPUs, relaunching with`, pin);
+        Object.assign(process.env, pin);
+        app.relaunch();
+        app.exit(0);
+    }
+}
+
 // Discard Chromium's on-disk GPU caches when the bundled Chromium version
 // changes. A shader/GPU disk cache written by a previous Chromium major is not
 // valid for the current one, and a stale cache leaves WebGPU with a working
@@ -44,39 +73,60 @@ if (dataDirOverride) {
 // the paint surface stays black). Chromium does not reliably invalidate these
 // on upgrade, so we key a purge on process.versions.chrome and clear them
 // before the GPU process starts reading them. Must run before app 'ready'.
-function purgeGpuCacheOnChromiumUpgrade(): void {
-    try {
-        const userData = app.getPath('userData');
-        const marker = path.join(userData, 'chromium-version');
-        const current = process.versions.chrome;
-        const previous = fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').trim() : '';
-        if (previous === current) {
-            return;
-        }
-        // Every on-disk GPU/shader cache Chromium + Dawn write under userData.
-        for (const dir of [
-            'GPUCache',
-            'DawnCache',
-            'DawnGraphiteCache',
-            'DawnWebGPUCache',
-            'GrShaderCache',
-            'ShaderCache',
-        ]) {
-            fs.rmSync(path.join(userData, dir), { recursive: true, force: true });
-        }
-        fs.mkdirSync(userData, { recursive: true });
-        fs.writeFileSync(marker, current);
-    } catch (err) {
-        console.error('Darkly: failed to purge stale GPU cache on upgrade:', err);
+function purgeGpuCaches(userData: string): void {
+    // Every on-disk GPU/shader cache Chromium + Dawn write under userData.
+    for (const dir of [
+        'GPUCache',
+        'DawnCache',
+        'DawnGraphiteCache',
+        'DawnWebGPUCache',
+        'GrShaderCache',
+        'ShaderCache',
+    ]) {
+        fs.rmSync(path.join(userData, dir), { recursive: true, force: true });
     }
 }
-purgeGpuCacheOnChromiumUpgrade();
 
-// WebGPU support on Linux/Chromium requires Vulkan + the unsafe-webgpu flag.
-// Mirrors the workaround documented in the public repo's README for browsers.
-if (process.platform === 'linux') {
-    app.commandLine.appendSwitch('enable-features', 'Vulkan');
-    app.commandLine.appendSwitch('enable-unsafe-webgpu');
+// The launch state record: the Chromium version the caches belong to and, on
+// Linux, the launch profile this session last worked with.
+const launchStateFile = path.join(app.getPath('userData'), 'gpu-launch.json');
+const storedLaunch = readLaunchState(launchStateFile);
+const launch = process.platform === 'linux'
+    ? chooseProfile(process.env, process.versions.chrome, storedLaunch)
+    : null;
+
+/** Record the launch state; true only if it reads back as written, so a
+ *  relaunch can never repeat a profile because the record did not stick. */
+function storeLaunchState(state: LaunchState): boolean {
+    try {
+        writeLaunchState(launchStateFile, state);
+    } catch (err) {
+        console.error('Darkly GPU launch: failed to record the launch state:', err);
+        return false;
+    }
+    return JSON.stringify(readLaunchState(launchStateFile)) === JSON.stringify(state);
+}
+
+try {
+    if (storedLaunch?.chrome !== process.versions.chrome) {
+        purgeGpuCaches(app.getPath('userData'));
+    }
+    const state = launch?.state ?? { chrome: process.versions.chrome };
+    if (JSON.stringify(state) !== JSON.stringify(storedLaunch)) {
+        storeLaunchState(state);
+    }
+} catch (err) {
+    console.error('Darkly: failed to purge stale GPU cache on upgrade:', err);
+}
+
+if (launch) {
+    for (const [name, value] of launch.profile.switches) {
+        app.commandLine.appendSwitch(name, value);
+    }
+    console.log(
+        `Darkly GPU launch: profile ${launch.profile.id}${launch.pinned ? ' (DARKLY_GPU_PROFILE)' : ''}, ` +
+            `session ${launch.state.session}, ${gpuCount} GPU(s)`,
+    );
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -157,6 +207,25 @@ ipcMain.handle('storage:write',  (_e, p: string, data: Uint8Array) => storageHos
 ipcMain.handle('storage:list',   (_e, dir: string)                => storageHost.list(dir));
 ipcMain.handle('storage:remove', (_e, p: string)                  => storageHost.remove(p));
 ipcMain.handle('storage:exists', (_e, p: string)                  => storageHost.exists(p));
+
+// The renderer reports its WebGPU adapter check; the launch policy decides
+// whether to move on to the next profile. Off Linux there is only one way to
+// launch, so the answer is always to carry on.
+ipcMain.handle('gpu:report', (_e, report: GpuReport) => {
+    if (!launch) return { verdict: 'continue' };
+    const outcome = afterAdapterCheck(process.env, launch, report.ok);
+    console.log(
+        `Darkly GPU launch: renderer ${report.ok ? `has ${report.adapter.vendor}/${report.adapter.architecture}` : report.reason}, ` +
+            (outcome.verdict === 'relaunch' ? `relaunching on profile ${outcome.store.profile}` : outcome.verdict),
+    );
+    if (outcome.verdict === 'continue') return { verdict: 'continue' };
+    if (storeLaunchState(outcome.store) && outcome.verdict === 'relaunch') {
+        app.relaunch();
+        app.exit(0);
+        return { verdict: 'relaunching' };
+    }
+    return { verdict: 'exhausted', diagnostics: launchDiagnostics(process.env, launch, gpuCount, report) };
+});
 
 app.whenReady().then(() => {
     Menu.setApplicationMenu(null);

@@ -1,7 +1,7 @@
 # Krita overlay. Carries every binding where Krita's choice differs from
 # at least one other reference editor, plus Darkly fallbacks for actions
 # where Krita has no opinion but some other editor does. Unanimous
-# bindings (those all three reference editors agree on) live in
+# bindings (those every reference editor agrees on) live in
 # defaults.yaml; see the rule in defaults.yaml's header.
 name: Krita
 description: Krita-style keybindings
@@ -45,6 +45,10 @@ hotkeys:
   # through to Photoshop's L / Shift+L convention.
   lassoSelectTool: KeyL
   polygonSelectTool: Shift+KeyL
+  # Krita's Ellipse Tool is Shift+J. Its Rectangle Tool's Shift+R is already
+  # ellipseSelectTool here, and its Polygon Tool has no default, so
+  # polygonTool stays unbound.
+  ellipseTool: Shift+KeyJ
   # Layers.
   isolateLayer: KeyI
   deleteLayer: Shift+Delete
@@ -61,6 +65,9 @@ hotkeys:
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+Shift+KeyI
+  # Krita binds D to `reset_fg_bg` (krita.action). Per-overlay because Clip
+  # Studio Paint spends D on a tool and has no reset.
+  resetColors: KeyD
   # Colors. Krita binds Ctrl+I to Invert (`krita_filter_invert`); Invert
   # Selection is the Shift variant above. Photoshop agrees (Ctrl+I → Image >
   # Adjustments > Invert); GIMP does NOT (Ctrl+I is its Invert Selection), so

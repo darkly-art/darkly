@@ -13,7 +13,7 @@ use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
-use crate::undo::{EntityAddAction, GpuRegionAction};
+use crate::undo::GpuRegionAction;
 
 #[handlers]
 impl DarklyEngine {
@@ -109,8 +109,8 @@ impl DarklyEngine {
         // so they lift it by `canvas_origin` (identity for an un-cropped doc).
         let canvas_origin = self.doc.canvas_origin;
 
-        // Resolve the node's CanvasFrame once for both the cut undo save below
-        // and the matching commit further down.
+        // Resolve the node's CanvasFrame once for the cut undo save below and
+        // the undo rect it shares with the matching commit further down.
         let target_frame = self
             .compositor
             .node_texture(layer_id)
@@ -258,14 +258,13 @@ impl DarklyEngine {
         encoder.submit();
 
         // Commit undo for cut.
-        if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
+        if let Some(snap) = cut_snapshot {
             let entry = commit_undo_region(
                 &self.gpu,
                 &self.region_scratch,
                 &mut self.readbacks,
                 "cut-commit",
                 layer_id,
-                &frame,
                 &snap,
                 undo_rect,
             );
@@ -510,8 +509,7 @@ impl DarklyEngine {
         let target = self.doc.resolve_anchor_target(active_layer_id);
         self.doc.place_layer(id, target);
 
-        let slot = self.doc.slot_of(id).unwrap_or_default();
-        self.push_undo(Box::new(EntityAddAction::new(id, slot)));
+        self.record_entity_add(id);
 
         id
     }

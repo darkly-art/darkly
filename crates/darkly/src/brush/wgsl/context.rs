@@ -25,15 +25,25 @@ pub struct NodeWgsl {
     /// Module-scope WGSL declarations: helper functions, const arrays,
     /// structs. Concatenated into the shader before `fs_main`.
     pub decls: String,
-    /// Lines inserted into the `fs_main` body, in topological order.
+    /// Lines inserted into the entry point's body, in topological order.
     /// May reference: `d` (the `DabRecord`), `u` (the `Uniforms`),
-    /// `local_uv: vec2<f32>` (fragment offset from dab centre, normalized
-    /// so the unmodulated disc edge is at `length = 1`), `local_dist: f32`
+    /// `local_uv: vec2<f32>` (offset from dab centre, normalized so the
+    /// unmodulated disc edge is at `length = 1`), `local_dist: f32`
     /// (= `length(local_uv)`), `theta: f32` (= `atan2(local_uv.y, local_uv.x)`),
-    /// `target_pos: vec2<f32>` (fragment's position in the target
-    /// texture's pixel space: canvas px for stroke, mask texels for
-    /// preview), and any function declared in `decls` or by upstream
-    /// nodes.
+    /// `target_pos: vec2<f32>` (the pixel centre in the target texture's
+    /// pixel space: canvas px for stroke, mask texels for preview), `sel`
+    /// (the selection mask at the pixel), and any function declared in
+    /// `decls` or by upstream nodes.
+    ///
+    /// Under a [`DabPass::DispatchPerDab`](crate::brush::node::DabPass::DispatchPerDab)
+    /// stroke the body runs in a compute thread that also has `layer_px:
+    /// vec2<i32>` (the pixel's layer-local texel), `ground` (the stroke
+    /// scratch as a read-write storage texture, packed premultiplied RGBA8
+    /// through `pack_ground` / `unpack_ground`) and every declared storage
+    /// channel by its name. A body may read them with `textureLoad`; the
+    /// terminal's body is what stores. A node whose body reads the live
+    /// ground must emit a neutral `compile_cursor_preview_body`, as
+    /// `clone_source` does: the preview skeleton has no ground.
     pub body: String,
     /// Output port name → a WGSL expression downstream nodes substitute
     /// for that port's value. Typically a `let`-binding name introduced
@@ -64,23 +74,13 @@ pub struct NodeWgsl {
     /// the terminal's `body` must then return `FsOut(...)`.
     ///
     /// These are the per-texel accumulators a terminal writes alongside
-    /// the stroke scratch in one instanced draw. One declaration carries
-    /// the name, the format and the blend law, so the generated `FsOut`
-    /// field, the pipeline's colour target, the allocated texture and the
-    /// pass attachment all derive from it instead of agreeing by hand.
-    /// Stroke mode only: the cursor-preview skeleton has no accumulators
-    /// to write and keeps the single-output signature.
+    /// the stroke scratch. One declaration carries the name, the format
+    /// and the kind, so the generated `FsOut` field or storage binding,
+    /// the pipeline's colour target or layout entry, the allocated texture
+    /// and the pass attachment all derive from it instead of agreeing by
+    /// hand. Stroke mode only: the cursor-preview skeleton has no
+    /// accumulators to write and keeps the single-output signature.
     pub channels: Vec<crate::brush::scratch::StrokeChannel>,
-    /// The blend state the terminal's per-dab pipeline writes the stroke
-    /// scratch with. Only a terminal sets this; every other node leaves it
-    /// `None`, and `None` means [`crate::brush::node::PREMULTIPLIED_SOURCE_OVER`].
-    ///
-    /// It lives on the compile output rather than on the node registration
-    /// because it is a *per-brush* choice (one graph's `paint` accumulates,
-    /// another's takes the ceiling), and a registration carries one value
-    /// per node *type*. Same reasoning as `channels`: the pipeline
-    /// build must match what the compile walk decided.
-    pub dab_blend: Option<wgpu::BlendState>,
 }
 
 // ── Input binding ───────────────────────────────────────────────────────
@@ -273,16 +273,19 @@ impl CompileWgslCtx<'_> {
         self.request_source(ResolvedSource::Named(name.to_string()))
     }
 
-    /// Reserve (or look up) a slot for a texture the requesting node
+    /// Reserve (or look up) a slot for a stroke texture the terminal
     /// republishes every flush, the [`ResolvedSource::Live`] shim over
     /// [`Self::request_source`].
     ///
     /// Unlike [`Self::request_texture`], the view is not resolved against
     /// the [`crate::gpu::texture_registry::TextureRegistry`] at
-    /// pipeline-build time; the producing node publishes it during its own
-    /// `flush_dabs` and the terminal binds whatever is there. A slot with
-    /// nothing published falls back to `_fallback`, which is how the
-    /// cursor preview renders without a stroke.
+    /// pipeline-build time; the terminal publishes it during its
+    /// `flush_dabs` and binds whatever is there. The slot is an ordinary
+    /// filterable graph texture: for [`LiveSource::StrokeAppearance`] it
+    /// holds the layer-sized appearance mirror, in the paint target's
+    /// frame. A slot with nothing published
+    /// falls back to `_fallback`, which is how the cursor preview renders
+    /// without a stroke.
     pub fn request_live_texture(&self, live: LiveSource) -> u32 {
         self.request_source(ResolvedSource::Live(live))
     }
@@ -292,23 +295,27 @@ impl CompileWgslCtx<'_> {
 
 /// Which of the two compiled shader variants is being assembled.
 ///
-/// The upstream graph contributes the same per-fragment shape /
-/// color / flow expressions in both modes, only the outer skeleton
-/// differs:
+/// The upstream graph contributes the same per-pixel shape / color /
+/// flow expressions in both modes, only the outer skeleton differs:
 ///
-/// - **`Stroke`**: instanced quad-per-dab vertex stage; `sel` sampled
-///   from a bound selection texture; terminal `@group(3)` bindings
-///   (scratch mirror, pickup atlas) declared.
-/// - **`Preview`**: single quad centred at `preview_centre`; `sel = 1.0`
-///   inlined; no `@group(2)` selection binding, no `@group(3)`
-///   terminal bindings.
+/// - **`Stroke`**: `sel` sampled from a bound selection texture;
+///   terminal `@group(3)` bindings (scratch mirror, pickup atlas)
+///   declared. The skeleton is the terminal's declared
+///   [`DabPass`](crate::brush::node::DabPass): an instanced
+///   quad-per-dab vertex stage and a fragment entry, or a compute entry
+///   with one thread per pixel of the dab's footprint and the scratch
+///   bound as read-write storage.
+/// - **`CursorPreview`**: single quad centred at `preview_centre`;
+///   `sel = 1.0` inlined; no `@group(2)` selection binding, no
+///   `@group(3)` terminal bindings. Always a fragment module, whatever
+///   the terminal's pass.
 ///
 /// The two modes share `node_decls`, `dab_layout`, and
 /// `uniform_layout`; every brush stores both WGSL strings side-by-side
 /// on [`crate::brush::wgsl::CompiledBrush`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ShaderMode {
-    Stroke,
+    Stroke(crate::brush::node::DabPass),
     CursorPreview,
 }
 

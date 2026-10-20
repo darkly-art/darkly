@@ -1,19 +1,29 @@
 // The stroke commit: lays a stroke's finished accumulations onto the layer.
 //
-// Two foreground slots, each with a fixed law and its own opacity, where an
-// opacity of zero means the slot is absent:
-//   wash:  committed through the per-pigment deposit ceiling
-//   build: composited on top with plain Porter-Duff source-over
+// Two foreground slots, each with its own opacity, where an opacity of zero
+// means the slot is absent, under the law `u.law` selects; the law itself is
+// `lib/commit_law.wgsl`'s, shared with the appearance snapshot.
 //
 // A terminal maps its accumulations onto the slots; the shader knows nothing
 // about brushes. One accumulation under one law is the common case (a brush
 // at either end of `paint.buildup`, or watercolor), and a brush inside the
-// dial fills both. Both foregrounds are premultiplied, which is how every
-// terminal's scratch and channels accumulate; the background (the pre-stroke
+// dial fills both. The foregrounds' alpha convention is the law's (the
+// deposit slots premultiplied, the move pigment straight), which is why the
+// law applies the slot opacities itself; the background (the pre-stroke
 // snapshot) is straight alpha, and so is the output.
+//
+// Two fragment entry points share one body: `fs_main` samples float
+// foregrounds (an instanced terminal's `rgba8unorm` scratch and channels),
+// `fs_packed` loads packed foregrounds (a compute terminal's `r32uint`
+// ground, premultiplied RGBA8 in one texel). The pipeline is picked by the
+// foreground format; each entry point uses only its own bindings, so the
+// float and the packed layouts each match their entry.
 //
 // Outputs straight alpha with REPLACE blend (no hardware alpha blending).
 // See docs/lessons-learned/compositing-lessons-learned.md #4 (why REPLACE).
+//
+// Includes `source_over.wgsl`, `lib/deposit_ceiling.wgsl` and
+// `lib/commit_law.wgsl`.
 
 struct CompositeUniforms {
     origin: vec2f,       // quad top-left in canvas pixels
@@ -25,6 +35,7 @@ struct CompositeUniforms {
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
     wash_opacity: f32,   // stroke opacity of the wash slot; 0 = absent
     build_opacity: f32,  // stroke opacity of the build slot; 0 = absent
+    law: u32,            // 0 = deposit (wash + build), 1 = move (coverage + pigment)
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -32,6 +43,8 @@ struct CompositeUniforms {
 @group(1) @binding(1) var s_wash: sampler;
 @group(2) @binding(0) var t_build: texture_2d<f32>;
 @group(2) @binding(1) var s_build: sampler;
+@group(1) @binding(2) var t_wash_packed: texture_2d<u32>;
+@group(2) @binding(2) var t_build_packed: texture_2d<u32>;
 @group(3) @binding(0) var t_bg: texture_2d<f32>;
 @group(3) @binding(1) var s_bg: sampler;
 
@@ -67,92 +80,27 @@ struct VertexOutput {
     return out;
 }
 
-/// Max-norm distance. See `deposit_through_ceiling` for why the norm choice
-/// matters there.
-fn chebyshev(a: vec3f, b: vec3f) -> f32 {
-    let v = abs(a - b);
-    return max(v.x, max(v.y, v.z));
-}
-
-// The deposit ceiling: lay `fg` (premultiplied) onto `bg`, depositing only
-// what the pixel can still take.
-//
-// A pass carrying pigment `C` at coverage `s` lands, starting from blank, a
-// fixed fraction of the way to `C`. Everything past that is refused. So
-// instead of asking what this pass would add, ask how much room is left
-// between where the pixel already sits and where this pass saturates, and
-// deposit exactly that. A pixel already at the saturation level takes
-// nothing; one that has never been touched takes the full `s`; a heavier
-// pass moves the saturation level and reopens room. No history is read: the
-// room is a property of the pixel's current colour, so a transparent layer
-// and an opaque one holding the same visible mark answer alike.
-//
-// `O` is the origin of the deposit scale, the gamut corner opposite `C`,
-// which is what the distances are measured against. Deriving it from the
-// pigment rather than assuming white is what lets a white pencil on black
-// ground behave exactly like a black one on white.
-fn deposit_through_ceiling(fg: vec4f, bg: vec4f) -> vec4f {
-    if fg.a <= 0.0 {
-        return bg;
-    }
-    let pigment = fg.rgb / fg.a;
-    let origin = select(vec3f(0.0), vec3f(1.0), pigment < vec3f(0.5));
-
-    // The max-norm is load-bearing, not a cheap stand-in for a Euclidean one.
-    // Under it, `d <= reach` holds for every colour in the cube, so a pass can
-    // only ever be reduced, never amplified, and `t` collapses to exactly `s`
-    // on any untouched ground. Under a Euclidean norm that is false: white is
-    // not red's antipode, so a red pencil on white paper would saturate at a
-    // weaker mark than graphite does at the same pressure.
-    //
-    // This is also where a move to OKLab would land. Distance there is
-    // Euclidean and perceptually uniform, which is the property this actually
-    // wants, but it needs a different reference than the cube corner to keep
-    // the `d <= reach` guarantee. Worth revisiting with the colour-system
-    // rewrite, not before.
-    let reach = chebyshev(origin, pigment);
-    let ground = bg.rgb * bg.a + origin * (1.0 - bg.a);
-    let d = chebyshev(ground, pigment);
-    if d <= 0.0 {
-        return bg;
-    }
-    // `t <= fg.a` always holds (see the max-norm note), so the ceiling can
-    // only ever reduce what the pass carries, never amplify it.
-    let t = max(0.0, 1.0 - (1.0 - fg.a) * reach / d);
-    return source_over(pigment * t, t, bg);
-}
-
+// Float foregrounds, sampled: the instanced terminals' scratch and channels.
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Background: the pre-stroke snapshot, straight alpha. The
-    // copy_texture_to_texture origin is floor(u.origin), integer pixel
-    // coords, so the floored origin maps each fragment to its own texel.
+    let wash = textureSample(t_wash, s_wash, in.fg_uv);
+    let build = textureSample(t_build, s_build, in.fg_uv);
+    return commit_fragment(in, wash, build);
+}
+
+// Packed foregrounds, loaded at the fragment's own texel: the scratch is
+// layer-sized and the quad is the layer, so the texel is exact.
+@fragment fn fs_packed(in: VertexOutput) -> @location(0) vec4f {
+    let px = vec2<i32>(in.position.xy);
+    let wash = unpack4x8unorm(textureLoad(t_wash_packed, px, 0).r);
+    let build = unpack4x8unorm(textureLoad(t_build_packed, px, 0).r);
+    return commit_fragment(in, wash, build);
+}
+
+// The background under a fragment: the pre-stroke snapshot, straight
+// alpha. The copy_texture_to_texture origin is floor(u.origin), integer
+// pixel coords, so the floored origin maps each fragment to its own texel.
+fn commit_fragment(in: VertexOutput, wash: vec4f, build: vec4f) -> vec4f {
     let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_bg));
     let bg = textureSample(t_bg, s_bg, copy_uv);
-
-    // Each slot scaled by its own stroke opacity. Premultiplied, so one
-    // multiply covers rgb and alpha together.
-    let wash = textureSample(t_wash, s_wash, in.fg_uv) * u.wash_opacity;
-    let build = textureSample(t_build, s_build, in.fg_uv) * u.build_opacity;
-
-    if u.blend_mode == 1u {
-        // Erase: each slot removes its own coverage, composing to a removal
-        // of `1 - (1 - wash.a) * (1 - build.a)`. Removal never goes through
-        // the ceiling, so an eraser can always reach zero. No gate needed:
-        // `destination_out(0, x)` is exactly `x`.
-        return destination_out(build.a, destination_out(wash.a, bg));
-    }
-
-    // The wash slot first: the ceiling reads the ground to find room, and a
-    // build slot laid under it would let a stroke's own build-up shrink its
-    // own wash. An absent slot is skipped rather than composited at zero
-    // alpha, because `source_over` at zero alpha is not an exact identity
-    // (it divides `bg.a * bg.rgb` by `bg.a`, and zeroes rgb under 0.001).
-    var out = bg;
-    if u.wash_opacity > 0.0 {
-        out = deposit_through_ceiling(wash, out);
-    }
-    if u.build_opacity > 0.0 {
-        out = source_over(build.rgb, build.a, out);
-    }
-    return out;
+    return commit_law(wash, build, bg, u.blend_mode, u.law, u.wash_opacity, u.build_opacity);
 }

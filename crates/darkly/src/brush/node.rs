@@ -44,6 +44,49 @@ pub enum Lifecycle {
     SeedScratchFromPreStroke,
 }
 
+/// How a terminal's per-dab pass writes the stroke scratch. Declared on
+/// the registration beside `scratch_format`: a per-type fact the stroke
+/// buffer, the assembler and the terminal's pipeline all read from one
+/// place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DabPass {
+    /// One instanced draw per flush: every dab is a quad, the blend unit
+    /// folds them under the scratch's blend state, channels are colour
+    /// attachments.
+    #[default]
+    InstancedDraw,
+    /// One compute dispatch per dab per flush over the dab's clamped
+    /// footprint, one thread per pixel, reading and writing the scratch
+    /// (the ground) and every storage channel; the law is the terminal's
+    /// body.
+    DispatchPerDab,
+}
+
+impl DabPass {
+    /// Usage the write side needs beyond attachment, copy and sampling.
+    pub fn write_side_usage(self) -> wgpu::TextureUsages {
+        match self {
+            Self::InstancedDraw => wgpu::TextureUsages::empty(),
+            Self::DispatchPerDab => wgpu::TextureUsages::STORAGE_BINDING,
+        }
+    }
+
+    /// Whether a texture written for one dab can be refreshed before the
+    /// next dab of the same flush reads it. A dispatch per dab orders its
+    /// dispatches and a dispatch's stores are visible to the next; the
+    /// instances of one draw cannot see each other's writes, and nothing
+    /// can run between them.
+    pub fn can_refresh_between_dabs(self) -> bool {
+        matches!(self, Self::DispatchPerDab)
+    }
+}
+
+/// Scratch format for a terminal that accumulates through a compute dab
+/// pass: premultiplied RGBA8 packed into one `u32` per texel with
+/// `pack4x8unorm`, because core WebGPU allows read-write storage only on
+/// 32-bit single-channel formats.
+pub const PACKED_GROUND_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
+
 /// A brush node's static metadata plus the GPU pipelines, evaluator
 /// constructor, and stroke-lifecycle hook it owns.
 ///
@@ -76,6 +119,11 @@ pub struct BrushNodeRegistration {
     /// [`BrushPipelines::canvas_copy_layout_for`](crate::brush::pipeline::BrushPipelines::canvas_copy_layout_for),
     /// so a terminal never has to think about filterability.
     pub scratch_format: wgpu::TextureFormat,
+    /// How this terminal's per-dab pass writes the scratch. See
+    /// [`DabPass`]; the write side's storage usage follows from it through
+    /// [`DabPass::write_side_usage`], exactly as a channel's follows from
+    /// [`ChannelUse::Storage`](crate::brush::scratch::ChannelUse::Storage).
+    pub dab_pass: DabPass,
 }
 
 /// Scratch format for terminals that accumulate colour: the default, and
@@ -100,37 +148,6 @@ pub const PREMULTIPLIED_SOURCE_OVER: wgpu::BlendState = wgpu::BlendState {
     },
 };
 
-/// Per-dab write law that takes the greatest coverage instead of
-/// accumulating: the stroke's density is set by its strongest dab, not by
-/// how many dabs landed on the pixel. A stroke cannot darken itself by
-/// crossing back over its own path, and its density stops depending on
-/// `spacing`.
-///
-/// Valid only for a stroke whose dabs share one chroma. Every graph whose
-/// `stamp.color` comes from the stroke-constant `paint_color` uniform
-/// satisfies that: all four channels then scale by the same per-dab
-/// factor, and since rounding to 8 bits is monotone, all four take their
-/// maximum from the *same* dab. That same-dab agreement is the property
-/// this relies on; it is not a claim that the stored premultiplied chroma
-/// is exact, since at the low stored alphas a light pass produces, 8-bit
-/// premultiplied chroma carries a few percent of error. A graph that
-/// varies dab colour per dab would take per-channel maxima from different
-/// dabs and must stay on [`PREMULTIPLIED_SOURCE_OVER`].
-///
-/// WebGPU requires both factors to be `One` under a `Max` operation.
-pub const COVERAGE_CEILING: wgpu::BlendState = wgpu::BlendState {
-    color: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    },
-    alpha: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    },
-};
-
 impl BrushNodeRegistration {
     /// Construct a compute-only node (no GPU pipelines, no lifecycle).
     pub fn compute(
@@ -143,6 +160,7 @@ impl BrushNodeRegistration {
             evaluator,
             lifecycle: Lifecycle::None,
             scratch_format: COLOR_SCRATCH_FORMAT,
+            dab_pass: DabPass::InstancedDraw,
         }
     }
 

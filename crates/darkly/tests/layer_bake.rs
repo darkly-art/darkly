@@ -17,6 +17,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// Paint a solid coloured stamp at canvas centre. Used to give layers
 /// distinguishable pixel content before merge/flatten.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
+    engine.set_foreground_color([color[0], color[1], color[2], 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -27,10 +28,6 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: color[0],
-        cg: color[1],
-        cb: color[2],
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);
@@ -47,6 +44,7 @@ fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
     let mask_id = engine
         .host_mask_id(host_id)
         .expect("paint_mask_dot requires the host to have a mask filter");
+    engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -57,10 +55,6 @@ fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 0.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);

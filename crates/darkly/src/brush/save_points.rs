@@ -1,9 +1,11 @@
 //! Per-dab save points for O(1) stroke rewind.
 //!
-//! Each save point records the cumulative bounding box of all dabs placed
-//! up to that point and the polyline vector index the dab was placed on.
-//! This lets the stabilizer rewind to any dab index by looking up the
-//! region that needs to be restored, with no GPU readback required.
+//! Each save point records the footprint of its dab, the cumulative
+//! bounding box of all dabs placed up to that point, and the polyline
+//! vector index the dab was placed on. The cumulative bbox is the undo
+//! damage rect; the per-dab footprints give the region dirtied between
+//! any two dab indices, which is what a checkpoint save or restore has to
+//! copy. No GPU readback is involved in either.
 //!
 //! Save points also store a `RenderCheckpoint` (the stroke engine's render
 //! state at that dab) so the checkpoint ring can restore engine state and
@@ -15,6 +17,9 @@ use crate::coord::CanvasRect;
 /// A single save point recorded when a dab is placed.
 #[derive(Clone)]
 pub struct DabSavePoint {
+    /// This dab's own write footprint, in canvas pixel coords; empty for a
+    /// dab that wrote nothing. Stable across mid-stroke layer growth.
+    pub canvas_bbox: CanvasRect,
     /// Union of all dab bounding boxes from dab 0..=this one, in canvas
     /// pixel coords. Stable across mid-stroke layer growth.
     pub cumulative_canvas_bbox: CanvasRect,
@@ -55,6 +60,7 @@ impl SavePointStore {
             dab_bbox
         };
         self.points.push(DabSavePoint {
+            canvas_bbox: dab_bbox,
             cumulative_canvas_bbox: cumulative,
             vector_index,
             render_state,
@@ -65,6 +71,23 @@ impl SavePointStore {
     /// canvas pixels.
     pub fn full_bbox(&self) -> Option<CanvasRect> {
         self.points.last().map(|sp| sp.cumulative_canvas_bbox)
+    }
+
+    /// Union of the footprints of the dabs with index in `(after, through]`,
+    /// in canvas pixels: the region in which the scratch after dab `through`
+    /// differs from the scratch after dab `after`. Empty when the range is.
+    pub fn dirty_between(&self, after: usize, through: usize) -> CanvasRect {
+        self.points
+            .get(after + 1..=through)
+            .unwrap_or(&[])
+            .iter()
+            .fold(CanvasRect::empty(), |union, sp| union.union(sp.canvas_bbox))
+    }
+
+    /// Union of the footprints of every dab after `after`, in canvas
+    /// pixels: what a rewind to dab `after` has to undo.
+    pub fn dirty_after(&self, after: usize) -> CanvasRect {
+        self.dirty_between(after, self.points.len().saturating_sub(1))
     }
 
     /// Keep only the first `n` save points.
@@ -159,6 +182,28 @@ mod tests {
         store.clear();
         assert!(store.is_empty());
         assert!(store.full_bbox().is_none());
+    }
+
+    #[test]
+    fn dirty_ranges_union_only_the_dabs_in_range() {
+        let mut store = SavePointStore::new();
+        store.push(r(0, 0, 10, 10), 0, dummy_checkpoint());
+        store.push(r(100, 0, 10, 10), 1, dummy_checkpoint());
+        store.push(r(0, 100, 10, 10), 2, dummy_checkpoint());
+        store.push(r(50, 50, 10, 10), 3, dummy_checkpoint());
+        // The per-dab footprint is stored as given; the cumulative one unions.
+        assert_eq!(store.points()[1].canvas_bbox, r(100, 0, 10, 10));
+        assert_eq!(store.points()[1].cumulative_canvas_bbox, r(0, 0, 110, 10));
+        assert_eq!(store.dirty_between(0, 2), r(0, 0, 110, 110));
+        assert_eq!(store.dirty_between(2, 3), r(50, 50, 10, 10));
+        assert_eq!(store.dirty_after(1), r(0, 50, 60, 60));
+        assert!(store.dirty_between(1, 1).is_empty(), "an empty range");
+        assert!(
+            store.dirty_after(3).is_empty(),
+            "nothing after the last dab"
+        );
+        assert!(store.dirty_between(3, 9).is_empty(), "a range past the end");
+        assert!(SavePointStore::new().dirty_after(0).is_empty());
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! `set_preview_theme`), not the active paint color, so all previews
 //! share a consistent palette.
 
-use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
+use super::gpu_context::StrokeGpuSetup;
 use super::nodes::brush_settings;
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
@@ -22,6 +22,7 @@ use super::stabilizer::PassThrough;
 use super::stroke_buffer::StrokeBuffer;
 use super::stroke_engine::StrokeEngine;
 use super::wire::BrushWireType;
+use crate::brush::node::DabPass;
 use crate::gpu::preview::PreviewBackdrop;
 use crate::nodegraph::Graph;
 
@@ -43,6 +44,8 @@ struct PreviewTarget {
     /// terminal's scratch holds a float field rather than colour, so a
     /// buffer cached for one is unbindable by the other.
     scratch_format: wgpu::TextureFormat,
+    /// Likewise the dab pass: decides the scratch's storage usage.
+    dab_pass: DabPass,
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
     stroke_buffer: StrokeBuffer,
@@ -55,6 +58,7 @@ impl PreviewTarget {
         height: u32,
         pipelines: &BrushPipelines,
         scratch_format: wgpu::TextureFormat,
+        dab_pass: DabPass,
     ) -> Self {
         let layer_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-preview-layer"),
@@ -74,11 +78,13 @@ impl PreviewTarget {
             view_formats: &[],
         });
         let layer_view = layer_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines, scratch_format);
+        let stroke_buffer =
+            StrokeBuffer::new(device, width, height, pipelines, scratch_format, dab_pass);
         Self {
             width,
             height,
             scratch_format,
+            dab_pass,
             layer_texture,
             layer_view,
             stroke_buffer,
@@ -128,8 +134,14 @@ impl BrushStrokePreviewRenderer {
         // brushes, so previewing a warp terminal after a colour one must
         // reallocate rather than bind a colour scratch to a field pipeline.
         let scratch_format = runner.scratch_format();
+        let dab_pass = runner.dab_pass();
         let target_changed = match &self.target {
-            Some(t) => t.width != width || t.height != height || t.scratch_format != scratch_format,
+            Some(t) => {
+                t.width != width
+                    || t.height != height
+                    || t.scratch_format != scratch_format
+                    || t.dab_pass != dab_pass
+            }
             None => true,
         };
         if target_changed {
@@ -139,6 +151,7 @@ impl BrushStrokePreviewRenderer {
                 height,
                 pipelines,
                 scratch_format,
+                dab_pass,
             ));
         }
         let target = self.target.as_mut().unwrap();
@@ -212,6 +225,9 @@ impl BrushStrokePreviewRenderer {
             spacing,
             base_size,
             Box::new(PassThrough::new()),
+            // A preview renders its path once and never diffs, so the
+            // epsilon is unused; the reference scale is the honest value.
+            crate::brush::stroke_engine::DIVERGENCE_EPSILON,
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),
@@ -230,82 +246,40 @@ impl BrushStrokePreviewRenderer {
         }
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
-        // `render_from_stabilized_range_to` walks them verbatim. No
-        // smoothing, no lag: the S-curve is exactly what we handed in.
+        // the render walks them verbatim. No smoothing, no lag: the S-curve
+        // is exactly what we handed in.
         for pt in path {
-            let _ = engine.stabilize(*pt);
+            engine.stabilize(*pt);
         }
 
-        let sel_bg = pipelines.default_selection_bind_group();
-
-        // Each block creates a fresh `BrushGpuContext`, runs one phase,
-        // and submits.
-        macro_rules! make_gpu_ctx {
-            ($label:expr) => {{
-                // The preview stroke buffer never captures a source
-                // snapshot, so a source-sampling brush previews off the
-                // pre-stroke snapshot, which is the backdrop, and is what
-                // gives it something to transport.
-                let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
-                    target.stroke_buffer.parts_for_brush_ctx();
-                BrushGpuContext {
-                    encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some($label),
-                    }),
-                    device,
-                    queue,
-                    pipelines,
-                    selection_bind_group: sel_bg,
-                    canvas_width: width,
-                    canvas_height: height,
-                    canvas_origin: [0, 0],
-                    blend_mode: 0,
-                    // Editor preview always renders at identity view; the
-                    // S-curve preview shouldn't shift orientation when the
-                    // artist happens to rotate the canvas while editing.
-                    view_rotation: 0.0,
-                    // Previews show brush identity, which is its
-                    // reference-pixel tuning, so they render at the
-                    // reference whatever the focused document's DPI.
-                    dpi_factor: 1.0,
-                    perf: BrushPerfCounters::default(),
-                    // Preview render target is canvas-aligned RGBA8.
-                    stroke: Some(StrokeResources {
-                        scratch,
-                        paint_target,
-                        pre_stroke_texture,
-                        pre_stroke_bind_group,
-                        source_override,
-                    }),
-                    preview: None,
-                    dab_batch: DabBatch::default(),
-                }
-            }};
-        }
-
-        // Terminal setup: color_output clears the scratch to transparent.
-        {
-            let mut ctx = make_gpu_ctx!("brush-preview-begin-stroke");
-            engine.begin_stroke(&mut ctx);
-            ctx.submit_final();
-        }
-
-        // Walk the full polyline placing dabs. `render_from_stabilized_range_to`
-        // handles Catmull-Rom interpolation + sensor derivation internally.
-        {
-            let end = path.len() - 1;
-            let mut ctx = make_gpu_ctx!("brush-preview-stroke");
-            engine.render_from_stabilized_range_to(&mut ctx, 0, end);
-            ctx.submit_final();
-        }
-
-        // Composite the scratch onto the pre-stroke snapshot and write
-        // the result to the layer: same path as a real stroke's commit.
-        {
-            let mut ctx = make_gpu_ctx!("brush-preview-commit");
-            engine.commit(&mut ctx);
-            ctx.submit_final();
-        }
+        // Clear the scratch, place every dab, and composite onto the
+        // pre-stroke snapshot: the same path as a real stroke's commit. The
+        // preview stroke buffer never captures a source snapshot, so a
+        // source-sampling brush previews off the pre-stroke snapshot, which
+        // is the backdrop, and is what gives it something to transport.
+        let setup = StrokeGpuSetup {
+            device,
+            queue,
+            pipelines,
+            selection_bind_group: pipelines.default_selection_bind_group(),
+            canvas_width: width,
+            canvas_height: height,
+            canvas_origin: [0, 0],
+            blend_mode: 0,
+            // Editor preview always renders at identity view; the S-curve
+            // preview shouldn't shift orientation when the artist happens to
+            // rotate the canvas while editing.
+            view_rotation: 0.0,
+            // Previews show brush identity, which is its reference-pixel
+            // tuning, so they render at the reference whatever the focused
+            // document's DPI.
+            dpi_factor: 1.0,
+            // Preview render target is canvas-aligned RGBA8.
+            paint_target,
+        };
+        let mut ctx = setup.ctx(&mut target.stroke_buffer, "brush-preview-stroke");
+        engine.render_whole(&mut ctx);
+        ctx.submit_final();
 
         Some(&target.layer_texture)
     }

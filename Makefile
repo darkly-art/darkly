@@ -115,10 +115,15 @@ install-data:
 	install -Dm644 LICENSE $(DESTDIR)$(LICENSEDIR)/LICENSE
 
 # Contributor setup. A packager on distro Rust already has the wasm32 target.
+# wasm-opt is not a cargo crate, so it is checked rather than installed:
+# without it `make wasm` would only fail later, at the optimizer step.
 tools:
 	rustup target add $(WASM_TARGET)
 	@test -n "$(WASM_BINDGEN_VERSION)" || { echo "wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
 	cargo install --locked wasm-bindgen-cli --version $(WASM_BINDGEN_VERSION)
+	@command -v $(WASM_OPT) >/dev/null || { \
+	  echo "$(WASM_OPT) not found: install binaryen with your package manager (it provides wasm-opt), or set WASM_OPT=/path/to/wasm-opt" >&2; \
+	  exit 1; }
 
 # The pin, for a recipe that fetches the CLI itself (scripts/flathub.sh).
 wasm-bindgen-version:

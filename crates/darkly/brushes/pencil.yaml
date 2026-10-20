@@ -96,8 +96,8 @@ nodes:
   invert:
     type: invert
     name: Invert roughness setting for paper grain
-  levels:
-    type: levels
+  remap:
+    type: remap
     name: Grain intensity
     comment: Pen tilt determines intensity of the paper grain texture
     inputs:
@@ -143,17 +143,17 @@ nodes:
       value: 0.5
 connections:
 - add.result -> paint.size
-- add_2.result -> levels.input
+- add_2.result -> remap.input
 - circle.mask -> multiply_2.b
 - curve.output -> multiply.b
 - curve_2.output -> add.a
 - curve_3.output -> add.b
-- curve_4.output -> levels.in_high
+- curve_4.output -> remap.in_high
 - curve_5.output -> paint.build_flow
 - curve_5.output -> paint.wash_flow
 - curve_6.output -> add_2.b
 - invert.output -> curve_6.input
-- levels.output -> multiply.a
+- remap.output -> multiply.a
 - multiply.result -> stamp.tip
 - multiply_2.result -> curve.input
 - noise.value -> multiply_2.a

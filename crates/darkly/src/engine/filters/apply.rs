@@ -68,7 +68,7 @@ impl DarklyEngine {
         if !self.compositor.effect_registry().has(filter_type) {
             return false;
         }
-        self.auto_commit_floating();
+        self.commit_pending_edits();
         if self.doc.layer(node_id).is_none() && self.doc.find_filter(node_id).is_none() {
             return false;
         }
@@ -108,7 +108,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             "filter-commit",
             node_id,
-            &frame,
             &snap,
             region,
         );
@@ -176,7 +175,7 @@ impl DarklyEngine {
 
         // Begin a session (snapshot the pristine region) if none is active.
         if self.filter_preview.is_none() {
-            self.auto_commit_floating();
+            self.commit_pending_edits();
             let (region, mask) = match self.resolve_filter_region(node_id) {
                 FilterRegion::Ready(r, m) => (r, m),
                 FilterRegion::Empty => return false,

@@ -13,9 +13,10 @@
 //!   parameters (the `noise` node, when its field is static). Baking turns an
 //!   ~80-hash per-fragment fBm kernel (re-run per canvas pixel per
 //!   overlapping dab) into a single `textureSample`.
-//! - [`ResolvedSource::Live`]: a texture the requesting node republishes
-//!   every flush (`clone_source`'s stroke snapshot, `pickup`'s per-dab
-//!   atlas). Resolved at bind time from the live table, so the slot
+//! - [`ResolvedSource::Live`]: a stroke texture the terminal republishes
+//!   every flush (the frozen stroke snapshot, the live stroke appearance;
+//!   both requested by `clone_source`). Resolved at bind time from the
+//!   live table, so the slot
 //!   survives the texture being reallocated mid-stroke, and falls back to
 //!   `_fallback` when nothing has been published, which is what makes the
 //!   cursor preview neutral without a special case.
@@ -57,38 +58,54 @@ impl ResolvedSource {
     pub fn is_live(&self) -> bool {
         matches!(self, ResolvedSource::Live(_))
     }
+
+    /// Whether this slot holds the output of the pass that samples it and
+    /// must be refreshed between consecutive dabs: see
+    /// [`LiveSource::refreshed_per_dab`].
+    pub fn refreshed_per_dab(&self) -> bool {
+        matches!(self, ResolvedSource::Live(live) if live.refreshed_per_dab())
+    }
 }
 
-/// A `@group(3)` texture supplied fresh once per flush by the node that
-/// requested it, rather than resolved against the registry or the bake
-/// cache at pipeline-build time.
+/// A `@group(3)` texture supplied fresh once per flush, rather than
+/// resolved against the registry or the bake cache at pipeline-build time.
 ///
-/// Each producer publishes its view through
-/// [`crate::brush::gpu_context::BrushGpuContext::publish_live_texture`]
-/// during its own `flush_dabs`, which the runner dispatches in topological
-/// order, so a producer upstream of the terminal has always published by
-/// the time the terminal binds. A slot with nothing published falls back to
-/// the registry's `_fallback` tile, which is what makes the cursor preview
-/// (no stroke, no dabs, nothing published) render neutrally with no
-/// special-casing in the preview pipeline.
+/// Both are stroke resources, so the terminal that owns the stroke
+/// publishes them through
+/// [`crate::brush::gpu_context::DabBatch::publish_live_texture`] from its
+/// own `flush_dabs` before it binds. A slot with nothing published falls
+/// back to the registry's `_fallback` tile, which is what makes the cursor
+/// preview (no stroke, no dabs, nothing published) render neutrally with
+/// no special-casing in the preview pipeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LiveSource {
     /// The stroke's frozen source snapshot: the cross-layer / merged
-    /// snapshot when one was captured, else the pre-stroke snapshot
-    /// (same-layer clone). Published by `clone_source`.
+    /// snapshot when one was captured, else the pre-stroke snapshot.
+    /// Never changes during the stroke. Requested by `clone_source`'s
+    /// Snapshot arm.
     StrokeSnapshot,
-    /// The per-dab pickup atlas: one texel per dab holding the
-    /// neighbourhood average of the dry canvas under it. Published by
-    /// `pickup`, which renders it in its own `flush_dabs`.
-    PickupAtlas,
+    /// The stroke as the commit would show it right now, at full strength
+    /// in paint mode: the pre-stroke snapshot with every accumulation laid
+    /// on it under the commit law. Layer-sized, in the paint target's
+    /// frame. Depends on the pass's own output, so the terminal refreshes
+    /// it under each dab's read region before that dab's dispatch; a pass
+    /// that cannot order a refresh between dabs cannot host it. Requested
+    /// by `clone_source`'s Live arm.
+    StrokeAppearance,
 }
 
 impl LiveSource {
     fn label(&self) -> &'static str {
         match self {
             LiveSource::StrokeSnapshot => "stroke snapshot",
-            LiveSource::PickupAtlas => "pickup atlas",
+            LiveSource::StrokeAppearance => "live stroke appearance",
         }
+    }
+
+    /// Whether this source holds the output of the pass that samples it
+    /// and must be refreshed between consecutive dabs.
+    pub fn refreshed_per_dab(&self) -> bool {
+        matches!(self, Self::StrokeAppearance)
     }
 }
 
@@ -205,6 +222,15 @@ impl BakeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_stroke_appearance_is_refreshed_per_dab() {
+        assert!(LiveSource::StrokeAppearance.refreshed_per_dab());
+        assert!(!LiveSource::StrokeSnapshot.refreshed_per_dab());
+        assert!(ResolvedSource::Live(LiveSource::StrokeAppearance).refreshed_per_dab());
+        assert!(!ResolvedSource::Live(LiveSource::StrokeSnapshot).refreshed_per_dab());
+        assert!(!ResolvedSource::Named("paper".into()).refreshed_per_dab());
+    }
 
     #[test]
     fn resolution_scales_with_octaves_and_clamps() {

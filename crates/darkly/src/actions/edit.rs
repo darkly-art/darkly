@@ -34,13 +34,14 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         id: "pasteAsSmartObject",
         display_name: "Paste as Smart Object",
-        description: "Paste the clipboard image as a smart object: a layer you can resize freely without losing quality, because the original is kept and re-sampled rather than overwritten.",
+        description: "Paste the clipboard image as a smart object layer.",
         icon: "tabler:photo-scan",
     },
     ActionDef {
         id: "convertFloatingToSmartObject",
         display_name: "Convert to Smart Object",
-        description: "Turn the content you are positioning into a smart object layer instead of stamping it down, so you can keep resizing it without losing quality.",
+        description:
+            "Turn the floating content into a smart object layer instead of stamping it down.",
         icon: "tabler:photo-scan",
     },
     ActionDef {
@@ -57,8 +58,8 @@ const ACTIONS: &[ActionDef] = &[
     },
     ActionDef {
         id: "rescaleImage",
-        display_name: "Scale Image to New Size",
-        description: "Resize all layers to new document dimensions.",
+        display_name: "Image Size",
+        description: "Resize the image or change its DPI.",
         icon: "fa6-solid:expand",
     },
     ActionDef {
@@ -96,6 +97,18 @@ const ACTIONS: &[ActionDef] = &[
         display_name: "Rotate Canvas 180°",
         description: "Rotate the whole canvas a half turn.",
         icon: "fa6-solid:rotate",
+    },
+    ActionDef {
+        id: "applyEditSession",
+        display_name: "Apply",
+        description: "Keep what the open edit session changed and end it: a transform, pasted content, or a stroke being edited.",
+        icon: "fa6-solid:check",
+    },
+    ActionDef {
+        id: "discardEditSession",
+        display_name: "Discard",
+        description: "Drop what the open edit session changed and end it.",
+        icon: "fa6-solid:xmark",
     },
 ];
 

@@ -45,6 +45,7 @@ pub fn register() -> BrushNodeRegistration {
         evaluator: || Box::new(ShapeEvaluator),
         lifecycle: crate::brush::node::Lifecycle::None,
         scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
+        dab_pass: crate::brush::node::DabPass::InstancedDraw,
         node: NodeRegistration {
         type_id: TYPE_ID,
         category: "shape",
@@ -188,22 +189,6 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-/// Gielis superformula with `a = b = 1`. Used only by
-/// [`ShapeEvaluator::extent`] to bound the dab footprint when the
-/// shape is set to Superformula; the per-fragment math lives in
-/// `shaders/brush/_shape.wgsl` and the compiled brush splices it in
-/// via [`ShapeEvaluator::compile_wgsl`].
-fn superformula_r(theta: f32, frequency: f32, n1: f32, n2: f32, n3: f32) -> f32 {
-    let m_quarter = frequency * theta * 0.25;
-    let term_a = (m_quarter.cos().abs()).powf(n2);
-    let term_b = (m_quarter.sin().abs()).powf(n3);
-    let sum = term_a + term_b;
-    if sum <= 0.0 {
-        return 0.0;
-    }
-    sum.powf(-1.0 / n1)
-}
-
 pub struct ShapeEvaluator;
 
 impl BrushNodeEvaluator for ShapeEvaluator {
@@ -306,7 +291,13 @@ impl BrushNodeEvaluator for ShapeEvaluator {
                 let mut max_r: f32 = 0.0;
                 for i in 0..32 {
                     let theta = -std::f32::consts::PI + (i as f32) * std::f32::consts::TAU / 32.0;
-                    max_r = max_r.max(superformula_r(theta, frequency, n1, n2, n3));
+                    max_r = max_r.max(crate::shape::polar::r_superformula(
+                        theta as f64,
+                        frequency as f64,
+                        n1 as f64,
+                        n2 as f64,
+                        n3 as f64,
+                    ) as f32);
                 }
                 max_r.max(1.0)
             }

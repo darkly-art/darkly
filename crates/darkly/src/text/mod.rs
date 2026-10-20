@@ -186,28 +186,25 @@ impl FontRegistry {
     }
 
     /// Build a `vello::Scene` realizing every object on a vector layer. Text is
-    /// shaped here (parley) and emitted as glyph runs; paths are filled/stroked
-    /// directly. `layer_transform` is the layer-level gizmo affine, baked in so
+    /// shaped here (parley) and emitted as glyph runs; every other source is
+    /// filled/stroked through its [`ObjectSource::outline`]. `layer_transform` is the layer-level gizmo affine, baked in so
     /// the rasterization is crisp at canvas resolution (raster-first).
     pub fn build_scene(&mut self, objects: &[VectorObject], layer_transform: Affine) -> Scene {
         let mut scene = Scene::new();
         for obj in objects {
             let transform = layer_transform * obj.transform;
-            match &obj.source {
-                ObjectSource::Path(path) => {
-                    if let Some(brush) = &obj.fill {
-                        scene.fill(Fill::NonZero, transform, brush, None, path);
-                    }
-                    if let Some((stroke, brush)) = &obj.stroke {
-                        scene.stroke(stroke, transform, brush, None, path);
-                    }
+            if let ObjectSource::Text(text) = &obj.source {
+                let fill = obj
+                    .fill
+                    .clone()
+                    .unwrap_or(Brush::Solid(Color::from_rgba8(0, 0, 0, 255)));
+                self.draw_text(&mut scene, text, transform, &fill);
+            } else if let Some(path) = obj.source.outline() {
+                if let Some(brush) = &obj.fill {
+                    scene.fill(Fill::NonZero, transform, brush, None, &*path);
                 }
-                ObjectSource::Text(text) => {
-                    let fill = obj
-                        .fill
-                        .clone()
-                        .unwrap_or(Brush::Solid(Color::from_rgba8(0, 0, 0, 255)));
-                    self.draw_text(&mut scene, text, transform, &fill);
+                if let Some((stroke, brush)) = &obj.stroke {
+                    scene.stroke(stroke, transform, brush, None, &*path);
                 }
             }
         }

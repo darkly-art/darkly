@@ -3,6 +3,7 @@ pub mod actions;
 pub mod brush;
 pub mod catalog;
 pub mod clipboard;
+pub mod color;
 pub mod config;
 pub mod coord;
 /// Fills the marked regions of the repository's own markdown from the
@@ -28,6 +29,7 @@ pub mod nodegraph;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod product;
 pub mod sdf;
+pub mod shape;
 pub mod text;
 pub mod tool;
 pub mod tools;

@@ -4,7 +4,7 @@ import type { Engine } from '../../engine/protocol';
 
 // In the frontend tree, index 0 of any `children` array is the TOP of the
 // stack, so a higher index is lower in the panel. "Sibling below" therefore
-// means the next higher index. See docs/plans/layer-delete-reselection.md §3.1.
+// means the next higher index.
 function layer(id: number, extra: Record<string, unknown> = {}) {
     return { type: 'raster', id, name: `l${id}`, visible: true, modifiers: [], ...extra };
 }

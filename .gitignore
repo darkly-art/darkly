@@ -14,3 +14,6 @@ desktop/dist/
 desktop/out/
 desktop/resources/app/
 desktop/test-results/
+
+# Planning documents are working notes, never committed
+docs/plans/

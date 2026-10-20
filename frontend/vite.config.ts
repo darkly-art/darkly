@@ -81,7 +81,7 @@ export default defineConfig(({ mode }) => ({
                 // the shell, fonts, icons) so the editor boots fully offline.
                 globPatterns: ['**/*.{js,css,html,wasm,woff2,png,svg}'],
                 // Default cap is ~2 MB, which would silently skip the WASM.
-                maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
+                maximumFileSizeToCacheInBytes: 32 * 1024 * 1024,
                 // SPA: serve the precached index.html for navigations. The
                 // relative `base: './'` emits the entry as `index.html`.
                 navigateFallback: 'index.html',

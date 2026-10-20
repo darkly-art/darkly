@@ -85,6 +85,11 @@ impl<S: Copy> Rect<S> {
         }
     }
 
+    /// The empty rect at the origin: the identity of [`Rect::union`].
+    pub const fn empty() -> Self {
+        Rect::from_xywh(0, 0, 0, 0)
+    }
+
     pub fn x0(&self) -> i32 {
         self.origin.x
     }

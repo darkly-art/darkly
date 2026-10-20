@@ -136,9 +136,10 @@ static build starts:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 . "$HOME/.cargo/env"
 curl -sSfL https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz | tar xz -C "$HOME"
+export WASM_OPT="$HOME/binaryen-version_133/bin/wasm-opt"
 make tools
 (cd frontend && npm ci)
-make frontend MODE=demo WASM_OPT="$HOME/binaryen-version_133/bin/wasm-opt"
+make frontend MODE=demo
 ```
 
 `wasm-opt` is not optional here: the unoptimized bridge is over the service

@@ -57,14 +57,15 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::brush::composite_pipeline::CommitLaw;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::paint_target_ext::BrushPaintTargetExt;
+use crate::brush::paint_target_ext::{BrushPaintTargetExt, CommitForegrounds};
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::scratch::StrokeChannel;
+use crate::brush::scratch::{ChannelUse, StrokeChannel};
 use crate::brush::wgsl::{
     pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, NodeWgsl, WgslType,
     INTRINSIC_UNIFORMS_SIZE,
@@ -109,16 +110,18 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 const DEPOSIT_CHANNEL: StrokeChannel = StrokeChannel {
     name: "deposit",
     format: wgpu::TextureFormat::R8Unorm,
-    blend: wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-            operation: wgpu::BlendOperation::Add,
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-            operation: wgpu::BlendOperation::Add,
+    kind: ChannelUse::Attachment {
+        blend: wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
         },
     },
 };
@@ -278,8 +281,8 @@ impl PerBrushPipeline {
                 bind_group_layouts: &[
                     Some(ctx.uniform_bgl),
                     Some(&dabs_bgl),
-                    Some(ctx.canvas_copy_bgl), // pre_stroke texture+sampler
-                    Some(ctx.canvas_copy_bgl), // deposit channel texture+sampler
+                    Some(&ctx.canvas_copy.bgl), // pre_stroke texture+sampler
+                    Some(&ctx.canvas_copy.bgl), // deposit channel texture+sampler
                 ],
                 immediate_size: 0,
             });
@@ -290,12 +293,10 @@ impl PerBrushPipeline {
         // colour is resolved before the dab goes down (see `compile_wgsl`),
         // so the only thing varying across the footprint is coverage, and
         // the ROP composites the stamp onto whatever is already there.
-        let composite_blend = crate::brush::node::PREMULTIPLIED_SOURCE_OVER;
-        let composite_targets = CompiledBrush {
-            dab_blend: composite_blend,
-            ..compiled.clone()
-        }
-        .color_targets(wgpu::TextureFormat::Rgba8Unorm);
+        let composite_targets = compiled.color_targets(
+            wgpu::TextureFormat::Rgba8Unorm,
+            crate::brush::node::PREMULTIPLIED_SOURCE_OVER,
+        );
 
         let composite_pipeline =
             ctx.device
@@ -499,7 +500,11 @@ impl PerBrushPipeline {
             deposit_atlas_attachment_view,
             deposit_atlas_sample_view,
             composite_group3_bgl,
-            canvas_copy_sampler: ctx.canvas_copy_sampler.clone(),
+            canvas_copy_sampler: ctx
+                .canvas_copy
+                .sampler
+                .clone()
+                .expect("the colour canvas-copy layout samples through a linear sampler"),
         }
     }
 }
@@ -734,6 +739,7 @@ pub fn register() -> BrushNodeRegistration {
         evaluator: || Box::new(WatercolorEvaluator),
         lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
         scratch_format: crate::brush::node::COLOR_SCRATCH_FORMAT,
+        dab_pass: crate::brush::node::DabPass::InstancedDraw,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -1083,6 +1089,9 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         });
 
         gpu.perf.record_dab_flush(total_dabs);
+        // The pickup probes draw into the atlas; only the composites draw
+        // into the scratch.
+        gpu.perf.record_dispatches(total_dabs);
     }
 
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
@@ -1096,9 +1105,12 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             gpu.queue,
             // Wet media glazes: layered washes are meant to compound, so
             // watercolor takes the source-over slot and never the ceiling.
-            /* wash */
-            None,
-            /* build */ Some(stroke.scratch.write_bind_group()),
+            CommitForegrounds {
+                format: stroke.scratch.format(),
+                wash: None,
+                build: Some(stroke.scratch.write_bind_group()),
+                law: CommitLaw::Deposit,
+            },
             stroke.pre_stroke_bind_group,
             opacity,
             gpu.blend_mode,
@@ -1277,8 +1289,8 @@ fn ensure_per_brush_pipeline(
         queue: gpu.queue,
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
-        canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
+        canvas_copy: gpu.pipelines.canvas_copy_layout(),
+        canvas_copy_layouts: gpu.pipelines.canvas_copy_layouts(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
         texture_registry: gpu.pipelines.texture_registry(),
         baked_sources: gpu.pipelines.baked_sources(),
