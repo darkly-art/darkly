@@ -2,6 +2,7 @@
 
 use darkly_macros::handlers;
 
+use super::pending_edit::{EditSessionKind, PendingEdit};
 use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
 use std::sync::Arc;
@@ -100,6 +101,59 @@ impl TransformTarget {
     }
 }
 
+/// A destructive transform session, open from `begin_transform` until it is
+/// committed or cancelled.
+pub(crate) struct TransformEdit;
+
+impl PendingEdit for TransformEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "transform",
+            display_name: "Transform",
+            icon: "fa6-solid:up-down-left-right",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.transform_session.is_some()
+    }
+
+    /// A refused commit keeps the session, so `resolve` reports it held.
+    fn apply(&self, engine: &mut DarklyEngine) {
+        engine.commit_transform_session();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.cancel_floating();
+    }
+}
+
+/// Pasted content floating over its target until it is committed or
+/// cancelled.
+pub(crate) struct FloatingEdit;
+
+impl PendingEdit for FloatingEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "floating",
+            display_name: "Pasted content",
+            icon: "fa6-solid:paste",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.floating.is_some()
+    }
+
+    fn apply(&self, engine: &mut DarklyEngine) {
+        engine.commit_floating();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.cancel_floating();
+    }
+}
+
 #[handlers]
 impl DarklyEngine {
     pub(crate) fn pixel_transform_link_policy(&self) -> TransformLinkPolicy {
@@ -120,35 +174,6 @@ impl DarklyEngine {
     fn validate_pixel_transform_plan(&self, plan: &PixelTransformPlan) -> bool {
         plan.link_policy == self.pixel_transform_link_policy()
             && self.doc.validate_pixel_transform_plan(plan)
-    }
-
-    /// Commit any pending edit (floating content, a transform session, a
-    /// shape placement) before performing other edits. Call this before
-    /// operations that would conflict with one (layer switch, paint, undo,
-    /// etc.).
-    pub fn commit_pending_edits(&mut self) {
-        let _ = self.resolve_pending_edits();
-    }
-
-    /// Generic chokepoint for document edits that can invalidate a pending
-    /// edit: transform topology, capability, selection, target resources, or
-    /// a layer that exists in the document but has no undo record yet.
-    pub(crate) fn resolve_pending_edits(&mut self) -> bool {
-        if self.pending_transform.take().is_some() {
-            self.transform_setup_generation = self.transform_setup_generation.wrapping_add(1);
-        }
-        if self.transform_session.is_some() {
-            return self.commit_transform_session() && self.transform_session.is_none();
-        }
-        if self.floating.is_some() {
-            self.commit_floating();
-            return self.floating.is_none();
-        }
-        if self.shape_placement.is_some() {
-            self.commit_shape();
-            return self.shape_placement.is_none();
-        }
-        true
     }
 
     /// Check if there is active floating content.

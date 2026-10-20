@@ -8,7 +8,7 @@ use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::preview::PreviewBackdrop;
-use crate::gpu::readback::{self, ReadbackScheduler};
+use crate::gpu::readback::{self, ReadbackRequest, ReadbackScheduler};
 use crate::gpu::region_runs::RegionRuns;
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
@@ -1197,9 +1197,22 @@ pub(crate) fn commit_undo_region(
     snapshot: &Snapshot,
     runs: impl Into<RegionRuns>,
 ) -> UndoRegionEntry {
-    let (entry, request) = gpu.encode_ret(label, |encoder| {
+    commit_undo_entry(gpu, scheduler, label, |encoder| {
         region_scratch.commit_region(encoder, &gpu.device, layer_id, snapshot, runs)
-    });
+    })
+}
+
+/// Encode an undo entry with `encode` in one submission labelled `label`, and
+/// schedule the readback that moves its pixels from VRAM to DRAM. The shape
+/// every GPU region commit shares, whatever the entry's pixels are copied
+/// from.
+pub(crate) fn commit_undo_entry(
+    gpu: &GpuContext,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
+    label: &'static str,
+    encode: impl FnOnce(&mut wgpu::CommandEncoder) -> (UndoRegionEntry, ReadbackRequest),
+) -> UndoRegionEntry {
+    let (entry, request) = gpu.encode_ret(label, encode);
     scheduler.submit(
         request,
         ReadbackContext::UndoRegionReady {

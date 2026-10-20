@@ -264,6 +264,7 @@ fn auto_snaps_at_2x_and_nearest_snaps_at_any_magnification() {
 
 /// Paint a short horizontal stroke so the composite changes.
 fn paint_dab_row(engine: &mut DarklyEngine, layer_id: LayerId) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for i in 0..8 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -275,10 +276,6 @@ fn paint_dab_row(engine: &mut DarklyEngine, layer_id: LayerId) {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();

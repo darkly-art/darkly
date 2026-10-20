@@ -23,6 +23,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 /// Paint a short brush stroke at (x, y) WITHOUT rendering: the tests
 /// control the `render(t)` clock themselves.
 fn stroke_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -33,10 +34,6 @@ fn stroke_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
 }
@@ -229,6 +226,7 @@ fn no_capture_while_stroke_active() {
 
     // Pending revision change (the layer add), but a stroke is in flight,
     // so the tick must hold off.
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 32.0,
@@ -239,10 +237,6 @@ fn no_capture_while_stroke_active() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     for _ in 0..4 {
         step(&mut engine, 0.0);

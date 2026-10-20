@@ -1,6 +1,10 @@
 //! GPU undo region storage: entries hold the tiles an operation changed, and
 //! every pending commit keeps the pixels it was saved from.
 //!
+//! A brush stroke's entry lands when the stroke settles (the next action),
+//! so cells that inspect the stack after a stroke settle it first with
+//! `commit_pending_edits`.
+//!
 //! Run with: `cargo test -p darkly --features testing --test undo_tiles -- --test-threads=1`
 
 use darkly::engine::types::StrokeOp;
@@ -9,18 +13,16 @@ use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
 
+/// An engine painting red.
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
     let (device, queue) = test_device();
     let gpu = GpuContext::new_headless(device, queue);
-    DarklyEngine::new(gpu, width, height)
+    let mut engine = DarklyEngine::new(gpu, width, height);
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
+    engine
 }
 
 fn brush_op(x: f32, y: f32) -> StrokeOp {
-    colored_brush_op(x, y, 1.0)
-}
-
-/// A brush op whose color is `[red, 0, 0]`; a mask takes the red channel.
-fn colored_brush_op(x: f32, y: f32, red: f32) -> StrokeOp {
     StrokeOp::BrushStroke {
         x,
         y,
@@ -30,10 +32,6 @@ fn colored_brush_op(x: f32, y: f32, red: f32) -> StrokeOp {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: red,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     }
 }
 
@@ -135,6 +133,7 @@ fn multi_run_entry_undoes_and_redoes_exactly() {
         .map(|i| (60.0 + i as f32 * 45.0, 60.0 + i as f32 * 45.0))
         .collect();
     stroke(&mut engine, layer_id, &diagonal);
+    engine.commit_pending_edits();
     engine.test_settle_pending();
     let after = engine.test_readback_layer(layer_id);
     assert!(
@@ -172,6 +171,7 @@ fn partial_edge_tiles_restore_exactly() {
         layer_id,
         &[(995.0, 10.0), (995.0, 995.0), (10.0, 995.0)],
     );
+    engine.commit_pending_edits();
     engine.test_settle_pending();
     let after = engine.test_readback_layer(layer_id);
     assert!(
@@ -204,6 +204,7 @@ fn stroke_that_grows_the_layer_stores_its_tiles() {
     let bytes0 = engine.test_undo_total_bytes();
 
     stroke(&mut engine, layer_id, &[(100.0, 100.0), (-60.0, 100.0)]);
+    engine.commit_pending_edits();
     engine.test_settle_pending();
     let grown = engine.test_node_extent(layer_id);
     assert!(grown.origin.x < 0, "the layer grew left");
@@ -230,10 +231,9 @@ fn mask_stroke_restores_exactly() {
     let len0 = engine.test_undo_len();
 
     // Black: a fresh mask is white, so a white stroke would change nothing.
-    engine.begin_stroke(mask_id).unwrap();
-    engine.stroke_to(colored_brush_op(100.0, 100.0, 0.0));
-    engine.stroke_to(colored_brush_op(900.0, 900.0, 0.0));
-    engine.end_stroke();
+    engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
+    stroke(&mut engine, mask_id, &[(100.0, 100.0), (900.0, 900.0)]);
+    engine.commit_pending_edits();
     engine.test_settle_pending();
     assert_eq!(engine.test_undo_len(), len0 + 1);
     assert!(
@@ -263,6 +263,7 @@ fn consecutive_strokes_each_get_a_tile_sized_entry() {
 
     stroke(&mut engine, layer_id, &[(60.0, 60.0), (960.0, 960.0)]);
     stroke(&mut engine, layer_id, &[(960.0, 60.0), (60.0, 960.0)]);
+    engine.commit_pending_edits();
     engine.test_settle_pending();
     assert_eq!(engine.test_undo_len(), len0 + 2);
     assert!(
@@ -335,6 +336,7 @@ fn fill_landing_after_its_layer_grew_commits_cleanly() {
     // Before the fill's readback lands, a stroke grows the layer left.
     stroke(&mut engine, layer_id, &[(50.0, 200.0), (-60.0, 200.0)]);
     engine.test_settle_pending();
+    engine.commit_pending_edits();
     assert!(
         engine.test_node_extent(layer_id).origin.x < 0,
         "the layer grew left"

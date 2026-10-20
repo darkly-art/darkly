@@ -175,8 +175,16 @@ impl UndoStack {
         doc: &mut Document,
         action: Box<dyn UndoAction>,
     ) -> Vec<Box<dyn UndoAction>> {
-        doc.dirty = true;
-        doc.revision += 1;
+        doc.mark_changed();
+        self.push_recorded(action)
+    }
+
+    /// [`Self::push`] for an action whose change the document has already
+    /// recorded ([`Document::mark_changed`] ran when its pixels changed, as a
+    /// brush stroke's does at pen-up), so pushing it is bookkeeping rather
+    /// than a new edit: a document saved in between stays clean.
+    #[must_use = "evicted actions must have on_evict called to release tombstones"]
+    pub fn push_recorded(&mut self, action: Box<dyn UndoAction>) -> Vec<Box<dyn UndoAction>> {
         let mut evicted: Vec<Box<dyn UndoAction>> = std::mem::take(&mut self.redo_steps);
         for a in &evicted {
             self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
@@ -227,8 +235,7 @@ impl UndoStack {
     ) -> Vec<Box<dyn UndoAction>> {
         if let Some(top) = self.undo_steps.last_mut() {
             if top.try_coalesce_property(&action) {
-                doc.dirty = true;
-                doc.revision += 1;
+                doc.mark_changed();
                 return Vec::new();
             }
         }

@@ -19,6 +19,7 @@ use darkly::nodegraph::NodeInstance;
 fn paint_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
     // Not unwrapped: callers also use this to prove a refused target stays
     // untouched, where opening the stroke is expected to fail.
+    engine.set_foreground_color([r, g, b, 1.0]);
     let _ = engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -29,13 +30,9 @@ fn paint_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: r,
-        cg: g,
-        cb: b,
-        ca: 1.0,
     });
     engine.end_stroke();
-    // Flush the pending diff-based undo commit.
+    // A frame, so the readbacks the stroke queued land.
     engine.render(0.0);
 }
 
@@ -48,6 +45,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
 fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -60,10 +58,6 @@ fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u3
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -745,6 +739,7 @@ fn lasso_selection_performance_and_correctness() {
     assert!(engine.has_selection());
 
     // Correctness: paint across canvas, verify masking works.
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..40 {
         let x = x_step as f32 * (w as f32 / 40.0);
@@ -757,10 +752,6 @@ fn lasso_selection_performance_and_correctness() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -809,6 +800,7 @@ fn alpha_sum(pixels: &[u8], w: u32, h: u32) -> u64 {
 }
 
 fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let samples = 40;
     for i in 0..samples {
@@ -823,10 +815,6 @@ fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32,
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
         // A frame per sample, so a stroke that could rewind does.
         engine.render(0.0);
@@ -971,6 +959,7 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     let x1 = (w as f32) - 16.0;
     let stroke_length_px = (x1 - x0).abs();
 
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let samples = 40;
     for i in 0..samples {
@@ -985,10 +974,6 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -1421,6 +1406,7 @@ fn mid_stroke_growth_preserves_already_saved_region() {
     // Now do a single stroke composed of multiple events, crossing the
     // canvas right edge. The first event is in-canvas; later events
     // trigger grow.
+    engine.set_foreground_color([0.0, 0.0, 1.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for x_step in 0..10 {
         let x = (cw as f32) * 0.4 + (x_step as f32) * 80.0;
@@ -1433,10 +1419,6 @@ fn mid_stroke_growth_preserves_already_saved_region() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 0.0,
-            cg: 0.0,
-            cb: 1.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -1835,14 +1817,13 @@ fn floating_perspective_commit_keystone() {
 }
 
 /// Regression: a brush stroke that paints past the canvas edge triggers a
-/// mid-stroke layer grow. After the grow, the diff_rect at end_stroke can
-/// land in the newly-grown area, a region that was just allocated and
-/// (correctly) holds zero/transparent pixels as its pre-stroke state. The
-/// commit/restore path must accept this as a contained sub-rect of the
-/// snapshot. Pre-fix, the snapshot's saved rect was translated to the old
-/// layer's footprint within the new layer, so a diff covering newly-grown
-/// pixels would (a) panic the new debug_assert, locking the engine RefCell
-/// in WASM and (b) read the correct zero-init pixels in release.
+/// mid-stroke layer grow, so its undo rect lands in the newly-grown area, a
+/// region that was just allocated and (correctly) holds transparent pixels
+/// as its pre-stroke state. The commit and restore paths must accept that
+/// rect. Pre-fix, the pre-stroke snapshot's rect was translated to the old
+/// layer's footprint within the new layer, so an undo rect covering
+/// newly-grown pixels would (a) panic a debug_assert, locking the engine
+/// RefCell in WASM and (b) read the correct zero-init pixels in release.
 #[test]
 fn brush_stroke_off_canvas_undo_after_grow() {
     let (cw, ch) = (256u32, 256u32);
@@ -1912,6 +1893,7 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
     // Stroke from canvas (50, 100) to (-100, 100). The dab center crosses
     // x=0 partway through, triggering a negative-direction grow that
     // shifts `offset_x` to ≤ -256.
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     for step in 0..20 {
         let t = step as f32 / 19.0;
@@ -1925,10 +1907,6 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: step as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -1985,13 +1963,12 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
 }
 
 /// Regression: after stroke A (inside canvas) and stroke B (off-canvas,
-/// triggers grow), undoing both must leave a clean layer. Pre-fix, the
-/// pending diff for stroke A was computed in stroke A's frame, but its
-/// commit ran AFTER stroke B's grow rebased the scratch, so the saved
-/// undo buffer held wrong pixels and `restore_region` wrote them at the
-/// stale layer-local coords, missing where stroke A actually landed in
-/// the post-grow layer. Symptom: stroke A's pixels persist after both
-/// undos.
+/// triggers grow), undoing both must leave a clean layer: B's growth must
+/// not reach A's undo entry. Pre-fix, A's entry was committed after B's grow
+/// had rebased the snapshot, so it held wrong pixels and `restore_region`
+/// wrote them at stale layer-local coords, missing where stroke A actually
+/// landed in the post-grow layer. Symptom: stroke A's pixels persist after
+/// both undos.
 #[test]
 fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
     let (cw, ch) = (256u32, 256u32);
@@ -2002,8 +1979,7 @@ fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
     paint_at(&mut engine, layer_id, 50.0, 50.0, 1.0, 0.0, 0.0);
 
     // Stroke B: canvas (-100, -100), triggers a negative-direction grow.
-    // This is the event that processes stroke A's pending diff against
-    // the post-grow scratch, corrupting its undo entry.
+    // Stroke A's undo entry is committed as B begins, before the grow.
     paint_at(&mut engine, layer_id, -100.0, -100.0, 0.0, 1.0, 0.0);
 
     // Undo B, then A.
@@ -2187,29 +2163,26 @@ fn transform_translate_with_selection_does_not_duplicate() {
     );
 }
 
-/// Regression for canvas-coord storage of pending undo commits: a deferred
-/// `pending_undo_commit` from stroke A must remain valid when stroke B grows
-/// the layer a second time before A's diff has been polled. With layer-local
-/// coords the diff rect captured at A's request time would be invalidated by
-/// B's grow rebasing the scratch and shifting the local frame, so the diff
-/// would land at the wrong texels. Canvas coords are stable across grows, so
-/// this round-trips cleanly.
+/// Regression for canvas-coord storage of undo rects: stroke A's undo entry
+/// must stay valid when stroke B grows the layer a second time. With
+/// layer-local coords, B's grow shifting the local frame would make A's rect
+/// land at the wrong texels on undo. Canvas coords are stable across grows,
+/// so this round-trips cleanly.
 #[test]
-fn pending_undo_commit_survives_two_grows() {
+fn undo_rects_survive_a_later_strokes_grow() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
     let layer_id = engine.add_raster_layer(None);
 
     // Stroke A: off-canvas in -X direction. Triggers grow #1.
     paint_at(&mut engine, layer_id, -50.0, 50.0, 1.0, 0.0, 0.0);
-    // Stroke B: off-canvas in -Y direction. Triggers grow #2 before A's
-    // diff has been polled (the deferred commit holds the canvas-coord
-    // snapshot from before grow #1).
+    // Stroke B: off-canvas in -Y direction. Triggers grow #2, after A's
+    // entry was committed in the frame grow #1 left.
     paint_at(&mut engine, layer_id, 50.0, -50.0, 0.0, 1.0, 0.0);
 
     // Undo both strokes. After both undos the layer must be fully
-    // transparent: if A's deferred commit captured the wrong pixels,
-    // some red would remain visible.
+    // transparent: if A's entry restored at the wrong texels, some red
+    // would remain visible.
     engine.undo();
     engine.render(0.0);
     engine.undo();
@@ -2231,8 +2204,8 @@ fn pending_undo_commit_survives_two_grows() {
         painted_count, 0,
         "after undoing two strokes that each grew the layer, the layer \
          should be fully transparent; got {painted_count} painted pixels: \
-         the deferred undo commit from stroke A held a stale layer-local \
-         rect that survived past the second grow"
+         the undo entry from stroke A restored at a stale layer-local \
+         rect after the second grow"
     );
 }
 
@@ -2251,6 +2224,7 @@ fn paint_mask_dab(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32, v
     let mask_id = engine
         .host_mask_id(host_id)
         .expect("paint_mask_dab requires the host to have a mask filter");
+    engine.set_foreground_color([value, value, value, 1.0]);
     engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -2261,10 +2235,6 @@ fn paint_mask_dab(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32, v
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: value,
-        cg: value,
-        cb: value,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);
@@ -2462,6 +2432,7 @@ fn engine_no_mask_brush_safe_on_layer() {
     let layer_id = engine.add_raster_layer(None);
 
     // No mask added; stroking on the layer must just paint the layer.
+    engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: (w / 2) as f32,
@@ -2472,10 +2443,6 @@ fn engine_no_mask_brush_safe_on_layer() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 0.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);
@@ -3000,10 +2967,6 @@ fn painting_mask_past_bounds_grows_mask_independently() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 0.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     };
     engine.begin_stroke(mask_id).unwrap();
     engine.stroke_to(black((ox + 30) as f32, (oy + 30) as f32));
@@ -3264,6 +3227,7 @@ fn apply_mask_reveals_host_outside_mask_footprint() {
     // footprint. The host grows to cover it; the mask stays 100×100.
     engine.resize_canvas(CanvasRect::from_xywh(0, 0, 300, 300));
     let (probe_x, probe_y) = (150.0f32, 150.0f32);
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x: probe_x,
@@ -3274,10 +3238,6 @@ fn apply_mask_reveals_host_outside_mask_footprint() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.test_flush_readbacks();
@@ -5516,10 +5476,6 @@ fn brush_sample(x: f32, y: f32, time_ms: f64) -> StrokeOp {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     }
 }
 
@@ -5807,6 +5763,7 @@ fn run_predicted_l_stroke(
         darkly::config::ConfigValue::Float(predict_ms as f64),
     );
 
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let mut t = 0.0f64;
     let mut sample = |engine: &mut DarklyEngine, x: f32, y: f32| {
@@ -5819,10 +5776,6 @@ fn run_predicted_l_stroke(
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: t,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
         t += 16.0;
     };
@@ -5922,6 +5875,7 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
         darkly::config::ConfigValue::Float(30.0),
     );
 
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let samples = 400usize;
     let cx = (w / 2) as f32;
@@ -5941,10 +5895,6 @@ fn predicted_stroke_keeps_checkpoint_coverage() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -6873,8 +6823,8 @@ fn duplicate_preserves_mask_link_state() {
 // bounding box of the change, and not the whole layer.
 // ============================================================================
 
-/// A default-brush `StrokeOp` at `(x, y)` in opaque `[r, g, b]`.
-fn brush_op(x: f32, y: f32, [r, g, b]: [f32; 3]) -> StrokeOp {
+/// A default-brush `StrokeOp` at `(x, y)`, in the foreground colour.
+fn brush_op(x: f32, y: f32) -> StrokeOp {
     StrokeOp::BrushStroke {
         x,
         y,
@@ -6884,10 +6834,6 @@ fn brush_op(x: f32, y: f32, [r, g, b]: [f32; 3]) -> StrokeOp {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: r,
-        cg: g,
-        cb: b,
-        ca: 1.0,
     }
 }
 
@@ -6905,9 +6851,11 @@ fn diagonal_stroke_undo_entry_is_tile_granular() {
     engine.begin_stroke(layer_id).unwrap();
     for i in 0..=40 {
         let t = 50.0 + i as f32 * 23.0;
-        engine.stroke_to(brush_op(t, t, [1.0, 0.0, 0.0]));
+        engine.stroke_to(brush_op(t, t));
     }
     engine.end_stroke();
+    // The stroke's entry lands when it settles.
+    engine.commit_pending_edits();
     engine.test_settle_pending();
 
     assert_eq!(
@@ -7028,10 +6976,12 @@ fn stroke_after_pending_fill_starts_a_new_stroke() {
     });
     engine.end_stroke();
     engine.begin_stroke(b).unwrap();
-    engine.stroke_to(brush_op(40.0, 40.0, [1.0, 0.0, 0.0]));
-    engine.stroke_to(brush_op(50.0, 50.0, [1.0, 0.0, 0.0]));
+    engine.stroke_to(brush_op(40.0, 40.0));
+    engine.stroke_to(brush_op(50.0, 50.0));
     engine.end_stroke();
     engine.test_settle_pending();
+    // The stroke's entry lands when it settles.
+    engine.commit_pending_edits();
     assert_eq!(
         engine.test_undo_len(),
         len0 + 2,
@@ -7039,8 +6989,8 @@ fn stroke_after_pending_fill_starts_a_new_stroke() {
     );
 
     engine.begin_stroke(b).unwrap();
-    engine.stroke_to(brush_op(200.0, 200.0, [1.0, 0.0, 0.0]));
-    engine.stroke_to(brush_op(210.0, 210.0, [1.0, 0.0, 0.0]));
+    engine.stroke_to(brush_op(200.0, 200.0));
+    engine.stroke_to(brush_op(210.0, 210.0));
     engine.end_stroke();
     engine.test_settle_pending();
 

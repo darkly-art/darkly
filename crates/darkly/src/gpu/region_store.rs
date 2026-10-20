@@ -223,7 +223,7 @@ impl RegionScratch {
     /// > After the call, the snapshot holds valid pre-operation state over
     /// > the **entire new extent**: its saved pixels at their canvas
     /// > position, and the format default (transparent for RGBA, **white**
-    /// > for an R8 mask, see [`scratch_default_clear`]) everywhere else, and
+    /// > for an R8 mask, see [`default_fill`](crate::gpu::default_fill)) everywhere else, and
     /// > its texture is texel-aligned to the grown layer.
     ///
     /// The newly-grown pixels didn't exist before the grow, so the default IS
@@ -255,19 +255,12 @@ impl RegionScratch {
             format,
         ));
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("scratch-rebase-clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(scratch_default_clear(format)),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
+        crate::gpu::clear_view(
+            encoder,
+            &view,
+            crate::gpu::default_fill(format),
+            "scratch-rebase-clear",
+        );
         let rebased = Snapshot {
             saved: new_extent,
             format,
@@ -586,17 +579,6 @@ fn create_scratch(
             | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
-}
-
-/// The pre-operation value a freshly-grown region of a scratch texture holds,
-/// matching the live texture's default fill: R8 masks default to white
-/// (255 = reveal), everything else to transparent/zero. Getting this wrong
-/// for an R8 mask corrupts undo: the grown region would restore to black.
-fn scratch_default_clear(format: wgpu::TextureFormat) -> wgpu::Color {
-    match format {
-        wgpu::TextureFormat::R8Unorm => wgpu::Color::WHITE,
-        _ => wgpu::Color::TRANSPARENT,
-    }
 }
 
 /// Allocate the readback + staging buffer pair for a `Pending` entry.

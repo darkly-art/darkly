@@ -23,6 +23,7 @@ fn set_jitter(hue: f64, saturation: f64, value: f64) {
 }
 
 fn paint_red(engine: &mut DarklyEngine, layer: LayerId) {
+    engine.set_foreground_color([RED[0], RED[1], RED[2], RED[3]]);
     engine.begin_stroke(layer).unwrap();
     for i in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -34,10 +35,6 @@ fn paint_red(engine: &mut DarklyEngine, layer: LayerId) {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: RED[0],
-            cg: RED[1],
-            cb: RED[2],
-            ca: RED[3],
         });
     }
     engine.end_stroke();

@@ -303,7 +303,7 @@ fn region_store_save_full_commit_subrect() {
     }
     write_texture(&queue, &tex, w, h, 4, &painted);
 
-    // Stroke end: diff_rect would return the painted center; commit that sub-rect.
+    // Commit only the painted center sub-rect.
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
         &mut enc,
@@ -388,7 +388,7 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
 /// everywhere else in the full target texture: no surviving sentinel.
 ///
 /// Run for both formats: R8's default (white) diverges from RGBA's (transparent),
-/// so it's the format the `scratch_default_clear` path can get wrong.
+/// so it's the format the `default_fill` path can get wrong.
 fn assert_grow_clears_stale(
     format: wgpu::TextureFormat,
     old_extent: CanvasRect,

@@ -47,10 +47,6 @@ pub struct RecordedEvent {
     /// itself is also forwarded into the engine so the stabilizer sees
     /// the original cadence regardless of how the harness paces dispatches.
     pub time_ms: f64,
-    pub cr: f32,
-    pub cg: f32,
-    pub cb: f32,
-    pub ca: f32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,10 +102,6 @@ impl RecordedEvent {
             rotation: self.rotation,
             tangential_pressure: self.tangential_pressure,
             time_ms: self.time_ms,
-            cr: self.cr,
-            cg: self.cg,
-            cb: self.cb,
-            ca: self.ca,
         }
     }
 }

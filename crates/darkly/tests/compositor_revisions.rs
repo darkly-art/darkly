@@ -58,6 +58,7 @@ fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8)
 }
 
 fn paint_dab(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -68,10 +69,6 @@ fn paint_dab(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32) {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     engine.end_stroke();
     settle(engine);
@@ -515,7 +512,7 @@ fn a_frame_does_not_reschedule_itself() {
     let mut f = fixture();
     paint_dab(&mut f.engine, f.bottom, 8.0, 8.0);
 
-    // Drain the async work the dab queued (thumbnail readback, diff rect) so
+    // Drain the async work the dab queued (the thumbnail readback) so
     // the assertion below is about scheduling and not about work still in
     // flight, which legitimately asks for frames.
     for _ in 0..8 {

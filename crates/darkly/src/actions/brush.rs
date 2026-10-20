@@ -20,6 +20,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:up-right-and-down-left-from-center",
     },
     ActionDef {
+        id: "toggleStrokeEdit",
+        display_name: "Edit Last Stroke",
+        description: "Redraw the last brush stroke with every change to the brush or colour until you apply or discard; it stays editable until your next action.",
+        icon: "fa6-solid:pen-nib",
+    },
+    ActionDef {
         id: "setCloneSource",
         display_name: "Set Clone Source",
         description: "Hold the modifier and click on the canvas to set the point the Clone brush copies from.",

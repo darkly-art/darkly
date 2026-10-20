@@ -176,6 +176,43 @@ impl RegionRuns {
         }
     }
 
+    /// The tiles on `grid` that any of `rects` overlaps, packed and costed as
+    /// [`Self::from_tile_flags`] packs a diff's, with the rects' union as
+    /// the tight bbox: the region of an operation that knows where it wrote
+    /// (a brush stroke's dab footprints) without diffing. `None` when no
+    /// rect overlaps `layer_extent`.
+    pub fn covering(
+        rects: impl IntoIterator<Item = CanvasRect>,
+        grid: TileGrid,
+        layer_extent: CanvasRect,
+        bpp: u32,
+    ) -> Option<Self> {
+        let (tiles_x, _) = grid.tiles(layer_extent.width, layer_extent.height);
+        let mut flags = vec![0u32; grid.flag_words(layer_extent.width, layer_extent.height)];
+        let mut bbox: Option<CanvasRect> = None;
+        for rect in rects {
+            let Some(rect) = rect.intersect(layer_extent) else {
+                continue;
+            };
+            bbox = Some(bbox.map_or(rect, |b| b.union(rect)));
+            let x0 = (rect.origin.x - layer_extent.origin.x) as u32;
+            let y0 = (rect.origin.y - layer_extent.origin.y) as u32;
+            for j in y0 / grid.tile_h..=(y0 + rect.height - 1) / grid.tile_h {
+                for i in x0 / grid.tile_w..=(x0 + rect.width - 1) / grid.tile_w {
+                    let idx = (j * tiles_x + i) as usize;
+                    flags[idx / 32] |= 1 << (idx % 32);
+                }
+            }
+        }
+        Some(Self::from_tile_flags(
+            &flags,
+            grid,
+            layer_extent,
+            bbox?,
+            bpp,
+        ))
+    }
+
     pub fn rects(&self) -> &[CanvasRect] {
         &self.0
     }
@@ -343,6 +380,30 @@ mod tests {
         let runs = RegionRuns::from_tile_flags(&flags, grid, extent, extent, 4);
         assert_eq!(runs.rects().len(), 16);
         assert_eq!(runs.byte_size(4), 16 * 64 * 256);
+    }
+
+    #[test]
+    fn covering_flags_every_tile_a_rect_touches() {
+        let grid = TileGrid::for_format(RGBA);
+        let extent = CanvasRect::from_xywh(-64, 0, 1024, 1024);
+        // Straddles two tile columns; the second sits two tile rows down and
+        // pokes past the extent's left edge.
+        let rects = [
+            CanvasRect::from_xywh(40, 10, 40, 20),
+            CanvasRect::from_xywh(-80, 140, 30, 10),
+            CanvasRect::from_xywh(5000, 5000, 8, 8),
+        ];
+        let runs = RegionRuns::covering(rects, grid, extent, 4).expect("two rects overlap");
+        // Tiles (1..3, 0) and (0, 2), clipped to the rects' union
+        // x -64..80, y 10..150.
+        assert_eq!(
+            runs.rects(),
+            &[
+                CanvasRect::from_xywh(0, 10, 80, 54),
+                CanvasRect::from_xywh(-64, 128, 64, 22),
+            ]
+        );
+        assert!(RegionRuns::covering([rects[2]], grid, extent, 4).is_none());
     }
 
     #[test]

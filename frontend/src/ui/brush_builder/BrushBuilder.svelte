@@ -179,14 +179,17 @@
         liveSize = null;
     }
 
+    // Capture phase, so the Escape this consumes never reaches the hotkeys
+    // (where it would discard an open edit session).
     function onKeydown(e: KeyboardEvent) {
         if (e.key === 'Escape' && brushGraph.fullscreen) {
+            e.preventDefault();
             brushGraph.fullscreen = false;
         }
     }
 </script>
 
-<svelte:window on:keydown={onKeydown} />
+<svelte:window on:keydown|capture={onKeydown} />
 
 <div class="brush-builder">
     <div class="canvas-wrapper">
