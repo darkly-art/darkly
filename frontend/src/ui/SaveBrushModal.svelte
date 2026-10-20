@@ -43,7 +43,7 @@
             await brushLibrary.refresh();
             // The graph is now that brush, so the builder's title and every
             // tile keyed by the active name agree with the library.
-            brushGraph.setActiveBrush({ name: trimmed, id });
+            await brushGraph.refreshLoaded();
             toast.show('success', `Saved “${trimmed}”`);
             open = false;
         } catch (e) {

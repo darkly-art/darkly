@@ -16,34 +16,15 @@ vi.mock('../../config/store.svelte', async (importOriginal) => ({
 }));
 
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
-import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
+import { BrushGraphState } from '../brush_graph.svelte';
 import { brushColors, type ColorPair } from '../brushColors.svelte';
 import type { Color } from '../../lib/color';
-
-const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
+import { fakeBrushEngine, type FakeBrushEngine } from './fakeBrushEngine';
 
 const RED: Color = { r: 255, g: 0, b: 0, a: 255 };
 const GREEN: Color = { r: 0, g: 255, b: 0, a: 255 };
 const BLUE: Color = { r: 0, g: 0, b: 255, a: 255 };
 const WHITE: Color = { r: 255, g: 255, b: 255, a: 255 };
-
-/** Engine stub covering `loadBrush`'s refresh chain and `resetToDefault`.
- *  `brushLoad` either resolves or rejects, which is the branch under test. */
-function fakeEngine(loadOk: boolean) {
-    return {
-        api: {
-            brushLoad: async () => {
-                if (!loadOk) throw new Error('no such brush');
-                return null;
-            },
-            brushGraphReset: () => {},
-            brushGraphActive: async () => emptyGraph,
-            brushExposedPorts: async () => [],
-            brushActiveCapabilities: async () => ({}),
-            brushTopologyVersion: async () => ({ value: 0 }),
-        },
-    } as unknown as NonNullable<typeof app.engine>;
-}
 
 function pair(foreground: Color, background: Color): ColorPair {
     return { foreground: { ...foreground }, background: { ...background } };
@@ -99,11 +80,13 @@ describe('brush color memory', () => {
 describe('paint stays on the brush across loadBrush', () => {
     let inst: DarklyInstance;
     let state: BrushGraphState;
+    let fake: FakeBrushEngine;
 
     beforeEach(() => {
         inst = new DarklyInstance();
         setActiveInstance(inst);
-        app.engine = fakeEngine(true);
+        fake = fakeBrushEngine();
+        app.engine = fake.engine;
         state = new BrushGraphState();
     });
     afterEach(() => {
@@ -153,7 +136,7 @@ describe('paint stays on the brush across loadBrush', () => {
         await state.loadBrush('B', 'b');
         paint(inst, BLUE, WHITE);
 
-        app.engine = fakeEngine(false);
+        fake.loadOk = false;
         await state.loadBrush('A', 'a');
 
         expect(state.error).not.toBeNull();
@@ -164,8 +147,9 @@ describe('paint stays on the brush across loadBrush', () => {
     it('a_saved_brush_records_under_its_new_id', async () => {
         await state.loadBrush('A', 'a');
         paint(inst, RED, GREEN);
-        // Save As: the graph is now a different library brush.
-        state.setActiveBrush({ name: 'A copy', id: 'a_copy' });
+        // Save As: the engine's graph is now a different library brush.
+        fake.loaded = { id: 'a_copy', name: 'A copy', modified: false };
+        await state.refreshLoaded();
         paint(inst, BLUE, WHITE);
 
         await state.loadBrush('B', 'b');

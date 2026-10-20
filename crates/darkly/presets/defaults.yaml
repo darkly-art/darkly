@@ -62,6 +62,15 @@ hotkeys:
   # Brush parameter hotkeys: `[` / `]` is the universal sizing convention.
   brushSizeUp: BracketRight
   brushSizeDown: BracketLeft
+  # Darkly-original (rule #2): cycling by recency has no reference-editor
+  # analog. Krita's `/` is "Switch to Previous Preset" (krita/krita/krita.action
+  # previous_preset), a single slot with no chain; Photoshop's `,` / `.` and
+  # GIMP's unbound context-brush-select-previous/next walk list order. The key
+  # follows Krita, the one editor with a brush-recall key. Verified free in
+  # defaults and all four overlays (Photoshop's `/` is transparency lock, GIMP's
+  # is action search, Clip Studio Paint's is the Zoom tool; none of those
+  # actions exist in Darkly).
+  cycleRecentBrush: Slash
   # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
   # default. Darkly picks the macOS preferences convention.
   openSettings: $mod+Comma

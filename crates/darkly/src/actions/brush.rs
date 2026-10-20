@@ -32,6 +32,18 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:crosshairs",
     },
     ActionDef {
+        id: "cycleRecentBrush",
+        display_name: "Cycle Recent Brushes",
+        description: "Switch to the brush you used before this one. Tap again right away to step further back through your recent brushes, wrapping around; pause to settle on one.",
+        icon: "fa6-solid:clock-rotate-left",
+    },
+    ActionDef {
+        id: "revertBrush",
+        display_name: "Revert to Saved Brush",
+        description: "Throw away your unsaved changes to the current brush and put it back the way it was saved.",
+        icon: "fa6-solid:rotate-left",
+    },
+    ActionDef {
         id: "addBrushNode",
         display_name: "Add Brush Node",
         description: "Open the add-node menu at the cursor (brush builder).",

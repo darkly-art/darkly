@@ -128,9 +128,25 @@
                 </span>
                 <span class="bar-control-text">
                     <span class="bar-control-label">Brush</span>
-                    <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
+                    <span class="bar-control-value name">
+                        {brushGraph.activeBrush ?? 'Custom'}{#if brushGraph.modified}<span
+                                class="modified"
+                                title="Unsaved changes to this brush">*</span
+                            >{/if}
+                    </span>
                 </span>
             </button>
+            {#if brushGraph.modified}
+                <!-- Tweaks survive switching brushes, so picking a brush again
+                     no longer puts it back the way it was saved; this does. -->
+                <button
+                    class="icon-btn revert-brush"
+                    onclick={() => void brushGraph.revert()}
+                    title={tooltipForAction('Revert to saved brush', 'revertBrush')}
+                >
+                    <Icon name="fa6-solid:rotate-left" />
+                </button>
+            {/if}
         </div>
 
         <BrushExplorer bind:open={explorerOpen} />
@@ -320,6 +336,12 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .revert-brush {
+        padding: 4px;
+        font-size: 12px;
+        flex-shrink: 0;
     }
 
     .error-badge {

@@ -153,6 +153,7 @@ For a feature to count, it must be:
 - [x] Flip layer / selection H / V
 - [x] Smart objects
 - [x] Recent colors
+- [x] Recent brushes
 - [ ] Saved swatches / palettes
 - [x] Palette popup
 - [ ] Navigator / overview window

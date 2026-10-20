@@ -14,12 +14,14 @@ import { config } from '../config/store.svelte';
 import { freshDocument } from './freshDocument';
 import { recentBrushes } from './recents.svelte';
 import { brushLibrary } from './brush_library.svelte';
+import { createRecentCycle } from '../lib/recentCycle';
 import type {
     BrushInfo,
     JsonValue,
     ExposedValue,
     ExposedPortInfo,
     ExposedPortMeta,
+    LoadedBrush,
 } from '../engine/protocol_gen';
 
 export type { BrushInfo };
@@ -30,6 +32,14 @@ export type { BrushInfo };
  *  the engine never enforces slider ranges, so authored/wired values are already
  *  unbounded; this only relaxes the editor's own slider validation. */
 export const EXTENDED_RANGE_MAX = 1000;
+
+/** How long after a press of the recent-brush cycle the chain stays open for
+ *  the next press to keep stepping back. Longer than a comfortable tap cadence
+ *  and the polygon tool's 400 ms double-click window, shorter than the "wait a
+ *  second" after which a press should swap straight back. A gesture timing
+ *  like `BRUSH_CAP` in `recents.svelte.ts`, not a pref: no reference editor
+ *  exposes one. */
+const RECENT_CYCLE_PAUSE_MS = 700;
 
 // --- Types mirroring Rust's nodegraph structures ---
 
@@ -183,9 +193,7 @@ export class BrushGraphState {
      *  guard are scoped to it, so a freshly-loaded graph is always treated as
      *  un-laid-out (even when it reuses the previous brush's node ids) and a
      *  stale async layout write for a superseded generation is discarded.
-     *  Frontend-only, like `nodePositions`; never crosses to Rust. Distinct
-     *  from `lastTopologyVersion` (which preserves `activeBrush` across
-     *  scrubs and bumps on unrelated events like port expose/unexpose). */
+     *  Frontend-only, like `nodePositions`; never crosses to Rust. */
     layoutGeneration = $state(0);
 
     /** The `layoutGeneration` value that positions were last laid out for.
@@ -237,26 +245,34 @@ export class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
-    /** The library brush the active graph came from (null = custom/modified).
-     *  One value for one fact: the name is what the engine loads by and what
-     *  the UI shows; the id is what recents and the per-brush color memory key
-     *  by, so a rename cannot orphan either. */
-    #active = $state<{ name: string; id: string } | null>(null);
+    /** The library brush the active graph belongs to (null = none: after a
+     *  reset or an import). A cache of the engine's answer, which is the one
+     *  home of this fact; `refreshLoaded` is the only writer. The name is what
+     *  the engine loads by and what the UI shows; the id is what recents and
+     *  the per-brush color memory key by, so a rename cannot orphan either. */
+    #active = $state<LoadedBrush | null>(null);
 
-    /** Currently loaded brush name (null = custom/modified). */
+    /** Currently loaded brush name (null = no library brush). */
     get activeBrush(): string | null {
         return this.#active?.name ?? null;
     }
 
-    /** Currently loaded brush id (null = custom/modified). */
+    /** Currently loaded brush id (null = no library brush). */
     get activeBrushId(): string | null {
         return this.#active?.id ?? null;
     }
 
-    /** Declare the active graph to be library brush `id` named `name`, as
-     *  after saving it there: the graph did not change, only what it is. */
-    setActiveBrush(brush: { name: string; id: string }) {
-        this.#active = { ...brush };
+    /** Whether the loaded brush has unsaved tweaks. Tweaks survive switching
+     *  brushes; saving, reverting or resetting is what ends them. */
+    get modified(): boolean {
+        return this.#active?.modified ?? false;
+    }
+
+    /** Re-read which library brush the engine's graph belongs to. Public for
+     *  callers that change it without a graph command, such as saving. */
+    async refreshLoaded() {
+        if (!app.engine) return;
+        this.#active = await app.engine.api.brushLoaded();
     }
 
     /** Ports exposed in the brush properties panel. */
@@ -278,15 +294,6 @@ export class BrushGraphState {
      *  `preview_staging`; refreshed alongside `supportsErase`. */
     previewIcon = $state<string | null>(null);
 
-    /**
-     * Last topology version we observed from the engine. The engine bumps
-     * this only on structural changes; exposed-port scrubs don't advance
-     * it. We compare on each mutation result to decide whether the active
-     * preset name still applies (scrub: keep) or the graph genuinely
-     * changed shape (clear → "Custom").
-     */
-    private lastTopologyVersion = 0;
-
     /** Guards `init()` against re-entrancy. `init()` is fired unawaited from
      *  two `if (!brushGraph.graph)` sites (brush-tool activation and the
      *  builder's `ensureInit`), and `graph` isn't set until its final
@@ -307,13 +314,7 @@ export class BrushGraphState {
         if (graph && graph.nodes) {
             this.graph = graph;
             this.error = null;
-            if (app.engine) {
-                const topo = (await app.engine.api.brushTopologyVersion()).value;
-                if (topo !== this.lastTopologyVersion) {
-                    this.#active = null;
-                    this.lastTopologyVersion = topo;
-                }
-            }
+            await this.refreshLoaded();
             await this.refreshExposedPorts();
             await this.refreshCapabilities();
         }
@@ -331,15 +332,15 @@ export class BrushGraphState {
         this.previewIcon = caps.preview_fallback_icon;
     }
 
-    /**
-     * Resync `lastTopologyVersion` from the engine. Call after deliberate
-     * topology changes that don't go through `applyResult` (`loadBrush`,
-     * `resetToDefault`, `init`) so subsequent scrubs see no version
-     * delta and preserve `activeBrush`.
-     */
-    private async snapshotTopologyVersion() {
-        if (!app.engine) return;
-        this.lastTopologyVersion = (await app.engine.api.brushTopologyVersion()).value;
+    /** Re-read everything this singleton caches about the engine's brush
+     *  after the graph was replaced as a whole (load, reset, import, tab
+     *  sync): the graph itself, the brush bar, the capabilities, and which
+     *  library brush it belongs to. */
+    async #refreshFromEngine() {
+        await this.fetchGraph();
+        await this.refreshExposedPorts();
+        await this.refreshCapabilities();
+        await this.refreshLoaded();
     }
 
     /** Fetch the current graph snapshot from Rust. Every caller is a
@@ -362,28 +363,17 @@ export class BrushGraphState {
     // --- Public API ---
 
     /** Re-sync this singleton's local view from the currently-active
-     *  engine. Call after a tab switch: `brushGraph.graph` /
-     *  `.exposedPorts` / `.lastTopologyVersion` are a CACHE of the
-     *  active engine's brush state, and become stale when the focused
-     *  instance changes.
-     *
-     *  Does NOT touch `activeBrush`. The engine doesn't track which
-     *  named library brush a graph came from (it just has a graph), so
-     *  the singleton's `activeBrush` is the only place that knowledge
-     *  lives. For v1 we leave it as-is: re-syncing the brush name
-     *  cross-tab would mean tracking it per-instance, which is the
-     *  follow-up after we decide whether named-brush selection is
-     *  per-tab or shell-global. */
+     *  engine. Call after a tab switch: `brushGraph.graph`,
+     *  `.exposedPorts` and the loaded brush are a CACHE of the active
+     *  engine's brush state, and become stale when the focused instance
+     *  changes. */
     async syncFromActiveEngine() {
         if (!app.engine) return;
         // `fetchGraph` begins a new layout generation atomically with the swap,
         // so the incoming tab's graph lays out for its own topology instead of
         // inheriting the previous tab's positions (node ids collide across
         // graphs).
-        await this.fetchGraph();
-        await this.refreshExposedPorts();
-        await this.refreshCapabilities();
-        await this.snapshotTopologyVersion();
+        await this.#refreshFromEngine();
     }
 
     /** Initialize from WASM: load node types, brushes, and default graph. */
@@ -407,14 +397,11 @@ export class BrushGraphState {
         if (defaultBrush) {
             // Deliberately not `loadBrush`: the painter did not reach for this
             // one, so it must not take the top slot in their recents.
-            await this.#load(defaultBrush.name, defaultBrush.id);
+            await this.#load(defaultBrush.name);
         } else {
             // No library brushes available: fall through to the engine's
             // default graph as a degenerate fallback.
-            await this.fetchGraph();
-            await this.refreshExposedPorts();
-            await this.refreshCapabilities();
-            await this.snapshotTopologyVersion();
+            await this.#refreshFromEngine();
         }
     }
 
@@ -422,12 +409,21 @@ export class BrushGraphState {
     async resetToDefault() {
         if (!app.engine) return;
         app.engine.api.brushGraphReset();
-        await this.fetchGraph();
-        await this.refreshExposedPorts();
-        await this.refreshCapabilities();
+        await this.#refreshFromEngine();
         this.error = null;
-        this.#active = null;
-        await this.snapshotTopologyVersion();
+    }
+
+    /** Throw away the loaded brush's tweaks and put its saved graph back. */
+    async revert() {
+        if (!app.engine || !this.#active) return;
+        try {
+            await app.engine.api.brushRevert();
+        } catch (e) {
+            this.error = String(e instanceof Error ? e.message : e);
+            return;
+        }
+        await this.#refreshFromEngine();
+        this.error = null;
     }
 
     /** Return the active brush graph as a portable YAML string. Empty
@@ -452,12 +448,8 @@ export class BrushGraphState {
             return err;
         }
         // Same post-mutation refresh as loadBrush / resetToDefault.
-        await this.fetchGraph();
-        await this.refreshExposedPorts();
-        await this.refreshCapabilities();
+        await this.#refreshFromEngine();
         this.error = null;
-        this.#active = null;
-        await this.snapshotTopologyVersion();
         return null;
     }
 
@@ -551,13 +543,81 @@ export class BrushGraphState {
      * nothing.
      */
     async loadBrush(name: string, id: string) {
-        const inst = getActiveInstance();
-        if (inst) brushColors.record(this.activeBrushId, inst);
-        // Only a successful load counts as use: a brush that never loaded was
-        // never used.
-        if (!(await this.#load(name, id))) return;
-        recentBrushes.use(id);
-        if (inst && config.get('colors.lockToBrush') === true) brushColors.restore(id, inst);
+        // A pick from anywhere else ends a recent-brush chain first, so the
+        // brush the chain landed on is recorded beneath this one.
+        this.#recentCycle.settle();
+        await this.#switch(name, id);
+        // Only a brush that ended up loaded counts as use: one that failed to
+        // load, or was superseded by a later pick before it could, was never
+        // used.
+        if (this.activeBrushId === id) recentBrushes.use(id);
+    }
+
+    /** The brush `#switch` should end up on, while one is waiting. */
+    #switchTarget: { name: string; id: string } | null = null;
+
+    /** The switch drain in progress, which every concurrent caller awaits. */
+    #switching: Promise<void> | null = null;
+
+    /** Switch to a brush, carrying paint per the color memory, without
+     *  recording it in recents.
+     *
+     *  Serialized, latest wins: while one load is in flight, a newer target
+     *  replaces any older waiting one, so a burst of picks reaches the engine
+     *  as its first and its last. Each switch reads the outgoing brush only
+     *  once the previous one has landed, so color memory always records
+     *  under the brush that was really active. Resolves when the burst has
+     *  settled. */
+    #switch(name: string, id: string): Promise<void> {
+        this.#switchTarget = { name, id };
+        this.#switching ??= this.#drainSwitches();
+        return this.#switching;
+    }
+
+    async #drainSwitches() {
+        try {
+            while (this.#switchTarget) {
+                const target = this.#switchTarget;
+                this.#switchTarget = null;
+                const inst = getActiveInstance();
+                if (inst) brushColors.record(this.activeBrushId, inst);
+                if (!(await this.#load(target.name))) continue;
+                if (inst && config.get('colors.lockToBrush') === true) brushColors.restore(target.id, inst);
+            }
+        } finally {
+            this.#switching = null;
+        }
+    }
+
+    /** The recent-brush cycle: frozen-ring tap chains over `recentBrushes`. */
+    #recentCycle = createRecentCycle<string>({
+        items: () => recentBrushes.items,
+        current: () => this.activeBrushId,
+        commit: id => recentBrushes.use(id),
+        pauseMs: RECENT_CYCLE_PAUSE_MS,
+    });
+
+    /** Whether a press of the recent-brush cycle would switch to anything. */
+    get canCycleRecentBrush(): boolean {
+        return this.#recentCycle.canStep();
+    }
+
+    /** One press of the recent-brush cycle: step to the next recent brush and
+     *  switch to it. Returns the brush id landed on, or null when there was
+     *  nothing to switch to. Recents are left alone until the chain settles. */
+    cycleRecentBrush(): string | null {
+        const id = this.#recentCycle.step();
+        if (id === null) return null;
+        // Recents hold ids and the engine loads by name. The ring is pruned of
+        // deleted ids on every library refresh, so a miss is a no-op.
+        const brush = brushLibrary.brushes.find(b => b.id === id);
+        if (brush) void this.#switch(brush.name, brush.id);
+        return id;
+    }
+
+    /** End a recent-brush chain now, recording the brush it landed on. */
+    settleRecentCycle() {
+        this.#recentCycle.settle();
     }
 
     /** Load a brush by name, without recording it. Returns whether it loaded.
@@ -565,7 +625,7 @@ export class BrushGraphState {
      *  `loadBrush` is the painter-facing entry point; this is the mechanism
      *  under it, so a selection the painter did not make (the boot default)
      *  can reach the engine without claiming the top of their recents. */
-    async #load(name: string, id: string): Promise<boolean> {
+    async #load(name: string): Promise<boolean> {
         if (!app.engine) return false;
         // brush_load rejects on error (old Result throw path).
         try {
@@ -574,17 +634,11 @@ export class BrushGraphState {
             this.error = String(e instanceof Error ? e.message : e);
             return false;
         }
-        this.#active = { name, id };
         // `fetchGraph` begins a new layout generation atomically with the
         // graph swap, so the canvas effect re-runs auto-layout for the
         // freshly-loaded graph.
-        await this.fetchGraph();
-        await this.refreshExposedPorts();
-        await this.refreshCapabilities();
+        await this.#refreshFromEngine();
         this.error = null;
-        // brush_load is a Topology change: snapshot here so the next
-        // exposed-port scrub doesn't see a delta and clear `activeBrush`.
-        await this.snapshotTopologyVersion();
         return true;
     }
 
