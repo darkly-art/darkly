@@ -482,6 +482,75 @@ impl<'a> StrokeResources<'a> {
     }
 }
 
+/// What every submission of one stroke's GPU work shares: the device and
+/// pipelines, the destination, and the per-stroke values the dab shaders
+/// read. A stroke (a real one, a stroke edit's redraw, or the brush editor's
+/// preview) builds one and asks it for a [`BrushGpuContext`] per submission,
+/// so the context is assembled in one place.
+#[derive(Clone, Copy)]
+pub struct StrokeGpuSetup<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub pipelines: &'a BrushPipelines,
+    /// Selection mask bind group (or default 1x1 white when no selection).
+    pub selection_bind_group: &'a wgpu::BindGroup,
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    /// See [`BrushGpuContext::canvas_origin`].
+    pub canvas_origin: [i32; 2],
+    /// See [`BrushGpuContext::blend_mode`].
+    pub blend_mode: u32,
+    /// See [`BrushGpuContext::view_rotation`].
+    pub view_rotation: f32,
+    /// See [`BrushGpuContext::dpi_factor`].
+    pub dpi_factor: f32,
+    /// The layer or mask the stroke commits to.
+    pub paint_target: GpuPaintTarget<'a>,
+}
+
+impl<'a> StrokeGpuSetup<'a> {
+    /// A context for one submission labelled `label`, rendering into
+    /// `buffer`'s scratch and committing onto the paint target over its
+    /// pre-stroke snapshot. Each context holds the scratch mutably until
+    /// `submit_final` consumes it, so the next one can borrow it again.
+    pub fn ctx<'b>(
+        &self,
+        buffer: &'b mut super::stroke_buffer::StrokeBuffer,
+        label: &str,
+    ) -> BrushGpuContext<'b>
+    where
+        'a: 'b,
+    {
+        let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
+            buffer.parts_for_brush_ctx();
+        BrushGpuContext {
+            encoder: self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) }),
+            device: self.device,
+            queue: self.queue,
+            pipelines: self.pipelines,
+            selection_bind_group: self.selection_bind_group,
+            canvas_width: self.canvas_width,
+            canvas_height: self.canvas_height,
+            canvas_origin: self.canvas_origin,
+            blend_mode: self.blend_mode,
+            view_rotation: self.view_rotation,
+            dpi_factor: self.dpi_factor,
+            perf: BrushPerfCounters::default(),
+            stroke: Some(StrokeResources {
+                scratch,
+                paint_target: self.paint_target,
+                pre_stroke_texture,
+                pre_stroke_bind_group,
+                source_override,
+            }),
+            preview: None,
+            dab_batch: DabBatch::default(),
+        }
+    }
+}
+
 /// Everything a GPU brush node needs to record render passes.
 ///
 /// Created once per rendering batch (per-segment in divergence, per-frame

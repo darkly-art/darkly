@@ -1,6 +1,7 @@
 mod bake_common;
 mod brush_graph;
 pub(crate) mod brush_library;
+mod brush_stroke;
 mod canvas_resize;
 mod canvas_transform;
 mod catalogs;
@@ -18,6 +19,7 @@ mod layers;
 mod load;
 mod merge;
 mod painting;
+mod pending_edit;
 pub mod preview;
 pub mod process_recording;
 pub mod protocol;
@@ -34,6 +36,7 @@ pub use brush_graph::{ExposedPortInfo, ExposedValue};
 pub use brush_library::BRUSH_THUMBNAIL_SIZE;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
+pub use pending_edit::EditSessionKind;
 pub use process_recording::{ProcessRecorder, RecordedFrame};
 pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SavePurpose, SaveReadbackKind};
@@ -50,8 +53,6 @@ use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::pipeline::BrushPipelines;
 use crate::brush::preview_renderer::BrushStrokePreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
-use crate::brush::stroke_buffer::StrokeBuffer;
-use crate::brush::stroke_engine::StrokeEngine;
 use crate::brush::wire::BrushWireType;
 use crate::clipboard::Clipboard;
 use crate::document::{auto_dpi, Document, MAX_DPI, MIN_DPI, REFERENCE_DPI};
@@ -139,10 +140,12 @@ pub(crate) struct RichCopyMask {
     pub bounds: crate::coord::CanvasRect,
 }
 
-/// Deferred undo commit: waiting for async GPU diff rect result.
+/// Deferred undo commit: an operation's pre-operation snapshot waiting on the
+/// GPU diff that says which of its tiles changed.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: LayerId,
     pub snapshot: crate::gpu::region_store::Snapshot,
+    pub diff: crate::gpu::diff_rect::PendingDiff,
 }
 
 /// Context for a pending async GPU readback: travels with the request and
@@ -164,6 +167,8 @@ pub(crate) enum ReadbackContext {
         /// window-local R8 buffer. See
         /// `crate::gpu::layer_readback::LayerReadbackExtent`.
         extent: crate::gpu::layer_readback::LayerReadbackExtent,
+        /// The target's pre-fill pixels, diffed for undo once the fill lands.
+        snapshot: crate::gpu::region_store::Snapshot,
     },
     ColorPick,
     Copy {
@@ -453,10 +458,11 @@ pub struct DarklyEngine {
     // --- GPU Paint Infrastructure ---
     pub(crate) region_scratch: RegionScratch,
     pub(crate) paint_pipelines: PaintPipelines,
-    /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
-    /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
-    /// `pending_undo_commit`) or by a sync commit path (flood fill, clear,
-    /// fill_background: those take their own snapshots inline).
+    /// Region-scratch snapshot for the current stroke's gradient or flood
+    /// fill, saved on its first op. A gradient queues it as a diff in
+    /// `pending_undo_commits` at end_stroke; a flood fill carries it in its
+    /// readback context until the fill lands. A brush stroke keeps its
+    /// pre-stroke pixels in its own stroke buffer instead.
     pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
     /// Selection-texture snapshot held between `save_selection_for_undo` and
     /// the matching `commit_selection_undo`. Some selection ops (magic wand,
@@ -466,8 +472,11 @@ pub struct DarklyEngine {
 
     // --- Brush Engine ---
     pub(crate) brush_pipelines: BrushPipelines,
-    /// Active brush stroke engine (only during a BrushStroke operation).
-    pub(crate) brush_stroke_engine: Option<StrokeEngine>,
+    /// The brush stroke the pen is painting, from its first event to pen-up.
+    pub(crate) brush_stroke: Option<brush_stroke::BrushStroke>,
+    /// The most recent brush stroke, from pen-up until the next action
+    /// settles it into an undo entry; editable meanwhile (stroke edit).
+    pub(crate) last_stroke: Option<brush_stroke::LastStroke>,
     /// Shared tool session: a generic bag of per-tool state shared
     /// across every engine in a `DarklySession`. The brush module stores
     /// its [`crate::brush::state::BrushState`] entry here; other tools
@@ -566,9 +575,6 @@ pub struct DarklyEngine {
     /// canvas as it then stands.
     pub(crate) previews: HashMap<preview::PreviewKey, PreviewJob>,
 
-    /// Stroke buffer for stabilizer-driven rewind + re-render.
-    pub(crate) stroke_buffer: Option<StrokeBuffer>,
-
     /// Ring buffer of GPU texture checkpoints for partial re-render on divergence.
     pub(crate) checkpoint_ring: CheckpointRing,
 
@@ -577,6 +583,11 @@ pub struct DarklyEngine {
 
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
+
+    /// Foreground colour brush strokes paint with: raw sRGB RGBA in `0..=1`,
+    /// as picked. Session state the frontend pushes whenever the picker
+    /// changes; a stroke freezes it at its start.
+    pub(crate) foreground_color: [f32; 4],
 
     /// Clone-brush set-source anchor in plane / canvas pixels, or `None`
     /// until the artist sets it via the set-source gesture. Session state:
@@ -603,7 +614,9 @@ pub struct DarklyEngine {
 
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
-    pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
+    /// Undo commits waiting on their diffs, in the order the operations
+    /// happened; committed in that order.
+    pub(crate) pending_undo_commits: Vec<PendingUndoCommit>,
 
     // --- Selection ---
     /// Reusable GPU pipelines for selection boolean / invert operations.
@@ -800,7 +813,8 @@ impl DarklyEngine {
             scratch_snapshot: None,
             pending_selection_snapshot: None,
             brush_pipelines,
-            brush_stroke_engine: None,
+            brush_stroke: None,
+            last_stroke: None,
             tool_session,
             brush_cursor_preview_info: None,
             last_cursor_preview_pose: None,
@@ -821,15 +835,15 @@ impl DarklyEngine {
             preview_source_is_composite: false,
             preview_active: None,
             previews: HashMap::new(),
-            stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
             brush_blend_mode: 0,
+            foreground_color: [0.0, 0.0, 0.0, 1.0],
             clone_source_anchor: None,
             stroke_seed: None,
             clone_source_layer: None,
             diff_rect,
-            pending_undo_commit: None,
+            pending_undo_commits: Vec::new(),
             selection_pipelines,
             pending_transform: None,
             transform_setup_generation: 0,
@@ -932,7 +946,7 @@ impl DarklyEngine {
     /// been placed. Test-only.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_stroke_save_point_bbox(&self) -> Option<crate::coord::CanvasRect> {
-        self.brush_stroke_engine.as_ref()?.save_points.full_bbox()
+        self.brush_stroke.as_ref()?.engine.save_points.full_bbox()
     }
 
     /// Whether the frame loop would schedule another frame right now: the
@@ -1051,6 +1065,18 @@ impl DarklyEngine {
             .find_filter(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
+    }
+
+    /// Test-only: number of steps on the undo stack.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_len(&self) -> usize {
+        self.undo_stack.test_undo_len()
+    }
+
+    /// Test-only: total byte cost charged to the undo budget.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_undo_total_bytes(&self) -> u64 {
+        self.undo_stack.total_bytes()
     }
 
     /// Test-only: whether the undo / redo stacks have anything to apply.

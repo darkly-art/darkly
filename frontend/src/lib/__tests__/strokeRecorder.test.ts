@@ -24,10 +24,6 @@ function makeEvent(overrides: Partial<RecordedEventParams> = {}): RecordedEventP
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0,
-        cr: 0,
-        cg: 0,
-        cb: 0,
-        ca: 1,
         ...overrides,
     };
 }

@@ -48,12 +48,14 @@ hotkeys:
   # `paste` here and `pasteInPlace` per-overlay).
   pasteAsSmartObject: $mod+Alt+Shift+KeyV
   selectAll: $mod+KeyA
-  # Floating-selection commit / cancel. Enter / Escape are the universal
-  # commit/cancel keys across PS, Krita, and GIMP's floating-selection
-  # handlers, and Clip Studio Paint's transform confirm / cancel.
   clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
+  # Apply / discard the open edit session (a transform, pasted content,
+  # stroke edit). Enter / Escape are the universal commit/cancel keys:
+  # Krita's tool-invocation Confirm / Cancel, GIMP's tool-widget CONFIRM /
+  # CANCEL, PS's floating-selection handlers, and Clip Studio Paint's
+  # transform confirm / cancel.
+  applyEditSession: Enter
+  discardEditSession: Escape
   # Colors: every reference editor uses X to swap. (Reset is per-overlay:
   # Clip Studio Paint has no reset and spends D on a tool.)
   swapColors: KeyX
@@ -73,6 +75,12 @@ hotkeys:
   resizeCanvas: $mod+Alt+KeyC
   # Darkly-original (brush builder): no reference-editor prior art.
   addBrushNode: Shift+KeyA
+  # Darkly-original (stroke edit): no reference editor redraws a finished
+  # raster stroke with new brush settings. Plain Y follows the nearest
+  # analog, Clip Studio Paint's Correct Line tools (Redraw vector line) on
+  # Y. GIMP (MyPaint Brush) and Photoshop (History Brush) spend Y on tools
+  # Darkly lacks, and no overlay binds plain Y.
+  toggleStrokeEdit: KeyY
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
   # belongs here rather than a per-editor overlay. Follows the VS Code
   # convention for a command palette ($mod+Shift+P), plus $mod+F as a

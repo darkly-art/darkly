@@ -1,8 +1,6 @@
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
-use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 use super::UndoAction;
 
@@ -27,15 +25,12 @@ impl SelectionAction {
 }
 
 impl UndoAction for SelectionAction {
-    fn undo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, _doc: &mut Document) {
         // No-op on the document: the engine handles gpu_selection.active
         // and GPU texture restore via selection_region_entry_mut().
-        HashMap::new()
     }
 
-    fn redo(&mut self, _doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        HashMap::new()
-    }
+    fn redo(&mut self, _doc: &mut Document) {}
 
     fn selection_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
         Some(&mut self.entry)
@@ -51,7 +46,7 @@ impl UndoAction for SelectionAction {
         // Same `UndoRegionEntry` byte_size pathway as `GpuRegionAction`:
         // selection-mask snapshots compete for the same WASM heap budget
         // and can easily run to 10s of MB on a complex selection edit.
-        self.entry.byte_size
+        self.entry.byte_size()
     }
 
     fn on_evict(&mut self, _compositor: &mut Compositor) {

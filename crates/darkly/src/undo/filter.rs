@@ -13,7 +13,6 @@
 use super::UndoAction;
 use crate::document::Document;
 use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Undo action for toggling visibility on any node: layer, group, or filter.
 /// Stores the current value and swaps it on undo/redo.
@@ -37,14 +36,12 @@ impl NodeVisibleAction {
 }
 
 impl UndoAction for NodeVisibleAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 }
 
@@ -69,13 +66,11 @@ impl NodeLockedAction {
 }
 
 impl UndoAction for NodeLockedAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 }

@@ -10,7 +10,6 @@ pub mod file;
 pub mod layers;
 pub mod selection;
 pub mod tools;
-pub mod transform;
 pub mod view;
 
 use crate::action::ActionCategory;
@@ -26,7 +25,6 @@ pub fn registrations() -> Vec<ActionCategory> {
     all.push(layers::register());
     all.push(selection::register());
     all.push(tools::register());
-    all.push(transform::register());
     all.push(view::register());
     all
 }

@@ -245,6 +245,21 @@ impl<'a> GpuPaintTarget<'a> {
         (self.canvas_origin_x, self.canvas_origin_y)
     }
 
+    /// This target's placement (canvas extent and canvas window) over
+    /// another texture of the same format and size: a texture aligned to
+    /// this one, such as a transient copy of its pixels.
+    pub fn retargeted<'b>(
+        &self,
+        texture: &'b wgpu::Texture,
+        view: &'b wgpu::TextureView,
+    ) -> GpuPaintTarget<'b> {
+        GpuPaintTarget {
+            texture,
+            view,
+            ..*self
+        }
+    }
+
     /// Borrow this target as a `CanvasFrame` for region-store APIs.
     pub fn canvas_frame(&self) -> CanvasFrame<'a> {
         CanvasFrame {
@@ -620,10 +635,8 @@ impl<'a> GpuPaintTarget<'a> {
     ) {
         let pipeline = pipelines.clear_pipeline(self.format);
 
-        let color = match self.format {
-            wgpu::TextureFormat::R8Unorm => [1.0, 1.0, 1.0, 1.0], // 255 = reveal all
-            _ => [0.0, 0.0, 0.0, 0.0],                            // transparent
-        };
+        let fill = crate::gpu::default_fill(self.format);
+        let color = [fill.r, fill.g, fill.b, fill.a].map(|c| c as f32);
 
         let uniforms = PaintUniforms {
             origin: [rect.x0() as f32, rect.y0() as f32],

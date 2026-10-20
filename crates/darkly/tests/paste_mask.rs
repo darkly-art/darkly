@@ -32,6 +32,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 
 /// Paint a dab of the given straight-alpha colour and render one frame.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: (f32, f32, f32)) {
+    engine.set_foreground_color([rgb.0, rgb.1, rgb.2, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -42,10 +43,6 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, rgb: 
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: rgb.0,
-        cg: rgb.1,
-        cb: rgb.2,
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);

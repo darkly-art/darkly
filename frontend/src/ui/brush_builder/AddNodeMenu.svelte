@@ -184,6 +184,8 @@
         }
     }
 
+    // Capture phase, so the Escape this consumes never reaches the hotkeys
+    // (where it would discard an open edit session).
     function onWindowKeydown(e: KeyboardEvent) {
         if (!open) return;
         if (e.key === 'Escape') {
@@ -199,7 +201,7 @@
 </script>
 
 <svelte:window
-    on:keydown={onWindowKeydown}
+    on:keydown|capture={onWindowKeydown}
     on:pointerdown={onWindowPointerDown}
 />
 

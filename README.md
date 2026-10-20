@@ -19,9 +19,11 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-I made Darkly because I wanted something as fun as Procreate, but for PC. PC users deserve to have fun too, and I miss the days when art felt like exploration. Darkly makes painting fun again - on Linux, Windows, macOS, and anything with a web browser.
+I made Darkly because I wanted something as fun as Procreate, but for PC. Painting should feel like play, not work. It should be smooth and satisfying, and maybe a little mesmerizing, so you end up exploring, and creating something unexpected.
 
-Darkly is not a Photoshop clone, and does not want to be. It has a unique brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
+Darkly makes painting fun again - on Linux, Windows, macOS, and anything with a web browser. It is not a Photoshop clone, and does not want to be.
+
+That doesn't mean it's not serious. Darkly has a list of professional features that's growing every day. Most importantly, it has a state-of-the-art brush engine, and **[dark arts](#dark-arts)** to help you commune with your imagination.
 
 **Use it on the web [here](https://demo.darkly.art).**
 
@@ -179,6 +181,7 @@ For a feature to count, it must be:
 - [x] Group blend mode / opacity
 - [x] Dockable / tiled panels (drag to reorder, tab, split-dock)
 - [x] Pop out panels into separate OS windows (cross-window drag)
+- [x] Stroke edit (redraw the last stroke with the current brush)
 - [ ] Oklab / Oklch foundational color system
 - [ ] Brush save/load + editable nodes/wires
 - [ ] Recent files

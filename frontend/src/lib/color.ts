@@ -48,6 +48,13 @@ export function colorToHexRgb(c: Color): string {
     return `#${hx(c.r)}${hx(c.g)}${hx(c.b)}`;
 }
 
+/** A byte `Color` as normalized `[r, g, b, a]` in `[0, 1]`, unconverted: the
+ *  form the engine paints with. Darkly stores and displays raw picked RGBA end
+ *  to end, so nothing on the way to the engine may gamma-convert it. */
+export function colorToRgba01(c: Color): [number, number, number, number] {
+    return [c.r / 255, c.g / 255, c.b / 255, c.a / 255];
+}
+
 /** A `#rrggbb`/`#rrggbbaa` hex string as a normalized sRGB `[r, g, b]` triple
  *  in `[0, 1]`. Alpha is discarded. Malformed input reads as black, which is
  *  what this helper's callers have always assumed. */

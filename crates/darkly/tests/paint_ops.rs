@@ -148,7 +148,6 @@ fn gpu_gradient_undo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
         cr(0, 0, w, h),
     );
@@ -432,7 +431,6 @@ fn gpu_flood_fill_undo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
         cr(0, 0, w, h),
     );

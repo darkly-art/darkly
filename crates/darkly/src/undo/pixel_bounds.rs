@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use crate::coord::CanvasRect;
 use crate::document::Document;
 use crate::layer::LayerId;
@@ -31,13 +29,11 @@ impl PixelBoundsAction {
 }
 
 impl UndoAction for PixelBoundsAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         self.swap(doc);
-        HashMap::new()
     }
 }
