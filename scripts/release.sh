@@ -33,7 +33,7 @@ tag="v$version"
 # GitHub holds the real tags, and the range below must agree with it.
 [ "$(git rev-parse --abbrev-ref HEAD)" = dev ] || die "not on dev"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked files have uncommitted changes"
-git fetch --quiet origin dev master '+refs/tags/*:refs/tags/*'
+git fetch --quiet origin dev '+refs/tags/*:refs/tags/*'
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)" ] \
   || die "HEAD is not origin/dev; push or pull first"
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "$tag already exists"
@@ -89,11 +89,10 @@ fi
 title="Dev -> Master $version"
 merged=""
 pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number // empty')
-if [ -z "$pr" ] && git merge-base --is-ancestor HEAD origin/master; then
+if [ -z "$pr" ]; then
   pr=$(gh pr list --base master --head dev --state merged --json number,headRefOid \
          --jq "map(select(.headRefOid == \"$(git rev-parse HEAD)\"))[0].number // empty")
-  [ -n "$pr" ] || die "HEAD is already on master, but no merged release PR is at HEAD"
-  merged=1
+  [ -z "$pr" ] || merged=1
 fi
 if [ -z "$pr" ]; then
   printf '%s\n' "$links" | gh pr create --draft --base master --head dev --title "$title" --body-file -
