@@ -79,6 +79,14 @@
 
   <!-- Filled from the v* tags by scripts/metainfo-releases.sh; do not edit by hand. -->
   <releases>
+    <release version="0.11.1" date="2026-10-20">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.11.1</url>
+      <description>
+        <ul>
+          <li>Release fixes (#158)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.0" date="2026-10-20">
       <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.11.0</url>
       <description>
