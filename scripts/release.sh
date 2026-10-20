@@ -33,7 +33,7 @@ tag="v$version"
 # GitHub holds the real tags, and the range below must agree with it.
 [ "$(git rev-parse --abbrev-ref HEAD)" = dev ] || die "not on dev"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked files have uncommitted changes"
-git fetch --quiet origin dev '+refs/tags/*:refs/tags/*'
+git fetch --quiet origin dev master '+refs/tags/*:refs/tags/*'
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)" ] \
   || die "HEAD is not origin/dev; push or pull first"
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "$tag already exists"
@@ -82,12 +82,22 @@ $bad"
 fi
 
 # The release PR: its CI is the gate on what gets tagged. With none open, open
-# one and stop; its checks run on this commit and the next run can proceed.
+# one and stop; its checks run on this commit and the next run can proceed. It
+# opens as a draft, which GitHub will not merge, because merging is this
+# script's job and comes after the tag. One already merged at HEAD (by hand,
+# before the tag) still gates the tag with its checks, and is not merged again.
 title="Dev -> Master $version"
+merged=""
 pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number // empty')
+if [ -z "$pr" ] && git merge-base --is-ancestor HEAD origin/master; then
+  pr=$(gh pr list --base master --head dev --state merged --json number,headRefOid \
+         --jq "map(select(.headRefOid == \"$(git rev-parse HEAD)\"))[0].number // empty")
+  [ -n "$pr" ] || die "HEAD is already on master, but no merged release PR is at HEAD"
+  merged=1
+fi
 if [ -z "$pr" ]; then
-  printf '%s\n' "$links" | gh pr create --base master --head dev --title "$title" --body-file -
-  die "opened the release PR; run this again once its checks pass"
+  printf '%s\n' "$links" | gh pr create --draft --base master --head dev --title "$title" --body-file -
+  die "opened the release PR as a draft; do not merge it, this script does after tagging. Run this again once its checks pass"
 fi
 [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$(git rev-parse HEAD)" ] \
   || die "release PR #$pr is not at HEAD yet; wait for GitHub to catch up"
@@ -114,7 +124,10 @@ git push origin "$tag"
 # commit, so master contains the tag. A failure here does not
 # undo the release; it is reported and the PR can be merged by hand.
 printf '%s\n' "$links" | gh pr edit "$pr" --title "$title" --body-file -
-gh pr merge "$pr" --merge || echo "release: could not merge release PR #$pr; merge it by hand" >&2
+if [ -z "$merged" ]; then
+  { gh pr ready "$pr" && gh pr merge "$pr" --merge; } \
+    || echo "release: could not merge release PR #$pr; merge it by hand" >&2
+fi
 
 # The checked-in copy of the release history, refreshed now that the tag exists.
 refreshed=$(mktemp)
