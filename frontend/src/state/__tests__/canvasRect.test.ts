@@ -21,6 +21,7 @@ function snapshot(over: Partial<EngineState> = {}): EngineState {
         thumbnailVersion: 0,
         dirty: false,
         hasSelection: false,
+        editSession: null,
         canvasOriginX: 0,
         canvasOriginY: 0,
         canvasWidth: 64,

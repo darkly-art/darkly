@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-    ROW_BASE_PAD,
-    ROW_INDENT,
     bandToGap,
     gapDepthRange,
     resolveGapDrop,
+    rowIndent,
 } from '../dropTarget';
 import type { DropRow } from '../../../state/layerTree';
 
@@ -14,7 +13,7 @@ function row(id: number, depth: number, isGroup = false): DropRow {
 
 /** The pointer offset that asks for `depth`, in the panel's indent arithmetic. */
 function xFor(depth: number): number {
-    return ROW_BASE_PAD + depth * ROW_INDENT;
+    return rowIndent(depth);
 }
 
 /**

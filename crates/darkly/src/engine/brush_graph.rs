@@ -502,6 +502,11 @@ impl DarklyEngine {
         // size, rotation, and tip changes all land here.
         self.regenerate_brush_cursor_preview();
 
+        // Every brush change reaches the last stroke too, when the artist is
+        // editing it, whatever kind of change it was: a scrub the previews
+        // ignore (size, stabilization) still changes a real stroke.
+        self.redraw_last_stroke();
+
         Ok(())
     }
 
@@ -543,7 +548,7 @@ impl DarklyEngine {
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
 
         // Caller's frontend treats an empty Vec as "no fresh bytes
         // available" and skips the image update, preserving whatever was
@@ -620,7 +625,7 @@ impl DarklyEngine {
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
 
         // See `brush_stroke_preview` for why we return an empty Vec rather
         // than a zero-filled one when no cache is available: frontends
@@ -675,7 +680,7 @@ impl DarklyEngine {
         // Guard against painting while a real stroke is in flight: the
         // preview shares GPU state with the engine (see
         // `brush_active_dab_preview`).
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
         let current_topology = self.brush_topology_version();
 
         let cached_bytes = self.node_preview_cache.get(node_id).map(|(_, b)| b.clone());
@@ -1020,6 +1025,7 @@ impl DarklyEngine {
     #[handler]
     pub fn set_brush_blend_mode(&mut self, mode: u32) {
         self.brush_blend_mode = mode;
+        self.redraw_last_stroke();
     }
 
     /// Return info about every brush-bar entry in the active brush graph,

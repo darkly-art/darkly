@@ -121,7 +121,6 @@ impl DarklyEngine {
             &mut self.readbacks,
             "flip-node-commit",
             node_id,
-            &frame,
             &snap,
             region,
         );

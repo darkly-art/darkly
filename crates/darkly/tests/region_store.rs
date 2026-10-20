@@ -4,7 +4,8 @@
 
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
-use darkly::gpu::region_store::RegionScratch;
+use darkly::gpu::region_runs::{RegionRuns, TileGrid};
+use darkly::gpu::region_store::{EntryPixels, RegionScratch};
 use darkly::gpu::test_utils::*;
 
 fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
@@ -73,7 +74,6 @@ fn region_store_save_restore_round_trip() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(0, 0, w, h),
     );
@@ -123,7 +123,6 @@ fn region_store_partial_rect() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(32, 32, 64, 64),
     );
@@ -182,7 +181,6 @@ fn region_store_redo_round_trip() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(0, 0, w, h),
     );
@@ -229,7 +227,6 @@ fn region_store_r8_format() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(0, 0, w, h),
     );
@@ -306,13 +303,12 @@ fn region_store_save_full_commit_subrect() {
     }
     write_texture(&queue, &tex, w, h, 4, &painted);
 
-    // Stroke end: diff_rect would return the painted center; commit that sub-rect.
+    // Commit only the painted center sub-rect.
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(48, 48, 32, 32),
     );
@@ -335,30 +331,44 @@ fn region_store_save_full_commit_subrect() {
     );
 }
 
-/// Validation-scope smoke test: growing the scratch when the old capacity
+/// Validation-scope smoke test: rebasing a snapshot whose scratch capacity
 /// exceeds the grown extent must not copy past the new texture bounds. This
 /// reproduces the AAR's geometry (canvas rescaled large to 1920×1080, then the
-/// layer grows up-left by (256, 256) but only taller). With the copy now sized
-/// by the live old extent and clamped to the destination, the overflow this
-/// once guarded is no longer constructible from the API; the scope just
-/// confirms the reallocated copy stays in bounds.
+/// layer grows up-left by (256, 256) but only taller). The copy is sized by
+/// the saved rect and clipped to the destination, so the scope just confirms
+/// it stays in bounds.
 #[test]
 fn region_store_grow_offset_does_not_overflow_scratch() {
     let (device, queue) = test_device();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
 
     // Old scratch sized to a rescaled canvas.
     let mut store = RegionScratch::new(&device, 1920, 1080);
 
     // Layer at canvas (0, 0) sized 1664×1024 grows up-left to a new extent at
     // (-256, -256), a (256, 256) rebase offset, only taller (1280), not wider.
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let (lw, lh) = (1664, 1024);
+    let (layer, _v) = create_test_texture_with_format(
+        &device,
+        &queue,
+        lw,
+        lh,
+        &vec![0; (lw * lh * 4) as usize],
+        format,
+    );
     let mut enc = encoder(&device);
-    store.grow_scratch_preserving(
+    let mut snapshot = store.save_region(
         &device,
         &mut enc,
-        cr(0, 0, 1664, 1024),
-        cr(-256, -256, 1920, 1280),
+        &frame(&layer, lw, lh),
+        format,
+        cr(0, 0, lw, lh),
     );
+    submit(&queue, enc);
+
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut enc = encoder(&device);
+    store.rebase(&device, &mut enc, &mut snapshot, cr(-256, -256, 1920, 1280));
     submit(&queue, enc);
     let _ = device.poll(wgpu::PollType::Wait {
         submission_index: None,
@@ -367,7 +377,7 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
     let err = pollster::block_on(scope.pop());
     assert!(
         err.is_none(),
-        "grow_scratch_preserving overflowed the scratch texture: {err:?}"
+        "rebase overflowed the scratch texture: {err:?}"
     );
 }
 
@@ -378,7 +388,7 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
 /// everywhere else in the full target texture: no surviving sentinel.
 ///
 /// Run for both formats: R8's default (white) diverges from RGBA's (transparent),
-/// so it's the format the `scratch_default_clear` path can get wrong.
+/// so it's the format the `default_fill` path can get wrong.
 fn assert_grow_clears_stale(
     format: wgpu::TextureFormat,
     old_extent: CanvasRect,
@@ -418,17 +428,18 @@ fn assert_grow_clears_stale(
         create_test_texture_with_format(&device, &queue, lw, lh, &live_data, format);
     let live_frame = frame(&live_tex, lw, lh);
     let mut enc = encoder(&device);
-    store.save_region(&device, &mut enc, &live_frame, format, old_extent);
+    let mut snapshot = store.save_region(&device, &mut enc, &live_frame, format, old_extent);
     submit(&queue, enc);
 
-    // Grow, then read back the whole scratch.
+    // Grow, then read back the whole rebased snapshot.
     let mut enc = encoder(&device);
-    store.grow_scratch_preserving(&device, &mut enc, old_extent, new_extent);
+    store.rebase(&device, &mut enc, &mut snapshot, new_extent);
     submit(&queue, enc);
 
-    let (tw, th) = store.scratch_dimensions();
-    let scratch = store.scratch_texture(format);
-    let pixels = readback_texture(&device, &queue, scratch, format, tw, th);
+    let rebased = snapshot.frame();
+    assert_eq!(rebased.canvas_extent.origin, new_extent.origin);
+    let (tw, th) = (rebased.canvas_extent.width, rebased.canvas_extent.height);
+    let pixels = readback_texture(&device, &queue, rebased.texture, format, tw, th);
 
     // The old extent's origin rebases to (old.origin - new.origin) in the new
     // frame; the live pixels occupy that rect and nothing else.
@@ -450,11 +461,10 @@ fn assert_grow_clears_stale(
     }
 }
 
-/// Realloc variant: a grow that reallocates (offset ≠ 0) must not copy the full
-/// old capacity (only the live old extent), leaving stale bytes right of / below
-/// the rebased live region. Old extent `(0,0,1024,800)`, new `(-64,-64,1600,1200)`;
-/// the (64,64) offset forces a realloc, capacity stays 1920×1200 via the monotonic
-/// max. Fails against the capacity-clamped copy.
+/// A rebase must copy only the saved rect, not the slot's full capacity,
+/// which would leave stale bytes right of / below the rebased live region.
+/// Old extent `(0,0,1024,800)`, new `(-64,-64,1600,1200)`, with a stale
+/// 1920×1080 save before it in the same slot.
 #[test]
 fn region_store_grow_realloc_clears_stale_tail_rgba() {
     assert_grow_clears_stale(
@@ -525,8 +535,112 @@ fn region_store_commit_outside_saved_panics() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame,
         &snap,
         cr(100, 100, 32, 32),
+    );
+}
+
+/// A two-run entry restores both runs, from VRAM while its readback is still
+/// pending and from the host bytes once it has landed, and leaves the pixels
+/// between the runs alone.
+#[test]
+fn two_run_entry_restores_from_pending_and_ready() {
+    let (device, queue) = test_device();
+    let (w, h) = (256, 256);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let blue: Vec<u8> = (0..w * h).flat_map(|_| [0u8, 0, 255, 255]).collect();
+    let (tex, _view) = create_test_texture(&device, &queue, w, h, &red);
+    let frame = frame(&tex, w, h);
+    let mut store = RegionScratch::new(&device, w, h);
+
+    // Tiles (0, 0) and (3, 3) of the 4x4 grid.
+    let grid = TileGrid::for_format(fmt);
+    let mut flags = vec![0u32; grid.flag_words(w, h)];
+    for idx in [0, 3 * 4 + 3] {
+        flags[idx / 32] |= 1 << (idx % 32);
+    }
+    let runs = RegionRuns::from_tile_flags(&flags, grid, cr(0, 0, w, h), cr(0, 0, w, h), 4);
+    assert_eq!(runs.rects(), &[cr(0, 0, 64, 64), cr(192, 192, 64, 64)]);
+
+    let mut enc = encoder(&device);
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let (entry, req) = store.commit_region(
+        &mut enc,
+        &device,
+        darkly::layer::LayerId::from_ffi(1),
+        &snap,
+        runs,
+    );
+    submit(&queue, enc);
+
+    for ready in [false, true] {
+        write_texture(&queue, &tex, w, h, 4, &blue);
+        if ready {
+            *entry.pixels.borrow_mut() = EntryPixels::Ready(req.blocking_read(&device));
+        }
+        let mut enc = encoder(&device);
+        store.upload_region(&mut enc, &device, &entry, &frame);
+        submit(&queue, enc);
+
+        let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+        let at = |x: u32, y: u32| &pixels[((y * w + x) * 4) as usize..][..4];
+        for (x, y) in [(0, 0), (63, 63), (192, 192), (255, 255)] {
+            assert_eq!(
+                at(x, y),
+                &[255, 0, 0, 255],
+                "run pixel ({x}, {y}) restored, ready={ready}"
+            );
+        }
+        for (x, y) in [(64, 0), (128, 128), (191, 255)] {
+            assert_eq!(
+                at(x, y),
+                &[0, 0, 255, 255],
+                "pixel ({x}, {y}) between runs untouched, ready={ready}"
+            );
+        }
+    }
+}
+
+/// A held snapshot's pixels survive a later save, which gets a fresh texture;
+/// once no snapshot holds the slot's texture, the next save reuses it.
+#[test]
+fn held_snapshot_survives_a_later_save() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let blue: Vec<u8> = (0..w * h).flat_map(|_| [0u8, 0, 255, 255]).collect();
+    let (tex, _view) = create_test_texture(&device, &queue, w, h, &red);
+    let frame = frame(&tex, w, h);
+    let mut store = RegionScratch::new(&device, w, h);
+
+    let mut enc = encoder(&device);
+    let held = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    submit(&queue, enc);
+    write_texture(&queue, &tex, w, h, 4, &blue);
+    let mut enc = encoder(&device);
+    let later = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    submit(&queue, enc);
+
+    assert!(!std::ptr::eq(held.frame().texture, later.frame().texture));
+    let held_px = readback_texture(&device, &queue, held.frame().texture, fmt, w, h);
+    assert_eq!(
+        &held_px[..4],
+        &[255, 0, 0, 255],
+        "the held snapshot keeps its pixels"
+    );
+    let later_px = readback_texture(&device, &queue, later.frame().texture, fmt, w, h);
+    assert_eq!(&later_px[..4], &[0, 0, 255, 255]);
+
+    let slot_texture: *const wgpu::Texture = later.frame().texture;
+    drop(held);
+    drop(later);
+    let mut enc = encoder(&device);
+    let next = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    submit(&queue, enc);
+    assert!(
+        std::ptr::eq(next.frame().texture, slot_texture),
+        "an unheld slot is reused"
     );
 }

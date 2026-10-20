@@ -808,10 +808,6 @@ fn sub_canvas_mask_survives_save_load_round_trip() {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 0.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
     original.end_stroke();
     original.render(0.0);

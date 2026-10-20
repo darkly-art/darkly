@@ -14,7 +14,7 @@
 //! `set_preview_theme`), not the active paint color, so all previews
 //! share a consistent palette.
 
-use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
+use super::gpu_context::StrokeGpuSetup;
 use super::nodes::brush_settings;
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
@@ -252,50 +252,32 @@ impl BrushStrokePreviewRenderer {
             engine.stabilize(*pt);
         }
 
-        let sel_bg = pipelines.default_selection_bind_group();
-
         // Clear the scratch, place every dab, and composite onto the
-        // pre-stroke snapshot: the same path as a real stroke's commit.
-        let mut ctx = {
-            // The preview stroke buffer never captures a source
-            // snapshot, so a source-sampling brush previews off the
-            // pre-stroke snapshot, which is the backdrop, and is what
-            // gives it something to transport.
-            let (scratch, pre_stroke_texture, pre_stroke_bind_group, source_override) =
-                target.stroke_buffer.parts_for_brush_ctx();
-            BrushGpuContext {
-                encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("brush-preview-stroke"),
-                }),
-                device,
-                queue,
-                pipelines,
-                selection_bind_group: sel_bg,
-                canvas_width: width,
-                canvas_height: height,
-                canvas_origin: [0, 0],
-                blend_mode: 0,
-                // Editor preview always renders at identity view; the
-                // S-curve preview shouldn't shift orientation when the
-                // artist happens to rotate the canvas while editing.
-                view_rotation: 0.0,
-                // Previews show brush identity, which is its
-                // reference-pixel tuning, so they render at the
-                // reference whatever the focused document's DPI.
-                dpi_factor: 1.0,
-                perf: BrushPerfCounters::default(),
-                // Preview render target is canvas-aligned RGBA8.
-                stroke: Some(StrokeResources {
-                    scratch,
-                    paint_target,
-                    pre_stroke_texture,
-                    pre_stroke_bind_group,
-                    source_override,
-                }),
-                preview: None,
-                dab_batch: DabBatch::default(),
-            }
+        // pre-stroke snapshot: the same path as a real stroke's commit. The
+        // preview stroke buffer never captures a source snapshot, so a
+        // source-sampling brush previews off the pre-stroke snapshot, which
+        // is the backdrop, and is what gives it something to transport.
+        let setup = StrokeGpuSetup {
+            device,
+            queue,
+            pipelines,
+            selection_bind_group: pipelines.default_selection_bind_group(),
+            canvas_width: width,
+            canvas_height: height,
+            canvas_origin: [0, 0],
+            blend_mode: 0,
+            // Editor preview always renders at identity view; the S-curve
+            // preview shouldn't shift orientation when the artist happens to
+            // rotate the canvas while editing.
+            view_rotation: 0.0,
+            // Previews show brush identity, which is its reference-pixel
+            // tuning, so they render at the reference whatever the focused
+            // document's DPI.
+            dpi_factor: 1.0,
+            // Preview render target is canvas-aligned RGBA8.
+            paint_target,
         };
+        let mut ctx = setup.ctx(&mut target.stroke_buffer, "brush-preview-stroke");
         engine.render_whole(&mut ctx);
         ctx.submit_final();
 

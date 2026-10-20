@@ -107,6 +107,7 @@ fn set_spacing(engine: &mut DarklyEngine, spacing: f32) {
 /// 2 doubles back over the identical path inside the same stroke.
 fn stroke_centreline(engine: &mut DarklyEngine, layer: LayerId, pressure: f32, passes: u32) {
     const SAMPLES: u32 = 40;
+    engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer).unwrap();
     let mut t = 0.0f64;
     for pass in 0..passes {
@@ -121,10 +122,6 @@ fn stroke_centreline(engine: &mut DarklyEngine, layer: LayerId, pressure: f32, p
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: t,
-                cr: 0.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
             t += 16.0;
         }
@@ -418,6 +415,7 @@ fn wash_caps_coverage_across_strokes() {
 #[test]
 fn wash_saturates_per_pigment_not_globally() {
     let coloured = |engine: &mut DarklyEngine, layer: LayerId, rgb: [f32; 3]| {
+        engine.set_foreground_color([rgb[0], rgb[1], rgb[2], 1.0]);
         engine.begin_stroke(layer).unwrap();
         for i in 0..40 {
             engine.stroke_to(StrokeOp::BrushStroke {
@@ -429,10 +427,6 @@ fn wash_saturates_per_pigment_not_globally() {
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: rgb[0],
-                cg: rgb[1],
-                cb: rgb[2],
-                ca: 1.0,
             });
         }
         engine.end_stroke();
@@ -819,6 +813,7 @@ fn the_top_of_the_dial_stacks_dabs_by_source_over() {
             .brush_graph_set_input(&bs, "size", InputValue::Scalar(0.5))
             .expect("brush_settings size port");
 
+        engine.set_foreground_color([0.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer).unwrap();
         for i in 0..2 {
             engine.stroke_to(StrokeOp::BrushStroke {
@@ -830,10 +825,6 @@ fn the_top_of_the_dial_stacks_dabs_by_source_over() {
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 0.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();

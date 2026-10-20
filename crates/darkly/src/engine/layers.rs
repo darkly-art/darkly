@@ -1701,6 +1701,7 @@ impl DarklyEngine {
             thumbnail_version: self.thumbnail_version(),
             dirty: self.is_dirty(),
             has_selection: self.has_selection(),
+            edit_session: self.active_edit_session().map(|edit| edit.kind()),
             canvas_origin_x: rect.origin.x,
             canvas_origin_y: rect.origin.y,
             canvas_width: rect.width,

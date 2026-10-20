@@ -3,7 +3,6 @@ use super::UndoAction;
 use crate::document::{Document, TreeSlot};
 use crate::gpu::compositor::Compositor;
 use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// Undo action for adding an entity: layer, group, or filter.
 ///
@@ -26,14 +25,12 @@ impl EntityAddAction {
 }
 
 impl UndoAction for EntityAddAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         doc.detach_for_undo(self.layer_id);
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         doc.reinsert_entity(self.layer_id, self.slot);
-        HashMap::new()
     }
 }
 
@@ -74,16 +71,14 @@ impl EntityRemoveAction {
 }
 
 impl UndoAction for EntityRemoveAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         doc.reinsert_entity(self.layer_id, self.slot);
         self.applied = false;
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         doc.detach_for_undo(self.layer_id);
         self.applied = true;
-        HashMap::new()
     }
 
     fn on_evict(&mut self, compositor: &mut Compositor) {
@@ -108,18 +103,16 @@ impl LayerMoveAction {
 }
 
 impl UndoAction for LayerMoveAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         if doc.detach_for_undo(self.layer_id).is_some() {
             doc.reinsert_entity(self.layer_id, self.old);
         }
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         if doc.detach_for_undo(self.layer_id).is_some() {
             doc.reinsert_entity(self.layer_id, self.new);
         }
-        HashMap::new()
     }
 }
 
@@ -156,16 +149,14 @@ impl DuplicateAction {
 }
 
 impl UndoAction for DuplicateAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         doc.detach_for_undo(self.root_new_id);
         self.applied = false;
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         doc.reinsert_entity(self.root_new_id, self.slot);
         self.applied = true;
-        HashMap::new()
     }
 
     fn on_evict(&mut self, compositor: &mut Compositor) {
@@ -248,7 +239,7 @@ impl BakeLayersAction {
 }
 
 impl UndoAction for BakeLayersAction {
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn undo(&mut self, doc: &mut Document) {
         // Detach the baked result; its texture lives on as a tombstone for
         // the next redo cycle (the result's texture is untouched between
         // undo and redo, since nothing draws into detached textures, so no
@@ -263,10 +254,9 @@ impl UndoAction for BakeLayersAction {
             doc.reinsert_entity(source.id, source.slot);
         }
         self.applied = false;
-        HashMap::new()
     }
 
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
+    fn redo(&mut self, doc: &mut Document) {
         // Detach sources first so their slots are gone before the result
         // claims its insertion position.
         for source in &self.sources {
@@ -274,7 +264,6 @@ impl UndoAction for BakeLayersAction {
         }
         doc.reinsert_entity(self.result_id, self.result_slot);
         self.applied = true;
-        HashMap::new()
     }
 
     fn on_evict(&mut self, compositor: &mut Compositor) {

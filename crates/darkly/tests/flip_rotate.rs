@@ -378,6 +378,7 @@ fn flip_layer_with_ellipse_selection_clips_to_shape() {
 
 /// Paint a short red horizontal stroke centred near plane `(cx, cy)`.
 fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let steps = 16;
     for i in 0..=steps {
@@ -391,10 +392,6 @@ fn paint_feature(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32)
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -785,6 +782,7 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
 
     // Mirror of x in [4,12) about a 32-wide canvas → x in [20,28).
     // Paint a row spanning both the (now-unselected) left and (selected) right.
+    e.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     e.begin_stroke(layer).unwrap();
     let steps = 64;
     for i in 0..=steps {
@@ -798,10 +796,6 @@ fn paint_through_flipped_selection_masks_mirrored_band() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     e.end_stroke();

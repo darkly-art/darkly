@@ -58,6 +58,8 @@
 
     $effect(() => watchDismiss(scope, onclose));
 
+    // Capture phase, so the Escape this consumes never reaches the hotkeys
+    // (where it would discard an open edit session).
     function onKeydown(e: KeyboardEvent) {
         if (e.key !== 'Escape') return;
         e.preventDefault();
@@ -66,7 +68,7 @@
 
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} />
 
 <div
     class="color-popup"

@@ -28,10 +28,6 @@ export interface RecordedEventParams {
     rotation: number;
     tangential_pressure: number;
     time_ms: number;
-    cr: number;
-    cg: number;
-    cb: number;
-    ca: number;
 }
 
 interface RecordingFile {
@@ -115,10 +111,6 @@ function pickEventFields(e: RecordedEventParams): RecordedEventParams {
         rotation: e.rotation,
         tangential_pressure: e.tangential_pressure,
         time_ms: e.time_ms,
-        cr: e.cr,
-        cg: e.cg,
-        cb: e.cb,
-        ca: e.ca,
     };
 }
 

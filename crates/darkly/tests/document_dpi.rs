@@ -350,6 +350,7 @@ fn spacing_scales_with_the_document_dpi() {
         let layer = engine.add_raster_layer(None);
         engine.rescale_image(w, h, Some(dpi));
 
+        engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer).unwrap();
         // A straight stroke of fixed canvas length, fed in small steps so the
         // dab count is set by the spacing rather than by the event rate.
@@ -363,10 +364,6 @@ fn spacing_scales_with_the_document_dpi() {
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 1.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();
@@ -402,6 +399,7 @@ fn a_stroke_scales_with_the_document_dpi() {
         // A DPI-only edit: same dims, so nothing is resampled.
         engine.rescale_image(w, h, Some(dpi));
 
+        engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer).unwrap();
         for i in 0..2 {
             engine.stroke_to(StrokeOp::BrushStroke {
@@ -413,10 +411,6 @@ fn a_stroke_scales_with_the_document_dpi() {
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 1.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();

@@ -1,5 +1,6 @@
 import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
+import type { EngineApi } from '../engine/protocol';
 import { catalogs } from '../state/catalogs.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
@@ -15,7 +16,7 @@ import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
 import { toolRegistry } from '../tools/registry';
 import { brushGraph } from '../state/brush_graph.svelte';
-import { brushSession } from '../tools/brush.svelte';
+import { brushSession, toggleStrokeEdit, strokeEditOpen } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { registerSampleColorAction } from './sample_color';
 import { registerPalettePopupAction } from './palette_popup';
@@ -459,9 +460,6 @@ export function registerActions() {
     actions.register({
         id: 'newDocument',
         menuPath: ['File:10'],
-        // No default hotkey: `$mod+KeyN` is reserved by every major browser
-        // for "new window" and cannot be intercepted by the page. Artists can
-        // still bind it via the Hotkeys tab if their browser/OS allows.
         handler: () => {
             newDocument.open = true;
         },
@@ -501,22 +499,26 @@ export function registerActions() {
             exportTimelapse.open = true;
         },
     });
-    // -- Floating content / transform --
+    // -- Edit sessions (a transform, pasted content, stroke edit) --
+    // Hotkey dispatch does not consult `enabled`, so every Enter and Escape
+    // reaches the engine; it answers whether a session was open, and only
+    // then does anything need refreshing (discarding a paste removes the
+    // layer it made).
+    const endEditSession = async (end: (api: EngineApi) => Promise<boolean>) => {
+        const engine = app.engine;
+        if (!engine || !(await end(engine.api))) return;
+        await app.refreshLayerTree();
+        app.requestFrame();
+    };
     actions.register({
-        id: 'commitFloating',
-        handler: () => {
-            if (!app.engine) return;
-            app.engine.api.commitFloating();
-            app.requestFrame();
-        },
+        id: 'applyEditSession',
+        enabled: () => !!app.engineState?.editSession || 'Nothing to apply',
+        handler: () => endEditSession((api) => api.applyEditSession()),
     });
     actions.register({
-        id: 'cancelFloating',
-        handler: () => {
-            if (!app.engine) return;
-            app.engine.api.cancelFloating();
-            app.requestFrame();
-        },
+        id: 'discardEditSession',
+        enabled: () => !!app.engineState?.editSession || 'Nothing to discard',
+        handler: () => endEditSession((api) => api.discardEditSession()),
     });
 
     // -- Tools (generated from registry) --
@@ -592,6 +594,13 @@ export function registerActions() {
         id: 'revertBrush',
         enabled: () => brushGraph.modified || 'The brush has no unsaved changes',
         handler: () => void brushGraph.revert(),
+    });
+
+    // Stroke edit lives on the brush tool and is reported by the engine.
+    actions.register({
+        id: 'toggleStrokeEdit',
+        status: () => (strokeEditOpen(app.engineState) ? 'fa6-solid:check' : undefined),
+        handler: () => toggleStrokeEdit(),
     });
 
     // -- Layers --

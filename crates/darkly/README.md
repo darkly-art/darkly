@@ -43,8 +43,10 @@ async fn run(instance: wgpu::Instance, surface: wgpu::Surface<'static>) {
     let gpu = GpuContext::new(instance, surface, wgpu::Limits::default(), 1920, 1080).await;
     let mut engine = DarklyEngine::new(gpu, 1920, 1080);
 
-    // Add a raster layer and paint a horizontal brush stroke across it.
+    // Add a raster layer and paint a horizontal brush stroke across it, in
+    // the foreground colour (raw sRGB RGBA, as picked).
     let layer = engine.add_raster_layer(None);
+    engine.set_foreground_color([0.1, 0.6, 1.0, 1.0]);
     engine.begin_stroke(layer);
     for i in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -56,7 +58,6 @@ async fn run(instance: wgpu::Instance, surface: wgpu::Surface<'static>) {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 0.1, cg: 0.6, cb: 1.0, ca: 1.0, // brush color, linear RGBA
         });
     }
     engine.end_stroke();
