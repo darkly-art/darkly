@@ -130,6 +130,11 @@ module.exports = {
             platforms: ['win32'],
             config: {
                 name: 'darkly',
+                // The publisher Windows lists in Installed apps, which package
+                // managers (winget) match an installed copy against. Unset,
+                // electron-winstaller takes package.json's whole `author`
+                // string, email included.
+                authors: 'Darkly Community',
                 // Signs the generated Setup.exe. This is separate from the
                 // packagerConfig.windowsSign above, which signs what goes
                 // INSIDE it (darkly.exe, Update.exe, the Electron DLLs). Both
