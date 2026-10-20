@@ -1,39 +1,51 @@
 /*
  * Layer-panel drag affordances.
  *
- * Global rather than component-scoped because `layerDropTarget` toggles these
- * classes through `classList`, which Svelte cannot see: a scoped selector it
- * cannot statically match is pruned as unused, and the indicator would silently
- * never draw. One row class means there are no variants to drift.
+ * `layerDropTarget` (`ui/layers/dropTarget.svelte.ts`) puts `drop-site` on every
+ * node it is attached to and toggles the `drop-*` classes on it, so these rules
+ * key on the action's own class and never on a site's: any element opted in
+ * with `use:layerDropTarget` draws the line, and no site has to know this file
+ * exists.
  *
- * `--drop-indent` is the depth the drop resolves to; the line starts at the
- * indent that depth renders at, so the gesture is visible rather than implied.
+ * Global rather than component-scoped because the classes are toggled through
+ * `classList`, which Svelte cannot see: a scoped selector it cannot statically
+ * match is pruned as unused, and the indicator would silently never draw.
+ *
+ * `--drop-left` is set by the action to the pixel indent of the depth the drop
+ * resolves to, so the line starts where a row at that depth would, and the
+ * gesture is visible rather than implied.
  */
 
-.layer-row {
-    --drop-indent: 0;
+.drop-site {
+    /* The containing block for the lines below. Declared here, beside the
+       rules that position against it, so no site has to remember to supply it
+       and none can forget. */
+    position: relative;
 }
 
-.layer-row.drop-above::before,
-.layer-row.drop-below::after {
+.drop-site.drop-above::before,
+.drop-site.drop-below::after {
     content: '';
     position: absolute;
-    left: calc(8px + var(--drop-indent) * 16px);
+    left: var(--drop-left, 0);
     right: 4px;
     height: 2px;
     background: var(--accent);
     pointer-events: none;
+    /* Positioned siblings paint in DOM order, so without this the next row's
+       background covers the pixel of a `drop-below` line that overhangs it. */
+    z-index: 1;
 }
 
-.layer-row.drop-above::before {
+.drop-site.drop-above::before {
     top: -1px;
 }
 
-.layer-row.drop-below::after {
+.drop-site.drop-below::after {
     bottom: -1px;
 }
 
-.layer-row.drop-into {
+.drop-site.drop-into {
     outline: 1px solid var(--accent);
     outline-offset: -1px;
 }

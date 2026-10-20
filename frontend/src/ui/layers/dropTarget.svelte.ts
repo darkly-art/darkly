@@ -1,7 +1,7 @@
 /**
  * `use:layerDropTarget`: one shared Svelte action owning the HTML5 drag-and-drop
  * lifecycle for every droppable thing in the layer panel: layer rows, group
- * headers, the viewport divider, and the empty area below the list.
+ * headers, the viewport divider, and the tail below the last row.
  *
  * The panel used to carry a near-identical copy of `dragstart` / `dragover` /
  * `dragleave` / `drop` in each row component. They are one behaviour, so they are
@@ -9,24 +9,30 @@
  * `MoveTarget` (delegated to the pure `dropTarget` module), the affordance
  * classes, and the `moveLayers` call with its skipped-count and error toasts.
  *
- * The affordance is written straight onto the node rather than round-tripped
- * through component state, so a site opts in with `use:` alone and needs no
- * `$state` of its own. The classes it toggles are styled in `dropIndicator.css`,
- * which is global on purpose: a component-scoped rule for a class that only
- * appears via `classList` is pruned as unmatchable.
+ * The affordance is owned here too. The action marks its node `drop-site` and
+ * writes the `drop-*` classes and the line's indent straight onto it rather
+ * than round-tripping them through component state, so a site opts in with
+ * `use:` alone and needs no `$state` or CSS of its own. They are styled in
+ * `styles/drop-indicator.css`, which keys on `drop-site` and so draws for every
+ * site, and is global on purpose: a component-scoped rule for a class that
+ * only appears via `classList` is pruned as unmatchable. The classes survive a
+ * site's own `class:` directives because Svelte toggles those individually
+ * when the element's base `class` is static; a site that binds `class` to an
+ * expression would overwrite them on every update.
  */
 
 import { app } from '../../state/app.svelte';
 import { toast } from '../../state/toast.svelte';
-import { bandToGap, resolveGapDrop, type Band, type DropResolution } from './dropTarget';
+import { bandToGap, resolveGapDrop, rowIndent, type Band, type DropResolution } from './dropTarget';
 
 const MIME = 'application/x-darkly-layers';
 
 export interface LayerDropParams {
-    /** The row this element draws, when it is one. Omit for the divider and the
-     *  empty area, which are gaps in their own right. */
+    /** The row this element draws, when it is one. Every row, the divider
+     *  included, splits into the gaps around it by `bandToGap`. */
     rowId?: number;
-    /** An explicit gap index, for sites that are not rows. */
+    /** An explicit gap index, for a site that is a gap rather than a row (the
+     *  tail below the last row). */
     gap?: number;
     /** Forces the depth for a site that names one rather than gesturing at it. */
     pin?: 'min' | 'max';
@@ -44,6 +50,7 @@ export interface LayerDropParams {
 
 export function layerDropTarget(node: HTMLElement, params: LayerDropParams) {
     let current = params;
+    node.classList.add('drop-site');
 
     /** The band the pointer is in and the drop it resolves to. A site that is a
      *  gap rather than a row has no bands, and draws its line above itself. */
@@ -77,12 +84,12 @@ export function layerDropTarget(node: HTMLElement, params: LayerDropParams) {
         node.classList.toggle('drop-above', live && res!.band === 'above');
         node.classList.toggle('drop-below', live && res!.band === 'below');
         node.classList.toggle('drop-into', live && res!.band === 'into');
-        if (live) node.style.setProperty('--drop-indent', `${res!.drop!.depth}`);
+        if (live) node.style.setProperty('--drop-left', `${rowIndent(res!.drop!.depth)}px`);
     }
 
     function clear() {
         node.classList.remove('drop-above', 'drop-below', 'drop-into');
-        node.style.removeProperty('--drop-indent');
+        node.style.removeProperty('--drop-left');
     }
 
     function onDragStart(e: DragEvent) {
@@ -163,6 +170,8 @@ export function layerDropTarget(node: HTMLElement, params: LayerDropParams) {
             current = next;
         },
         destroy() {
+            clear();
+            node.classList.remove('drop-site');
             node.removeEventListener('dragstart', onDragStart);
             node.removeEventListener('dragover', onDragOver);
             node.removeEventListener('dragleave', onDragLeave);

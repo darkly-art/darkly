@@ -44,7 +44,7 @@ interface Slot {
  */
 export interface DropRow {
     id: number;
-    /** Render depth, matching the panel's `padding-left: 8 + depth * 16`. */
+    /** Render depth: the row is indented `rowIndent(depth)` (`ui/layers/dropTarget.ts`). */
     depth: number;
     isGroup: boolean;
 }

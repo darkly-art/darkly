@@ -28,22 +28,25 @@
         <LayerFooter onupdate={refresh} />
     </div>
 
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- The list's own drop target is the empty space under the last row: a
-         drop there means "below everything, at root", which is the one place
-         the row gestures cannot reach when the bottom row is nested. Rows stop
-         their own drag events, so this only ever sees the gap beneath them. -->
-    <div
-        class="layer-list"
-        use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
-    >
+    <div class="layer-list">
         <LayerRows nodes={app.layerTree} onupdate={refresh} />
 
-        <!-- The divider is always in the tree, so "no layers" means no rows
-             besides it. -->
-        {#if app.layerTree.filter((n) => n.type !== 'divider').length === 0}
-            <div class="empty-message">No layers</div>
-        {/if}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- The tail: the space under the last row, filling the rest of the
+             list. A drop here means "below everything, at root", which is the
+             one place the row gestures cannot reach when the bottom row is
+             nested. It is the gap below the last row, so its top edge is where
+             that gap is and where its drop line draws. -->
+        <div
+            class="drop-tail"
+            use:layerDropTarget={{ gap: app.dropRows.length, pin: 'min', onupdate: refresh }}
+        >
+            <!-- The divider is always in the tree, so "no layers" means no rows
+                 besides it. -->
+            {#if app.layerTree.filter((n) => n.type !== 'divider').length === 0}
+                <div class="empty-message">No layers</div>
+            {/if}
+        </div>
     </div>
 </div>
 
@@ -66,9 +69,16 @@
 
     .layer-list {
         position: relative;
+        display: flex;
+        flex-direction: column;
         flex: 1;
         overflow-y: auto;
         min-height: 0;
+    }
+
+    .drop-tail {
+        flex: 1;
+        min-height: 24px;
     }
 
     .empty-message {

@@ -38,7 +38,9 @@
         align-items: center;
         gap: 6px;
         padding: 0 8px;
-        height: 14px;
+        /* Taller than the rule needs: the box is the hit area, and each half
+           of it is one of the two gaps the divider separates. */
+        height: 26px;
         flex: 0 0 auto;
         cursor: ns-resize;
         user-select: none;
@@ -61,12 +63,16 @@
     }
 
     /* With nothing above it the line is an affordance, not a boundary, so it
-       recedes until pointed at. */
-    .divider.empty {
+       recedes until pointed at. The children recede rather than the divider
+       itself, because the drop line is drawn on the divider and would recede
+       with it, and `:hover` does not update during a drag. */
+    .divider.empty .rule,
+    .divider.empty .label {
         opacity: 0.4;
     }
 
-    .divider:hover {
+    .divider:hover .rule,
+    .divider:hover .label {
         opacity: 1;
     }
 </style>

@@ -19,7 +19,7 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophes. Release your creativity from the bonds of logic. Madness isn't a bug, it's a feature.
 
-I made Darkly because painting should feel like play, not work. It should be smooth and satisfying, and maybe a little mesmerizing, so you end up exploring, and creating something unexpected.
+I made Darkly because I wanted something as fun as Procreate, but for PC. Painting should feel like play, not work. It should be smooth and satisfying, and maybe a little mesmerizing, so you end up exploring, and creating something unexpected.
 
 Darkly makes painting fun again - on Linux, Windows, macOS, and anything with a web browser. It is not a Photoshop clone, and does not want to be.
 
