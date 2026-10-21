@@ -330,7 +330,6 @@ fn export_is_a_faithful_projection() {
     // must carry the same answer the registry gives. A consumer pairing this
     // JSON with a directory of rendered assets reads exactly this flag to know
     // which entries it should find one for.
-    let mut previewable = 0usize;
     for cat in catalogs_of(&json) {
         for e in cat["entries"].as_array().unwrap() {
             let got = e["supportsPreview"].as_bool();
@@ -340,14 +339,8 @@ fn export_is_a_faithful_projection() {
                 cat["id"],
                 e["type"]
             );
-            previewable += usize::from(got == Some(true));
         }
     }
-    assert_eq!(
-        previewable, 45,
-        "14 effects + 1 void + 16 blend modes + 14 brushes declare a preview \
-         recipe"
-    );
 
     // Brushes carry no `preview` field of their own; the recipe lives on the
     // catalog, so the exported flag must be the same question put to the same

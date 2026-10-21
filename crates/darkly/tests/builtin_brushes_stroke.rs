@@ -1,7 +1,7 @@
 //! Every shipped brush actually paints.
 //!
 //! The suite checks a great deal about the engine and almost nothing about
-//! the fourteen brushes, deliberately: their tuning is art, and tests that
+//! the shipped brushes, deliberately: their tuning is art, and tests that
 //! pin art break every time an artist changes their mind. This is the floor
 //! under that, and the only thing here that names shipped brushes at all.
 //!
