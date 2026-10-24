@@ -50,7 +50,6 @@ nodes:
     comment: The nib filled with the current color.
   paint:
     type: paint
-    name: Deposit
     comment: "Mostly Wash with a little Build-up: crossing your own stroke adds little, but a second stroke layers over the first."
     inputs:
       buildup: 0.3

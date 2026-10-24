@@ -62,7 +62,6 @@ nodes:
     comment: The nib filled with the current color.
   paint:
     type: paint
-    name: Deposit
     comment: Overlapping dabs make one solid line.
 connections:
 - pen_input.position -> paint.position

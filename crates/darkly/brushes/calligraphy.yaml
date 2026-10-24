@@ -51,7 +51,6 @@ nodes:
     comment: The nib filled with the current color.
   paint:
     type: paint
-    name: Deposit
 connections:
 - pen_input.position -> paint.position
 - paint_color.color -> stamp.color

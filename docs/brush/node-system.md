@@ -269,29 +269,28 @@ also a worked example: artists open it in the builder to learn how brushes are
 made. These rules apply to every builtin brush, and a brush that breaks one is
 not ready to ship.
 
-### Every node is named and explained
+### Names and comments earn their place
 
-A builtin brush labels every node and says why it is there. In the YAML that is
-`name:` and `comment:` on the node; the builder shows the name as the node's
-title and the comment as a note beneath it. Both are written for an artist
-reading the graph for the first time.
+A node's `name:` replaces its type name as its title in the builder, and its
+`comment:` shows as a note beneath it. Both are optional, and both are written
+for an artist reading the graph for the first time.
 
-- **`name:` says what the node is in this brush.** "Paper grain texture" and
-  "Squash pen pressure" tell the artist what they are looking at.
-- **`comment:` is one short sentence saying what the node does for this
-  brush.** Write it the way you would say it across a desk: "Pressure sets the
-  width, eased so a light touch draws a thin line." Describe the effect on the
-  mark; the port descriptions already explain how each knob is defined. A
-  second sentence is earned by a node whose role is central and genuinely
-  complex, such as the paint terminal's accumulation law, and it stays short.
+- **Name a node only when its type name does not already say what it does
+  here.** "Paper grain texture" on an `image` node and "Squash pen pressure" on
+  a `curve` tell the reader something; renaming a `paint` or `stamp` node after
+  its own job does not.
+- **Comment a node only when the graph alone would leave the reader asking
+  why.** The comment says the node's role in producing the brush's intended
+  effect: why it can't be deleted. "Pressure sets the width, eased so a light
+  touch draws a thin line." One short sentence; if it takes more than that, or
+  it restates the node's type, its settings or its port descriptions, leave it
+  out.
 - **Describe the mark in the artist's own color.** The artist paints in
   whatever color is current, so say what changes: opacity, coverage, how much
-  color a dab lays down, whether a repeat pass adds anything. "Dark" and
-  "light" belong to a brush whose job is value, such as dodge or burn.
-- **Comment the nodes that need it.** A `pen_input` or `paint_color` with one
-  obvious wire stands on its own header. A node with a tuned input, a curve, a
-  `random`, a `switch`, or more than one outgoing wire gets both a name and a
-  comment.
+  color a dab lays down. "Dark" and "light" belong to a brush whose job is
+  value, such as dodge or burn.
+- **Only say what is true.** A comment or description that promises behavior
+  the engine does not have is worse than none.
 
 [`pencil.yaml`](../../crates/darkly/brushes/pencil.yaml) and
 [`ink.yaml`](../../crates/darkly/brushes/ink.yaml) are the models to match.
@@ -343,5 +342,6 @@ order.
 4. Run the brush accumulation and preview tests. A brush that uses `random`
    needs the fixture approach in
    [`docs/plans/decouple-tests-from-shipped-brushes.md`](../plans/decouple-tests-from-shipped-brushes.md).
-5. Read the brush back in the builder as an artist would: every node named,
-   every non-obvious node commented, every knob labeled for what it does here.
+5. Read the brush back in the builder as an artist would: every knob labeled
+   for what it does here, and no name or comment that is not pulling its
+   weight.
