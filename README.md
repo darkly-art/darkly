@@ -45,10 +45,26 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 
 ### Brush Packs
 
-Brushes ship in packs, each with its own colours and character. Here is one; the rest are in the [brush documentation](docs/brush/README.md#brush-packs).
+These are Darkly's builtin brushes.
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=basic -->
+<img src="docs/images/graphics/brushPacks-basic.jpg" alt="Basic: Airbrush, Calligraphy, Ink Pen, Rough Ink">
+<!-- /darkly:catalog-graphic -->
 
 <!-- darkly:catalog-graphic catalog=brushPacks entry=dry_media -->
 <img src="docs/images/graphics/brushPacks-dry_media.jpg" alt="Dry Media: Pencil, Charcoal, Hair, Sponge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=wet_media -->
+<img src="docs/images/graphics/brushPacks-wet_media.jpg" alt="Wet Media: Rough Watercolor, Smooth Watercolor">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=effects -->
+<img src="docs/images/graphics/brushPacks-effects.jpg" alt="Effects: Blur, Liquify, Smudge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=misc -->
+<img src="docs/images/graphics/brushPacks-misc.jpg" alt="Misc: Clone">
 <!-- /darkly:catalog-graphic -->
 
 ## Dark Arts
