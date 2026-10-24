@@ -5,7 +5,8 @@
  * The export is the directory `DOCS_EXPORT` names (see "Reading the export"
  * below). Everything under `src/content/docs/` and `src/generated/` is output
  * of this script and is gitignored: the prose is copied from the export's
- * `manual/`, the reference pages are generated from its `metadata.json`.
+ * `manual/`, the reference pages are generated from its `metadata.json`, and
+ * the pictures they embed are copied out of its `previews/` and `graphics/`.
  *
  * The layout this builds was specified up front:
  *
@@ -41,11 +42,19 @@ const MEDIA = path.join(ROOT, 'public', 'previews');
 const MEDIA_URL = `${BASE}previews`;
 
 /*
+ * Catalog graphics the same way: the committed cards under
+ * `docs/images/graphics/` (one per brush pack, rendered by
+ * `frontend/scripts/render-doc-graphics.mjs`), which the export carries as
+ * `graphics/` with the `.hash.json` sidecar each was rendered with.
+ */
+const GRAPHICS = path.join(ROOT, 'public', 'graphics');
+const GRAPHICS_URL = `${BASE}graphics`;
+
+/*
  * Which catalogs make up which section, and in what order they appear in the
  * sidebar. A catalog absent from here is simply not published, and stays in the
  * export for whenever we want it: the 13 `settings.*` preference groups,
- * which the specified layout has no section for, `layerFilters`, and
- * `brushPacks`.
+ * which the specified layout has no section for, and `layerFilters`.
  *
  * `veils` and `filters` were separate catalogs until v0.8.0, when Darkly merged
  * them into `effects` and kept the old split as the entries' `category`. They
@@ -63,7 +72,10 @@ const MEDIA_URL = `${BASE}previews`;
  * prominence. It leads the reference for the same reason it led that group, and
  * `brushNodes` follows it because a brush graph's nodes are what a brush is made
  * of; that leaves Tools as what the word means in the editor, the twelve things
- * on the toolbar.
+ * on the toolbar. `brushPacks` opens the section: a pack is how the brushes are
+ * met in the editor, and its page is the cards rather than a table (see
+ * `groupPage`), so it is the one reference page that is a picture of what it
+ * describes.
  *
  * A section holding one catalog is written as a page rather than a directory
  * (`reference/tools.md`, not `reference/tools/tools.md`), because a group whose
@@ -71,7 +83,7 @@ const MEDIA_URL = `${BASE}previews`;
  * sidebar already has a shape for a one-page section.
  */
 const SECTIONS = {
-    brushes: ['brushes', 'brushNodes'],
+    brushes: ['brushPacks', 'brushes', 'brushNodes'],
     'layer-types': ['effects', 'voids', 'blendModes'],
     tools: ['tools'],
 };
@@ -134,6 +146,25 @@ function source() {
 }
 
 /**
+ * The catalog graphics the export carries, by file stem, each with the size its
+ * sidecar recorded. Absent when the export has no `graphics/`: a build from an
+ * export made without them still gets every table, and a page that needs a
+ * card fails by name in `groupPage` rather than shipping a broken image.
+ */
+function readGraphics(dir) {
+    const from = path.join(dir, 'graphics');
+    const graphics = {};
+    if (!fs.existsSync(from)) return graphics;
+    for (const file of fs.readdirSync(from)) {
+        if (!file.endsWith('.hash.json')) continue;
+        const name = file.replace(/\.hash\.json$/, '');
+        const { width, height } = JSON.parse(fs.readFileSync(path.join(from, file), 'utf8'));
+        graphics[name] = { file: `${name}.jpg`, width, height };
+    }
+    return graphics;
+}
+
+/**
  * Copy the export's rendered previews into `public/`.
  *
  * Wholesale rather than per referenced entry: the tree is what the encoder
@@ -158,6 +189,19 @@ function copyPreviews(dir) {
     };
     walk(from, MEDIA);
     return count;
+}
+
+/** Copy the export's catalog graphics into `public/`, images only: the
+ *  sidecars were read for their sizes and are nothing to serve. */
+function copyGraphics(dir, graphics) {
+    fs.rmSync(GRAPHICS, { recursive: true, force: true });
+    const names = Object.keys(graphics);
+    if (!names.length) return 0;
+    fs.mkdirSync(GRAPHICS, { recursive: true });
+    for (const name of names) {
+        fs.copyFileSync(path.join(dir, 'graphics', graphics[name].file), path.join(GRAPHICS, graphics[name].file));
+    }
+    return names.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +377,60 @@ function catalogPage(catalog, icons, assets, order, version) {
     ].join('\n');
 }
 
+/**
+ * A catalog of groups as a page: a card per entry rather than a row.
+ *
+ * Each card already carries the pack's icon, name, description and every
+ * member's stroke in the pack's own colours, so the page is the cards and
+ * nothing beside them: a heading or a caption would say what the picture
+ * says. The words go in the alt text instead, where a screen reader and the
+ * search index find them without the page repeating itself.
+ *
+ * The card is the committed graphic for `<catalog>-<type>`, the stem
+ * `render-doc-graphics.mjs` writes and the README links. A group without one
+ * fails the build by name: a page with a hole where a picture should be is
+ * exactly what nobody notices before deploy.
+ */
+function groupPage(catalog, metadata, graphics, order, version) {
+    const nameOf = (members, id) =>
+        metadata.catalogs.find((c) => c.id === members.catalog)?.entries.find((e) => e.type === id)?.displayName ?? id;
+    const cards = catalog.entries.map((e) => {
+        const name = `${catalog.id}-${e.type}`;
+        const card = graphics[name];
+        if (!card) {
+            fail(
+                `no card for ${catalog.id}/${e.type}: the export has no graphics/${name}.jpg\n` +
+                    '       render it: node frontend/scripts/render-doc-graphics.mjs --metadata <export>/metadata.json',
+            );
+        }
+        const members = e.members.entries.map((id) => nameOf(e.members, id)).join(', ');
+        // Each part a sentence, so a description that already ends in a
+        // full stop does not get a second one.
+        const alt = [e.displayName, e.description, members]
+            .filter(Boolean)
+            .map((part) => part.replace(/\.?$/, '.'))
+            .join(' ');
+        return (
+            `<img class="docs-card" src="${GRAPHICS_URL}/${card.file}?v=${encodeURIComponent(version)}" ` +
+            `width="${card.width}" height="${card.height}" alt="${cell(alt)}" loading="lazy" decoding="async">`
+        );
+    });
+    return [
+        frontmatter({ title: catalog.title, description: catalog.description, order }),
+        catalog.description ? `${catalog.description}\n` : '',
+        ...cards.map((c) => `${c}\n`),
+        `*All ${catalog.entries.length} ${catalog.title.toLowerCase()} in Darkly ${version}.*`,
+        '',
+    ].join('\n');
+}
+
+/** A catalog whose every entry groups entries of another is a page of cards;
+ *  anything else is a table. Decided by what the entries carry, so a second
+ *  grouping catalog would take the same shape with no change here. */
+function isGroupCatalog(catalog) {
+    return catalog.entries.length > 0 && catalog.entries.every((e) => e.members);
+}
+
 // ---------------------------------------------------------------------------
 // The actions island's data
 // ---------------------------------------------------------------------------
@@ -433,6 +531,7 @@ function copyManual(dir, actions) {
 
 function main() {
     const { dir, metadata, icons, assets } = source();
+    const graphics = readGraphics(dir);
 
     fs.rmSync(OUT, { recursive: true, force: true });
     fs.mkdirSync(OUT, { recursive: true });
@@ -444,6 +543,7 @@ function main() {
 
     const prose = copyManual(dir, actions);
     const media = copyPreviews(dir);
+    const cards = copyGraphics(dir, graphics);
 
     let pages = 0;
     const missing = [];
@@ -463,7 +563,10 @@ function main() {
             const file = flat
                 ? path.join(OUT, 'reference', `${section}.md`)
                 : path.join(OUT, 'reference', section, `${slug}.md`);
-            fs.writeFileSync(file, catalogPage(catalog, icons, assets, i + 1, metadata.version));
+            const page = isGroupCatalog(catalog)
+                ? groupPage(catalog, metadata, graphics, i + 1, metadata.version)
+                : catalogPage(catalog, icons, assets, i + 1, metadata.version);
+            fs.writeFileSync(file, page);
             pages += 1;
         });
     }
@@ -497,7 +600,7 @@ function main() {
     log(
         `${metadata.version}: ${prose} prose page(s), ${pages} reference table(s), ` +
             `${actions.rows.length} actions across ${actions.presets.length} presets, ` +
-            `${media} preview file(s)`,
+            `${media} preview file(s), ${cards} card(s)`,
     );
 }
 

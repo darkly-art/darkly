@@ -21,6 +21,7 @@ docs-site/.astro/
 docs-site/src/content/docs/
 docs-site/src/generated/
 docs-site/public/previews/
+docs-site/public/graphics/
 
 # Planning documents are working notes, never committed
 docs/plans/

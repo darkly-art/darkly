@@ -53,6 +53,8 @@ function syntheticCard(source: AddSource, deps: TabDeps): AddCard | null {
             params: [],
             supportsPreview: false,
             source: null,
+            members: null,
+            palette: null,
         } as CatalogEntry,
         source,
         catalog: '',

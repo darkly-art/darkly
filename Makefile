@@ -137,10 +137,11 @@ deps:
 	cd desktop && npm ci
 
 # The docs site's content, from this checkout: registry metadata, resolved
-# icons, rendered previews unless DOCS_PREVIEWS=0, and the manual. That
-# directory is all docs-site/ reads, handed to it as DOCS_EXPORT. Needs
-# frontend/ node_modules for the icon resolver, and a GPU plus ffmpeg for the
-# previews. Contributors' and CI's targets, not a channel's.
+# icons, rendered previews unless DOCS_PREVIEWS=0, the committed catalog
+# graphics (the brush pack cards) and the manual. That directory is all
+# docs-site/ reads, handed to it as DOCS_EXPORT. Needs frontend/ node_modules
+# for the icon resolver, and a GPU plus ffmpeg for the previews. Contributors'
+# and CI's targets, not a channel's.
 DOCS_PREVIEWS ?= 1
 DOCS_EXPORT   := $(TARGET_DIR)/docs-site
 
@@ -152,6 +153,7 @@ ifneq ($(DOCS_PREVIEWS),0)
 	cargo run -q --release -p darkly --features testing --bin render_docs -- --out $(DOCS_EXPORT)/frames
 	node scripts/encode-doc-previews.mjs --frames $(DOCS_EXPORT)/frames --out $(DOCS_EXPORT)
 endif
+	cp -r docs/images/graphics $(DOCS_EXPORT)/graphics
 	cp -r docs/manual $(DOCS_EXPORT)/manual
 
 # The static site, type-checked, into docs-site/dist.

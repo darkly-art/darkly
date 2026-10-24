@@ -1,0 +1,50 @@
+{
+  "svg": "724656a2c9ade241",
+  "width": 1444,
+  "height": 396,
+  "catalog": "brushPacks",
+  "category": null,
+  "entry": "effects",
+  "context": {
+    "catalogs": {},
+    "entries": {
+      "brushPacks/effects": {
+        "type": "effects",
+        "displayName": "Effects",
+        "description": "Brushes that move and reshape the pixels already on the canvas.",
+        "icon": "mdi:blur",
+        "palette": {
+          "chroma": "#8b5cf6",
+          "refraction": "#e05ccb",
+          "surface": "#6d3ce01a"
+        },
+        "members": {
+          "catalog": "brushes",
+          "entries": [
+            "blur",
+            "liquify",
+            "smudge"
+          ]
+        }
+      },
+      "brushes/blur": {
+        "type": "blur",
+        "displayName": "Blur",
+        "description": "Softens whatever is already on the layer instead of laying down color.",
+        "icon": "mdi:blur"
+      },
+      "brushes/liquify": {
+        "type": "liquify",
+        "displayName": "Liquify",
+        "description": "Pushes the pixels under the cursor along the stroke, warping the image without repainting it.",
+        "icon": "tabler:ripple"
+      },
+      "brushes/smudge": {
+        "type": "smudge",
+        "displayName": "Smudge",
+        "description": "A fingertip dragged through the pigment already on the canvas. Pulls it along the stroke and leaves nothing of its own.",
+        "icon": "mdi:fingerprint"
+      }
+    }
+  }
+}

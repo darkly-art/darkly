@@ -1,0 +1,53 @@
+{
+  "svg": "df9b85ac5c750cc8",
+  "width": 1444,
+  "height": 396,
+  "catalog": "brushPacks",
+  "category": null,
+  "entry": "basic",
+  "context": {
+    "catalogs": {},
+    "entries": {
+      "brushPacks/basic": {
+        "type": "basic",
+        "displayName": "Basic",
+        "description": "Everyday marks, the brushes to reach for first.",
+        "icon": "mdi:brush",
+        "palette": {
+          "chroma": "#a89a78",
+          "refraction": "#c9b98f",
+          "surface": "#8a74421a"
+        },
+        "members": {
+          "catalog": "brushes",
+          "entries": [
+            "airbrush",
+            "calligraphy",
+            "ink_pen",
+            "rough_ink"
+          ]
+        }
+      },
+      "brushes/airbrush": {
+        "type": "airbrush",
+        "displayName": "Airbrush",
+        "description": "A fully soft disc that builds color up gradually; hold it in one place and the tone deepens."
+      },
+      "brushes/calligraphy": {
+        "type": "calligraphy",
+        "displayName": "Calligraphy",
+        "description": "A broad elliptical nib held at a fixed angle, so strokes thicken and thin with direction."
+      },
+      "brushes/ink_pen": {
+        "type": "ink_pen",
+        "displayName": "Ink Pen",
+        "description": "A crisp-edged nib with a slow pressure ramp, for confident line work that holds its weight."
+      },
+      "brushes/rough_ink": {
+        "type": "rough_ink",
+        "displayName": "Rough Ink",
+        "description": "An ink nib whose edge is reshaped at random every dab, producing line work that looks bitten rather than printed."
+      }
+    }
+  }
+}

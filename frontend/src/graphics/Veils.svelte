@@ -7,14 +7,9 @@
     The template is SVG because resvg is what rasterizes it, so everything here
     has to be SVG geometry plus SVG presentation properties: there is no flow
     layout and no text measurement, which is why every position below is
-    arithmetic. Scoped CSS does apply (the runner splices the compiled stylesheet
-    in), so colour and type are declared once at the bottom rather than sprayed
-    across attributes. What does not survive is `var()`, so the palette is spelled
-    out in hex.
-
-    That palette is the *website's*, not the editor's: this is a marketing
-    surface, and `frontend/src/styles/tokens.css` is the app's chrome. Do not
-    "fix" these values to the app tokens; the two are deliberately unrelated.
+    arithmetic. Colour and type come from `site.css`, the website's palette
+    shared by every graphic, which the runner splices in ahead of a component's
+    own scoped stylesheet; this one has nothing of its own to add.
 -->
 <script module lang="ts">
     /** Stills are `PREVIEW_MAX_DIM` (256) squares and are drawn at 1:1, so the
@@ -59,8 +54,10 @@
         };
     }
 
-    export function size(count: number) {
-        const rows = Math.ceil(count / COLS);
+    /** Takes what `graphicProps` returned, so a layout whose height depends on
+     *  more than a count has the same signature. */
+    export function size({ entries }: { entries: Entry[] }) {
+        const rows = Math.ceil(entries.length / COLS);
         return {
             width: PAD * 2 + COLS * STILL + (COLS - 1) * GAP_X,
             height: PAD * 2 + TITLE_H + rows * (STILL + LABEL_H) + (rows - 1) * ROW_GAP,
@@ -73,7 +70,7 @@
 
     let { entries, title }: { entries: Entry[]; title: string } = $props();
 
-    const dims = $derived(size(entries.length));
+    const dims = $derived(size({ entries }));
     const x = (i: number) => PAD + (i % COLS) * (STILL + GAP_X);
     const y = (i: number) => PAD + TITLE_H + Math.floor(i / COLS) * (STILL + LABEL_H + ROW_GAP);
 </script>
@@ -101,35 +98,3 @@
     {/each}
 </svg>
 
-<style>
-    .card {
-        fill: #0b0a0d;
-    }
-
-    /* Display type, from the website's masthead. `OldStyle 1` is the family in
-       the font file; see fonts/NOTICE.md before changing this string. */
-    .title {
-        fill: #e9e3d9;
-        font-family: 'OldStyle 1';
-        font-size: 72px;
-    }
-
-    .rule {
-        fill: #2a2630;
-    }
-
-    .frame {
-        fill: none;
-        stroke: #241f2b;
-        stroke-width: 1;
-    }
-
-    /* 20px rather than the title's scale because Noto sets wider than OldStyle,
-       and "Chromatic Aberration" has to fit inside one 256px cell. */
-    .label {
-        fill: #b9b2a6;
-        font-family: 'Noto Sans';
-        font-size: 20px;
-        text-anchor: middle;
-    }
-</style>

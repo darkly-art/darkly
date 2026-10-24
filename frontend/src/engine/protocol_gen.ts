@@ -231,7 +231,17 @@ supportsPreview: boolean,
  * other registry, whose entries are effects over an existing image rather
  * than sources of one.
  */
-source: VoidSource | null, };
+source: VoidSource | null, 
+/**
+ * The entries of another catalog this entry groups; brush packs only.
+ * `None` for every registry whose entries stand alone.
+ */
+members: Membership | null, 
+/**
+ * Identity colours; brush packs only. `None` for every registry whose
+ * entries are told apart by icon and name.
+ */
+palette: PackPalette | null, };
 
 export type ClearSelectionContentsReq = { id: number, };
 
@@ -555,6 +565,16 @@ layers: Array<LayerInfo>, };
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
 
 export type MaskToSelectionReq = { id: number, };
+
+export type Membership = { 
+/**
+ * Id of the catalog the members are entries of.
+ */
+catalog: string, 
+/**
+ * Member type ids, in the group's declared order.
+ */
+entries: Array<string>, };
 
 export type MergeDownReq = { source_id: number, };
 
