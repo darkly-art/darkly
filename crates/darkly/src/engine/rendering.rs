@@ -1266,7 +1266,7 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 192;
 /// Target mean luminance the cursor-preview mask gets normalized to,
 /// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).
 /// Sized to roughly match what a natural full-coverage brush like
-/// Ink Pen produces unboosted, so attenuated brushes (Charcoal: paper
+/// Ink produces unboosted, so attenuated brushes (Charcoal: paper
 /// texture × shape masks → ~0.2 unboosted) land at the same apparent
 /// visibility under the cursor. Multiplier-only against an empty
 /// background: preserves true zero coverage exactly; the shader

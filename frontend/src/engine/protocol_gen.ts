@@ -297,7 +297,15 @@ export type ExposedPortInfo = {
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
  */
-key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
+key: string, nodeId: string, portName: string, label: string, 
+/**
+ * The target port's own label, ignoring the entry's relabel.
+ */
+portLabel: string, icon: string, description: string, 
+/**
+ * The owning node's effective title (author's name, else type name).
+ */
+nodeDisplayName: string, data: ExposedValue, };
 
 export type ExposedPortMeta = { label?: string, description?: string, icon?: string, 
 /**

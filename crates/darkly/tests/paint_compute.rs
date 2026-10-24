@@ -16,6 +16,7 @@ use std::path::PathBuf;
 
 use darkly::brush::builtin_brushes;
 use darkly::brush::input_value::InputValue;
+use darkly::brush::portable::PortableBrush;
 use darkly::coord::CanvasRect;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
@@ -34,6 +35,24 @@ fn fixture(name: &str) -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", name]
         .iter()
         .collect()
+}
+
+/// The deterministic disc engine tests measure through, shared with
+/// `brush_accumulation.rs`. The strokes here are compared byte for byte
+/// across engines, and a shipped brush with a `random` node draws a fresh
+/// stroke seed per engine, so the depositing strokes go through the fixture;
+/// Smudge is installed where the live sampler is the point.
+const ANALYTIC_DISC: &str = include_str!("fixtures/analytic_disc.yaml");
+
+fn install_disc(engine: &mut DarklyEngine) {
+    let portable: PortableBrush = serde_yaml_ng::from_str(ANALYTIC_DISC).expect("fixture parses");
+    let brush = portable
+        .into_brush(darkly::brush::registry(), "fixture")
+        .expect("fixture builds");
+    let json = serde_json::to_string(&brush.metadata.graph).expect("serialize brush graph");
+    engine
+        .set_brush_graph(&json)
+        .unwrap_or_else(|e| panic!("the disc fixture compiles: {e:?}"));
 }
 
 fn install_builtin(engine: &mut DarklyEngine, name: &str) {
@@ -125,7 +144,7 @@ fn replay_is_deterministic_through_checkpoints_and_paints() {
 
     let run = || {
         let mut engine = test_engine(canvas);
-        install_builtin(&mut engine, "Ink Pen");
+        install_disc(&mut engine);
         set_input(&mut engine, "brush_settings", "stabilize", 1.0);
         let layer = engine.add_raster_layer(None);
         let timings = replay(
@@ -154,7 +173,7 @@ fn replay_is_deterministic_through_checkpoints_and_paints() {
 #[test]
 fn dispatches_count_one_per_dab() {
     let mut engine = test_engine((256, 128));
-    install_builtin(&mut engine, "Ink Pen");
+    install_disc(&mut engine);
     let layer = engine.add_raster_layer(None);
     let _ = engine.drain_brush_perf_delta();
     stroke_row(&mut engine, layer, 64.0, 12.0, 244.0, 48);
@@ -171,7 +190,7 @@ fn dispatches_count_one_per_dab() {
 #[test]
 fn dispatches_count_two_per_dab_for_a_live_sampler() {
     let mut engine = test_engine((256, 128));
-    install_builtin(&mut engine, "Ink Pen");
+    install_disc(&mut engine);
     let layer = engine.add_raster_layer(None);
     stroke_row(&mut engine, layer, 64.0, 12.0, 244.0, 48);
     install_builtin(&mut engine, "Smudge");
@@ -197,7 +216,7 @@ fn live_sampler_replay_is_deterministic_and_moves_pigment() {
     let canvas = (1024, 512);
     let run = || {
         let mut engine = test_engine(canvas);
-        install_builtin(&mut engine, "Ink Pen");
+        install_disc(&mut engine);
         let layer = engine.add_raster_layer(None);
         for y in (16..canvas.1).step_by(32) {
             stroke_row(&mut engine, layer, y as f32, 8.0, canvas.0 as f32 - 8.0, 64);
@@ -235,7 +254,7 @@ fn selection_masks_the_dab_pass_under_a_cropped_canvas() {
     // At the plane origin: select the right half, stroke the whole width.
     {
         let mut engine = test_engine((w, h));
-        install_builtin(&mut engine, "Ink Pen");
+        install_disc(&mut engine);
         let layer = engine.add_raster_layer(None);
         engine.select_rect(
             64.0,
@@ -264,7 +283,7 @@ fn selection_masks_the_dab_pass_under_a_cropped_canvas() {
     // the window, stroke across it.
     {
         let mut engine = test_engine((w, h));
-        install_builtin(&mut engine, "Ink Pen");
+        install_disc(&mut engine);
         let layer = engine.add_raster_layer(None);
         stroke_row(&mut engine, layer, 8.0, 20.0, -40.0, 16);
         let bounds = engine.layer_bounds(layer).expect("layer");
@@ -304,7 +323,7 @@ fn selection_masks_the_dab_pass_under_a_cropped_canvas() {
 fn stroke_that_grows_the_layer_keeps_its_ground() {
     let (w, h) = (128u32, 128u32);
     let mut engine = test_engine((w, h));
-    install_builtin(&mut engine, "Ink Pen");
+    install_disc(&mut engine);
     let layer = engine.add_raster_layer(None);
     let before = engine.layer_bounds(layer).expect("layer");
     stroke_row(&mut engine, layer, 64.0, 64.0, -60.0, 64);

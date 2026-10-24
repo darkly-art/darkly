@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use darkly::brush::builtin_brushes;
 use darkly::brush::gpu_context::MAX_DABS_PER_PHASE;
 use darkly::brush::input_value::InputValue;
+use darkly::brush::portable::PortableBrush;
 use darkly::brush::resampler::MAX_COMMITS_PER_SAMPLE;
 use darkly::brush::stabilizers::laplacian::relaxed_vertex_updates;
 use darkly::coord::CanvasRect;
@@ -49,15 +50,53 @@ fn fixture(name: &str) -> PathBuf {
         .collect()
 }
 
-fn install_builtin(engine: &mut DarklyEngine, name: &str) {
-    let brush = builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == name)
-        .unwrap_or_else(|| panic!("{name} is a builtin"));
-    let json = serde_json::to_string(&brush.metadata.graph).expect("serialize brush graph");
-    engine
-        .set_brush_graph(&json)
-        .unwrap_or_else(|e| panic!("{name} compiles: {e:?}"));
+/// The deterministic disc engine tests measure through, shared with
+/// `brush_accumulation.rs`: nothing in it is random, so two engines place
+/// bit-identical dabs.
+const ANALYTIC_DISC: &str = include_str!("fixtures/analytic_disc.yaml");
+
+/// What a stroke paints with. Every comparison here is two renders of the
+/// same stroke matched byte for byte, and a shipped brush with a `random`
+/// node draws a fresh stroke seed per engine, so those strokes go through the
+/// disc fixture; a shipped brush is installed only where its behaviour (the
+/// live sampler) is the point of the test.
+#[derive(Clone, Copy)]
+enum Vehicle {
+    Disc,
+    Builtin(&'static str),
+}
+
+impl Vehicle {
+    fn label(self) -> &'static str {
+        match self {
+            Vehicle::Disc => "the disc fixture",
+            Vehicle::Builtin(name) => name,
+        }
+    }
+
+    fn install(self, engine: &mut DarklyEngine) {
+        let (graph, what) = match self {
+            Vehicle::Disc => {
+                let portable: PortableBrush =
+                    serde_yaml_ng::from_str(ANALYTIC_DISC).expect("fixture parses");
+                let brush = portable
+                    .into_brush(darkly::brush::registry(), "fixture")
+                    .expect("fixture builds");
+                (brush.metadata.graph, "the disc fixture")
+            }
+            Vehicle::Builtin(name) => {
+                let brush = builtin_brushes::all()
+                    .into_iter()
+                    .find(|b| b.metadata.name == name)
+                    .unwrap_or_else(|| panic!("{name} is a builtin"));
+                (brush.metadata.graph, name)
+            }
+        };
+        let json = serde_json::to_string(&graph).expect("serialize brush graph");
+        engine
+            .set_brush_graph(&json)
+            .unwrap_or_else(|e| panic!("{what} compiles: {e:?}"));
+    }
 }
 
 fn set_input(engine: &mut DarklyEngine, type_id: &str, port: &str, value: f32) {
@@ -77,10 +116,10 @@ fn set_input(engine: &mut DarklyEngine, type_id: &str, port: &str, value: f32) {
 
 /// A headless engine with `brush` installed at the given stabilizer
 /// strength.
-fn new_engine(canvas: (u32, u32), brush: &str, stabilize: f32) -> DarklyEngine {
+fn new_engine(canvas: (u32, u32), brush: Vehicle, stabilize: f32) -> DarklyEngine {
     let (device, queue) = test_device();
     let mut engine = DarklyEngine::new(GpuContext::new_headless(device, queue), canvas.0, canvas.1);
-    install_builtin(&mut engine, brush);
+    brush.install(&mut engine);
     set_input(&mut engine, "brush_settings", "stabilize", stabilize);
     engine
 }
@@ -174,8 +213,8 @@ fn assert_same(
 
 /// One stroke configuration, run either incrementally (the ring's region
 /// copies) or through the forced full re-render (the oracle).
-struct Cell<'a> {
-    brush: &'a str,
+struct Cell {
+    brush: Vehicle,
     /// `paint.buildup`; `Some` adds the `build` storage channel, so the
     /// ring snapshots and restores two grounds.
     buildup: Option<f32>,
@@ -185,7 +224,7 @@ struct Cell<'a> {
     crop: Option<CanvasRect>,
 }
 
-impl Cell<'_> {
+impl Cell {
     /// The cell's engine at [`STABILIZE`] and zero divergence epsilon, with
     /// a fresh raster layer and the window cropped, before any stroke.
     fn engine(&self) -> (DarklyEngine, LayerId) {
@@ -229,7 +268,7 @@ impl Cell<'_> {
     /// bounds for the caller's structural assertions.
     fn assert_matches_oracle(&self, drive: impl Fn(&mut DarklyEngine, LayerId)) -> CanvasRect {
         assert_same(
-            &format!("{}, buildup {:?}", self.brush, self.buildup),
+            &format!("{}, buildup {:?}", self.brush.label(), self.buildup),
             "incremental rewind",
             self.run(false, &drive),
             "the full re-render",
@@ -282,7 +321,7 @@ fn recorded_ops(canvas: (u32, u32)) -> Vec<StrokeOp> {
 #[test]
 fn checkpoint_saves_share_their_segment_submission() {
     let canvas = (1024, 512);
-    let mut engine = new_engine(canvas, "Ink Pen", STABILIZE);
+    let mut engine = new_engine(canvas, Vehicle::Disc, STABILIZE);
     let layer = engine.add_raster_layer(None);
     let timings = replay_recording(&mut engine, layer, canvas);
     engine.test_flush_readbacks();
@@ -351,7 +390,7 @@ fn recorded_stroke_rewinds_match_full_rerender() {
     // `tests/stroke_replay.rs`.
     let canvas = (1024, 512);
     let cell = Cell {
-        brush: "Ink Pen",
+        brush: Vehicle::Disc,
         buildup: None,
         canvas,
         crop: None,
@@ -361,14 +400,14 @@ fn recorded_stroke_rewinds_match_full_rerender() {
     });
 }
 
-/// Black vertical bars across the layer in the Ink Pen, then `brush`
+/// Black vertical bars across the layer in the disc fixture, then `brush`
 /// back at [`STABILIZE`]: something for a brush that moves existing
 /// pigment to move. The bars stay a dab's reach inside the layer: pigment
 /// at the border would let the smear cross the edge at a dab clipped
 /// before the layer grows, the history `grow_reverse_jump`'s note says a
 /// from-scratch render cannot reproduce.
-fn lay_stripes(engine: &mut DarklyEngine, layer: LayerId, canvas: (u32, u32), brush: &str) {
-    install_builtin(engine, "Ink Pen");
+fn lay_stripes(engine: &mut DarklyEngine, layer: LayerId, canvas: (u32, u32), brush: Vehicle) {
+    Vehicle::Disc.install(engine);
     set_input(engine, "brush_settings", "stabilize", 0.0);
     const INSET: u32 = 64;
     for x in (INSET..canvas.0 - INSET).step_by(48) {
@@ -379,7 +418,7 @@ fn lay_stripes(engine: &mut DarklyEngine, layer: LayerId, canvas: (u32, u32), br
         }
         engine.end_stroke();
     }
-    install_builtin(engine, brush);
+    brush.install(engine);
     set_input(engine, "brush_settings", "stabilize", STABILIZE);
 }
 
@@ -392,13 +431,13 @@ fn lay_stripes(engine: &mut DarklyEngine, layer: LayerId, canvas: (u32, u32), br
 fn live_sampler_rewinds_match_full_rerender() {
     let canvas = (1024, 512);
     let cell = Cell {
-        brush: "Smudge",
+        brush: Vehicle::Builtin("Smudge"),
         buildup: None,
         canvas,
         crop: None,
     };
     cell.assert_matches_oracle(|engine, layer| {
-        lay_stripes(engine, layer, canvas, "Smudge");
+        lay_stripes(engine, layer, canvas, Vehicle::Builtin("Smudge"));
         replay_recording(engine, layer, canvas);
     });
 }
@@ -410,7 +449,7 @@ fn live_sampler_rewinds_match_full_rerender() {
 fn two_grounds_rewind_together() {
     let canvas = (1024, 512);
     let cell = Cell {
-        brush: "Ink Pen",
+        brush: Vehicle::Disc,
         buildup: Some(0.5),
         canvas,
         crop: None,
@@ -428,7 +467,7 @@ fn two_grounds_rewind_together() {
 fn growth_and_crop_rewind_match_full_rerender() {
     for buildup in [None, Some(0.5)] {
         let cell = Cell {
-            brush: "Ink Pen",
+            brush: Vehicle::Disc,
             buildup,
             canvas: (256, 192),
             crop: Some(CanvasRect::from_xywh(16, 8, 224, 176)),
@@ -459,7 +498,7 @@ fn zig_zag_ops(canvas: (u32, u32)) -> Vec<StrokeOp> {
     ops
 }
 
-/// A small Ink Pen at the 1 px spacing floor over a long zig-zag, with no
+/// A small Ink at the 1 px spacing floor over a long zig-zag, with no
 /// frame during the stroke, places more dabs in the pen-up flush's one
 /// segment than one phase holds. The phase splits at the cap, and the layer
 /// matches the same stroke rendered a frame per event, whose phases stay far
@@ -470,7 +509,7 @@ fn headless_stroke_splits_phases_at_the_dab_cap() {
     let canvas = (1024, 256);
     let ops = zig_zag_ops(canvas);
     let run = |drive: fn(&mut DarklyEngine, LayerId, &[StrokeOp])| {
-        let mut engine = new_engine(canvas, "Ink Pen", 0.0);
+        let mut engine = new_engine(canvas, Vehicle::Disc, 0.0);
         set_input(&mut engine, "brush_settings", "size", 0.02);
         set_input(&mut engine, "brush_settings", "spacing", 0.0);
         let layer = engine.add_raster_layer(None);
@@ -484,7 +523,7 @@ fn headless_stroke_splits_phases_at_the_dab_cap() {
         dabs > MAX_DABS_PER_PHASE as u64,
         "the stroke must place more dabs than one phase holds: {dabs}"
     );
-    // The prologue, one per full phase, the tail and the commit. Ink Pen's
+    // The prologue, one per full phase, the tail and the commit. Ink's
     // paint terminal writes its uniform ring once per dab flush, so no ring
     // flush adds a submission.
     assert!(
@@ -493,7 +532,7 @@ fn headless_stroke_splits_phases_at_the_dab_cap() {
     );
     let (framed_layer, _, _) = run(frame_per_event);
     assert_same(
-        "Ink Pen at stabilize 0",
+        "Ink at stabilize 0",
         "headless",
         headless_layer,
         "a frame per event",
@@ -508,7 +547,7 @@ fn headless_stroke_splits_phases_at_the_dab_cap() {
 #[test]
 fn pen_up_flush_saves_no_checkpoints() {
     let canvas = (1024, 512);
-    let mut engine = new_engine(canvas, "Ink Pen", STABILIZE);
+    let mut engine = new_engine(canvas, Vehicle::Disc, STABILIZE);
     let layer = engine.add_raster_layer(None);
     headless(&mut engine, layer, &recorded_ops(canvas));
     let dabs = engine.test_stroke_total_dabs();
@@ -532,7 +571,7 @@ fn pen_up_flush_saves_no_checkpoints() {
 fn live_pen_up_flush_renders_one_segment() {
     let canvas = (1024, 512);
     let cell = Cell {
-        brush: "Ink Pen",
+        brush: Vehicle::Disc,
         buildup: None,
         canvas,
         crop: None,
@@ -565,7 +604,7 @@ fn live_pen_up_flush_renders_one_segment() {
 fn headless_stroke_matches_frame_by_frame() {
     let canvas = (1024, 512);
     let cell = Cell {
-        brush: "Ink Pen",
+        brush: Vehicle::Disc,
         buildup: None,
         canvas,
         crop: None,
@@ -576,7 +615,7 @@ fn headless_stroke_matches_frame_by_frame() {
     let (mut engine, layer) = cell.engine();
     headless(&mut engine, layer, &recorded_ops(canvas));
     assert_same(
-        "Ink Pen",
+        "the disc fixture",
         "headless",
         readback(&mut engine, layer),
         "a flush per event",
@@ -592,7 +631,7 @@ fn headless_stroke_matches_frame_by_frame() {
 fn headless_stroke_relaxes_once() {
     let canvas = (1024, 512);
     let ops = recorded_ops(canvas);
-    let mut engine = new_engine(canvas, "Ink Pen", 0.6);
+    let mut engine = new_engine(canvas, Vehicle::Disc, 0.6);
     let layer = engine.add_raster_layer(None);
     let before = relaxed_vertex_updates();
     headless(&mut engine, layer, &ops);

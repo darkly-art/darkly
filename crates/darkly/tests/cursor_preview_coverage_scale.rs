@@ -12,7 +12,7 @@
 //! What this test pins down:
 //!   - Charcoal recompile → readback → cached scale lifts the cursor
 //!     overlay above an explicit visibility threshold.
-//!   - Ink Pen (already at near-full coverage) stays at ≈1.0: no
+//!   - Ink (already at near-full coverage) stays at ≈1.0: no
 //!     over-boost.
 //!   - The scale tracks brush identity: switching from charcoal to
 //!     ink pen recomputes back down rather than carrying the charcoal
@@ -60,9 +60,9 @@ fn charcoal_cursor_preview_scale_lifts_above_visibility_floor() {
 
 #[test]
 fn ink_pen_cursor_preview_scale_stays_near_unity() {
-    let engine = engine_for_brush("Ink Pen");
+    let engine = engine_for_brush("Ink");
     let scale = engine.cursor_preview_coverage_scale();
-    // Ink Pen is a natural full-coverage brush: its mask averages well
+    // Ink is a natural full-coverage brush: its mask averages well
     // above the target so the formula short-circuits to 1.0 (no boost).
     // A scale above ~1.2 here would mean either the brush regressed
     // toward partial coverage or the formula over-boosts.
@@ -114,7 +114,7 @@ fn switching_brushes_recomputes_scale() {
         "charcoal scale precondition failed, got {charcoal_scale}"
     );
 
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.test_flush_readbacks();
     engine.test_flush_readbacks();
     let ink_pen_scale = engine.cursor_preview_coverage_scale();

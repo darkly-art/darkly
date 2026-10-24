@@ -262,7 +262,7 @@ pub fn graph_capabilities(
 }
 
 /// Build the default brush graph: pressure-sensitive disc through the
-/// compiled `paint` terminal. Same shape as Ink Pen in
+/// compiled `paint` terminal. Same shape as Ink in
 /// [`builtin_brushes`]: `pen → paint_color → circle (sine, amplitude 0)
 /// → stamp → paint`, minus the per-brush configuration
 /// closure (no exposed softness, no flow wire).

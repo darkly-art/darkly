@@ -7,7 +7,7 @@
 //!    identical graphs (independent of node ID allocation) hash to the
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
-//! 2. **The Rough Ink builtin compiles end-to-end**: the framework
+//! 2. **The Ink builtin compiles end-to-end**: the framework
 //!    handles a real graph with random + curve + shape + stamp +
 //!    paint and produces non-empty WGSL.
 
@@ -53,14 +53,14 @@ fn empty_graph_errors_cleanly() {
 
 #[test]
 fn rough_ink_brush_compiles_to_nonempty_wgsl() {
-    // Lift the Rough Ink graph straight from `builtin_brushes::all()`;
+    // Lift the Ink graph straight from `builtin_brushes::all()`;
     // it's the canonical demo brush this framework was built to support,
     // and a quick smoke test that every per-node `compile_wgsl` works in
     // the context of a real graph.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(
@@ -101,8 +101,8 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(
@@ -229,11 +229,11 @@ fn stamp_rotation_counteracts_view_rotation() {
 fn topology_hash_is_stable_for_identical_graphs() {
     let rough_a = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
+        .find(|b| b.metadata.name == "Ink")
         .unwrap();
     let rough_b = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
+        .find(|b| b.metadata.name == "Ink")
         .unwrap();
     let reg = registry();
     let plan_a = compile(&rough_a.metadata.graph, reg.as_map()).unwrap();
@@ -1903,8 +1903,8 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
 
     let mut brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let graph = &mut brush.metadata.graph;
     let paint_id = graph
         .nodes()
@@ -1949,7 +1949,7 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
         ret < load
     };
 
-    // Rough Ink never mentions `buildup`, so it is on the registration
+    // Ink never mentions `buildup`, so it is on the registration
     // default: build-up alone, stored into the ground.
     let default = compile_it(graph);
     assert_eq!(default.dab_pass, DabPass::DispatchPerDab);
@@ -2185,8 +2185,8 @@ fn the_buildup_port_cannot_be_wired() {
     // And the refusal is real on a graph, not just a flag on a registration.
     let mut brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let graph = &mut brush.metadata.graph;
     let pen = graph
         .nodes()

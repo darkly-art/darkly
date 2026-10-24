@@ -388,6 +388,67 @@ fn set_node_name_does_not_advance_topology_version() {
 }
 
 #[test]
+fn exposed_entry_names_its_node_and_port() {
+    // A relabelled brush-bar entry still says which control it drives: the
+    // port's own label (the entry's relabel aside) and the node's title as
+    // the builder shows it, the author's name when there is one.
+    let mut engine = fresh_engine();
+
+    let target = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .next()
+        .expect("default brush exposes at least one port");
+    let type_id = engine
+        .active_brush_graph()
+        .nodes()
+        .get(&darkly::nodegraph::NodeId(target.node_id.clone()))
+        .expect("target node exists in the active graph")
+        .type_id
+        .clone();
+    let reg = darkly::brush::registry()
+        .get(&type_id)
+        .expect("target node type is registered");
+    let reg_label = reg
+        .ports
+        .iter()
+        .find(|p| p.name == target.port_name)
+        .map(|p| p.label.clone())
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| target.port_name.clone());
+
+    engine
+        .brush_graph_set_exposed_port_meta(
+            &target.key,
+            darkly::nodegraph::ExposedPortMeta {
+                label: "Twirl".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("relabel");
+    engine
+        .brush_graph_set_node_name(&target.node_id, "Twirl amount".to_string())
+        .expect("set name");
+
+    let entry = |engine: &DarklyEngine| {
+        engine
+            .brush_exposed_ports()
+            .into_iter()
+            .find(|p| p.key == target.key)
+            .expect("the entry survives the edits")
+    };
+    let named = entry(&engine);
+    assert_eq!(named.label, "Twirl");
+    assert_eq!(named.port_label, reg_label);
+    assert_eq!(named.node_display_name, "Twirl amount");
+
+    engine
+        .brush_graph_set_node_name(&target.node_id, String::new())
+        .expect("clear name");
+    assert_eq!(entry(&engine).node_display_name, reg.display_name);
+}
+
+#[test]
 fn set_node_comment_does_not_advance_topology_version() {
     // A node comment is inert w.r.t. render output and preset identity, so
     // setting one must NOT advance `brush_topology_version`; otherwise the
@@ -450,11 +511,9 @@ fn brush_active_capabilities_reflect_loaded_brush() {
     );
     assert_eq!(caps.preview_fallback_icon, Some("mdi:blur"));
 
-    engine
-        .brush_load("Ink Pen")
-        .expect("Ink Pen is a built-in brush");
+    engine.brush_load("Ink").expect("Ink is a built-in brush");
     let caps = engine.brush_active_capabilities();
-    assert!(caps.supports_erase, "Ink Pen honours erase");
+    assert!(caps.supports_erase, "Ink honours erase");
     assert_eq!(
         caps.preview_fallback_icon, None,
         "content-free brushes keep the baked previews"
@@ -479,9 +538,7 @@ fn graph_change_triggers_active_dab_rebake() {
     // the graph version through `compile_active`. The version mismatch
     // queues a fresh render on the next call (the previous bytes are
     // returned as fallback to avoid a flash to zeros mid-swap).
-    engine
-        .brush_load("Ink Pen")
-        .expect("Ink Pen is a built-in brush");
+    engine.brush_load("Ink").expect("Ink is a built-in brush");
     let _stale_fallback = engine.brush_active_dab_preview();
 
     engine.test_flush_readbacks();
@@ -492,7 +549,7 @@ fn graph_change_triggers_active_dab_rebake() {
     );
     assert_ne!(
         after, before,
-        "swapping Airbrush for Ink Pen should produce different dab pixels"
+        "swapping Airbrush for Ink should produce different dab pixels"
     );
 }
 

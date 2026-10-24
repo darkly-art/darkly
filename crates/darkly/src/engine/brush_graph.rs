@@ -1068,16 +1068,19 @@ impl DarklyEngine {
                 _ => continue,
             };
 
+            // The port as the node card names it: registration label, else
+            // the port name.
+            let port_label = reg_port
+                .map(|rp| &rp.label)
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_else(|| port_name.to_string());
             // Brush-bar entry meta wins; fall back to registration label /
             // description / icon, then to the port name.
             let label = if !meta.label.is_empty() {
                 meta.label.clone()
             } else {
-                reg_port
-                    .map(|rp| &rp.label)
-                    .filter(|l| !l.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| port_name.to_string())
+                port_label.clone()
             };
             let icon = if !meta.icon.is_empty() {
                 meta.icon.clone()
@@ -1097,7 +1100,14 @@ impl DarklyEngine {
                 label,
                 icon,
                 description,
-                node_display_name: reg.map(|r| r.display_name).unwrap_or("").to_string(),
+                port_label,
+                // The node's title as the builder shows it: the author's
+                // name, else the type's display name.
+                node_display_name: if node.name.is_empty() {
+                    reg.map_or("", |r| r.display_name).to_string()
+                } else {
+                    node.name.clone()
+                },
                 data,
             });
         }
@@ -1564,8 +1574,11 @@ pub struct ExposedPortInfo {
     pub node_id: String,
     pub port_name: String,
     pub label: String,
+    /// The target port's own label, ignoring the entry's relabel.
+    pub port_label: String,
     pub icon: String,
     pub description: String,
+    /// The owning node's effective title (author's name, else type name).
     pub node_display_name: String,
     pub data: ExposedValue,
 }

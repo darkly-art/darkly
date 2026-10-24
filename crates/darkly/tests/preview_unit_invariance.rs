@@ -61,17 +61,17 @@ struct Out {
     half_extent_canvas_px: [f32; 2],
 }
 
-/// Render `Ink Pen` at a brush size whose canvas-px bbox exceeds the
+/// Render `Ink` at a brush size whose canvas-px bbox exceeds the
 /// 128² test mask's inscribed half-side (64). The exact size value
-/// is pinned so future default-tuning of `Ink Pen` doesn't drift the
+/// is pinned so future default-tuning of `Ink` doesn't drift the
 /// assertions.
 fn render_big_disc() -> Out {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Ink Pen")
-        .expect("Ink Pen brush is registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink Pen has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).

@@ -118,7 +118,7 @@ describe('freshDocument recipes', () => {
 
     describe('app', () => {
         it('boots the ink pen with a white foreground on a black background', () => {
-            expect(RECIPES.app.defaultBrushName).toBe('Ink Pen');
+            expect(RECIPES.app.defaultBrushName).toBe('Ink');
             expect(RECIPES.app.foreground).toEqual({ r: 255, g: 255, b: 255, a: 255 });
             // Regression: the background swatch was hardcoded to white in app
             // state, so the `app` build shipped white-on-white, an invisible

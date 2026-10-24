@@ -56,7 +56,10 @@ description** from the node definition
 (`PortDef::input(...).with_label(...).with_unit(...)` etc.). Everything under
 the entry overrides that for this brush only. The same edits are available at
 runtime through the brush bar's entry modal, so an author never has to
-hand-edit YAML to rename or re-range a control.
+hand-edit YAML to rename or re-range a control. However an entry is
+relabelled, it stays traceable: the modal names the node and port it
+controls, and in the builder hovering an entry lights the port it drives
+(and hovering an exposed port lights its entry).
 
 `unit:` is worth a word, because it converts rather than just relabelling.
 Percent is a factor of 100 and degrees are radians on the wire, so choosing one
@@ -257,3 +260,88 @@ default can express.
 - **Don't** reach for `user_input` reflexively. If one control feeds one port,
   a brush-bar entry on that port is simpler, and it can be renamed, re-ranged
   and inverted without a node.
+
+## Shipped brushes
+
+Everything under [`crates/darkly/brushes/`](../../crates/darkly/brushes/) is
+embedded by `build.rs` and shipped to every painter, and a shipped brush is
+also a worked example: artists open it in the builder to learn how brushes are
+made. These rules apply to every builtin brush, and a brush that breaks one is
+not ready to ship.
+
+### Every node is named and explained
+
+A builtin brush labels every node and says why it is there. In the YAML that is
+`name:` and `comment:` on the node; the builder shows the name as the node's
+title and the comment as a note beneath it. Both are written for an artist
+reading the graph for the first time.
+
+- **`name:` says what the node is in this brush.** "Paper grain texture" and
+  "Squash pen pressure" tell the artist what they are looking at.
+- **`comment:` is one short sentence saying what the node does for this
+  brush.** Write it the way you would say it across a desk: "Pressure sets the
+  width, eased so a light touch draws a thin line." Describe the effect on the
+  mark; the port descriptions already explain how each knob is defined. A
+  second sentence is earned by a node whose role is central and genuinely
+  complex, such as the paint terminal's accumulation law, and it stays short.
+- **Describe the mark in the artist's own color.** The artist paints in
+  whatever color is current, so say what changes: opacity, coverage, how much
+  color a dab lays down, whether a repeat pass adds anything. "Dark" and
+  "light" belong to a brush whose job is value, such as dodge or burn.
+- **Comment the nodes that need it.** A `pen_input` or `paint_color` with one
+  obvious wire stands on its own header. A node with a tuned input, a curve, a
+  `random`, a `switch`, or more than one outgoing wire gets both a name and a
+  comment.
+
+[`pencil.yaml`](../../crates/darkly/brushes/pencil.yaml) and
+[`ink.yaml`](../../crates/darkly/brushes/ink.yaml) are the models to match.
+
+### Names say what the brush does
+
+Noun first (Pen, Pencil, Chalk, Knife, Wash), behavior second (Flat, Rough,
+Dry, Hard), grades for pencils, and the pressure target named when it is what
+separates two siblings. No person names, author prefixes, sort prefixes or pixel
+sizes. Flavor lives in the `description`, which the picker shows on hover and
+the docs render. The evidence behind this grammar is the Naming section of
+[`brush-packs-prior-art.md`](brush-packs-prior-art.md).
+
+### Exposed knobs read as the artist's, not the graph's
+
+An exposed port whose meaning in this brush differs from the port's own gets a
+`label`, `description` and `icon` on its `exposed_ports` entry (the Pencil's
+`paint.buildup` is exposed as Strength). An entry that inherits is fine only
+when the port's own label is exactly what the knob does here.
+
+Nothing about how the brush is built leaks into what the painter sees: the
+brush bar's labels and tooltips, and the brush's `description` in the picker.
+Port labels are written for the builder, so they carry node-graph and terminal
+vocabulary (which half of the paint law a flow feeds, which node a value comes
+from, which law is active); a painter has no use for any of it. If an
+inherited label or description names a mechanism instead of an effect on the
+mark, override it. The paint terminal's `build_flow` is the standing example:
+its port label is "Flow (Build-up)", and every brush that exposes it says
+"Flow", with a description of how much paint each touch lays down.
+
+### Familiar settings come first
+
+The brush bar shows exposed entries in their `exposed_ports` order, left to
+right, and every brush starts it the same way: Size, then Opacity and Flow,
+then Stabilize, followed by the settings particular to this brush. A painter
+switching brushes finds the controls they reach for most in the same place
+every time, and the brush's own character is what comes after. A brush that
+does not expose one of the familiar settings skips it and keeps the rest in
+order.
+
+### Adding a brush: the checklist
+
+1. Write `crates/darkly/brushes/<id>.yaml` in the portable format described
+   above; `build.rs` embeds it. The file stem is the brush's permanent id.
+2. Add the id to the pack's member list in `crates/darkly/packs/<pack>.yaml`.
+3. Regenerate previews and documentation (`cargo sync-docs`, the graphics
+   runner; see [`docs/generated-markdown.md`](../generated-markdown.md)).
+   `tests/docs_md.rs` fails on a stale region.
+4. Run the brush accumulation and preview tests. A brush that uses `random`
+   needs the fixture approach in
+   [`docs/plans/decouple-tests-from-shipped-brushes.md`](../plans/decouple-tests-from-shipped-brushes.md).
+5. Read the brush back in the builder as an artist would: every node named,
+   every non-obvious node commented, every knob labeled for what it does here.

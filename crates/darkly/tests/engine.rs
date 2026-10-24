@@ -869,11 +869,11 @@ fn stroke_seed_pins_random_nodes() {
         let mut engine = test_engine(w, h);
         let brush = darkly::brush::builtin_brushes::all()
             .into_iter()
-            .find(|b| b.metadata.name == "Rough Ink")
-            .expect("Rough Ink is a builtin");
+            .find(|b| b.metadata.name == "Ink")
+            .expect("Ink is a builtin");
         engine
             .set_brush_graph(&serde_json::to_string(&brush.metadata.graph).unwrap())
-            .expect("Rough Ink compiles");
+            .expect("Ink compiles");
         engine.set_stroke_seed(Some(seed));
         let layer_id = engine.add_raster_layer(None);
         paint_horizontal_stroke(&mut engine, layer_id, w, h);

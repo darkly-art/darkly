@@ -324,7 +324,7 @@ fn live_sampler_compiles_beside_baked_noise_and_image() {
     );
     assert!(compiled.stroke_wgsl.contains("= clone_live_clone_source("));
 
-    for name in ["Clone", "Ink Pen"] {
+    for name in ["Clone", "Ink"] {
         let runner = compile_graph(&builtin(name)).unwrap();
         assert!(
             !runner.compiled_brush().unwrap().reads_stroke_appearance(),

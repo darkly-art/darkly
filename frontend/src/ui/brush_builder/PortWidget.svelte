@@ -307,6 +307,22 @@
     let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
+    /** Lit while this input is the highlighted port. Hovering an exposed
+     *  input points at it in turn, so its brush bar row lights. Leave clears
+     *  only what this port holds, exposed or not, so unexposing a hovered
+     *  port does not strand the light. */
+    let highlighted = $derived(
+        port.dir === 'Input' &&
+            brushGraph.highlightedPort?.node === nodeId &&
+            brushGraph.highlightedPort.port === port.name
+    );
+    function onRowEnter() {
+        if (isExposed) brushGraph.highlightedPort = { node: nodeId, port: port.name };
+    }
+    function onRowLeave() {
+        if (highlighted) brushGraph.highlightedPort = null;
+    }
+
     function toggleExposed(e: MouseEvent) {
         e.stopPropagation();
         if (isExposed) {
@@ -367,11 +383,15 @@
     }
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="port-row"
     class:port-right={side === 'right'}
     class:port-block={showCurve}
+    class:highlighted
     title={regPort?.description || ''}
+    onpointerenter={onRowEnter}
+    onpointerleave={onRowLeave}
 >
     {#if showDot}
         <div
@@ -499,6 +519,10 @@
         gap: 4px;
         height: 18px;
         padding-left: 10px;
+    }
+    .port-row.highlighted {
+        background: color-mix(in srgb, var(--accent) 25%, transparent);
+        border-radius: 3px;
     }
     .port-right {
         flex-direction: row-reverse;

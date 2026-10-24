@@ -135,14 +135,14 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn ink_pen_preview_shows_color_and_shape() {
-    // Ink Pen: pressure=1 → flow=1 → centre pixel must be the seeded
+    // Ink: pressure=1 → flow=1 → centre pixel must be the seeded
     // color at near-full alpha.
-    let out = render_cursor_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink", 0.1, [0.0, 0.6, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
         centre[1] > 100 && centre[0] < 30 && centre[3] > 200,
-        "Ink Pen centre should be green-ish and opaque; got {centre:?}",
+        "Ink centre should be green-ish and opaque; got {centre:?}",
     );
 
     // Sanity-check bbox info published.
@@ -171,14 +171,14 @@ fn airbrush_preview_shows_color_with_alpha_falloff() {
 
 #[test]
 fn rough_ink_preview_shows_color() {
-    let out = render_cursor_preview("Rough Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should be the brush color (orange-ish). Perlin noise can
     // dip flow at the centre, so only assert color, not full opacity.
     assert!(
         centre[0] > centre[2] && centre[3] > 0,
-        "Rough Ink centre should be visible and lean orange; got {centre:?}",
+        "Ink centre should be visible and lean orange; got {centre:?}",
     );
     // (Boundary-variance check lives in `preview_watercolor.rs` against
     // Rough Watercolor: that brush has a much larger amplitude so the

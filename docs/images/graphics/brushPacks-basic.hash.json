@@ -1,7 +1,7 @@
 {
-  "svg": "df9b85ac5c750cc8",
+  "svg": "f52b30a6e54de1de",
   "width": 1444,
-  "height": 396,
+  "height": 584,
   "catalog": "brushPacks",
   "category": null,
   "entry": "basic",
@@ -21,32 +21,44 @@
         "members": {
           "catalog": "brushes",
           "entries": [
+            "ink",
+            "round",
             "airbrush",
-            "calligraphy",
-            "ink_pen",
-            "rough_ink"
+            "technical_pen",
+            "flat_pen",
+            "calligraphy"
           ]
         }
+      },
+      "brushes/ink": {
+        "type": "ink",
+        "displayName": "Ink",
+        "description": "A hard inking nib. Pressure sets the width and nothing else: the line stays solid at any touch. Roughness bites the edge; turn it to zero for a clean round, up for line work that looks bitten rather than printed."
+      },
+      "brushes/round": {
+        "type": "round",
+        "displayName": "Round",
+        "description": "The painter's round: a hard disc that holds its size and lays down more color the harder you press. One pass lays down what the pressure allows; a second pass over it builds. Roughness bites the edge; zero is a clean disc."
       },
       "brushes/airbrush": {
         "type": "airbrush",
         "displayName": "Airbrush",
-        "description": "A fully soft disc that builds color up gradually; hold it in one place and the tone deepens."
+        "description": "A fully soft disc that builds color up gradually; hold it in one place and the color keeps building."
+      },
+      "brushes/technical_pen": {
+        "type": "technical_pen",
+        "displayName": "Technical Pen",
+        "description": "A fineliner: one width, one opacity, whatever the pressure. For ruling, tracing and panel borders, where the line is meant to be the same from end to end. Roughness bites the edge; zero is a clean line."
+      },
+      "brushes/flat_pen": {
+        "type": "flat_pen",
+        "displayName": "Flat Pen",
+        "description": "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets the opacity, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
       },
       "brushes/calligraphy": {
         "type": "calligraphy",
         "displayName": "Calligraphy",
-        "description": "A broad elliptical nib held at a fixed angle, so strokes thicken and thin with direction."
-      },
-      "brushes/ink_pen": {
-        "type": "ink_pen",
-        "displayName": "Ink Pen",
-        "description": "A crisp-edged nib with a slow pressure ramp, for confident line work that holds its weight."
-      },
-      "brushes/rough_ink": {
-        "type": "rough_ink",
-        "displayName": "Rough Ink",
-        "description": "An ink nib whose edge is reshaped at random every dab, producing line work that looks bitten rather than printed."
+        "description": "A broad nib held at a fixed angle, so strokes thicken and thin with direction. Roughness bites the edge; zero is a clean nib."
       }
     }
   }

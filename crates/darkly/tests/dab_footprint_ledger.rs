@@ -61,7 +61,7 @@ fn painted_layer(engine: &mut DarklyEngine) -> LayerId {
     let layer_id = engine.add_raster_layer(None);
     // Liquify pushes existing pigment; give it something to push so the
     // stationary early-out is the only reason a dab could write nothing.
-    set_builtin_brush(engine, "Ink Pen");
+    set_builtin_brush(engine, "Ink");
     engine.begin_stroke(layer_id).unwrap();
     stroke_to(engine, 100.0, 128.0, 0.0);
     stroke_to(engine, 156.0, 128.0, 16.0);

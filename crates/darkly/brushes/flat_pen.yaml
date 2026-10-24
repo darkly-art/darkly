@@ -1,0 +1,74 @@
+name: Flat Pen
+description: "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets the opacity, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
+nodes:
+  pen_input:
+    type: pen_input
+    name: Pen
+  brush_settings:
+    type: brush_settings
+    name: Brush settings
+    comment: Tight spacing so the turning nib does not scallop, and a limited turn rate so it lags the stroke at corners.
+    inputs:
+      stabilize: 0.5
+      spacing: 0.02
+      stamp_angle_rate: 3.1416
+  opacity_curve:
+    type: curve
+    name: Pressure to opacity
+    comment: Pressure sets the opacity, not the width, with a faint floor so the lightest touch still shows.
+    inputs:
+      curve:
+      - - 0.0
+        - 0.04
+      - - 0.5
+        - 0.4
+      - - 1.0
+        - 1.0
+  aspect_draw:
+    type: random
+    name: Aspect per dab
+    comment: A fresh draw every dab, so the nib's thickness wavers along the stroke.
+  aspect:
+    type: remap
+    name: Aspect jitter
+    comment: Keeps the waver within a narrow band around a 3 to 1 nib.
+    inputs:
+      out_low: 0.28
+      out_high: 0.38
+  circle:
+    type: circle
+    name: Nib
+    comment: A flat nib that turns to face the stroke.
+    inputs:
+      softness: 0.1
+  paint_color:
+    type: paint_color
+    name: Ink color
+  stamp:
+    type: stamp
+    name: Stamp
+    comment: The nib filled with the current color.
+  paint:
+    type: paint
+    name: Deposit
+    comment: "Mostly Wash with a little Build-up: crossing your own stroke adds little, but a second stroke layers over the first."
+    inputs:
+      buildup: 0.3
+connections:
+- pen_input.position -> paint.position
+- pen_input.drawing_angle -> circle.rotation_input
+- pen_input.pressure -> opacity_curve.input
+- opacity_curve.output -> paint.wash_flow
+- opacity_curve.output -> paint.build_flow
+- aspect_draw.value -> aspect.input
+- aspect.output -> circle.aspect
+- circle.mask -> stamp.tip
+- paint_color.color -> stamp.color
+- stamp.dab -> paint.rgba
+exposed_ports:
+  brush_settings.size: {}
+  paint.opacity: {}
+  brush_settings.stabilize: {}
+  brush_settings.stamp_angle_rate: {}
+  circle.softness: {}
+  paint.buildup: {}

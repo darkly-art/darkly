@@ -31,7 +31,7 @@
       "brushes/pencil": {
         "type": "pencil",
         "displayName": "Pencil",
-        "description": "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure does not darken it, pressing harder does."
+        "description": "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure adds nothing, pressing harder does."
       },
       "brushes/charcoal": {
         "type": "charcoal",

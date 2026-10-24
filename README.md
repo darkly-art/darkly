@@ -48,7 +48,7 @@ Darkly's unique brushes live inside a node-based system. This enables infinite c
 These are Darkly's builtin brushes.
 
 <!-- darkly:catalog-graphic catalog=brushPacks entry=basic -->
-<img src="docs/images/graphics/brushPacks-basic.jpg" alt="Basic: Airbrush, Calligraphy, Ink Pen, Rough Ink">
+<img src="docs/images/graphics/brushPacks-basic.jpg" alt="Basic: Ink, Round, Airbrush, Technical Pen, Flat Pen, Calligraphy">
 <!-- /darkly:catalog-graphic -->
 
 <!-- darkly:catalog-graphic catalog=brushPacks entry=dry_media -->

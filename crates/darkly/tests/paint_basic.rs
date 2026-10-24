@@ -1,4 +1,4 @@
-//! Smoke tests for the Airbrush / Ink Pen builtins. Each
+//! Smoke tests for the Airbrush / Ink builtins. Each
 //! test loads the actual builtin graph (no test-only rewiring),
 //! renders one dab, and asserts the deposit lands inside its
 //! declared bbox.
@@ -183,7 +183,7 @@ fn count_deposited(rgba: &[u8]) -> usize {
 
 #[test]
 fn airbrush_deposits_softer_than_ink_pen() {
-    // Airbrush has softness=1.0; Ink Pen has 0.1. Centre coverage should
+    // Airbrush has softness=1.0; Ink has 0.1. Centre coverage should
     // still be solid (pressure→opacity is 1.0), but the alpha falloff
     // at the rim is gentler. Smoke-test centre only here, since the softer
     // edge is hard to assert quantitatively without a per-pixel
@@ -234,15 +234,15 @@ fn airbrush_opacity_tracks_pressure() {
 fn ink_pen_deposits_at_center() {
     // Pressure drives `paint.size` directly, so pressure=1.0 renders the
     // full-size crisp disc at the canvas centre.
-    let rgba = render_single_dab("Ink Pen", 0.15, [0.0, 0.0, 1.0, 1.0]);
+    let rgba = render_single_dab("Ink", 0.15, [0.0, 0.0, 1.0, 1.0]);
     let center = center_rgba(&rgba);
     assert!(
         center[2] > 150 && center[0] < 60 && center[1] < 60,
-        "Ink Pen center should be ~blue, got {center:?}"
+        "Ink center should be ~blue, got {center:?}"
     );
     assert!(
         count_deposited(&rgba) > 500,
-        "Ink Pen should deposit a substantial disc, got {} pixels",
+        "Ink should deposit a substantial disc, got {} pixels",
         count_deposited(&rgba),
     );
 }

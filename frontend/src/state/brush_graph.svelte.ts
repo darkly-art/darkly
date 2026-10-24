@@ -234,6 +234,12 @@ export class BrushGraphState {
     /** Currently selected node ID. */
     selectedNode = $state<string | null>(null);
 
+    /** The port some surface is pointing at: the brush bar row under the
+     *  cursor, the entry whose editor is open, or an exposed port row under
+     *  the cursor. Every linked surface writes it on hover and reads it to
+     *  light itself. UI-only: never sent to Rust, never persisted. */
+    highlightedPort = $state<{ node: string; port: string } | null>(null);
+
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
@@ -603,6 +609,9 @@ export class BrushGraphState {
         for (const bmp of this.imageThumbnails.values()) bmp.close();
         this.imageThumbnails.clear();
         this.nodePositions = {};
+        // Node ids restart per brush, so a highlight would light the same id
+        // in the incoming graph.
+        this.highlightedPort = null;
         this.layoutGeneration++;
     }
 

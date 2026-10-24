@@ -20,8 +20,8 @@ connections:
 - 'pen_input.pressure -> blur.size'
 - 'circle.mask -> blur.mask'
 exposed_ports:
-  "brush_settings.stabilize": {}
   "brush_settings.size": {}
+  "blur.opacity": {}
+  "brush_settings.stabilize": {}
   "circle.softness": {}
   "blur.strength": {}
-  "blur.opacity": {}

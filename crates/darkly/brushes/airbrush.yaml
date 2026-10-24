@@ -1,14 +1,16 @@
 name: Airbrush
-description: A fully soft disc that builds color up gradually; hold it in one place and the tone deepens.
+description: A fully soft disc that builds color up gradually; hold it in one place and the color keeps building.
 nodes:
+  pen_input:
+    type: pen_input
+    name: Pen
   brush_settings:
     type: brush_settings
-  circle:
-    type: circle
-    inputs:
-      softness: 1.0
-  curve:
+    name: Brush settings
+  flow_curve:
     type: curve
+    name: Pressure to flow
+    comment: Pressure sets how much each dab adds, eased so a light touch stays delicate.
     inputs:
       curve:
       - - 0.0
@@ -17,24 +19,35 @@ nodes:
         - 0.31422412
       - - 1.0
         - 1.0
-  paint:
-    type: paint
+  circle:
+    type: circle
+    name: Spray
+    comment: A disc at full softness, all falloff and no edge.
+    inputs:
+      softness: 1.0
   paint_color:
     type: paint_color
-  pen_input:
-    type: pen_input
+    name: Paint color
   stamp:
     type: stamp
+    name: Stamp
+    comment: The soft disc filled with the current color.
+  paint:
+    type: paint
+    name: Deposit
+    comment: Dabs keep stacking while the pen lingers.
 connections:
-- circle.mask -> stamp.tip
-- curve.output -> paint.build_flow
-- paint_color.color -> stamp.color
 - pen_input.position -> paint.position
-- pen_input.pressure -> curve.input
+- pen_input.pressure -> flow_curve.input
+- flow_curve.output -> paint.build_flow
+- circle.mask -> stamp.tip
+- paint_color.color -> stamp.color
 - stamp.dab -> paint.rgba
 exposed_ports:
-  brush_settings.stabilize: {}
   brush_settings.size: {}
-  circle.softness: {}
-  paint.build_flow: {}
   paint.opacity: {}
+  paint.build_flow:
+    label: Flow
+    description: How much paint each touch lays down.
+  brush_settings.stabilize: {}
+  circle.softness: {}

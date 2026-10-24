@@ -92,11 +92,11 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             instance.requestFrame();
         },
     },
-    // App: a clean editor, an opaque black layer painted with a white ink pen,
+    // App: a clean editor, an opaque black layer painted with white Ink,
     // and no pre-seeded viewport effects. The feature still exists; it is
     // simply not pre-populated.
     app: {
-        defaultBrushName: 'Ink Pen',
+        defaultBrushName: 'Ink',
         foreground: { r: 255, g: 255, b: 255, a: 255 },
         background: { r: 0, g: 0, b: 0, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackgroundColor({ id, rgba: [0, 0, 0, 255] }),

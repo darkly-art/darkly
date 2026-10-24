@@ -50,7 +50,7 @@ below are generated from the shipped packs (see
 brush's own preview, tinted with its pack's colours.
 
 <!-- darkly:catalog-graphic catalog=brushPacks entry=basic -->
-<img src="../images/graphics/brushPacks-basic.jpg" alt="Basic: Airbrush, Calligraphy, Ink Pen, Rough Ink">
+<img src="../images/graphics/brushPacks-basic.jpg" alt="Basic: Ink, Round, Airbrush, Technical Pen, Flat Pen, Calligraphy">
 <!-- /darkly:catalog-graphic -->
 
 <!-- darkly:catalog-graphic catalog=brushPacks entry=dry_media -->

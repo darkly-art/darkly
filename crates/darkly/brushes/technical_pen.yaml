@@ -1,0 +1,75 @@
+name: Technical Pen
+description: "A fineliner: one width, one opacity, whatever the pressure. For ruling, tracing and panel borders, where the line is meant to be the same from end to end. Roughness bites the edge; zero is a clean line."
+nodes:
+  pen_input:
+    type: pen_input
+    name: Pen
+    comment: Pressure is unwired on purpose; the line is the same at any touch.
+  brush_settings:
+    type: brush_settings
+    name: Brush settings
+    comment: The steadiest brush in the pack, for ruling and tracing.
+    inputs:
+      stabilize: 0.7
+      size: 0.05
+  roughness:
+    type: user_input
+    name: Roughness
+    comment: How far the edge is bitten; zero is a clean line.
+    inputs:
+      value: 0.15
+  bite_draw:
+    type: random
+    name: Bite per dab
+    comment: A fresh bite every dab, so the edge varies along the stroke.
+  bite:
+    type: multiply
+    name: Edge bite
+    comment: Roughness scaled by the per-dab draw.
+  seed_draw:
+    type: random
+    name: Edge pattern per dab
+    comment: A new edge pattern every dab.
+  spin_draw:
+    type: random
+    name: Edge spin per dab
+    comment: Spins the edge pattern each dab so bumps never line up.
+  circle:
+    type: circle
+    name: Nib
+    comment: A hard disc with a finely noisy edge.
+    inputs:
+      algorithm: 1
+      frequency: 12.0
+      octaves: 4.0
+      softness: 0.08
+  paint_color:
+    type: paint_color
+    name: Ink color
+  stamp:
+    type: stamp
+    name: Stamp
+    comment: The nib filled with the current color.
+  paint:
+    type: paint
+    name: Deposit
+    comment: Overlapping dabs and crossings make one solid line.
+connections:
+- pen_input.position -> paint.position
+- roughness.value -> bite.a
+- bite_draw.value -> bite.b
+- bite.result -> circle.amplitude
+- seed_draw.value -> circle.seed
+- spin_draw.value -> circle.rotation_input
+- circle.mask -> stamp.tip
+- paint_color.color -> stamp.color
+- stamp.dab -> paint.rgba
+exposed_ports:
+  brush_settings.size: {}
+  paint.opacity: {}
+  brush_settings.stabilize: {}
+  roughness.value:
+    label: Roughness
+    description: How far the edge of the nib is bitten. Zero is a clean line.
+    icon: tabler:grain
+  circle.softness: {}

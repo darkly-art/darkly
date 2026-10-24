@@ -44,7 +44,7 @@ nodes:
     type: stamp
   paint:
     type: paint
-    comment: Set to Move, so each touch swaps part of what is under the finger for what the finger brought along. A smear can thin an edge as well as thicken it
+    comment: Set to Move, so each touch swaps what is under the finger for what the finger brought along.
     inputs:
       mode: 1
 connections:
@@ -61,10 +61,10 @@ connections:
 - strength.value -> paint.build_flow
 exposed_ports:
   brush_settings.size: {}
+  paint.opacity: {}
   brush_settings.stabilize: {}
   circle.softness: {}
   strength.value:
     label: Strength
     description: How much of what is under the finger moves with each touch
     icon: fa6-solid:droplet
-  paint.opacity: {}
