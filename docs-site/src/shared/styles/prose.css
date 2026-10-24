@@ -1,0 +1,153 @@
+/*
+ * Rendered markdown, for any page that puts it in `.prose`.
+ *
+ * Sibling spacing is `.prose > * + *`, direct children only, so it stops at
+ * the wrapper of any component a page mounts and never gets inside it.
+ * Starlight's content layer spaces every descendant pair instead, roughly
+ * `.sl-markdown-content :not(a, strong, …) + :not(a, strong, …) { margin-top: 1rem }`,
+ * which pushes each button of a segmented switch onto its own line. So
+ * `.not-content` guards only the rules that select an element by name deeply
+ * enough to matter.
+ */
+
+.prose {
+    font-size: 17px;
+    line-height: 1.75;
+    color: var(--text);
+}
+.prose > * + * {
+    margin-top: 1.25em;
+}
+.prose h2,
+.prose h3,
+.prose h4 {
+    font-weight: 200;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+}
+.prose h2 {
+    font-size: 1.75rem;
+    margin-top: 2.5em;
+}
+.prose h3 {
+    font-size: 1.35rem;
+    margin-top: 2em;
+}
+.prose h4 {
+    font-size: 1.1rem;
+    margin-top: 1.75em;
+}
+.prose p {
+    margin: 0;
+}
+.prose :is(ul, ol) {
+    padding-left: 1.5em;
+}
+.prose li + li {
+    margin-top: 0.5em;
+}
+.prose blockquote {
+    margin: 0;
+    padding: 0 0 0 1.25em;
+    border-left: 2px solid var(--accent);
+    color: var(--text-muted);
+    font-style: italic;
+}
+.prose code {
+    background: var(--bg-active);
+    padding: 0.1em 0.4em;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.9em;
+}
+.prose pre {
+    background: var(--bg-raised);
+    padding: 18px 20px;
+    border-radius: var(--radius-md, 6px);
+    overflow-x: auto;
+    font-size: 0.9em;
+    line-height: 1.6;
+}
+.prose pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+}
+.prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md, 6px);
+}
+.prose hr {
+    border: none;
+    border-top: 1px solid var(--bg-active);
+    margin: 2.5em 0;
+}
+.prose a {
+    color: var(--accent-text);
+}
+
+/*
+ * Tables. The `.not-content` guard is what keeps these off a component that
+ * renders its own table and styles it itself.
+ *
+ * `display: block` makes the table its own scroll container: a reference table
+ * is a long description column beside several narrow ones, and it should scroll
+ * rather than widening the page under it.
+ */
+.prose :where(table):not(:where(.not-content *)) {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+    border-collapse: collapse;
+}
+.prose :where(th, td):not(:where(.not-content *)) {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--bg-active);
+    text-align: left;
+}
+
+/*
+ * The floor goes on the description column, not on the table.
+ *
+ * `display: block` alone does not produce a scrolling table; it produces a
+ * squeezed one, because the table still lays out to whatever width it is given
+ * and on a phone that leaves the description about one word wide. But a
+ * `min-width` on the table cannot fix it either: the table *is* the scroll box,
+ * so widening it overflows the page instead of scrolling inside itself.
+ *
+ * Putting the floor on the last cell raises the table's min-content above the
+ * width available, which is what makes it overflow the box it is already
+ * scrolling. Description is the last column of a reference table; the narrow
+ * columns beside it keep sizing to their content.
+ */
+.prose :where(table):not(:where(.not-content *)) :where(td, th):last-child {
+    min-width: 18rem;
+}
+
+/*
+ * Shiki emits both themes on every token and picks one with a CSS variable.
+ * Astro's `defaultColor: false` is what makes that switch ours to drive, so the
+ * theme toggle changes code colors along with everything else: one attribute,
+ * no second stylesheet, no flash.
+ */
+[data-theme='light'] .prose :is(pre, code) {
+    color: var(--shiki-light);
+    background-color: var(--shiki-light-bg);
+}
+[data-theme='light'] .prose :is(pre, code) span {
+    color: var(--shiki-light);
+}
+[data-theme='dark'] .prose :is(pre, code) {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+}
+[data-theme='dark'] .prose :is(pre, code) span {
+    color: var(--shiki-dark);
+}
+/* Inline code keeps our own chip styling; only fenced blocks take Shiki's bg. */
+[data-theme='light'] .prose :not(pre) > code,
+[data-theme='dark'] .prose :not(pre) > code {
+    background: var(--bg-active);
+    color: var(--text);
+}

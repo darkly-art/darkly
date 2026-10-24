@@ -69,7 +69,7 @@ fn main() -> ExitCode {
                     entries.len()
                 );
             }
-            println!("{} - version {}", out.display(), manifest.version);
+            println!("{}", out.display());
             ExitCode::SUCCESS
         }
         Err(e) => {

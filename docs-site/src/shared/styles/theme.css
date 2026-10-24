@@ -1,0 +1,48 @@
+/*
+ * The palette, as custom properties for both themes.
+ *
+ * Black backgrounds with a deep-indigo accent (#5400ff). The accent is dark
+ * enough that it fails contrast as text on black, so anything that renders the
+ * accent *as text* should use --accent-text instead; --accent is for fills,
+ * borders, and gradients.
+ */
+
+:root {
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --transition-fast: 0.1s;
+}
+
+.dark,
+[data-theme='dark'] {
+    --bg:           #000000;
+    --bg-raised:    #0b0912;
+    --bg-hover:     #16112a;
+    --bg-active:    #241a3d;
+    --text:         #cccccc;
+    --text-muted:   #6f6a80;
+    --text-dim:     #454052;
+    --accent:       #5400ff;
+    --accent-text:  #9b83ff;
+    --accent-hover: #6a24ff;
+    --danger:       #e05555;
+    --thumb-bg:     #333333;
+    --canvas-bg:    #2a2a2a;
+}
+
+.light,
+[data-theme='light'] {
+    --bg:           #ffffff;
+    --bg-raised:    #f5f3fb;
+    --bg-hover:     #ebe6f8;
+    --bg-active:    #dcd4f0;
+    --text:         #1b1826;
+    --text-muted:   #6f6a80;
+    --text-dim:     #a9a3bb;
+    --accent:       #5400ff;
+    --accent-text:  #4a00e0;
+    --accent-hover: #6a24ff;
+    --danger:       #cc3b3b;
+    --thumb-bg:     #cccccc;
+    --canvas-bg:    #d0d0d0;
+}

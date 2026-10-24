@@ -10,6 +10,12 @@ homepage = "https://github.com/darkly-art/darkly"
 readme = "README.md"
 keywords = ["paint", "gpu", "webgpu", "graphics", "wgpu"]
 categories = ["graphics", "rendering", "wasm"]
+# Left out of the published package: a consumer of the crate builds neither,
+# and crates.io caps a `.crate` at 10 MiB (the CI package job checks it), of
+# which the embedded fonts and textures already take most. Everything the
+# library compiles from, including the Krita importer's test data under
+# `src/`, is still packaged.
+exclude = ["tests/", "bench-results/"]
 
 [features]
 profile = []

@@ -13,6 +13,7 @@
 
 [![itch.io](https://img.shields.io/badge/itch.io-black?logo=itchdotio&logoColor=9500ff&style=for-the-badge&labelColor=black)](https://darklyart.itch.io/darkly)
 [![Flathub](https://img.shields.io/flathub/v/art.darkly.Darkly?label=Flathub&logo=flathub&logoColor=6914ff&style=for-the-badge&labelColor=black&color=6914ff)](https://flathub.org/en/apps/art.darkly.Darkly)
+[![winget](https://img.shields.io/winget/v/Darkly.Darkly?label=winget&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzQ0MDBmZiIgZD0iTTAsMEgxMS4zNzdWMTEuMzcySDBaTTEyLjYyMywwSDI0VjExLjM3MkgxMi42MjNaTTAsMTIuNjIzSDExLjM3N1YyNEgwWm0xMi42MjMsMEgyNFYyNEgxMi42MjMiLz48L3N2Zz4=&style=for-the-badge&labelColor=black&color=4400ff)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/d/Darkly/Darkly)
 
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
@@ -45,6 +46,30 @@ https://github.com/user-attachments/assets/1fc0632d-5846-4c64-bac8-e39b0794b8b5
 ![brush-engine-screenshot](https://github.com/user-attachments/assets/67f8826e-a5b5-4cbe-83e1-3e29246c293c)
 
 Darkly's unique brushes live inside a node-based system. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
+
+### Brush Packs
+
+These are Darkly's builtin brushes.
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=basic -->
+<img src="docs/images/graphics/brushPacks-basic.jpg" alt="Basic: Airbrush, Calligraphy, Ink Pen, Rough Ink">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=dry_media -->
+<img src="docs/images/graphics/brushPacks-dry_media.jpg" alt="Dry Media: Pencil, Charcoal, Hair, Sponge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=wet_media -->
+<img src="docs/images/graphics/brushPacks-wet_media.jpg" alt="Wet Media: Rough Watercolor, Smooth Watercolor">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=effects -->
+<img src="docs/images/graphics/brushPacks-effects.jpg" alt="Effects: Blur, Liquify, Smudge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=misc -->
+<img src="docs/images/graphics/brushPacks-misc.jpg" alt="Misc: Clone">
+<!-- /darkly:catalog-graphic -->
 
 ## Dark Arts
 

@@ -86,8 +86,10 @@ wbg_aarch64=$(sidecar "$wbg_dist/wasm-bindgen-$wbg-aarch64-unknown-linux-musl.ta
 
 # shellcheck disable=SC2086  # the overrides may carry an interpreter
 $FLATPAK_CARGO_GENERATOR Cargo.lock -o "$out/cargo-sources.json"
-# `-r` walks the tree for every package-lock.json: frontend/ and desktop/.
-$FLATPAK_NODE_GENERATOR -r -R package-lock.json -o "$out/generated-sources.json" npm package-lock.json
+# `-r` walks the tree for every package-lock.json, and `-R` keeps only the
+# two the app is built from: docs-site/ is not part of it.
+$FLATPAK_NODE_GENERATOR -r -R frontend/package-lock.json -R desktop/package-lock.json \
+  -o "$out/generated-sources.json" npm package-lock.json
 
 sed -e "s|@COMMIT@|$commit|g" \
     -e "s|@RUST_VERSION@|$rust|g" \
