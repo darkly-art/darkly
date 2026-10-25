@@ -85,7 +85,7 @@ fn set_input(engine: &mut DarklyEngine, type_id: &str, port: &str, value: f32) {
         .unwrap_or_else(|e| panic!("{type_id}.{port}: {e:?}"));
 }
 
-fn event(x: f32, y: f32, t: f64, rgb: [f32; 3]) -> StrokeOp {
+fn event(x: f32, y: f32, t: f64) -> StrokeOp {
     StrokeOp::BrushStroke {
         x,
         y,
@@ -95,10 +95,6 @@ fn event(x: f32, y: f32, t: f64, rgb: [f32; 3]) -> StrokeOp {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: t,
-        cr: rgb[0],
-        cg: rgb[1],
-        cb: rgb[2],
-        ca: 1.0,
     }
 }
 
@@ -107,7 +103,7 @@ fn stroke_row(engine: &mut DarklyEngine, layer: LayerId, y: f32, x0: f32, x1: f3
     engine.begin_stroke(layer).unwrap();
     for i in 0..=steps {
         let x = x0 + (x1 - x0) * (i as f32 / steps as f32);
-        engine.stroke_to(event(x, y, i as f64 * 16.0, [0.0, 0.0, 0.0]));
+        engine.stroke_to(event(x, y, i as f64 * 16.0));
     }
     engine.end_stroke();
     engine.test_flush_readbacks();
@@ -373,11 +369,12 @@ fn coloured_wash_is_spacing_independent_within_two_lsb() {
             .unwrap_or_else(|e| panic!("fixture compiles: {e:?}"));
         set_input(&mut engine, "brush_settings", "spacing", spacing);
         let layer = engine.add_raster_layer(None);
+        engine.set_foreground_color([PIGMENT[0], PIGMENT[1], PIGMENT[2], 1.0]);
         engine.begin_stroke(layer).unwrap();
         const SAMPLES: u32 = 40;
         for i in 0..SAMPLES {
             let x = 8.0 + i as f32 * ((W as f32 - 16.0) / SAMPLES as f32);
-            engine.stroke_to(event(x, (H / 2) as f32, i as f64 * 16.0, PIGMENT));
+            engine.stroke_to(event(x, (H / 2) as f32, i as f64 * 16.0));
         }
         engine.end_stroke();
         engine.test_flush_readbacks();

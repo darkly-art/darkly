@@ -24,6 +24,8 @@
         close();
     }
 
+    // Capture phase, so the Escape this consumes never reaches the hotkeys
+    // (where it would discard an open edit session) or the canvas.
     function onKeydown(e: KeyboardEvent) {
         if (open && e.key === 'Escape') {
             e.preventDefault();
@@ -36,7 +38,7 @@
     $effect(() => watchDismiss('menu', close));
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} />
 
 <div class="hamburger-container">
     <button class="icon-btn square hamburger-btn" data-keep-open="menu" onclick={toggle} title="Menu">

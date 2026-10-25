@@ -1,25 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
-import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
+import { BrushGraphState } from '../brush_graph.svelte';
 import { recentBrushes, recentColors } from '../recents.svelte';
+import { fakeBrushEngine } from './fakeBrushEngine';
 
-const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
-
-/** Engine stub covering `loadBrush`'s refresh chain. `brushLoad` either
- *  resolves or rejects, which is the branch under test. */
+/** `loadBrush`'s refresh chain, with `brushLoad` resolving or rejecting,
+ *  which is the branch under test. */
 function fakeEngine(loadOk: boolean) {
-    return {
-        api: {
-            brushLoad: async () => {
-                if (!loadOk) throw new Error('no such brush');
-                return null;
-            },
-            brushGraphActive: async () => emptyGraph,
-            brushExposedPorts: async () => [],
-            brushActiveCapabilities: async () => ({}),
-            brushTopologyVersion: async () => ({ value: 0 }),
-        },
-    } as unknown as NonNullable<typeof app.engine>;
+    const fake = fakeBrushEngine({}, { 'Ink Pen': 'ink_pen' });
+    fake.loadOk = loadOk;
+    return fake.engine;
 }
 
 let inst: DarklyInstance;

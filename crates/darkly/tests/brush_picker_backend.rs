@@ -298,11 +298,9 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // the icon visually unchanged. Verified end-to-end: render, scrub
     // size, render again, compare bytes.
     //
-    // Also locks in the topology-version contract the brush-bar UI relies
-    // on: a scrub must not advance `brush_topology_version`. The frontend
-    // uses that counter to decide whether the active preset name still
-    // applies: a false bump would flip "Airbrush" → "Custom" on every
-    // size drag. Regression for that bug lives here, against the same
+    // Also locks in the topology-version contract the dab cache keys off:
+    // a scrub must not advance `brush_topology_version`, or every size drag
+    // would invalidate the dab thumbnail. Checked here, against the same
     // engine, to avoid creating an extra wgpu device in parallel.
     let mut engine = fresh_engine();
 
@@ -326,7 +324,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
         engine.brush_topology_version(),
         topo_before_scrub,
         "exposed-port scrub must not advance the topology version: \
-         the frontend uses this to keep the active preset name across scrubs"
+         the dab cache keys off it"
     );
 
     // Drain any in-flight readback queued by the scrub. If the cache
@@ -340,7 +338,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     );
 
     // Conversely, a structural change MUST advance the topology version,
-    // so the frontend correctly clears the preset name. Unexpose a port:
+    // so the dab cache rebakes. Unexpose a port:
     // cheaper than brush_load and avoids extra GPU work (no
     // compile_active call), but still classified as topology.
     let topo_before_toggle = engine.brush_topology_version();
@@ -356,11 +354,10 @@ fn size_scrub_does_not_change_active_dab_pixels() {
 
 #[test]
 fn set_node_name_does_not_advance_topology_version() {
-    // An author-chosen node name is a label: inert w.r.t. render output and
-    // preset identity, so naming a node must NOT advance
-    // `brush_topology_version` and flip the brush bar's active preset to
-    // "Custom". The name must still land on the graph, and the node must
-    // still be addressable by the id it was named under.
+    // An author-chosen node name is a label: inert w.r.t. render output, so
+    // naming a node must NOT advance `brush_topology_version` and rebake the
+    // dab thumbnail. The name must still land on the graph, and the node
+    // must still be addressable by the id it was named under.
     let mut engine = fresh_engine();
 
     let target = engine
@@ -450,10 +447,10 @@ fn exposed_entry_names_its_node_and_port() {
 
 #[test]
 fn set_node_comment_does_not_advance_topology_version() {
-    // A node comment is inert w.r.t. render output and preset identity, so
-    // setting one must NOT advance `brush_topology_version`; otherwise the
-    // brush bar would flip the active preset name to "Custom" the moment a
-    // artist annotated a node. The comment must still land on the graph.
+    // A node comment is inert w.r.t. render output, so setting one must NOT
+    // advance `brush_topology_version` and rebake the dab thumbnail the
+    // moment an artist annotates a node. The comment must still land on the
+    // graph.
     let mut engine = fresh_engine();
 
     let target = engine

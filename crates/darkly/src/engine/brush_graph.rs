@@ -3,10 +3,13 @@
 //! Provides the API surface for the WASM bridge to query node types,
 //! get/set the active brush graph, and compile graphs.
 
+use std::collections::HashMap;
+
 use darkly_macros::handlers;
 
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::input_value::InputValue;
+use crate::brush::pack::BrushId;
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
 use crate::document::canvas_per_reference_px;
@@ -53,6 +56,21 @@ enum ChangeKind {
     /// Either way the rendered output cannot change in response to the
     /// scrub, so neither cache needs to bump.
     PreviewIrrelevantScrub,
+}
+
+/// Every input port's current value in `graph`, keyed by (node id, port
+/// name): a brush's double-click reset baseline. Raw port-space values.
+pub(super) fn port_defaults(graph: &Graph<BrushWireType>) -> HashMap<(NodeId, String), f32> {
+    graph
+        .nodes()
+        .values()
+        .flat_map(|node| {
+            node.ports
+                .iter()
+                .filter(|port| port.dir == PortDir::Input)
+                .map(|port| ((node.id.clone(), port.name.clone()), port.value.as_f32()))
+        })
+        .collect()
 }
 
 #[handlers]
@@ -102,23 +120,14 @@ impl DarklyEngine {
     /// Compile a brush graph from JSON and set it as the active graph.
     ///
     /// The next stroke will use this graph.  Returns `Ok(())` on success
-    /// or an error string if the graph is invalid.
+    /// or an error string if the graph is invalid. The graph belongs to no
+    /// library brush, so whichever brush was loaded is left (its tweaks
+    /// stashed) and none is loaded afterwards.
     pub fn set_brush_graph(&mut self, json: &str) -> Result<(), String> {
-        // Validate by attempting compilation.
-        let _runner = crate::brush::compile_from_json(json)?;
-        // If compilation succeeded, store the deserialized graph.
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
-        self.tool_session
-            .write()
-            .get_mut::<BrushState>()
-            .expect(NO_BRUSH_STATE)
-            .graph = graph;
-        self.snapshot_brush_defaults();
-        // Run the post-mutation pipeline so the brush preview mask (and any
-        // other graph-dependent state) refreshes from the new graph.
-        self.compile_active(ChangeKind::Topology)?;
-        Ok(())
+        let defaults = port_defaults(&graph);
+        self.install_brush_graph(graph, defaults, None)
     }
 
     /// Export the active brush graph as the human/AI-friendly YAML
@@ -136,56 +145,93 @@ impl DarklyEngine {
     /// Replace the active brush graph from a YAML string in the
     /// [`PortableBrush`](crate::brush::portable::PortableBrush) format.
     /// Validates and compiles before swapping; on failure the previous
-    /// graph is untouched and an error string describes the problem.
+    /// graph is untouched and an error string describes the problem. Like
+    /// [`Self::set_brush_graph`], the imported graph is nobody's.
     pub fn set_brush_graph_yaml(&mut self, yaml: &str) -> Result<(), String> {
         let portable: crate::brush::portable::PortableBrush =
             serde_yaml_ng::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
         let registry = crate::brush::registry();
         let graph = portable.into_graph(registry)?;
-        self.tool_session
-            .write()
-            .get_mut::<BrushState>()
-            .expect(NO_BRUSH_STATE)
-            .graph = graph;
-        self.snapshot_brush_defaults();
-        self.compile_active(ChangeKind::Topology)?;
-        Ok(())
+        let defaults = port_defaults(&graph);
+        self.install_brush_graph(graph, defaults, None)
     }
 
-    /// Reset the active brush graph to the built-in default.
+    /// Reset the active brush graph to the built-in default, discarding the
+    /// loaded brush's tweaks: this is the painter throwing them away, not
+    /// putting them aside.
     pub fn reset_brush_graph(&mut self) {
-        self.tool_session
-            .write()
-            .get_mut::<BrushState>()
-            .expect(NO_BRUSH_STATE)
-            .graph = crate::brush::default_graph();
-        self.snapshot_brush_defaults();
-        let _ = self.compile_active(ChangeKind::Topology);
+        self.with_brush_state_mut(BrushState::discard_loaded);
+        let graph = crate::brush::default_graph();
+        let defaults = port_defaults(&graph);
+        let _ = self.install_brush_graph(graph, defaults, None);
     }
 
-    /// Capture every input port's current default into the shared brush
-    /// state's `defaults` map. Called whenever the active graph is
-    /// replaced as a whole (brush load, reset, save) so that "reset to
-    /// default" returns to the loaded/saved baseline rather than the
-    /// node-type registration value. Not called on individual port edits;
+    /// Make `graph` the live brush graph, belonging to library brush `loaded`
+    /// (or to none), with `defaults` as its double-click reset baseline.
+    ///
+    /// Validates first, so a graph that does not compile changes nothing: the
+    /// previous graph stays live, the loaded brush stays loaded, and no
+    /// working copy is touched. Then leaves the loaded brush (stashing its
+    /// tweaks) and installs.
+    ///
+    /// `defaults` may lack entries for nodes a working copy added to its
+    /// saved brush; `brush_exposed_ports` falls back to the node type's
+    /// registration default for those, which is the right baseline for a
+    /// node the saved brush never had.
+    pub(crate) fn install_brush_graph(
+        &mut self,
+        graph: Graph<BrushWireType>,
+        defaults: HashMap<(NodeId, String), f32>,
+        loaded: Option<BrushId>,
+    ) -> Result<(), String> {
+        crate::brush::compile_graph(&graph)?;
+        self.leave_loaded_brush();
+        self.with_brush_state_mut(|brush| {
+            brush.graph = graph;
+            brush.defaults = defaults;
+            brush.loaded = loaded;
+        });
+        // Run the post-mutation pipeline so the brush preview mask (and any
+        // other graph-dependent state) refreshes from the new graph.
+        self.compile_active(ChangeKind::Topology)
+    }
+
+    /// Stash the loaded brush's tweaks, if it has any, and unload it. The
+    /// saved graph is copied out of the library before the brush state is
+    /// written, so the library borrow never overlaps an engine write.
+    fn leave_loaded_brush(&mut self) {
+        let Some(id) = self.with_brush_state(|b| b.loaded.clone()) else {
+            return;
+        };
+        let saved =
+            crate::brush::library::with(|lib| lib.get(&id).map(|b| b.metadata.graph.clone()));
+        self.with_brush_state_mut(|b| b.stash_loaded(saved.as_ref()));
+    }
+
+    /// Run `f` against the shared brush state under a read lock.
+    pub(crate) fn with_brush_state<R>(&self, f: impl FnOnce(&BrushState) -> R) -> R {
+        f(self
+            .tool_session
+            .read()
+            .get::<BrushState>()
+            .expect(NO_BRUSH_STATE))
+    }
+
+    /// Run `f` against the shared brush state under a write lock.
+    pub(crate) fn with_brush_state_mut<R>(&self, f: impl FnOnce(&mut BrushState) -> R) -> R {
+        f(self
+            .tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE))
+    }
+
+    /// Make the live graph its own reset baseline. Called when the live graph
+    /// becomes what a brush is, by saving it, so that "reset to default"
+    /// returns to what was just saved. Not called on individual port edits;
     /// that's the whole point.
     pub(crate) fn snapshot_brush_defaults(&mut self) {
-        let mut tool = self.tool_session.write();
-        let brush = tool.get_mut::<BrushState>().expect(NO_BRUSH_STATE);
-        brush.defaults.clear();
-        // Re-borrow split: walking `brush.graph.nodes()` and inserting
-        // into `brush.defaults` are reads/writes of disjoint fields on
-        // `BrushState`, so the borrow checker permits both inside the
-        // loop with no separate snapshot.
-        for node in brush.graph.nodes().values() {
-            for port in &node.ports {
-                if port.dir == PortDir::Input {
-                    brush
-                        .defaults
-                        .insert((node.id.clone(), port.name.clone()), port.value.as_f32());
-                }
-            }
-        }
+        self.with_brush_state_mut(|brush| brush.defaults = port_defaults(&brush.graph));
     }
 
     // --- Fine-grained graph commands ---
@@ -456,6 +502,11 @@ impl DarklyEngine {
         // size, rotation, and tip changes all land here.
         self.regenerate_brush_cursor_preview();
 
+        // Every brush change reaches the last stroke too, when the artist is
+        // editing it, whatever kind of change it was: a scrub the previews
+        // ignore (size, stabilization) still changes a real stroke.
+        self.redraw_last_stroke();
+
         Ok(())
     }
 
@@ -497,7 +548,7 @@ impl DarklyEngine {
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
 
         // Caller's frontend treats an empty Vec as "no fresh bytes
         // available" and skips the image update, preserving whatever was
@@ -574,7 +625,7 @@ impl DarklyEngine {
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
         // uniform rings.
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
 
         // See `brush_stroke_preview` for why we return an empty Vec rather
         // than a zero-filled one when no cache is available: frontends
@@ -629,7 +680,7 @@ impl DarklyEngine {
         // Guard against painting while a real stroke is in flight: the
         // preview shares GPU state with the engine (see
         // `brush_active_dab_preview`).
-        let in_stroke = self.brush_stroke_engine.is_some();
+        let in_stroke = self.brush_stroke.is_some();
         let current_topology = self.brush_topology_version();
 
         let cached_bytes = self.node_preview_cache.get(node_id).map(|(_, b)| b.clone());
@@ -974,6 +1025,7 @@ impl DarklyEngine {
     #[handler]
     pub fn set_brush_blend_mode(&mut self, mode: u32) {
         self.brush_blend_mode = mode;
+        self.redraw_last_stroke();
     }
 
     /// Return info about every brush-bar entry in the active brush graph,
@@ -1176,9 +1228,9 @@ impl DarklyEngine {
         })
     }
 
-    /// Add a brush-bar entry. Idempotent. Bumps the topology version so
-    /// the frontend treats the change as structural and clears the active
-    /// preset name. No recompile: exposure doesn't affect render output.
+    /// Add a brush-bar entry. Idempotent. Bumps the topology version: the
+    /// brush bar is part of the brush's identity. No recompile: exposure
+    /// doesn't affect render output.
     #[handler(returns = graph)]
     pub fn brush_graph_expose_port(
         &mut self,
@@ -1217,9 +1269,9 @@ impl DarklyEngine {
 
     /// Set (or clear, with an empty string) a node's author comment.
     /// Deliberately bumps no version: a comment is inert w.r.t. render
-    /// output and preset identity, so it must not clear the active preset
-    /// name or invalidate the dab-thumbnail cache. `applyResult` refreshes
-    /// the frontend graph from the returned JSON regardless.
+    /// output, so it must not invalidate the dab-thumbnail cache.
+    /// `applyResult` refreshes the frontend graph from the returned JSON
+    /// regardless.
     #[handler(returns = graph)]
     pub fn brush_graph_set_node_comment(
         &mut self,
@@ -1276,8 +1328,8 @@ impl DarklyEngine {
     }
 
     /// Remove a brush-bar entry. Idempotent (missing entries aren't an
-    /// error). Bumps the topology version so the frontend clears the
-    /// active preset name.
+    /// error). Bumps the topology version: the brush bar is part of the
+    /// brush's identity.
     #[handler(returns = graph)]
     pub fn brush_graph_unexpose_port(
         &mut self,

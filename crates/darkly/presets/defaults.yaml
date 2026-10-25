@@ -4,20 +4,24 @@
 #
 # Hotkeys / mouse_clicks inclusion rule:
 #
-#   1. A binding lives here iff Krita, Photoshop, and GIMP all agree on its
-#      value. Verify against the actual editor sources (krita/, gimp/, and
-#      Photoshop docs), not against memory or web claims, before adding.
+#   1. A binding lives here iff every reference editor (one per overlay in
+#      this directory) agrees on its value. Verify against the actual editor
+#      sources (krita/, gimp/) or the vendor's own documentation, not against
+#      memory or web claims, before adding.
 #
 #   2. Darkly-original actions (no reference editor has any prior art) also
 #      live here. Mark them explicitly so reviewers don't mistake them for #1.
 #
-#   3. Anything else (any binding where the editors disagree, or where some
-#      editors have an opinion and others don't) must be split into each
-#      per-editor overlay (krita.yaml / photoshop.yaml / gimp.yaml). The
+#   3. Anything else must be split into each per-editor overlay. That covers
+#      any binding where the editors disagree, where some editors have an
+#      opinion and others don't, and any binding whose key some editor
+#      spends on a different command or tool (even one Darkly lacks). The
 #      `user → overlay → defaults` fallthrough makes silent inheritance the
 #      default; this rule keeps the per-editor file authoritative for any
 #      action that any editor would assign a key to, so an overlay can't
-#      accidentally reuse the same key for a different action.
+#      accidentally reuse the same key for a different action. An overlay
+#      cannot drop a binding inherited from here (the config tests enforce
+#      it), so a contested binding has to leave this file.
 #
 # Settings inclusion rule: Darkly-specific configuration (canvas size,
 # animation rates, theme, …) that has no direct reference-editor analog
@@ -25,8 +29,8 @@
 # tools.colorPickerSampleSource) are split into the per-editor overlays.
 
 hotkeys:
-  # Universal edit / clipboard / file bindings: all three editors agree.
-  # (redo, pasteInPlace differ between editors and live per-overlay.)
+  # Universal edit / clipboard / file bindings: every reference editor
+  # agrees. (redo, pasteInPlace differ between editors and live per-overlay.)
   undo: $mod+KeyZ
   copy: $mod+KeyC
   cut: $mod+KeyX
@@ -34,39 +38,45 @@ hotkeys:
   saveDocument: $mod+KeyS
   saveDocumentAs: $mod+Shift+KeyS
   open: $mod+KeyO
+  # File > New: Krita `file_new` (kritamenu.action), GIMP `image-new`
+  # (image-actions.c), Photoshop and Clip Studio Paint all use $mod+N.
+  newDocument: $mod+KeyN
   # Darkly-original: no reference editor has a paste-as-smart-object
   # analogue, so there is no convention to inherit and this lives in
   # defaults rather than per-overlay. Verified free of collisions in
-  # defaults and all three overlays (the only other KeyV bindings are
+  # defaults and every overlay (the only other KeyV bindings are
   # `paste` here and `pasteInPlace` per-overlay).
   pasteAsSmartObject: $mod+Alt+Shift+KeyV
   selectAll: $mod+KeyA
-  # Floating-selection commit / cancel. Enter / Escape are the universal
-  # commit/cancel keys across PS, Krita, and GIMP's floating-selection
-  # handlers.
   clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
-  # Colors: all three editors use D to reset, X to swap.
-  resetColors: KeyD
+  # Apply / discard the open edit session (a transform, pasted content,
+  # stroke edit). Enter / Escape are the universal commit/cancel keys:
+  # Krita's tool-invocation Confirm / Cancel, GIMP's tool-widget CONFIRM /
+  # CANCEL, PS's floating-selection handlers, and Clip Studio Paint's
+  # transform confirm / cancel.
+  applyEditSession: Enter
+  discardEditSession: Escape
+  # Colors: every reference editor uses X to swap. (Reset is per-overlay:
+  # Clip Studio Paint has no reset and spends D on a tool.)
   swapColors: KeyX
   # Brush parameter hotkeys: `[` / `]` is the universal sizing convention.
   brushSizeUp: BracketRight
   brushSizeDown: BracketLeft
+  # Darkly-original (rule #2): cycling by recency has no reference-editor
+  # analog. Krita's `/` is "Switch to Previous Preset" (krita/krita/krita.action
+  # previous_preset), a single slot with no chain; Photoshop's `,` / `.` and
+  # GIMP's unbound context-brush-select-previous/next walk list order. The key
+  # follows Krita, the one editor with a brush-recall key. Verified free in
+  # defaults and all four overlays (Photoshop's `/` is transparency lock, GIMP's
+  # is action search, Clip Studio Paint's is the Zoom tool; none of those
+  # actions exist in Darkly).
+  cycleRecentBrush: Slash
   # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
   # default. Darkly picks the macOS preferences convention.
   openSettings: $mod+Comma
   # Image export is folded into Save As (the save picker's type dropdown
   # offers PNG/JPEG/WebP alongside `.darkly`), so there's no separate
   # export-image hotkey; Save As ($mod+Shift+KeyS) covers it.
-  # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
-  # selection-tool .action files have empty <shortcut>; GIMP's analog is
-  # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
-  # Photoshop's choice; per-editor overlays can override.
-  lassoSelectTool: KeyL
-  polygonSelectTool: Shift+KeyL
-  # Krita binds View > Mirror View to M; Photoshop/GIMP have no default.
-  mirrorViewH: KeyM
   # Canvas resize. Photoshop binds Image Size to $mod+Alt+I and Canvas Size
   # to $mod+Alt+C; GIMP/Krita have no default for canvas size. Darkly takes
   # Photoshop's Canvas Size binding. `cropToSelection` stays menu-only (no
@@ -74,6 +84,12 @@ hotkeys:
   resizeCanvas: $mod+Alt+KeyC
   # Darkly-original (brush builder): no reference-editor prior art.
   addBrushNode: Shift+KeyA
+  # Darkly-original (stroke edit): no reference editor redraws a finished
+  # raster stroke with new brush settings. Plain Y follows the nearest
+  # analog, Clip Studio Paint's Correct Line tools (Redraw vector line) on
+  # Y. GIMP (MyPaint Brush) and Photoshop (History Brush) spend Y on tools
+  # Darkly lacks, and no overlay binds plain Y.
+  toggleStrokeEdit: KeyY
   # Darkly-original (command palette). No Krita/PS/GIMP prior art, so it
   # belongs here rather than a per-editor overlay. Follows the VS Code
   # convention for a command palette ($mod+Shift+P), plus $mod+F as a

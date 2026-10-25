@@ -27,6 +27,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 
 /// Paint a horizontal brush stroke at plane-y `py`, sweeping plane-x `[x0, x1)`.
 fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1: f32) {
+    engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     let steps = 48;
     for i in 0..=steps {
@@ -40,10 +41,6 @@ fn paint_row(engine: &mut DarklyEngine, layer_id: LayerId, py: f32, x0: f32, x1:
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -857,6 +854,7 @@ fn crop_to_selection_matches_selection_bounds() {
 /// present yields equal arms, an anisotropic (squashed) present unequal arms.
 fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, arm: f32) {
     for horizontal in [true, false] {
+        engine.set_foreground_color([1.0, 0.0, 0.0, 1.0]);
         engine.begin_stroke(layer_id).unwrap();
         let steps = 48;
         for i in 0..=steps {
@@ -875,10 +873,6 @@ fn paint_cross(engine: &mut DarklyEngine, layer_id: LayerId, cx: f32, cy: f32, a
                 rotation: 0.0,
                 tangential_pressure: 0.0,
                 time_ms: i as f64 * 16.0,
-                cr: 1.0,
-                cg: 0.0,
-                cb: 0.0,
-                ca: 1.0,
             });
         }
         engine.end_stroke();

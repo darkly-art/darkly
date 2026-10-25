@@ -4,6 +4,7 @@
 use darkly_macros::handlers;
 
 use super::layers::{brush_rgba, solid_rgba, VectorOpKind};
+use super::pending_edit::{EditSessionKind, PendingEdit};
 use super::types::ParamInfo;
 use super::DarklyEngine;
 use crate::engine::protocol::{params_from_json, RawParams};
@@ -65,6 +66,36 @@ pub struct ShapeObjectInfo {
 pub(crate) struct ShapePlacement {
     layer: LayerId,
     object: ObjectId,
+}
+
+/// A shape being placed. It lasts only for the drag that places it, so it
+/// resolves like any pending edit but is never presented as a session.
+pub(crate) struct ShapePlacementEdit;
+
+impl PendingEdit for ShapePlacementEdit {
+    fn kind(&self) -> EditSessionKind {
+        EditSessionKind {
+            id: "shapePlacement",
+            display_name: "Placing shape",
+            icon: "fa6-solid:shapes",
+        }
+    }
+
+    fn held(&self, engine: &DarklyEngine) -> bool {
+        engine.shape_placement.is_some()
+    }
+
+    fn presented(&self, _engine: &DarklyEngine) -> bool {
+        false
+    }
+
+    fn apply(&self, engine: &mut DarklyEngine) {
+        let _ = engine.commit_shape();
+    }
+
+    fn discard(&self, engine: &mut DarklyEngine) {
+        engine.cancel_shape();
+    }
 }
 
 /// A box the engine can draw: positive and finite on both axes.

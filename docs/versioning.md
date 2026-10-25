@@ -56,7 +56,10 @@ You need: a clean `dev` checkout in sync with `origin/dev`, an authenticated
 1. **Tag.** `scripts/release.sh X.Y.Z`, with `X.Y.Z` above the last tag
    (`git describe --tags --abbrev=0`). It refuses unless the release PR's
    checks have passed on the commit being tagged; if no release PR is open, it
-   opens one and stops, so run it again once that PR is green. It then lists
+   opens one and stops, so run it again once that PR is green. The PR opens as
+   a draft so that GitHub will not merge it: do not merge it yourself, the
+   script does after tagging. (One merged anyway, before the tag, still gates
+   it and is not merged again.) It then lists
    the PRs merged since the last tag, bots excluded, one `Title (#N)` per line,
    and asks. On `y` it tags `vX.Y.Z` with those lines as the body, pushes the
    tag, retitles the release PR `Dev -> Master X.Y.Z` with a link to each of
@@ -92,7 +95,8 @@ would break Flathub cannot be tagged.
 **Notes by hand.** The tag body is what users read in the store, and PR titles
 are commit language. To write it yourself, skip the script: `git tag -a
 vX.Y.Z`, subject `vX.Y.Z`, then a blank line and one change per line; `git
-push origin vX.Y.Z`; merge the release PR with the PR links as its body;
+push origin vX.Y.Z`; mark the draft release PR ready and merge it with the
+PR links as its body;
 then refresh the metainfo and carry on from step 2:
 
 ```bash

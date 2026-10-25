@@ -9,7 +9,7 @@
 //! compared against the live [`Revisions`] whenever it is read, so nothing has
 //! to push an invalidation when the inputs move.
 
-use super::bbox::{BboxReduction, PendingBbox};
+use super::reduction::{decode_bounds, PendingReduction, BOUNDS_INIT};
 use super::revisions::{Revisions, Tick};
 use crate::layer::LayerId;
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ pub struct ContentBoundsPass {
 struct PendingBounds {
     layer_id: LayerId,
     stamp: Stamp,
-    bbox: PendingBbox,
+    reduction: PendingReduction,
 }
 
 /// Uniform buffer layout matching the shader's `Params` struct.
@@ -227,7 +227,7 @@ impl ContentBoundsPass {
         }
         param_buf.unmap();
 
-        let bbox = BboxReduction::dispatch(
+        let reduction = PendingReduction::dispatch(
             device,
             queue,
             &self.pipeline,
@@ -251,6 +251,7 @@ impl ContentBoundsPass {
                     ],
                 })
             },
+            &BOUNDS_INIT,
             width,
             height,
         );
@@ -258,7 +259,7 @@ impl ContentBoundsPass {
         self.pending.push(PendingBounds {
             layer_id,
             stamp,
-            bbox,
+            reduction,
         });
     }
 
@@ -269,8 +270,12 @@ impl ContentBoundsPass {
         let mut completed = Vec::new();
         let mut i = 0;
         while i < self.pending.len() {
-            match self.pending[i].bbox.poll(device) {
-                Some(result) => {
+            match self.pending[i].reduction.poll(device) {
+                Some(words) => {
+                    let result = words
+                        .as_deref()
+                        .and_then(|w| w.first_chunk())
+                        .and_then(|b| decode_bounds(*b));
                     let p = self.pending.swap_remove(i);
                     if p.stamp == Stamp::current(revisions, p.layer_id) {
                         // Store even an empty result, so callers do not

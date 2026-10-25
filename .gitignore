@@ -25,3 +25,6 @@ docs-site/public/graphics/
 
 # Planning documents are working notes, never committed
 docs/plans/
+
+# Krita autosaves next to edited resources
+*-autosave.kra

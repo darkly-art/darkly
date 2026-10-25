@@ -29,8 +29,6 @@ pub use selection_metadata::SelectionMetadataAction;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
-use crate::layer::LayerId;
-use std::collections::{HashMap, HashSet};
 
 /// A reversible action that can be undone and redone.
 ///
@@ -38,12 +36,12 @@ use std::collections::{HashMap, HashSet};
 /// the internal state so that a subsequent `redo()` reverses it, and vice versa.
 /// The action is moved between the undo and redo stacks as a single `Box<dyn UndoAction>`.
 pub trait UndoAction {
-    /// Reverse this action. Returns affected tile coordinates per layer for GPU dirty marking.
-    /// For non-tile actions (layer structure, properties), returns an empty map.
-    fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>>;
+    /// Reverse this action's document changes. GPU pixel restores are run by
+    /// the engine through [`gpu_region_entries_mut`](Self::gpu_region_entries_mut).
+    fn undo(&mut self, doc: &mut Document);
 
-    /// Re-apply this action. Returns affected tile coordinates per layer for GPU dirty marking.
-    fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>>;
+    /// Re-apply this action's document changes.
+    fn redo(&mut self, doc: &mut Document);
 
     /// Try to coalesce a property change into this action.
     /// Only `PropertyAction` overrides this; all others return false.
@@ -150,6 +148,13 @@ impl UndoStack {
         self.undo_steps.len()
     }
 
+    /// Running byte cost over both stacks, the figure the memory cap
+    /// compares against.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+
     /// Push a completed action. Clears redo history.
     ///
     /// Takes `&mut Document` so the chokepoint can set the sticky
@@ -170,8 +175,16 @@ impl UndoStack {
         doc: &mut Document,
         action: Box<dyn UndoAction>,
     ) -> Vec<Box<dyn UndoAction>> {
-        doc.dirty = true;
-        doc.revision += 1;
+        doc.mark_changed();
+        self.push_recorded(action)
+    }
+
+    /// [`Self::push`] for an action whose change the document has already
+    /// recorded ([`Document::mark_changed`] ran when its pixels changed, as a
+    /// brush stroke's does at pen-up), so pushing it is bookkeeping rather
+    /// than a new edit: a document saved in between stays clean.
+    #[must_use = "evicted actions must have on_evict called to release tombstones"]
+    pub fn push_recorded(&mut self, action: Box<dyn UndoAction>) -> Vec<Box<dyn UndoAction>> {
         let mut evicted: Vec<Box<dyn UndoAction>> = std::mem::take(&mut self.redo_steps);
         for a in &evicted {
             self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
@@ -222,8 +235,7 @@ impl UndoStack {
     ) -> Vec<Box<dyn UndoAction>> {
         if let Some(top) = self.undo_steps.last_mut() {
             if top.try_coalesce_property(&action) {
-                doc.dirty = true;
-                doc.revision += 1;
+                doc.mark_changed();
                 return Vec::new();
             }
         }
@@ -240,20 +252,20 @@ impl UndoStack {
         all
     }
 
-    /// Undo the most recent action. Returns affected tile coords per layer.
-    pub fn undo(&mut self, doc: &mut Document) -> Option<HashMap<LayerId, HashSet<(i32, i32)>>> {
-        let mut action = self.undo_steps.pop()?;
-        let affected = action.undo(doc);
-        self.redo_steps.push(action);
-        Some(affected)
+    /// Undo the most recent action, if any.
+    pub fn undo(&mut self, doc: &mut Document) {
+        if let Some(mut action) = self.undo_steps.pop() {
+            action.undo(doc);
+            self.redo_steps.push(action);
+        }
     }
 
-    /// Redo the most recently undone action. Returns affected tile coords per layer.
-    pub fn redo(&mut self, doc: &mut Document) -> Option<HashMap<LayerId, HashSet<(i32, i32)>>> {
-        let mut action = self.redo_steps.pop()?;
-        let affected = action.redo(doc);
-        self.undo_steps.push(action);
-        Some(affected)
+    /// Redo the most recently undone action, if any.
+    pub fn redo(&mut self, doc: &mut Document) {
+        if let Some(mut action) = self.redo_steps.pop() {
+            action.redo(doc);
+            self.undo_steps.push(action);
+        }
     }
 
     /// Pop the top undo action without executing it.

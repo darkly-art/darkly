@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { app, DarklyInstance, setActiveInstance } from '../app.svelte';
-import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
+import { BrushGraphState } from '../brush_graph.svelte';
+import { fakeBrushEngine } from './fakeBrushEngine';
 
 // Regression: a null-on-success handler (`brush_graph_import_yaml`) crosses the
 // wasm boundary as a nullish value. The importer must read that as success and
@@ -8,19 +9,9 @@ import { BrushGraphState, type BrushGraph } from '../brush_graph.svelte';
 // `Cannot read properties of undefined (reading 'error')` when the boundary
 // delivered `undefined` instead of the declared `null`.
 
-const emptyGraph: BrushGraph = { nodes: {}, connections: [] };
-
-// Minimal engine stub covering `importYaml`'s success refresh chain.
+// `importYaml`'s success refresh chain, with the import answering `importResult`.
 function fakeEngine(importResult: unknown) {
-    return {
-        api: {
-            brushGraphImportYaml: async () => importResult,
-            brushGraphActive: async () => emptyGraph,
-            brushExposedPorts: async () => [],
-            brushActiveCapabilities: async () => ({}),
-            brushTopologyVersion: async () => ({ value: 0 }),
-        },
-    } as unknown as NonNullable<typeof app.engine>;
+    return fakeBrushEngine({ brushGraphImportYaml: async () => importResult }).engine;
 }
 
 let state: BrushGraphState;

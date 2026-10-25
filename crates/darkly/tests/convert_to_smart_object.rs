@@ -51,6 +51,7 @@ fn is_smart_object(engine: &DarklyEngine, id: LayerId) -> bool {
 /// Paint an opaque dab so a layer has real content for the alpha-tight
 /// extraction to find.
 fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color: [f32; 3]) {
+    engine.set_foreground_color([color[0], color[1], color[2], 1.0]);
     engine.begin_stroke(layer_id).unwrap();
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -61,10 +62,6 @@ fn paint_dot(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, color
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: color[0],
-        cg: color[1],
-        cb: color[2],
-        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0);

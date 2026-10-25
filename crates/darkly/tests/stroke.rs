@@ -6,8 +6,9 @@
 
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
-use darkly::gpu::diff_rect::DiffRectPass;
+use darkly::gpu::diff_rect::{DiffRectPass, PendingDiff};
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintCommandEncoder, PaintPipelines};
+use darkly::gpu::region_runs::RegionRuns;
 use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 
@@ -105,7 +106,6 @@ fn gpu_stroke_paint_undo_redo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
         stroke_rect,
     );
@@ -312,7 +312,6 @@ fn gpu_stroke_on_mask_undo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
         cr(52, 52, 24, 24),
     );
@@ -389,7 +388,6 @@ fn gpu_two_strokes_sequential_undo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap1,
         cr(23, 23, 14, 14),
     );
@@ -426,7 +424,6 @@ fn gpu_two_strokes_sequential_undo() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap2,
         cr(83, 83, 14, 14),
     );
@@ -576,7 +573,6 @@ fn gpu_region_action_undo_stack() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
         cr(22, 22, 20, 20),
     );
@@ -588,8 +584,7 @@ fn gpu_region_action_undo_stack() {
 
     // Pop for undo, execute GPU restore, complete.
     let mut action = undo_stack.pop_for_undo().unwrap();
-    let affected = action.undo(&mut doc);
-    assert!(affected.is_empty(), "GPU action returns empty affected map");
+    action.undo(&mut doc);
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
@@ -613,8 +608,7 @@ fn gpu_region_action_undo_stack() {
 
     // Pop for redo, execute GPU restore, complete.
     let mut action = undo_stack.pop_for_redo().unwrap();
-    let affected = action.redo(&mut doc);
-    assert!(affected.is_empty());
+    action.redo(&mut doc);
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
@@ -688,14 +682,7 @@ fn gpu_cpu_undo_interleaved() {
     enc.submit();
 
     let mut enc = encoder(&device);
-    let (entry, _req) = store.commit_region(
-        &mut enc,
-        &device,
-        layer_id,
-        &frame(&tex, w, h),
-        &snap,
-        cr(25, 25, 14, 14),
-    );
+    let (entry, _req) = store.commit_region(&mut enc, &device, layer_id, &snap, cr(25, 25, 14, 14));
     submit(&queue, enc);
     let _ = undo_stack.push(&mut doc, Box::new(GpuRegionAction::new(entry)));
 
@@ -714,7 +701,7 @@ fn gpu_cpu_undo_interleaved() {
 
     // Undo #1: property change (CPU, no GPU work).
     let mut action = undo_stack.pop_for_undo().unwrap();
-    let _affected = action.undo(&mut doc);
+    action.undo(&mut doc);
     assert!(
         action.gpu_region_entry_mut().is_none(),
         "property action should not be GPU"
@@ -730,7 +717,7 @@ fn gpu_cpu_undo_interleaved() {
 
     // Undo #2: GPU paint stroke.
     let mut action = undo_stack.pop_for_undo().unwrap();
-    let _affected = action.undo(&mut doc);
+    action.undo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
         let (forward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
@@ -748,7 +735,7 @@ fn gpu_cpu_undo_interleaved() {
 
     // Redo both.
     let mut action = undo_stack.pop_for_redo().unwrap();
-    let _affected = action.redo(&mut doc);
+    action.redo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
         let (backward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
@@ -764,7 +751,7 @@ fn gpu_cpu_undo_interleaved() {
     );
 
     let mut action = undo_stack.pop_for_redo().unwrap();
-    let _affected = action.redo(&mut doc);
+    action.redo(&mut doc);
     undo_stack.complete_redo(action);
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
@@ -821,21 +808,19 @@ fn diff_rect_finds_painted_region() {
     enc.submit();
 
     // Dispatch the diff.
-    let mut diff = DiffRectPass::new(&device);
-    diff.request(&device, &queue, &scratch_view, &canvas_view, cr(0, 0, w, h));
-
-    // Poll until ready (native/test, blocking poll is fine).
-    let rect = loop {
-        if let Some(result) = diff.poll(&device) {
-            break result;
-        }
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
+    let mut pending = DiffRectPass::new(&device).request(
+        &device,
+        &queue,
+        &scratch_view,
+        &canvas_view,
+        cr(0, 0, w, h),
+        fmt,
+    );
+    let runs = poll_diff_blocking(&mut pending, &device).expect("diff should find changed pixels");
+    // The circle lies inside one tile, so its one run is the tight rect.
+    let &[rect] = runs.rects() else {
+        panic!("expected one run, got {:?}", runs.rects());
     };
-
-    let rect = rect.expect("diff should find changed pixels");
     let (rx, ry, rw, rh) = (rect.x0(), rect.y0(), rect.width, rect.height);
 
     // The circle is at (100, 100) with radius 8. The diff rect should
@@ -909,30 +894,28 @@ fn diff_rect_undo_restores_offset_paint() {
     );
 
     // Compute diff rect via GPU (instead of hand-tracking).
-    let scratch_view = store.scratch_view(fmt);
-    let mut diff = DiffRectPass::new(&device);
-    diff.request(&device, &queue, &scratch_view, &view, cr(0, 0, w, h));
+    let before_view = snap
+        .frame()
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let mut pending = DiffRectPass::new(&device).request(
+        &device,
+        &queue,
+        &before_view,
+        &view,
+        cr(0, 0, w, h),
+        fmt,
+    );
+    let runs = poll_diff_blocking(&mut pending, &device).expect("should have a diff region");
 
-    let rect = loop {
-        if let Some(result) = diff.poll(&device) {
-            break result;
-        }
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-    };
-    let rect = rect.expect("should have a diff rect");
-
-    // Commit with the diff-derived rect.
+    // Commit with the diff-derived region.
     let mut enc = encoder(&device);
     let (entry, _req) = store.commit_region(
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
         &snap,
-        rect,
+        runs,
     );
     submit(&queue, enc);
 
@@ -975,8 +958,8 @@ fn rgba_with_rect(w: u32, h: u32, rx: u32, ry: u32, rw: u32, rh: u32, color: [u8
     buf
 }
 
-/// Blocking-poll a `DiffRectPass` to completion (native/test only).
-fn poll_diff_blocking(diff: &mut DiffRectPass, device: &wgpu::Device) -> Option<CanvasRect> {
+/// Blocking-poll a `PendingDiff` to completion (native/test only).
+fn poll_diff_blocking(diff: &mut PendingDiff, device: &wgpu::Device) -> Option<RegionRuns> {
     loop {
         if let Some(result) = diff.poll(device) {
             return result;
@@ -988,11 +971,10 @@ fn poll_diff_blocking(diff: &mut DiffRectPass, device: &wgpu::Device) -> Option<
     }
 }
 
-/// Parity regression for the shared `BboxReduction` extraction: the diff
-/// predicate must report the *exact* changed rect (not merely a superset), and
-/// identical textures must report no diff. Guards against the reduction/decode
-/// or the empty-convention drifting when the machinery moved out of
-/// `DiffRectPass` into `gpu::bbox`.
+/// Parity regression for the shared reduction: the diff predicate must report
+/// the *exact* changed rect (not merely a superset), and identical textures
+/// must report no diff. Guards against the reduction/decode or the
+/// empty-convention drifting between `DiffRectPass` and `gpu::reduction`.
 #[test]
 fn diff_rect_returns_exact_changed_rect() {
     let (device, queue) = test_device();
@@ -1004,25 +986,25 @@ fn diff_rect_returns_exact_changed_rect() {
     let b = rgba_with_rect(w, h, 10, 20, 5, 7, [255, 0, 0, 255]);
     let (_b_tex, b_view) = create_test_texture(&device, &queue, w, h, &b);
 
-    let mut diff = DiffRectPass::new(&device);
-    diff.request(&device, &queue, &a_view, &b_view, cr(0, 0, w, h));
-    let rect = poll_diff_blocking(&mut diff, &device).expect("should find the changed rect");
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let diff = DiffRectPass::new(&device);
+    let mut pending = diff.request(&device, &queue, &a_view, &b_view, cr(0, 0, w, h), fmt);
+    let runs = poll_diff_blocking(&mut pending, &device).expect("should find the changed rect");
     assert_eq!(
-        (rect.x0(), rect.y0(), rect.width, rect.height),
-        (10, 20, 5, 7),
+        runs.rects(),
+        &[cr(10, 20, 5, 7)],
         "diff rect must be exact, not a superset"
     );
 
     // Identical textures → no diff.
-    let mut diff_same = DiffRectPass::new(&device);
-    diff_same.request(&device, &queue, &a_view, &a_view, cr(0, 0, w, h));
+    let mut same = diff.request(&device, &queue, &a_view, &a_view, cr(0, 0, w, h), fmt);
     assert!(
-        poll_diff_blocking(&mut diff_same, &device).is_none(),
+        poll_diff_blocking(&mut same, &device).is_none(),
         "identical textures must report no diff (empty convention)"
     );
 }
 
-/// Parity regression for the shared `BboxReduction` extraction, content-bounds
+/// Parity regression for the shared reduction, content-bounds
 /// predicate: the alpha-threshold scan must report the *exact* non-transparent
 /// rect, and a fully-transparent texture must yield no cached bounds.
 #[test]
@@ -1160,19 +1142,12 @@ fn negative_direction_grow_crosses_zero() {
             depth_or_array_layers: 1,
         },
     );
-    // Rebase the region_store scratch alongside the layer: old extent at
-    // canvas (0, 0), new extent at (-256, -256), the layer grew up-left.
-    store.grow_scratch_preserving(
-        &device,
-        &mut enc,
-        cr(0, 0, init_w, init_h),
-        cr(-256, -256, new_w, new_h),
-    );
+    // Rebase the snapshot alongside the layer: old extent at canvas (0, 0),
+    // new extent at (-256, -256), the layer grew up-left. Its saved rect
+    // widens to the new extent so commits that spill into the newly-grown
+    // area are still contained.
+    store.rebase(&device, &mut enc, &mut snap, cr(-256, -256, new_w, new_h));
     submit(&queue, enc);
-
-    // After grow the engine widens snap.saved to the new canvas extent so
-    // commits that spill into the newly-grown area are still contained.
-    snap.saved = cr(-256, -256, new_w, new_h);
 
     // Frame describing the post-grow layer at canvas (-256, -256).
     let new_frame = CanvasFrame {
@@ -1221,7 +1196,6 @@ fn negative_direction_grow_crosses_zero() {
         &mut enc,
         &device,
         darkly::layer::LayerId::from_ffi(1),
-        &new_frame,
         &snap,
         commit_rect,
     );

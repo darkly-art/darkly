@@ -79,6 +79,34 @@
 
   <!-- Filled from the v* tags by scripts/metainfo-releases.sh; do not edit by hand. -->
   <releases>
+    <release version="0.11.1" date="2026-10-20">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.11.1</url>
+      <description>
+        <ul>
+          <li>Release fixes (#158)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.11.0" date="2026-10-20">
+      <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.11.0</url>
+      <description>
+        <ul>
+          <li>docs: link the readme header image to darkly.art (#132)</li>
+          <li>Compute brushes + smudge decomposition (#133)</li>
+          <li>Stabilization Improvements (#134)</li>
+          <li>Add stroke_path for whole-path offline strokes (#135)</li>
+          <li>Better gpu handling / fallbacks (#142)</li>
+          <li>Vector shapes (#143)</li>
+          <li>Color Jitter (#145)</li>
+          <li>Better artifact naming for releases (#149)</li>
+          <li>Clip Studio Paint hotkey presets (#150)</li>
+          <li>Store GPU undo regions as changed tiles, not bounding rects (#151)</li>
+          <li>Stroke editing (#154)</li>
+          <li>Fix veil reorder bug (#152)</li>
+          <li>Hotkey for switching brushes (#156)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.0" date="2026-09-26">
       <url type="details">https://github.com/darkly-art/darkly/releases/tag/v0.10.0</url>
       <description>

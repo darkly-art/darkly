@@ -16,7 +16,10 @@
     import { THUMB_SIZE } from '../ui/layers/thumbnails.svelte';
     import { isToolHoverSuppressed } from '../tools/modifier_cursor';
     import { isEditableTarget } from '../lib/isEditableTarget';
+    import { colorToRgba01 } from '../lib/color';
     import TransformModeMenu from '../ui/TransformModeMenu.svelte';
+    import EditSessionFrame from './EditSessionFrame.svelte';
+    import { actions } from '../actions/registry';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -442,6 +445,14 @@
         }
     });
 
+    // Push the foreground whenever it changes: brush strokes paint with the
+    // engine's copy, and a stroke being edited redraws in it. A pointerdown is
+    // a later task than this effect's flush, so the colour always reaches the
+    // engine's request queue before the stroke that uses it.
+    $effect(() => {
+        inst.engine?.api.setForegroundColor({ rgba: colorToRgba01(inst.foreground) });
+    });
+
     // HMR'ing this component re-runs onMount and creates a second WASM
     // engine, wiping the running undo stack. Force a full reload instead.
     if (import.meta.hot) {
@@ -481,6 +492,14 @@
     <!-- Right-click mode-switch menu for the transform tool. The tool sets
          `app.transformModeMenu`; this renders against it. -->
     <TransformModeMenu />
+
+    <!-- The open edit session's frame, from this instance's own engine. Its
+         buttons dispatch the same actions as Enter and Escape. -->
+    <EditSessionFrame
+        session={inst.engineState?.editSession ?? null}
+        onapply={() => actions.dispatch('applyEditSession')}
+        ondiscard={() => actions.dispatch('discardEditSession')}
+    />
 </div>
 
 <style>

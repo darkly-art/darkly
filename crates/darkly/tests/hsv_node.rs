@@ -239,6 +239,7 @@ fn gpu_matches_cpu() {
         .set_brush_graph_yaml(&hsv_brush_yaml(true))
         .expect("brush loads");
     let layer = engine.add_raster_layer(None);
+    engine.set_foreground_color([COLOR[0], COLOR[1], COLOR[2], COLOR[3]]);
     engine.begin_stroke(layer).unwrap();
     for i in 0..20 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -250,10 +251,6 @@ fn gpu_matches_cpu() {
             rotation: 0.0,
             tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: COLOR[0],
-            cg: COLOR[1],
-            cb: COLOR[2],
-            ca: COLOR[3],
         });
     }
     engine.end_stroke();

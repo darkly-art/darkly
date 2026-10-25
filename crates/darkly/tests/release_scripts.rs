@@ -346,9 +346,10 @@ const METAINFO_PATH: &str = "packaging/art.darkly.Darkly.metainfo.xml";
 
 /// Answers each query from a JSON fixture through the `--jq` expression the
 /// script passes, the way gh itself would: merged PRs from `prs.json`, the
-/// open release PR from `open.json`, its checks from `checks.json`, and its
-/// head commit from `head` (the work tree's HEAD when absent). Logs every call
-/// and the body of `pr create` / `pr edit`.
+/// open release PR from `open.json`, merged release PRs from `merged.json`,
+/// its checks from `checks.json`, and its head commit from `head` (the work
+/// tree's HEAD when absent). Logs every call and the body of `pr create` /
+/// `pr edit`.
 const GH_SHIM: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 echo "$*" >> "$SHIM_DIR/log"
@@ -359,12 +360,13 @@ for i in "${!args[@]}"; do
 done
 case "$*" in
   "pr list --state merged"*) jq -r "$jq_expr" "$SHIM_DIR/prs.json" ;;
+  "pr list --base master --head dev --state merged"*) jq -r "$jq_expr" "$SHIM_DIR/merged.json" ;;
   "pr list --base master"*)  jq -r "$jq_expr" "$SHIM_DIR/open.json" ;;
   "pr view"*)
     head=$(cat "$SHIM_DIR/head" 2>/dev/null || git rev-parse HEAD)
     jq -rn --arg h "$head" '{headRefOid: $h}' | jq -r "$jq_expr" ;;
   "pr checks"*)              jq -r "$jq_expr" "$SHIM_DIR/checks.json" ;;
-  "pr merge"*)               : ;;
+  "pr ready"*|"pr merge"*)   : ;;
   "pr create"*|"pr edit"*)   cat > "$SHIM_DIR/body"; echo "https://example.invalid/pull/1" ;;
   *) echo "gh shim: unexpected: $*" >&2; exit 2 ;;
 esac
@@ -409,6 +411,7 @@ impl Release {
             .status()
             .unwrap();
         fs::write(shim.join("open.json"), r#"[{"number":42}]"#).unwrap();
+        fs::write(shim.join("merged.json"), "[]").unwrap();
         fs::write(
             shim.join("checks.json"),
             r#"[{"name":"test","bucket":"pass"},{"name":"docs","bucket":"skipping"}]"#,
@@ -497,6 +500,7 @@ fn tags_from_merged_prs_and_writes_the_pr_body() {
 
     let log = r.log();
     assert!(log.contains("pr edit 42 --title Dev -> Master 0.2.0 --body-file -"));
+    assert!(log.contains("pr ready 42"));
     assert!(log.contains("pr merge 42 --merge"));
     assert!(!log.contains("pr create"));
     assert_eq!(
@@ -525,9 +529,39 @@ fn opens_a_release_pr_and_stops_when_none_is_open() {
     let out = r.run("0.2.0");
     assert!(!out.status.success());
     assert!(!r.origin_has("v0.2.0"));
-    assert!(r
-        .log()
-        .contains("pr create --base master --head dev --title Dev -> Master 0.2.0 --body-file -"));
+    assert!(r.log().contains(
+        "pr create --draft --base master --head dev --title Dev -> Master 0.2.0 --body-file -"
+    ));
+}
+
+#[test]
+fn a_release_pr_merged_before_the_tag_still_gates_it() {
+    let (r, shas, _) = Release::new("premerged", &["human pr"]);
+    r.prs(&[(5, "Human change", false, &shas[0])]);
+    fs::write(r.shim.join("open.json"), "[]").unwrap();
+    fs::write(
+        r.shim.join("merged.json"),
+        format!(
+            r#"[{{"number":41,"headRefOid":"{}"}},{{"number":42,"headRefOid":"{}"}}]"#,
+            "0".repeat(40),
+            shas[0]
+        ),
+    )
+    .unwrap();
+
+    let out = r.run("0.2.0");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(r.origin_has("v0.2.0"));
+    let log = r.log();
+    assert!(log.contains("pr checks 42"));
+    assert!(log.contains("pr edit 42 --title Dev -> Master 0.2.0 --body-file -"));
+    assert!(!log.contains("pr create"));
+    assert!(!log.contains("pr ready"));
+    assert!(!log.contains("pr merge"));
 }
 
 #[test]

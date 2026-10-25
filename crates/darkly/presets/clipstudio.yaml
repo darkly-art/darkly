@@ -1,0 +1,134 @@
+# Clip Studio Paint overlay. Carries every binding where Clip Studio Paint's
+# choice differs from at least one other reference editor. Unanimous bindings
+# live in defaults.yaml; see the rule in defaults.yaml's header.
+#
+# Every binding here is one CELSYS documents as a default. An action with no
+# documented default stays unbound rather than borrowing another editor's key.
+# Sources (the full tables are in docs/clip-studio-paint-default-hotkeys.md):
+#
+#   [T] Tool Shortcuts
+#       https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm
+#   [M] Menu Shortcuts
+#       https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Menu_Shortcuts.htm
+#   [O] Optional Shortcuts
+#       https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Optional_Shortcuts.htm
+#   [D] Shortcuts usable during operation (modifier keys)
+#       https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Shortcuts_usable_during_operation.htm
+#   [A] Selection area tool (sub tools)
+#       https://help.clip-studio.com/en-us/manual_en/330_selection/Selection_area_tool.htm
+#   [X] Types of transformations
+#       https://help.clip-studio.com/en-us/manual_en/360_transform/Types_of_transformations.htm
+#   [P] Cut/Copy/Paste
+#       https://help.clip-studio.com/en-us/manual_en/270_canvas/Cut__47_Copy__47_Paste.htm
+#   [S] Selection from layer
+#       https://help.clip-studio.com/en-us/manual_en/330_selection/Selection_from_layer.htm
+#
+# CELSYS writes Windows keys and says to read Ctrl as Command on macOS, which
+# is exactly `$mod`.
+name: Clip Studio Paint
+description: Clip Studio Paint-style keybindings
+
+hotkeys:
+  # Edit [M]. Redo has two defaults; cut / copy / paste each add a function
+  # key alias.
+  redo:
+    - $mod+KeyY
+    - $mod+Shift+KeyZ
+  cut:
+    - $mod+KeyX
+    - F2
+  copy:
+    - $mod+KeyC
+    - F3
+  paste:
+    - $mod+KeyV
+    - F4
+  # pasteInPlace: intentionally unbound. CSP's Ctrl+Shift+V is "Paste to shown
+  # position", which centers the image [P]; Darkly's pasteInPlace keeps the
+  # original position, the opposite meaning.
+  # Edit > Erase [M]. Its Backspace aliases are left out: Backspace removes
+  # the last point of an in-progress polygon selection.
+  clearSelectionContents:
+    - Delete
+    - $mod+Delete
+  # File [M]: Save as has three defaults.
+  saveDocumentAs:
+    - $mod+Shift+KeyS
+    - Alt+Shift+KeyS
+    - $mod+Alt+KeyS
+  # File > Preferences [M].
+  openSettings: $mod+KeyK
+  # View [M]. "Fit to Screen" is Ctrl+0. resetView is intentionally unbound:
+  # CSP's "Reset display" is Ctrl+@, a key of Japanese-layout origin whose
+  # US-layout position (`[`) CSP itself spends on Ctrl+[ (reduce opacity, [O]).
+  # mirrorViewH is intentionally unbound: View > Rotate/Invert > Flip
+  # horizontal has no default key.
+  fitToScreen: $mod+Digit0
+  # Tools [T]. CSP's Pen and Pencil share P, and Brush, Airbrush and
+  # Decoration share B; every one of them is Darkly's brush tool.
+  brushTool:
+    - KeyP
+    - KeyB
+  # Eraser is E [T]. C is CSP's "Switch drawing color and transparent color"
+  # [O], its own paint-with-transparency toggle, which is what erase mode is.
+  toggleEraseMode:
+    - KeyE
+    - KeyC
+  colorPickerTool: KeyI
+  # Selection is M [T]; Rectangle is its first sub tool [A]. Ellipse, Lasso and
+  # Polyline are sub tools of the same group with no key of their own, so
+  # ellipseSelectTool, lassoSelectTool and polygonSelectTool stay unbound.
+  rectSelectTool: KeyM
+  # Auto select [T].
+  magicWandTool: KeyW
+  # Fill and Gradient share G in CSP, which cycles between them on repeated
+  # presses. Darkly has no cycling, so G is Fill and gradientTool stays
+  # unbound.
+  fillTool: KeyG
+  textTool: KeyT
+  # Figure is U [T]: lines and shapes. Darkly's polygon tool defaults to a
+  # rectangle; the ellipse tool, a sub tool in CSP, stays unbound.
+  polygonTool: KeyU
+  # Edit > Transform [M]. Scale/Rotate is Ctrl+T. Free Transform
+  # (Ctrl+Shift+T) moves each handle freely on both axes [X], which is the
+  # perspective tool's four independent corners.
+  transformTool: $mod+KeyT
+  transformPerspectiveTool: $mod+Shift+KeyT
+  # Layer [M]. Darkly's mergeDown merges the selection when several layers
+  # are selected, so it answers both "Merge with layer below" (Ctrl+E) and
+  # "Merge selected layers" (Shift+Alt+E).
+  newLayer: $mod+Shift+KeyN
+  mergeDown:
+    - $mod+KeyE
+    - Alt+Shift+KeyE
+  # Select [M].
+  clearSelection: $mod+KeyD
+  invertSelection:
+    - $mod+Shift+KeyI
+    - Shift+F7
+  # Edit > Tonal correction [M]. "Reverse gradient" is CSP's negative.
+  effectInvert: $mod+KeyI
+  effectHsv: $mod+KeyU
+  # resetColors: intentionally unbound. CSP has no reset-colors command, and
+  # D is its Operation (Select layer) tool [T].
+
+mouse_clicks:
+  # Eyedropper is Alt+click in every drawing tool [D]. CSP also samples on a
+  # bare right click; Darkly keeps right-drag for its palette popup (the same
+  # call Krita's own Clip Studio Paint canvas profile makes).
+  sampleColor: canvas@paint:alt+drag
+  # Copy stamp: "Specify reference point" is Alt+click [D]. Brush-scoped so it
+  # out-ranks `sampleColor` only while the Clone brush is active.
+  setCloneSource: canvas@paint@clone:alt+drag
+  # "Change brush size" is Ctrl+Alt+drag in every drawing tool [D].
+  brushSizeAdjust: canvas@paint:$mod+alt+drag
+  # Ctrl+click on a layer in the Layer palette creates a selection from it
+  # [S]. The sources are silent on mask thumbnails, so maskToSelection stays
+  # unbound.
+  alphaToSelection: layerThumb:$mod+click
+
+settings:
+  # A choice, not a documented CSP default: CSP's eyedropper offers Image,
+  # Top layer and Current layer references without stating a default. Merged
+  # matches its screen-color sampling and Krita's Clip Studio Paint profile.
+  tools.colorPickerSampleSource: merged

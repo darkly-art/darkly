@@ -64,7 +64,7 @@ pub fn config_reset_all() {
     config::reset_all();
 }
 
-/// List equal-status overlay names (e.g. `["GIMP", "Krita", "Photoshop"]`).
+/// List equal-status overlay names, one per editor overlay in `presets/`.
 /// Order is alphabetical so no editor is privileged.
 #[wasm_bindgen]
 pub fn config_base_names() -> JsValue {

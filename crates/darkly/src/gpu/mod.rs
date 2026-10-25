@@ -1,10 +1,11 @@
-/// Clear a texture view to fully-transparent black via an empty render
-/// pass. WebGPU has no standalone "clear texture" command; clears are
-/// expressed as the load op of a render pass. This wraps the empty-pass
-/// boilerplate so callers that just need a clear can do it in one call.
-pub fn clear_view_transparent(
+/// Clear a texture view to `color` via an empty render pass. WebGPU has no
+/// standalone "clear texture" command; clears are expressed as the load op of
+/// a render pass. This wraps the empty-pass boilerplate so callers that just
+/// need a clear can do it in one call.
+pub fn clear_view(
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
+    color: wgpu::Color,
     label: &str,
 ) {
     let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -14,12 +15,33 @@ pub fn clear_view_transparent(
             resolve_target: None,
             depth_slice: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                load: wgpu::LoadOp::Clear(color),
                 store: wgpu::StoreOp::Store,
             },
         })],
         ..Default::default()
     });
+}
+
+/// [`clear_view`] to fully-transparent black.
+pub fn clear_view_transparent(
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    label: &str,
+) {
+    clear_view(encoder, view, wgpu::Color::TRANSPARENT, label);
+}
+
+/// What a node texture of `format` holds where nothing has been painted:
+/// white for an R8 mask (255 reveals), transparent for everything else.
+/// Growth fills a node's new area with it, so any copy of a node's pixels
+/// that grows alongside the node has to fill its new area with it too, or
+/// that area reads black where the node reads white.
+pub fn default_fill(format: wgpu::TextureFormat) -> wgpu::Color {
+    match format {
+        wgpu::TextureFormat::R8Unorm => wgpu::Color::WHITE,
+        _ => wgpu::Color::TRANSPARENT,
+    }
 }
 
 /// Create a 2D texture and its default view in one call. Wraps the
@@ -124,7 +146,6 @@ pub mod apply_mask;
 pub mod atlas;
 pub mod bake;
 pub mod baked_source_cache;
-pub mod bbox;
 pub mod black_and_white;
 pub mod blend;
 pub mod blend_mode;
@@ -156,6 +177,8 @@ pub mod param_effect;
 pub mod params;
 pub mod preview;
 pub mod readback;
+pub mod reduction;
+pub mod region_runs;
 pub mod region_store;
 pub mod rescale;
 pub mod revisions;

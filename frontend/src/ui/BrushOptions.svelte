@@ -3,7 +3,7 @@
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
     import { unitFor } from '../lib/units';
-    import { brushSession, focusedBrushTool } from '../tools/brush.svelte';
+    import { brushSession, focusedBrushTool, strokeEditOpen, toggleStrokeEdit } from '../tools/brush.svelte';
     import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
@@ -128,9 +128,25 @@
                 </span>
                 <span class="bar-control-text">
                     <span class="bar-control-label">Brush</span>
-                    <span class="bar-control-value name">{brushGraph.activeBrush ?? 'Custom'}</span>
+                    <span class="bar-control-value name">
+                        {brushGraph.activeBrush ?? 'Custom'}{#if brushGraph.modified}<span
+                                class="modified"
+                                title="Unsaved changes to this brush">*</span
+                            >{/if}
+                    </span>
                 </span>
             </button>
+            {#if brushGraph.modified}
+                <!-- Tweaks survive switching brushes, so picking a brush again
+                     no longer puts it back the way it was saved; this does. -->
+                <button
+                    class="icon-btn revert-brush"
+                    onclick={() => void brushGraph.revert()}
+                    title={tooltipForAction('Revert to saved brush', 'revertBrush')}
+                >
+                    <Icon name="fa6-solid:rotate-left" />
+                </button>
+            {/if}
         </div>
 
         <BrushExplorer bind:open={explorerOpen} />
@@ -198,6 +214,20 @@
                 title={tooltipForAction('Erase mode', 'toggleEraseMode')}
             />
         {/if}
+
+        <!-- Stroke edit: while on, every change to the brush or colour
+             redraws the last stroke; toggling it off applies the edit. The
+             engine owns the mode and reports it in `engineState`, which any
+             edit of the document also clears. -->
+        <Scrub
+            mode="toggle"
+            icon="fa6-solid:pen-nib"
+            label="Edit stroke"
+            valueLabel={strokeEditOpen(app.engineState) ? 'On' : 'Off'}
+            active={strokeEditOpen(app.engineState)}
+            onToggle={() => void toggleStrokeEdit()}
+            title={tooltipForAction('Edit last stroke', 'toggleStrokeEdit')}
+        />
     {/snippet}
 
     {#snippet right()}
@@ -306,6 +336,12 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .revert-brush {
+        padding: 4px;
+        font-size: 12px;
+        flex-shrink: 0;
     }
 
     .error-badge {

@@ -98,6 +98,18 @@ const ACTIONS: &[ActionDef] = &[
         description: "Rotate the whole canvas a half turn.",
         icon: "fa6-solid:rotate",
     },
+    ActionDef {
+        id: "applyEditSession",
+        display_name: "Apply",
+        description: "Keep what the open edit session changed and end it: a transform, pasted content, or a stroke being edited.",
+        icon: "fa6-solid:check",
+    },
+    ActionDef {
+        id: "discardEditSession",
+        display_name: "Discard",
+        description: "Drop what the open edit session changed and end it.",
+        icon: "fa6-solid:xmark",
+    },
 ];
 
 pub fn register() -> ActionCategory {

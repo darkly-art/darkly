@@ -47,9 +47,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Catches manifest defects that only surface at release time, when a `v*`
       # tag runs .github/workflows/publish.yml: a dependency published without
-      # a version requirement, a missing readme, an unpackageable path. Manifest
-      # checks only, so --no-verify skips the compile the real publish does.
+      # a version requirement, a missing readme, an unpackageable path, or a
+      # crate over crates.io's 10 MiB upload limit, which only the upload itself
+      # enforces. Packaging checks only, so --no-verify skips the compile the
+      # real publish does.
       - run: cargo package -p darkly-macros -p darkly --no-verify
+      - name: Crates fit crates.io's upload limit
+        run: |
+          for crate in target/package/*.crate; do
+            size=$(stat -c %s "$crate")
+            [ "$size" -le 10485760 ] || { echo "$crate is $size bytes, over 10485760"; exit 1; }
+          done
 
   clippy:
     name: clippy

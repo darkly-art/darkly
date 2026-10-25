@@ -50,10 +50,6 @@ fn stroke_to(engine: &mut DarklyEngine, x: f32, y: f32, time_ms: f64) {
         rotation: 0.0,
         tangential_pressure: 0.0,
         time_ms,
-        cr: 1.0,
-        cg: 0.0,
-        cb: 0.0,
-        ca: 1.0,
     });
 }
 

@@ -183,7 +183,6 @@ impl DarklyEngine {
                 &mut self.readbacks,
                 "remove-mask-commit",
                 modifier_id,
-                &frame,
                 &snap,
                 rect,
             ))
@@ -346,7 +345,6 @@ impl DarklyEngine {
                 &mut self.readbacks,
                 "apply-mask-undo",
                 id,
-                &frame,
                 &snap,
                 rect,
             ))
@@ -362,7 +360,6 @@ impl DarklyEngine {
                 &mut self.readbacks,
                 "apply-mask-undo-mask",
                 mask_id,
-                &frame,
                 &snap,
                 rect,
             ))

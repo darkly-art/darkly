@@ -261,6 +261,16 @@ export type DuplicateNodeReq = { source_id: number, };
 
 export type DuplicateNodesReq = { ids: Array<number>, };
 
+export type EditSessionKind = { 
+/**
+ * Stable id the frontend keys per-kind controls by.
+ */
+id: string, displayName: string, 
+/**
+ * Iconify id.
+ */
+icon: string, };
+
 export type EngineState = { 
 /**
  * Compositor master tick (post-increment for this frame). Drives JS-side
@@ -280,6 +290,12 @@ dirty: boolean,
  * Document has an active selection. Backs selection-gated menu items.
  */
 hasSelection: boolean, 
+/**
+ * The kind of the edit session open for the artist to apply or
+ * discard (stroke edit, a transform, pasted content), if any. Backs the
+ * canvas's session frame and the stroke-edit toggle's active state.
+ */
+editSession: EditSessionKind | null, 
 /**
  * The canvas window rect in plane coordinates (`Document::canvas_rect`):
  * where the window sits and how big it is. Rides the frame snapshot
@@ -571,6 +587,16 @@ export type LayerTree = {
 layers: Array<LayerInfo>, };
 
 export type LibrarySnapshot = { brushes: Array<BrushInfo>, packs: Array<BrushPackInfo>, };
+
+export type LoadedBrush = { id: string, 
+/**
+ * Display name, read from the library when asked.
+ */
+name: string, 
+/**
+ * Whether the live graph differs from the brush's saved graph.
+ */
+modified: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
@@ -1011,6 +1037,8 @@ export type SetDocumentNameReq = { name: string, };
 
 export type SetFilterParamsReq = { id: number, params: JsonValue, };
 
+export type SetForegroundColorReq = { rgba: [number, number, number, number], };
+
 export type SetGroupCollapsedReq = { id: number, collapsed: boolean, };
 
 export type SetGroupPassthroughReq = { id: number, passthrough: boolean, };
@@ -1078,12 +1106,7 @@ export type SmoothSelectionReq = { radius: number, };
 
 export type StartSaveDocumentReq = { snapshot: boolean, };
 
-export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, 
-/**
- * Foreground color as raw sRGB RGBA floats (0-1), as picked; the
- * compositor is display-referred, so no gamma conversion is applied.
- */
-cr: number, cg: number, cb: number, ca: number, };
+export type StrokeOp = { "op": "flood_fill", x: number, y: number, r: number, g: number, b: number, a: number, tolerance: number, } | { "op": "linear_gradient", x0: number, y0: number, x1: number, y1: number, r0: number, g0: number, b0: number, a0: number, r1: number, g1: number, b1: number, a1: number, } | { "op": "brush_stroke", x: number, y: number, pressure: number, x_tilt: number, y_tilt: number, rotation: number, tangential_pressure: number, time_ms: number, };
 
 export type StrokeToReq = { op: StrokeOp, };
 
@@ -1120,6 +1143,7 @@ export type RequestKind =
     | 'add_void'
     | 'alpha_to_selection'
     | 'antialias_selection'
+    | 'apply_edit_session'
     | 'apply_filter'
     | 'apply_mask'
     | 'begin_shape'
@@ -1154,14 +1178,15 @@ export type RequestKind =
     | 'brush_graph_validate'
     | 'brush_list'
     | 'brush_load'
+    | 'brush_loaded'
     | 'brush_node_preview'
     | 'brush_node_types'
     | 'brush_rename'
+    | 'brush_revert'
     | 'brush_save'
     | 'brush_set_exposed_port'
     | 'brush_stroke_preview'
     | 'brush_thumbnail'
-    | 'brush_topology_version'
     | 'brush_upload_image'
     | 'can_convert_floating_to_smart_object'
     | 'can_convert_layer_to_smart_object'
@@ -1190,6 +1215,7 @@ export type RequestKind =
     | 'copy_layer_rich'
     | 'crop_to_selection'
     | 'cut'
+    | 'discard_edit_session'
     | 'document_dpi'
     | 'document_name'
     | 'duplicate_node'
@@ -1276,6 +1302,7 @@ export type RequestKind =
     | 'set_clone_source'
     | 'set_document_name'
     | 'set_filter_params'
+    | 'set_foreground_color'
     | 'set_group_collapsed'
     | 'set_group_passthrough'
     | 'set_isolated_node'
@@ -1303,6 +1330,8 @@ export type RequestKind =
     | 'start_export'
     | 'start_preview'
     | 'start_save_document'
+    | 'stroke_edit_begin'
+    | 'stroke_edit_end'
     | 'stroke_to'
     | 'take_transform_setup_error'
     | 'text_objects'
@@ -1327,6 +1356,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'add_void',
     'alpha_to_selection',
     'antialias_selection',
+    'apply_edit_session',
     'apply_filter',
     'apply_mask',
     'begin_shape',
@@ -1361,14 +1391,15 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'brush_graph_validate',
     'brush_list',
     'brush_load',
+    'brush_loaded',
     'brush_node_preview',
     'brush_node_types',
     'brush_rename',
+    'brush_revert',
     'brush_save',
     'brush_set_exposed_port',
     'brush_stroke_preview',
     'brush_thumbnail',
-    'brush_topology_version',
     'brush_upload_image',
     'can_convert_floating_to_smart_object',
     'can_convert_layer_to_smart_object',
@@ -1397,6 +1428,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'copy_layer_rich',
     'crop_to_selection',
     'cut',
+    'discard_edit_session',
     'document_dpi',
     'document_name',
     'duplicate_node',
@@ -1483,6 +1515,7 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'set_clone_source',
     'set_document_name',
     'set_filter_params',
+    'set_foreground_color',
     'set_group_collapsed',
     'set_group_passthrough',
     'set_isolated_node',
@@ -1510,6 +1543,8 @@ export const REQUEST_KINDS: readonly RequestKind[] = [
     'start_export',
     'start_preview',
     'start_save_document',
+    'stroke_edit_begin',
+    'stroke_edit_end',
     'stroke_to',
     'take_transform_setup_error',
     'text_objects',
@@ -1542,6 +1577,7 @@ export interface EngineApi {
     addVoid(req: AddVoidReq): Promise<number | null>;
     alphaToSelection(req: AlphaToSelectionReq): void;
     antialiasSelection(): void;
+    applyEditSession(): Promise<boolean>;
     applyFilter(req: ApplyFilterReq): Promise<boolean>;
     applyMask(req: ApplyMaskReq): void;
     beginShape(req: BeginShapeReq): void;
@@ -1576,14 +1612,15 @@ export interface EngineApi {
     brushGraphValidate(req: BrushGraphJsonReq): Promise<null | { error: string }>;
     brushList(): Promise<Array<BrushInfo>>;
     brushLoad(req: BrushLoadReq): Promise<null>;
+    brushLoaded(): Promise<LoadedBrush | null>;
     brushNodePreview(req: BrushNodePreviewReq): Promise<{ bytes: Uint8Array }>;
     brushNodeTypes(): Promise<Array<NodeRegistration>>;
     brushRename(req: BrushRenameReq): Promise<null>;
+    brushRevert(): Promise<null>;
     brushSave(req: BrushSaveReq): Promise<null>;
     brushSetExposedPort(req: BrushSetExposedPortReq): Promise<{ graph: JsonValue } | { error: string }>;
     brushStrokePreview(): Promise<{ bytes: Uint8Array }>;
     brushThumbnail(req: BrushThumbnailReq): Promise<{ bytes: Uint8Array }>;
-    brushTopologyVersion(): Promise<{ value: number }>;
     brushUploadImage(req: BrushUploadImageReq, bytes: Uint8Array): Promise<void>;
     canConvertFloatingToSmartObject(): Promise<boolean>;
     canConvertLayerToSmartObject(req: CanConvertLayerToSmartObjectReq): Promise<boolean>;
@@ -1612,6 +1649,7 @@ export interface EngineApi {
     copyLayerRich(req: CopyLayerRichReq): void;
     cropToSelection(): void;
     cut(req: CutReq): Promise<ClipboardExport | null>;
+    discardEditSession(): Promise<boolean>;
     documentDpi(): Promise<number>;
     documentName(): Promise<string>;
     duplicateNode(req: DuplicateNodeReq): Promise<number | null>;
@@ -1698,6 +1736,7 @@ export interface EngineApi {
     setCloneSource(req: SetCloneSourceReq): void;
     setDocumentName(req: SetDocumentNameReq): void;
     setFilterParams(req: SetFilterParamsReq): void;
+    setForegroundColor(req: SetForegroundColorReq): void;
     setGroupCollapsed(req: SetGroupCollapsedReq): void;
     setGroupPassthrough(req: SetGroupPassthroughReq): void;
     setIsolatedNode(req: SetIsolatedNodeReq): Promise<number | null>;
@@ -1725,6 +1764,8 @@ export interface EngineApi {
     startExport(): void;
     startPreview(req: PreviewReq): void;
     startSaveDocument(req: StartSaveDocumentReq): Promise<void>;
+    strokeEditBegin(): Promise<boolean>;
+    strokeEditEnd(): void;
     strokeTo(req: StrokeToReq): void;
     takeTransformSetupError(): Promise<TransformCapabilityError | null>;
     textObjects(req: LayerIdReq): Promise<{ objects: Array<{ object: number, content: string, font_family: string, size: number, variations: Record<string, number>, features: Record<string, number>, letter_spacing: number, word_spacing: number, line_height: number, italic: boolean, align: string, color: [number, number, number, number], box: [number, number] | null }> }>;
@@ -1751,6 +1792,7 @@ export function makeApi(t: Transport): EngineApi {
         addVoid: (req) => t.request('add_void', req),
         alphaToSelection: (req) => t.postFF('alpha_to_selection', req),
         antialiasSelection: () => t.postFF('antialias_selection'),
+        applyEditSession: () => t.request('apply_edit_session'),
         applyFilter: (req) => t.request('apply_filter', req),
         applyMask: (req) => t.postFF('apply_mask', req),
         beginShape: (req) => t.postFF('begin_shape', req),
@@ -1785,14 +1827,15 @@ export function makeApi(t: Transport): EngineApi {
         brushGraphValidate: (req) => t.request('brush_graph_validate', req),
         brushList: () => t.request('brush_list'),
         brushLoad: (req) => t.request('brush_load', req),
+        brushLoaded: () => t.request('brush_loaded'),
         brushNodePreview: (req) => t.request('brush_node_preview', req),
         brushNodeTypes: () => t.request('brush_node_types'),
         brushRename: (req) => t.request('brush_rename', req),
+        brushRevert: () => t.request('brush_revert'),
         brushSave: (req) => t.request('brush_save', req),
         brushSetExposedPort: (req) => t.request('brush_set_exposed_port', req),
         brushStrokePreview: () => t.request('brush_stroke_preview'),
         brushThumbnail: (req) => t.request('brush_thumbnail', req),
-        brushTopologyVersion: () => t.request('brush_topology_version'),
         brushUploadImage: (req, bytes) => t.request('brush_upload_image', req, bytes),
         canConvertFloatingToSmartObject: () => t.request('can_convert_floating_to_smart_object'),
         canConvertLayerToSmartObject: (req) => t.request('can_convert_layer_to_smart_object', req),
@@ -1821,6 +1864,7 @@ export function makeApi(t: Transport): EngineApi {
         copyLayerRich: (req) => t.postFF('copy_layer_rich', req),
         cropToSelection: () => t.postFF('crop_to_selection'),
         cut: (req) => t.request('cut', req),
+        discardEditSession: () => t.request('discard_edit_session'),
         documentDpi: () => t.request('document_dpi'),
         documentName: () => t.request('document_name'),
         duplicateNode: (req) => t.request('duplicate_node', req),
@@ -1907,6 +1951,7 @@ export function makeApi(t: Transport): EngineApi {
         setCloneSource: (req) => t.postFF('set_clone_source', req),
         setDocumentName: (req) => t.postFF('set_document_name', req),
         setFilterParams: (req) => t.postFF('set_filter_params', req),
+        setForegroundColor: (req) => t.postFF('set_foreground_color', req),
         setGroupCollapsed: (req) => t.postFF('set_group_collapsed', req),
         setGroupPassthrough: (req) => t.postFF('set_group_passthrough', req),
         setIsolatedNode: (req) => t.request('set_isolated_node', req),
@@ -1934,6 +1979,8 @@ export function makeApi(t: Transport): EngineApi {
         startExport: () => t.postFF('start_export'),
         startPreview: (req) => t.postFF('start_preview', req),
         startSaveDocument: (req) => t.request('start_save_document', req),
+        strokeEditBegin: () => t.request('stroke_edit_begin'),
+        strokeEditEnd: () => t.postFF('stroke_edit_end'),
         strokeTo: (req) => t.postFF('stroke_to', req),
         takeTransformSetupError: () => t.request('take_transform_setup_error'),
         textObjects: (req) => t.request('text_objects', req),
