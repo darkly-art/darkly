@@ -1,5 +1,5 @@
 {
-  "svg": "28f0049c31affe0b",
+  "svg": "17f761c3e0b22545",
   "width": 1444,
   "height": 584,
   "catalog": "brushPacks",
@@ -42,7 +42,8 @@
       },
       "brushes/airbrush": {
         "type": "airbrush",
-        "displayName": "Airbrush"
+        "displayName": "Airbrush",
+        "description": "A fully soft disc for smooth gradients and gradual shading."
       },
       "brushes/technical_pen": {
         "type": "technical_pen",

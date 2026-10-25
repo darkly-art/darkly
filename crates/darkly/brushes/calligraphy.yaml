@@ -11,7 +11,7 @@ nodes:
     comment: Tight spacing keeps the nib's thin edge continuous.
     inputs:
       spacing: 0.018592645
-      stabilize: 0.6
+      stabilize: 0.4
       size: 0.125
   paint_color:
     type: paint_color

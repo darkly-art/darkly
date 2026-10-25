@@ -8,9 +8,8 @@ nodes:
   brush_settings:
     type: brush_settings
     name: Brush settings
-    comment: The steadiest brush in the pack, for ruling and tracing.
     inputs:
-      stabilize: 0.7
+      stabilize: 0.4
       size: 0.05
   roughness:
     type: user_input

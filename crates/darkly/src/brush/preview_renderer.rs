@@ -31,9 +31,10 @@ use crate::nodegraph::Graph;
 /// A preview is a picture of a brush, not of one stroke of it: five shipped
 /// brushes contain `random`/`noise` nodes, and seeding those from the clock
 /// would make a cached thumbnail differ from its own re-bake and a
-/// documentation asset differ from its own rebuild. The value is arbitrary; that
-/// it never changes is the point.
-const PREVIEW_STROKE_SEED: u32 = 0x5EED_B00C;
+/// documentation asset differ from its own rebuild. That it never changes is
+/// the point; the value itself is one whose draws give the shipped brushes'
+/// noisy round tips an even silhouette in the single-dab preview.
+const PREVIEW_STROKE_SEED: u32 = 0x5EED_891E;
 
 /// Reusable GPU scratch + layer textures for preview rendering.
 struct PreviewTarget {

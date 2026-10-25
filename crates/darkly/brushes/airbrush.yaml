@@ -1,4 +1,5 @@
 name: Airbrush
+description: A fully soft disc for smooth gradients and gradual shading.
 nodes:
   pen_input:
     type: pen_input

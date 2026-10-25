@@ -501,7 +501,13 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::BrushDabThumbnail { id, width, height } => {
-                let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
+                let png_bytes = frame_dab_tip(
+                    &pixels,
+                    width,
+                    height,
+                    self.preview_theme_fg,
+                    self.preview_theme_bg,
+                );
                 if !png_bytes.is_empty() {
                     crate::brush::library::with_mut(|lib| lib.set_dab_thumbnail(&id, png_bytes));
                 }
@@ -567,7 +573,8 @@ impl DarklyEngine {
                 // queued before a scrub change is still valid.
                 if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    let png_bytes =
+                        frame_dab_tip(&pixels, w, h, self.preview_theme_fg, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
                         self.active_dab_preview_cache = Some(png_bytes);
                     }
@@ -1431,6 +1438,63 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         return Vec::new();
     }
     out
+}
+
+/// Frame a single-dab render as the brush's tip: [`frame_dab_thumbnail`]
+/// after stretching the dab to full contrast.
+///
+/// A dab preview shows the tip's shape, but one dab carries only the
+/// brush's per-dab flow, and a brush that builds opacity out of many
+/// low-flow dabs would show a near-invisible tile (or none, once the dab
+/// sits inside the framer's background tolerance). The strongest pixel's
+/// deviation from `bg` is scaled up to the full `fg`-to-`bg` contrast and
+/// every other pixel by the same factor, so the shape and its falloff
+/// survive and flow no longer decides whether the tip is visible.
+pub fn frame_dab_tip(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    fg: [f32; 4],
+    bg: [f32; 4],
+) -> Vec<u8> {
+    let bg_u8 = quantize_rgb(bg);
+    let fg_u8 = quantize_rgb(fg);
+    let deviation = |px: &[u8; 4]| {
+        (0..3)
+            .map(|c| (px[c] as i32 - bg_u8[c] as i32).abs())
+            .max()
+            .unwrap_or(0)
+    };
+    let full = (0..3)
+        .map(|c| (fg_u8[c] as i32 - bg_u8[c] as i32).abs())
+        .max()
+        .unwrap_or(0);
+    let peak = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(deviation)
+        .max()
+        .unwrap_or(0);
+    if peak == 0 || peak >= full {
+        return frame_dab_thumbnail(pixels, width, height, bg);
+    }
+    let k = full as f32 / peak as f32;
+    let stretched: Vec<u8> = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|px| {
+            let mut out = [0u8; 4];
+            for c in 0..3 {
+                let d = px[c] as f32 - bg_u8[c] as f32;
+                out[c] = (bg_u8[c] as f32 + d * k).round().clamp(0.0, 255.0) as u8;
+            }
+            out[3] = px[3];
+            out
+        })
+        .collect();
+    frame_dab_thumbnail(&stretched, width, height, bg)
 }
 
 /// Compute the coverage scale to apply to the cursor-preview overlay

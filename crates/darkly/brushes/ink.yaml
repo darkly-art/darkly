@@ -9,7 +9,7 @@ nodes:
     name: Brush settings
     comment: Extra stabilization, since line work wants a steady hand.
     inputs:
-      stabilize: 0.6
+      stabilize: 0.4
   width_curve:
     type: curve
     name: Pressure to width
@@ -27,7 +27,7 @@ nodes:
     name: Roughness
     comment: How far the edge is bitten; zero is a clean disc.
     inputs:
-      value: 0.35
+      value: 0.2
   bite_draw:
     type: random
     name: Bite per dab

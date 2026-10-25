@@ -174,6 +174,48 @@ fn small_size_brush_dab_thumbnail_is_framed() {
     );
 }
 
+/// Regression: a brush that builds opacity from many low-flow dabs showed a
+/// near-invisible dab preview, because the preview is one dab and one dab
+/// carries only the per-dab flow. The preview is the tip's shape, so its
+/// strongest pixel reaches the full foreground whatever the flow.
+#[test]
+fn low_flow_dab_preview_shows_the_tip_at_full_strength() {
+    let mut engine = fresh_engine();
+    let portable: darkly::brush::portable::PortableBrush =
+        serde_yaml_ng::from_str(include_str!("fixtures/analytic_disc.yaml"))
+            .expect("fixture parses");
+    let mut graph = portable
+        .into_brush(darkly::brush::registry(), "fixture")
+        .expect("fixture builds")
+        .metadata
+        .graph;
+    // Flow per dab is `pressure * b`; the preview dab is at full pressure.
+    let mul = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "multiply")
+        .expect("fixture has a multiply")
+        .id
+        .clone();
+    graph
+        .set_port_default(&mul, "b", 0.05)
+        .expect("multiply factor");
+    engine
+        .set_brush_graph(&serde_json::to_string(&graph).unwrap())
+        .expect("fixture compiles");
+
+    let _ = engine.brush_active_dab_preview();
+    engine.test_flush_readbacks();
+    let png = engine.brush_active_dab_preview();
+    let img = image::load_from_memory(&png).expect("valid PNG").to_rgba8();
+    let brightest = img.pixels().map(|p| p.0[0]).max().unwrap_or(0);
+    assert!(
+        brightest > 240,
+        "a 5% flow dab should still show its tip at full strength; the \
+         brightest pixel was {brightest}"
+    );
+}
+
 #[test]
 fn brush_thumbnail_unknown_name_returns_empty() {
     let mut engine = fresh_engine();
