@@ -1,5 +1,5 @@
 name: Round
-description: "The painter's round: a hard disc that holds its size and lays down more color the harder you press. One pass lays down what the pressure allows; a second pass over it builds. Roughness bites the edge; zero is a clean disc."
+description: "The painter's round: a hard disc that holds its size and lays down more color the harder you press. Roughness bites the edge; zero is a clean disc."
 nodes:
   pen_input:
     type: pen_input
@@ -8,11 +8,12 @@ nodes:
     type: brush_settings
     name: Brush settings
     inputs:
+      spacing: 0.02
       stabilize: 0.4
-  opacity_curve:
+  flow_curve:
     type: curve
-    name: Pressure to opacity
-    comment: Pressure sets the opacity, not the width, with a faint floor so the lightest touch still shows.
+    name: Pressure to flow
+    comment: Pressure sets how much color each dab lays down, not the width, with a faint floor so the lightest touch still shows.
     inputs:
       curve:
       - - 0.0
@@ -21,6 +22,14 @@ nodes:
         - 0.4
       - - 1.0
         - 1.0
+  flow:
+    type: user_input
+    name: Flow
+    inputs:
+      value: 0.05
+  flow_scale:
+    type: multiply
+    name: Flow times pressure
   roughness:
     type: user_input
     name: Roughness
@@ -61,14 +70,12 @@ nodes:
     comment: The tip filled with the current color.
   paint:
     type: paint
-    comment: "Mostly Wash with a little Build-up: crossing your own stroke adds little, but a second stroke layers over the first."
-    inputs:
-      buildup: 0.3
 connections:
 - pen_input.position -> paint.position
-- pen_input.pressure -> opacity_curve.input
-- opacity_curve.output -> paint.wash_flow
-- opacity_curve.output -> paint.build_flow
+- pen_input.pressure -> flow_curve.input
+- flow_curve.output -> flow_scale.a
+- flow.value -> flow_scale.b
+- flow_scale.result -> paint.build_flow
 - roughness.value -> bite.a
 - bite_draw.value -> bite.b
 - bite.result -> circle.amplitude
@@ -80,10 +87,13 @@ connections:
 exposed_ports:
   brush_settings.size: {}
   paint.opacity: {}
+  flow.value:
+    label: Flow
+    description: How much color each touch lays down.
+    icon: fa6-solid:droplet
   brush_settings.stabilize: {}
   roughness.value:
     label: Roughness
     description: How far the edge of the tip is bitten. Zero is a clean round.
     icon: tabler:grain
   circle.softness: {}
-  paint.buildup: {}

@@ -1,5 +1,5 @@
 {
-  "svg": "f52b30a6e54de1de",
+  "svg": "28f0049c31affe0b",
   "width": 1444,
   "height": 584,
   "catalog": "brushPacks",
@@ -38,12 +38,11 @@
       "brushes/round": {
         "type": "round",
         "displayName": "Round",
-        "description": "The painter's round: a hard disc that holds its size and lays down more color the harder you press. One pass lays down what the pressure allows; a second pass over it builds. Roughness bites the edge; zero is a clean disc."
+        "description": "The painter's round: a hard disc that holds its size and lays down more color the harder you press. Roughness bites the edge; zero is a clean disc."
       },
       "brushes/airbrush": {
         "type": "airbrush",
-        "displayName": "Airbrush",
-        "description": "A fully soft disc that builds color up gradually; hold it in one place and the color keeps building."
+        "displayName": "Airbrush"
       },
       "brushes/technical_pen": {
         "type": "technical_pen",

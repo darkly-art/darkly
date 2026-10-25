@@ -1926,10 +1926,20 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
     // A ground's read-modify-write: the law runs on the loaded texel and
     // the packed result is stored only where it differs from what was
     // there, so a refused dab costs a load and no store.
+    // Build-up rounds its store stochastically; the other laws round to
+    // nearest.
     let guarded_store = |target: &str, law: &str, src: &str| {
+        let packed = if law == "accumulate_build" {
+            format!(
+                "pack_ground_dithered({law}({src}, unpack_ground({target}_was)), \
+                 build_dither(canvas_px, d.pos))"
+            )
+        } else {
+            format!("pack_ground({law}({src}, unpack_ground({target}_was)))")
+        };
         format!(
             "    let {target}_was = textureLoad({target}, layer_px);\n\
-             \x20   let {target}_now = pack_ground({law}({src}, unpack_ground({target}_was)));\n\
+             \x20   let {target}_now = {packed};\n\
              \x20   if ({target}_now.r != {target}_was.r) {{\n\
              \x20       textureStore({target}, layer_px, {target}_now);\n\
              \x20   }}\n"
@@ -2271,9 +2281,14 @@ fn authored_buildup_picks_the_accumulation_shape() {
     // The law a ground accumulates under, as the line that computes its
     // next texel.
     let stores = |compiled: &darkly::brush::wgsl::CompiledBrush, target: &str, law: &str| {
+        let pack = if law == "accumulate_build" {
+            "pack_ground_dithered"
+        } else {
+            "pack_ground"
+        };
         compiled
             .stroke_wgsl
-            .contains(&format!("let {target}_now = pack_ground({law}("))
+            .contains(&format!("let {target}_now = {pack}({law}("))
     };
 
     let top = compiled_at(Some(1.0));

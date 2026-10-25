@@ -63,10 +63,10 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
-                .with_label("Softness")
+                .with_label("Feather")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa6-solid:feather")
-                .with_description("Edge softness (0% = hard, 100% = feathered)"),
+                .with_description("How far the edge fades out (0% = hard, 100% = fully feathered)"),
             // amplitude is meaningful for Sine and Perlin (modulates the
             // bumpy boundary); the Superformula's amplitude is implicit in
             // its n1/n2/n3 instead, so we hide this knob for it.

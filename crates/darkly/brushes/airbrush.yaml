@@ -21,7 +21,7 @@ nodes:
   circle:
     type: circle
     name: Spray
-    comment: A disc at full softness, all falloff and no edge.
+    comment: A disc at full feather, all falloff and no edge.
     inputs:
       softness: 1.0
   paint_color:
