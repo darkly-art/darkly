@@ -497,7 +497,8 @@ pub struct DarklyEngine {
     /// Previous hover sample fed into `regenerate_brush_cursor_preview_with_pen`.
     /// Kept so segment-derived sensors (drawing_angle, motion, distance,
     /// speed) can be derived on the next hover using the same helper the
-    /// stroke engine uses. Reset on pointer-leave / stroke-start via
+    /// stroke engine uses. A stroke's first event takes it, so the stroke's
+    /// first dab continues the hover direction. Reset on pointer-leave via
     /// `clear_brush_cursor_preview_pose()` so a return-from-offscreen hover
     /// doesn't synthesize a spurious direction.
     pub(crate) last_cursor_preview_pose: Option<crate::brush::paint_info::PaintInformation>,

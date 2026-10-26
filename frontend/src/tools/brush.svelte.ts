@@ -128,6 +128,11 @@ class BrushTool extends ToolBase {
      *  session doesn't draw, so it stays. */
     private hoverGen = 0;
 
+    /** `pointerId` of the last hover move. The engine's stroke continues the
+     *  hover the pen arrived with, so a pen-down by any other pointer (a touch
+     *  while a mouse rests over the canvas) clears that hover first. */
+    private hoverPointerId: number | null = null;
+
     /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the given
      *  pose. Also reachable by non-brush callers (the shift+drag size scrub, the
      *  `[` / `]` hotkey refresh) via {@link focusedBrushTool}. Async: it awaits
@@ -243,7 +248,7 @@ class BrushTool extends ToolBase {
         // Clear the hover overlay while painting: the stamp renders onto the
         // canvas directly; a ghost at the cursor would just clutter.
         engine.api.clearOverlay();
-        engine.api.clearBrushCursorPreviewPose();
+        if (e.pointerId !== this.hoverPointerId) engine.api.clearBrushCursorPreviewPose();
         this.clearHover();
         this.inst.toolCursor = 'none';
         // Records the foreground as recently used; the engine already has it.
@@ -279,6 +284,7 @@ class BrushTool extends ToolBase {
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
+        this.hoverPointerId = e.pointerId;
         void runHook(this.pushHoverOverlay(cursorPose(e), cx, cy));
     }
 

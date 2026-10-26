@@ -249,8 +249,9 @@ impl DarklyEngine {
 
     /// Drop the remembered hover pose so the next
     /// `regenerate_brush_cursor_preview_with_pen` starts a fresh hover with no
-    /// derived direction/motion/distance/speed. Call this on pointer-leave
-    /// and at the start of a stroke.
+    /// derived direction/motion/distance/speed. Call this on pointer-leave,
+    /// and at pen-down by a pointer other than the one that hovered (a
+    /// touch), whose stroke must not continue another pointer's hover.
     #[handler]
     pub fn clear_brush_cursor_preview_pose(&mut self) {
         self.last_cursor_preview_pose = None;

@@ -8,7 +8,7 @@ use super::types::StrokeOp;
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
-use crate::brush::paint_info::PaintInformation;
+use crate::brush::paint_info::{direction_between, PaintInformation};
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::coord::CanvasRect;
 use crate::gpu::layer_readback;
@@ -872,6 +872,13 @@ impl DarklyEngine {
         time_ms: f64,
     ) {
         if self.brush_stroke.is_none() {
+            // The stroke continues the hover stream: its first dab measures
+            // its direction from the last hover sample, the way that sample
+            // measured its own. Taken before anything can refuse the stroke,
+            // so a pen-down always ends the hover it interrupts.
+            let start_direction = self.last_cursor_preview_pose.take().map_or(0.0, |hover| {
+                direction_between(hover.pos, [x, y], hover.drawing_angle)
+            });
             let Some(runner) = self.compile_active_brush() else {
                 return;
             };
@@ -880,7 +887,7 @@ impl DarklyEngine {
             if !self.brush_can_paint(&runner) {
                 return;
             }
-            let conditions = self.current_stroke_conditions();
+            let conditions = self.current_stroke_conditions(start_direction);
             let engine = self.build_stroke_engine(runner, &conditions);
             // No node texture, no stroke: the engine is dropped unstored.
             // Scratch initialisation is the terminal's responsibility (via

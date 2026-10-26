@@ -545,6 +545,16 @@ whichever terminal publishes a `dab_size: Vec2` output, and the stroke engine
 reads it after every dab (`BrushGraphRunner::last_dab_size`). A terminal that
 wants its footprint to drive spacing only has to publish that port.
 
+Two per-dab quantities are not interpolated but measured in `place_dab`
+against the dab before it: `motion` and the direction of travel. Direction
+follows the one rule the hover preview uses too (`direction_between`, after
+Krita's `directionBetweenPoints`): the chord from the previous sample, or the
+previous direction when the two coincide. A stroke's first dab has no dab
+behind it, so it measures from the last hover sample, which the stroke takes
+at pen-down: the stroke continues the hover stream, and its first dab faces
+the way the hover preview did. The stamp tracker (`stamp_angle_rate`) then
+filters that direction, seeded by the first dab that has travelled.
+
 ## Undo, the last stroke, and stroke edit
 
 A stroke's undo entry comes from two structures it already has:

@@ -232,6 +232,8 @@ impl BrushStrokePreviewRenderer {
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),
+            // A synthetic path has no hover to continue.
+            0.0,
             // Previews show brush identity, not momentary document state,
             // and a brush's identity is its reference-pixel tuning, so they
             // render at the reference (factor 1.0) whatever the focused
