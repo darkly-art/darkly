@@ -10,6 +10,13 @@ export function resolveStep(min: number, max: number, integer: boolean, step?: n
     return span > 0 ? span / 200 : 1;
 }
 
+/** Decimal places a readout needs to resolve a hundredth of the range: two
+ *  for a unit range, three for `[0, 0.1]`, never fewer than two. */
+export function readoutDecimals(min: number, max: number): number {
+    const span = max - min;
+    return span > 0 ? Math.max(2, Math.ceil(-Math.log10(span / 100))) : 2;
+}
+
 /** Clamp to `[min, max]`, rounding to an integer when the slider is integral. */
 export function clampValue(value: number, min: number, max: number, integer: boolean): number {
     let v = integer ? Math.round(value) : value;

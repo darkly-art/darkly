@@ -1,5 +1,5 @@
 name: Flat Pen
-description: "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets the opacity, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
+description: "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets how much ink goes down, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
 nodes:
   pen_input:
     type: pen_input
@@ -12,10 +12,10 @@ nodes:
       stabilize: 0.5
       spacing: 0.02
       stamp_angle_rate: 3.1416
-  opacity_curve:
+  flow_curve:
     type: curve
-    name: Pressure to opacity
-    comment: Pressure sets the opacity, not the width, with a faint floor so the lightest touch still shows.
+    name: Pressure to flow
+    comment: Pressure sets how much ink each dab lays down, not the width, with a faint floor so the lightest touch still shows.
     inputs:
       curve:
       - - 0.0
@@ -24,6 +24,15 @@ nodes:
         - 0.4
       - - 1.0
         - 1.0
+  flow:
+    type: user_input
+    name: Flow
+    comment: The nib is thin along the stroke, so fewer dabs overlap any spot than on a round tip, and each lays down more.
+    inputs:
+      value: 0.15
+  flow_scale:
+    type: multiply
+    name: Flow times pressure
   aspect_draw:
     type: random
     name: Aspect per dab
@@ -50,15 +59,13 @@ nodes:
     comment: The nib filled with the current color.
   paint:
     type: paint
-    comment: "Mostly Wash with a little Build-up: crossing your own stroke adds little, but a second stroke layers over the first."
-    inputs:
-      buildup: 0.3
 connections:
 - pen_input.position -> paint.position
 - pen_input.drawing_angle -> circle.rotation_input
-- pen_input.pressure -> opacity_curve.input
-- opacity_curve.output -> paint.wash_flow
-- opacity_curve.output -> paint.build_flow
+- pen_input.pressure -> flow_curve.input
+- flow_curve.output -> flow_scale.a
+- flow.value -> flow_scale.b
+- flow_scale.result -> paint.build_flow
 - aspect_draw.value -> aspect.input
 - aspect.output -> circle.aspect
 - circle.mask -> stamp.tip
@@ -67,7 +74,10 @@ connections:
 exposed_ports:
   brush_settings.size: {}
   paint.opacity: {}
+  flow.value:
+    label: Flow
+    description: How much ink each touch lays down.
+    icon: fa6-solid:droplet
   brush_settings.stabilize: {}
   brush_settings.stamp_angle_rate: {}
   circle.softness: {}
-  paint.buildup: {}

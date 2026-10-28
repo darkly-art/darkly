@@ -52,7 +52,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             const ids: number[] = [];
             for (const [pipeline, params] of [
                 ['rainy_glass', { direction: 135 }],
-                ['grain', { speed: 0.05 }],
+                ['grain', {}],
                 ['lens_blur', { radius: 0.25 }],
                 ['vhs', {}],
             ] as const) {

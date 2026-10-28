@@ -390,6 +390,11 @@ pub struct BrushPipelines {
     /// Pipelines built lazily, keyed by the brush's `topology_hash`.
     /// See [`CursorPreviewPipelineCache`].
     cursor_preview_pipeline_cache: CursorPreviewPipelineCache,
+
+    /// Stretches a single-dab render to full contrast, for every preview
+    /// that shows one dab as the brush's tip. See
+    /// [`crate::gpu::tip_stretch`].
+    tip_stretch: crate::gpu::tip_stretch::TipStretch,
 }
 
 impl BrushPipelines {
@@ -781,7 +786,13 @@ impl BrushPipelines {
             texture_registry,
             baked_sources,
             cursor_preview_pipeline_cache,
+            tip_stretch: crate::gpu::tip_stretch::TipStretch::new(device),
         }
+    }
+
+    /// The pass every single-dab tip preview is stretched through.
+    pub fn tip_stretch(&self) -> &crate::gpu::tip_stretch::TipStretch {
+        &self.tip_stretch
     }
 
     /// The zero source [`crate::gpu::zero_fill::zero_fill_rect`] copies
@@ -1235,7 +1246,7 @@ fn build_cursor_preview_pipeline(
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: crate::gpu::overlay::CURSOR_PREVIEW_RENDER_FORMAT,
                 blend: Some(wgpu::BlendState::REPLACE),
                 write_mask: wgpu::ColorWrites::ALL,
             })],

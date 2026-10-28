@@ -289,21 +289,6 @@ pub(crate) enum ReadbackContext {
         node_id: String,
         topology_version: u64,
     },
-    /// Async readback of the freshly-rendered `cursor_preview_mask` (the GPU
-    /// texture sampled by the overlay's KIND_MASKED_STAMP) used to derive
-    /// the cursor-preview coverage scale. Completion measures mean alpha
-    /// and pushes the resulting normalize multiplier into the overlay
-    /// uniform via `set_preview_coverage_scale`. Carries the topology
-    /// version at request time so stale results from superseded
-    /// compilations are dropped.
-    ///
-    /// `width` / `height` are the cursor_preview_mask dimensions at readback
-    /// time, used to walk the row-padded buffer the GPU returned.
-    BrushCursorPreviewScale {
-        topology_version: u64,
-        width: u32,
-        height: u32,
-    },
     /// Async readback of an undo-region staging buffer. On completion the
     /// handler flips the `cell` from `Pending` to `Ready`, dropping the
     /// staging buffer and moving the pixels onto the host heap.
@@ -539,12 +524,6 @@ pub struct DarklyEngine {
     /// re-issuing a readback while the graph is unchanged. Refreshed
     /// asynchronously via `ReadbackContext::NodePreview`.
     pub(crate) node_preview_cache: std::collections::HashMap<String, (u64, Vec<u8>)>,
-    /// Topology version of the brush whose cursor-preview coverage scale
-    /// we last requested a readback for. Compared against the current
-    /// topology to skip re-issuing the readback when the brush hasn't
-    /// changed shape: the scale is a property of the graph topology,
-    /// not the cursor pose.
-    pub(crate) last_requested_cursor_scale_topology_version: u64,
     /// Theme colors shared by the stroke preview, the dab preview, and
     /// the library thumbnail bake. (The cursor preview composes over the
     /// live canvas and ignores these.) The frontend sets these via
@@ -825,7 +804,6 @@ impl DarklyEngine {
             active_dab_preview_cache: None,
             node_preview_cache: std::collections::HashMap::new(),
             last_rendered_dab_topology_version: 0,
-            last_requested_cursor_scale_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
@@ -1005,12 +983,55 @@ impl DarklyEngine {
         self.compositor.test_clear_needs_present();
     }
 
-    /// Current cursor-preview coverage scale uniform: the multiplier the
-    /// overlay shader applies to KIND_MASKED_STAMP sampled coverage.
-    /// Test-only.
+    /// Blocking readback of the hover dab as the brush rendered it: per
+    /// texel, the red channel of the preview render, before the stretch,
+    /// rounded to 8 bits. Returns `(coverage, width, height)`. Test-only.
     #[cfg(any(test, feature = "testing"))]
-    pub fn cursor_preview_coverage_scale(&self) -> f32 {
-        self.compositor.tool_overlay().preview_coverage_scale()
+    pub fn test_readback_cursor_preview_raw(&self) -> (Vec<u8>, u32, u32) {
+        let (render, _) = self.cursor_preview_textures();
+        let (w, h) = self.compositor.tool_overlay().cursor_preview_mask_size();
+        let rgba = crate::gpu::test_utils::readback_cursor_preview_render(
+            &self.gpu.device,
+            &self.gpu.queue,
+            render,
+            w,
+            h,
+        );
+        (
+            rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect(),
+            w,
+            h,
+        )
+    }
+
+    /// Blocking readback of the hover dab as the overlay draws it: per
+    /// texel, the coverage the masked stamp shows under the cursor.
+    /// Returns `(coverage, width, height)`. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_readback_cursor_preview_displayed(&self) -> (Vec<u8>, u32, u32) {
+        let (_, mask) = self.cursor_preview_textures();
+        let (w, h) = self.compositor.tool_overlay().cursor_preview_mask_size();
+        let rgba = crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            mask,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+        );
+        (
+            rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect(),
+            w,
+            h,
+        )
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    fn cursor_preview_textures(&self) -> (&wgpu::Texture, &wgpu::Texture) {
+        self.compositor
+            .tool_overlay()
+            .cursor_preview_textures()
+            .expect("a hover dab has been rendered")
     }
 
     /// Test-only view of the selection mask's CPU cache. Returns `None`
@@ -1527,8 +1548,9 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of the raw dab-preview **render canvas** for the
-    /// active brush: the buffer *before* `frame_dab_thumbnail` crops it.
-    /// Returns `(pixels, width, height)`. Same purpose and path as
+    /// active brush: the buffer *before* the tip stretch and
+    /// `frame_dab_thumbnail` crops it, so a measurement reads the dab the
+    /// brush deposits. Returns `(pixels, width, height)`. Same purpose and path as
     /// [`Self::test_render_stroke_preview_canvas`], for the single-dab preview.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_render_dab_preview_canvas(&mut self) -> (Vec<u8>, u32, u32) {

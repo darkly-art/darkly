@@ -1,5 +1,5 @@
 {
-  "svg": "17f761c3e0b22545",
+  "svg": "36f4062558af24ed",
   "width": 1444,
   "height": 584,
   "catalog": "brushPacks",
@@ -53,7 +53,7 @@
       "brushes/flat_pen": {
         "type": "flat_pen",
         "displayName": "Flat Pen",
-        "description": "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets the opacity, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
+        "description": "A flat nib that turns to follow the stroke, so lines swell on the turns and thin on the straights while the width itself never changes. Pressure sets how much ink goes down, not the width. The nib lags the stroke a little, the way a real flat does at a corner."
       },
       "brushes/calligraphy": {
         "type": "calligraphy",

@@ -216,6 +216,61 @@ fn low_flow_dab_preview_shows_the_tip_at_full_strength() {
     );
 }
 
+/// A node's preview shows the node's value as it is: only the brush's tip is
+/// stretched to full strength. A stamp whose tip is scaled to 30% previews at
+/// 30% while the dab tile of the same graph reaches full.
+#[test]
+fn node_preview_keeps_its_natural_strength() {
+    let mut engine = fresh_engine();
+    let yaml = include_str!("fixtures/analytic_disc.yaml")
+        .replace(
+            "  stamp:\n    type: stamp\n",
+            "  stamp:\n    type: stamp\n  tip_scale:\n    type: multiply\n    inputs:\n      b: 0.3\n",
+        )
+        .replace(
+            "- circle.mask -> stamp.tip",
+            "- circle.mask -> tip_scale.a\n- tip_scale.result -> stamp.tip",
+        );
+    let portable: darkly::brush::portable::PortableBrush =
+        serde_yaml_ng::from_str(&yaml).expect("fixture parses");
+    let graph = portable
+        .into_brush(darkly::brush::registry(), "fixture")
+        .expect("fixture builds")
+        .metadata
+        .graph;
+    let stamp = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "stamp")
+        .expect("fixture has a stamp")
+        .id
+        .0
+        .clone();
+    engine
+        .set_brush_graph(&serde_json::to_string(&graph).unwrap())
+        .expect("fixture compiles");
+
+    let brightest = |png: &[u8]| {
+        let img = image::load_from_memory(png).expect("valid PNG").to_rgba8();
+        img.pixels().map(|p| p.0[0]).max().unwrap_or(0)
+    };
+    let _ = engine.brush_node_preview(&stamp);
+    let _ = engine.brush_active_dab_preview();
+    engine.test_flush_readbacks();
+    let node = brightest(&engine.brush_node_preview(&stamp));
+    let tip = brightest(&engine.brush_active_dab_preview());
+    assert!(
+        (60..=100).contains(&node),
+        "the stamp's preview should show its 30% tip as it is; the brightest \
+         pixel was {node}"
+    );
+    assert!(
+        tip > 240,
+        "the dab tile of the same graph should show the tip at full \
+         strength; the brightest pixel was {tip}"
+    );
+}
+
 #[test]
 fn brush_thumbnail_unknown_name_returns_empty() {
     let mut engine = fresh_engine();

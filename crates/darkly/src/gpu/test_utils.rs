@@ -157,6 +157,59 @@ pub fn create_test_texture_with_format(
     (texture, view)
 }
 
+/// A hover-dab render target, in the format brush terminals render the
+/// cursor preview into: what a test hands a `CursorPreviewState` as its
+/// `mask_view`.
+pub fn cursor_preview_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test-cursor-preview-target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: super::overlay::CURSOR_PREVIEW_RENDER_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+/// Read back a hover-dab render target (blocking) as unpadded RGBA8, each
+/// channel clamped and rounded the way an `Rgba8Unorm` store would.
+pub fn readback_cursor_preview_render(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let raw = readback_texture(
+        device,
+        queue,
+        texture,
+        super::overlay::CURSOR_PREVIEW_RENDER_FORMAT,
+        width,
+        height,
+    );
+    raw.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&b| {
+            let v = half::f16::from_le_bytes(b).to_f32();
+            (v.clamp(0.0, 1.0) * 255.0).round() as u8
+        })
+        .collect()
+}
+
 /// Read back an entire texture to CPU memory (blocking). For test assertions.
 pub fn readback_texture(
     device: &wgpu::Device,

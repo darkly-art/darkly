@@ -5,6 +5,7 @@ import {
     valueToFraction,
     quantize,
     fractionToValue,
+    readoutDecimals,
 } from '../slider';
 
 describe('resolveStep', () => {
@@ -90,5 +91,17 @@ describe('fractionToValue', () => {
             const f = valueToFraction(v, min, max);
             expect(fractionToValue(f, min, max, false, 0.5)).toBeCloseTo(v, 6);
         }
+    });
+});
+
+describe('readoutDecimals', () => {
+    it('resolves a hundredth of the range', () => {
+        expect(readoutDecimals(0, 1)).toBe(2);
+        expect(readoutDecimals(0, 0.1)).toBe(3);
+        expect(readoutDecimals(0, 0.01)).toBe(4);
+    });
+    it('never drops below two places', () => {
+        expect(readoutDecimals(0, 360)).toBe(2);
+        expect(readoutDecimals(5, 5)).toBe(2);
     });
 });
