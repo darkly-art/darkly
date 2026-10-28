@@ -62,7 +62,7 @@ nodes:
   subtract:
     type: subtract
     inputs:
-      a: 0.11999999731779099
+      a: 0.12
 connections:
 - add.result -> remap.input
 - brush_settings.size -> divide.b

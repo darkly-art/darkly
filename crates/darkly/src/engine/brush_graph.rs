@@ -1359,20 +1359,26 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
-    /// Move a brush-bar entry to a target index. Backs the drag-reorder
-    /// UX in the brush-bar node.
+    /// Move a brush-bar entry so it sits immediately before the entry
+    /// keyed `before`, or last when `before` is `None`. Backs the
+    /// drag-reorder UX in the brush-bar node.
+    ///
+    /// Anchored on a neighbouring key rather than an index because
+    /// [`Self::brush_exposed_ports`] is a filtered view of the graph's
+    /// entries (wire-driven ports are skipped), so an index into the list
+    /// the bar renders is not an index into the graph.
     #[handler(returns = graph)]
     pub fn brush_graph_reorder_exposed_port(
         &mut self,
         key: &str,
-        new_index: u32,
+        before: Option<String>,
     ) -> Result<String, String> {
         self.tool_session
             .write()
             .get_mut::<BrushState>()
             .expect(NO_BRUSH_STATE)
             .graph
-            .reorder_exposed_port(key, new_index as usize)
+            .move_exposed_port_before(key, before.as_deref())
             .map_err(|e| format!("{e}"))?;
         self.bump_brush_topology_version();
         Ok(self.active_graph_json())
@@ -1610,8 +1616,8 @@ pub enum ExposedValue {
 pub struct ExposedPortInfo {
     /// `"<node_id>.<port_name>"`: the same string used to address the
     /// entry in `Graph::exposed_ports`. Frontend passes it back to
-    /// `set_exposed_port_meta` / `reorder_exposed_port` without having
-    /// to reconstruct the format.
+    /// `set_exposed_port_meta` / `brush_graph_reorder_exposed_port`
+    /// without having to reconstruct the format.
     pub key: String,
     pub node_id: String,
     pub port_name: String,

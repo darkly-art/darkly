@@ -110,7 +110,7 @@ export type BrushGraphJsonReq = { json: string, };
 
 export type BrushGraphRemoveNodeReq = { node_id: string, };
 
-export type BrushGraphReorderExposedPortReq = { key: string, new_index: number, };
+export type BrushGraphReorderExposedPortReq = { key: string, before: string | null, };
 
 export type BrushGraphSetExposedPortMetaReq = { key: string, meta: ExposedPortMeta, };
 
@@ -300,8 +300,8 @@ export type ExposedPortInfo = {
 /**
  * `"<node_id>.<port_name>"`: the same string used to address the
  * entry in `Graph::exposed_ports`. Frontend passes it back to
- * `set_exposed_port_meta` / `reorder_exposed_port` without having
- * to reconstruct the format.
+ * `set_exposed_port_meta` / `brush_graph_reorder_exposed_port`
+ * without having to reconstruct the format.
  */
 key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
 
