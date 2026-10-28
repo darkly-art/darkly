@@ -95,14 +95,18 @@ describe('freshDocument recipes', () => {
         // the seed added them at their default visibility. They exist to be
         // discovered, not to redecorate the canvas before the user has touched
         // anything.
-        it('seeds every effect hidden', async () => {
+        //
+        // Regression: the effects themselves were hidden too, so showing the
+        // group changed nothing and each effect needed its own click. Only the
+        // group is hidden; one click on it turns the whole stack on.
+        it('seeds the group hidden and every effect inside it visible', async () => {
             const { engine, api } = fakeEngine();
             const { inst } = fakeInstance(engine);
             await RECIPES.demo.seedViewportEffects(inst, 800, 600);
-            expect(api.setLayerVisible).toHaveBeenCalledTimes(4);
-            for (const call of api.setLayerVisible.mock.calls) {
-                expect(call[0].visible).toBe(false);
-            }
+            const groupId = await api.groupLayers.mock.results[0].value;
+            expect(api.setLayerVisible.mock.calls.map((c) => c[0])).toEqual([
+                { id: groupId, visible: false },
+            ]);
         });
 
         // Regression: the panel read the tree when it mounted, which is before

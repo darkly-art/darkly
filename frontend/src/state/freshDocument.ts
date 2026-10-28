@@ -41,9 +41,10 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
         background: { r: 255, g: 255, b: 255, a: 255 },
         fillInitialLayer: (engine, id) => engine.api.fillBackground({ id }),
         seedViewportEffects: async (instance, _w, _h) => {
-            // Four effect layers, added **hidden**: they are there to be
-            // discovered, not to redecorate the canvas before the user has
-            // touched anything.
+            // Four effect layers, added visible inside a **hidden** group:
+            // they are there to be discovered, not to redecorate the canvas
+            // before the user has touched anything, and one click on the
+            // group turns the whole stack on.
             //
             // Then the divider moves below all four in one ordinary layer
             // move, because the run never grows on its own: adding a layer
@@ -57,10 +58,7 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
                 ['vhs', {}],
             ] as const) {
                 const id = await api.addFilter({ pipeline, params, anchor: null });
-                if (id != null) {
-                    api.setLayerVisible({ id, visible: false });
-                    ids.push(id);
-                }
+                if (id != null) ids.push(id);
             }
             if (ids.length > 0) {
                 const tree = await api.layerTree();
@@ -83,7 +81,10 @@ export const RECIPES: Record<DeployMode, FreshDocumentRecipe> = {
             // the whole arrangement into canvas space.
             if (ids.length > 0) {
                 const groupId = await api.groupLayers({ ids });
-                if (groupId != null) api.setLayerName({ id: groupId, name: 'Veils' });
+                if (groupId != null) {
+                    api.setLayerName({ id: groupId, name: 'Veils' });
+                    api.setLayerVisible({ id: groupId, visible: false });
+                }
             }
             // The panel read the tree when it mounted, which is before any of
             // this existed. Nothing else refreshes it: these layers are added
