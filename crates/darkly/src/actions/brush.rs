@@ -38,6 +38,12 @@ const ACTIONS: &[ActionDef] = &[
         icon: "fa6-solid:clock-rotate-left",
     },
     ActionDef {
+        id: "cycleRecentBrushBack",
+        display_name: "Cycle Recent Brushes Backward",
+        description: "Step through your recent brushes the other way: from the oldest one the cycle holds, or back one if you tapped past the brush you wanted.",
+        icon: "fa6-solid:clock-rotate-left",
+    },
+    ActionDef {
         id: "revertBrush",
         display_name: "Revert to Saved Brush",
         description: "Throw away your unsaved changes to the current brush and put it back the way it was saved.",

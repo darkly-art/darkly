@@ -38,6 +38,13 @@ describe('cycleRecentBrush action', () => {
         expect(app.activeToolId).toBe('brush');
     });
 
+    it('the_two_actions_step_in_opposite_directions', () => {
+        const step = vi.spyOn(brushGraph, 'cycleRecentBrush').mockReturnValue('b');
+        run('cycleRecentBrush');
+        run('cycleRecentBrushBack');
+        expect(step.mock.calls).toEqual([[1], [-1]]);
+    });
+
     it('is_disabled_when_there_is_nothing_to_cycle_to', () => {
         vi.spyOn(brushGraph, 'canCycleRecentBrush', 'get').mockReturnValue(false);
         expect(actionEnablement(actions.get('cycleRecentBrush')!)).toEqual({

@@ -14,7 +14,7 @@ import { config } from '../config/store.svelte';
 import { freshDocument } from './freshDocument';
 import { recentBrushes } from './recents.svelte';
 import { brushLibrary } from './brush_library.svelte';
-import { createRecentCycle } from '../lib/recentCycle';
+import { createRecentCycle, type CycleDirection } from '../lib/recentCycle';
 import type {
     BrushInfo,
     JsonValue,
@@ -594,6 +594,7 @@ export class BrushGraphState {
         items: () => recentBrushes.items,
         current: () => this.activeBrushId,
         commit: id => recentBrushes.use(id),
+        limit: () => config.get('tools.recentBrushCycleLength') as number,
         pauseMs: RECENT_CYCLE_PAUSE_MS,
     });
 
@@ -602,11 +603,12 @@ export class BrushGraphState {
         return this.#recentCycle.canStep();
     }
 
-    /** One press of the recent-brush cycle: step to the next recent brush and
-     *  switch to it. Returns the brush id landed on, or null when there was
-     *  nothing to switch to. Recents are left alone until the chain settles. */
-    cycleRecentBrush(): string | null {
-        const id = this.#recentCycle.step();
+    /** One press of the recent-brush cycle: step to the next recent brush in
+     *  `direction` (`1` older, `-1` back) and switch to it. Returns the brush
+     *  id landed on, or null when there was nothing to switch to. Recents are
+     *  left alone until the chain settles. */
+    cycleRecentBrush(direction: CycleDirection = 1): string | null {
+        const id = this.#recentCycle.step(direction);
         if (id === null) return null;
         // Recents hold ids and the engine loads by name. The ring is pruned of
         // deleted ids on every library refresh, so a miss is a no-op.

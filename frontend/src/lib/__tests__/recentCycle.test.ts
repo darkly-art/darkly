@@ -5,7 +5,11 @@ const PAUSE = 700;
 
 /** A live MRU list: `commit` reorders it exactly as `recentBrushes.use` does,
  *  so a commit that happened mid-chain would show up in every later step. */
-function mru(initial: string[], current: (list: string[]) => string | null = l => l[0] ?? null) {
+function mru(
+    initial: string[],
+    current: (list: string[]) => string | null = l => l[0] ?? null,
+    limit = Infinity,
+) {
     let list = [...initial];
     const commit = vi.fn((id: string) => {
         list = [id, ...list.filter(x => x !== id)];
@@ -14,6 +18,7 @@ function mru(initial: string[], current: (list: string[]) => string | null = l =
         items: () => list,
         current: () => current(list),
         commit,
+        limit: () => limit,
         pauseMs: PAUSE,
     });
     return { cycle, commit, list: () => list };
@@ -101,6 +106,39 @@ describe('recent cycle', () => {
     it('a_current_item_below_the_head_is_treated_as_the_head', () => {
         const { cycle } = mru(['a', 'b', 'c'], () => 'c');
         expect([cycle.step(), cycle.step(), cycle.step()]).toEqual(['a', 'b', 'c']);
+    });
+
+    it('the_walk_is_cut_to_the_limit_counting_the_current_item', () => {
+        const { cycle } = mru(['a', 'b', 'c', 'd', 'e'], undefined, 3);
+        expect([cycle.step(), cycle.step(), cycle.step(), cycle.step()]).toEqual(['b', 'c', 'a', 'b']);
+    });
+
+    it('the_limit_counts_from_a_current_item_below_the_head', () => {
+        const { cycle } = mru(['a', 'b', 'c', 'd'], () => 'd', 2);
+        expect([cycle.step(), cycle.step(), cycle.step()]).toEqual(['a', 'd', 'a']);
+    });
+
+    it('stepping_back_starts_from_the_far_end_and_wraps', () => {
+        const { cycle } = mru(['a', 'b', 'c']);
+        expect([cycle.step(-1), cycle.step(-1), cycle.step(-1), cycle.step(-1)]).toEqual(['c', 'b', 'a', 'c']);
+    });
+
+    it('stepping_back_undoes_an_overshoot_within_the_chain', () => {
+        const { cycle, commit } = mru(['a', 'b', 'c', 'd']);
+        expect([cycle.step(), cycle.step(), cycle.step(-1)]).toEqual(['b', 'c', 'b']);
+        vi.advanceTimersByTime(PAUSE);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit).toHaveBeenCalledWith('b');
+    });
+
+    it('stepping_back_respects_the_limit', () => {
+        const { cycle } = mru(['a', 'b', 'c', 'd', 'e'], undefined, 3);
+        expect(cycle.step(-1)).toBe('c');
+    });
+
+    it('stepping_back_with_nothing_current_starts_from_the_tail', () => {
+        const { cycle } = mru(['a', 'b', 'c'], () => null);
+        expect([cycle.step(-1), cycle.step(-1), cycle.step(-1)]).toEqual(['c', 'b', 'a']);
     });
 
     it('an_empty_ring_is_a_no_op', () => {

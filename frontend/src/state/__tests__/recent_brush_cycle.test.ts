@@ -1,11 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// The color lock is a config pref read through WASM once it is ready. Stand in
-// for the store so a case can flip it; everything else stays real.
+// The color lock and the cycle length are config prefs read through WASM once
+// it is ready. Stand in for the store so a case can set them; everything else
+// stays real.
 const { fakeConfig } = vi.hoisted(() => {
     const fakeConfig = {
         locked: false,
-        get: (key: string) => (key === 'colors.lockToBrush' ? fakeConfig.locked : undefined),
+        cycleLength: 5,
+        get: (key: string) =>
+            key === 'colors.lockToBrush'
+                ? fakeConfig.locked
+                : key === 'tools.recentBrushCycleLength'
+                  ? fakeConfig.cycleLength
+                  : undefined,
     };
     return { fakeConfig };
 });
@@ -42,6 +49,7 @@ beforeEach(() => {
     fake = fakeBrushEngine({ beginStroke: async () => null });
     app.engine = fake.engine;
     fakeConfig.locked = false;
+    fakeConfig.cycleLength = 5;
     brushColors.clear();
     brushLibrary.brushes = ['A', 'B', 'C', 'D'].map(name => ({
         id: name.toLowerCase(),
@@ -127,6 +135,16 @@ describe('recent brush cycle', () => {
         expect(state.cycleRecentBrush()).toBe('a');
         await landed();
         expect(state.activeBrushId).toBe('a');
+    });
+
+    it('the_cycle_length_pref_bounds_the_walk', async () => {
+        fakeConfig.cycleLength = 2;
+        await seed(state, 'c', 'b', 'a');
+        expect([state.cycleRecentBrush(), state.cycleRecentBrush(), state.cycleRecentBrush()]).toEqual([
+            'b',
+            'a',
+            'b',
+        ]);
     });
 
     it('a_load_from_elsewhere_settles_the_chain_first', async () => {
