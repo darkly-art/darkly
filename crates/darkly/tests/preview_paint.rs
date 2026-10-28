@@ -157,3 +157,23 @@ fn rough_ink_preview_shows_color() {
     // Rough Watercolor: that brush has a much larger amplitude so the
     // shape modulation reads cleanly at our sampling resolution.)
 }
+
+/// The canvas size drag scales the brush by the ratio of its outline's
+/// extent, so the extent it reads must keep tracking the size below the
+/// dab's half-pixel radius floor, where the drawn outline stops shrinking.
+/// Otherwise a drag starting at the smallest sizes crawls.
+#[test]
+fn nominal_half_extent_stays_proportional_below_the_radius_floor() {
+    let small = render_cursor_preview("Ink", 0.0001, [0.0, 0.0, 0.0, 1.0]).info;
+    let double = render_cursor_preview("Ink", 0.0002, [0.0, 0.0, 0.0, 1.0]).info;
+
+    assert_eq!(
+        small.half_extent_canvas_px, double.half_extent_canvas_px,
+        "both sizes sit under the floor, so the drawn outline is the same"
+    );
+    let ratio = double.nominal_half_extent_canvas_px[0] / small.nominal_half_extent_canvas_px[0];
+    assert!(
+        (ratio - 2.0).abs() < 1e-4,
+        "nominal extent should double with the size; ratio {ratio}"
+    );
+}

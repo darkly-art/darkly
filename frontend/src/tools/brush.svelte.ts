@@ -22,6 +22,7 @@ import {
 import { isToolHoverSuppressed } from './modifier_cursor';
 import { toast } from '../state/toast.svelte';
 import type { EngineState } from '../engine/protocol';
+import type { BrushCursorPreviewInfoResp } from '../engine/protocol_gen';
 
 /** Brush-tool session state: an app-global artist preference (not per-document),
  *  so it stays module-level even though the brush *tool* is per-instance.
@@ -43,10 +44,6 @@ const MAX_STRENGTH = 0.65;
 const SMALL_ON_SCREEN = 6;
 /** Half-extent in *on-screen* pixels at/above which BASE_STRENGTH applies. */
 const LARGE_ON_SCREEN = 40;
-
-interface BrushCursorPreviewInfo {
-    halfExtent: [number, number];
-}
 
 /** Scale strength with on-screen stamp size: tiny stamps get more contrast
  *  so they remain readable; big stamps stay subtle. Smooth ramp. `zoom` is the
@@ -114,6 +111,12 @@ class BrushTool extends ToolBase {
      *  deactivate, so it only exists while a hover preview is actually visible. */
     private lastHover: { cx: number; cy: number; pose: PenPose } | null = null;
 
+    /** The last cursor preview the engine drew, and where. Unlike `lastHover`
+     *  it outlives a stroke, so the canvas size drag can measure the outline
+     *  it starts from even when the artist drags straight after painting,
+     *  with no hover move in between. */
+    lastPreview: { cx: number; cy: number; info: BrushCursorPreviewInfoResp } | null = null;
+
     /** Monotonic hover generation, bumped every time the overlay is invalidated
      *  (stroke start, pointer leave, tool deactivate). `pushHoverOverlay` awaits
      *  the preview refresh before drawing, so a hover in flight when a stroke
@@ -159,7 +162,7 @@ class BrushTool extends ToolBase {
             tilt_y: pose.tiltY,
             rotation: pose.twist,
             tangential_pressure: pose.tangentialPressure,
-        })) as BrushCursorPreviewInfo | null;
+        })) as BrushCursorPreviewInfoResp | null;
         // A stroke / leave / deactivate fired during the await; that path
         // already cleared the overlay, so drawing now would resurrect a frozen
         // ghost dab.
@@ -168,6 +171,7 @@ class BrushTool extends ToolBase {
             engine.api.clearOverlay();
             this.inst.toolCursor = null;
             this.lastHover = null;
+            this.lastPreview = null;
             return;
         }
         this.inst.toolCursor = 'none';
@@ -183,6 +187,7 @@ class BrushTool extends ToolBase {
             ],
         });
         this.lastHover = { cx, cy, pose };
+        this.lastPreview = { cx, cy, info };
     }
 
     /** Re-push the hover overlay at the last known hover position. No-op if the

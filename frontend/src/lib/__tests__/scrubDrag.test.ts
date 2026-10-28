@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { beginScrubDrag } from '../scrubDrag';
+import { beginScrubDrag, scrubValue, SCRUB_TRAVEL_PX } from '../scrubDrag';
 
 /** A drag harness whose value is just the x coordinate, so assertions read
  *  directly as pointer positions. */
@@ -71,5 +71,38 @@ describe('beginScrubDrag', () => {
         drag.end();
         drag.end();
         expect(onFinish).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('scrubValue', () => {
+    // Regression: Size spans 0.01%..400% and moved 1% per pixel, so 1% to 3%
+    // was a 2 px target. Its declared curve spends the drag on the low end.
+    it('makes 1% to 3% of size a drag of at least 20 px', () => {
+        const curve = { exponent: 3, reversed: false };
+        expect(scrubValue(1, 20, 0.01, 400, curve)).toBeLessThan(3);
+    });
+
+    it('is the plain linear drag when the curve is linear', () => {
+        const linear = { exponent: 1, reversed: false };
+        for (const [start, dx, min, max] of [
+            [0.5, 40, 0, 1],
+            [10, -25, -100, 100],
+            [3, 7, 1, 512],
+        ]) {
+            expect(scrubValue(start, dx, min, max, linear)).toBeCloseTo(
+                start + (dx * (max - min)) / SCRUB_TRAVEL_PX,
+                9,
+            );
+            expect(scrubValue(start, dx, min, max)).toBeCloseTo(
+                start + (dx * (max - min)) / SCRUB_TRAVEL_PX,
+                9,
+            );
+        }
+    });
+
+    it('clamps to the range', () => {
+        const curve = { exponent: 3, reversed: false };
+        expect(scrubValue(1, -1000, 0.01, 400, curve)).toBe(0.01);
+        expect(scrubValue(1, 1000, 0.01, 400, curve)).toBe(400);
     });
 });

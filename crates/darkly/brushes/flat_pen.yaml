@@ -30,6 +30,12 @@ nodes:
     comment: The nib is thin along the stroke, so fewer dabs overlap any spot than on a round tip, and each lays down more.
     inputs:
       value: 0.15
+    ranges:
+      value:
+      - 0.0001
+      - 1.0
+    curves:
+      value: 2.0
   flow_scale:
     type: multiply
     name: Flow times pressure
@@ -78,6 +84,7 @@ exposed_ports:
     label: Flow
     description: How much ink each touch lays down.
     icon: fa6-solid:droplet
+    unit: Percent
   brush_settings.stabilize: {}
   brush_settings.stamp_angle_rate: {}
   circle.softness: {}

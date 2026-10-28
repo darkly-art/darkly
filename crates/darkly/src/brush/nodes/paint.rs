@@ -618,6 +618,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("wash_flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow (Wash)")
                     .with_unit(UnitType::Percent)
@@ -629,6 +630,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("build_flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow (Build-up)")
                     .with_unit(UnitType::Percent)
@@ -639,6 +641,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
@@ -1010,8 +1013,10 @@ impl BrushNodeEvaluator for PaintEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(
+            gpu,
+            crate::brush::read_mirror_terminal::nominal_radius(ctx),
+        );
         vec![]
     }
 

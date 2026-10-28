@@ -40,6 +40,7 @@ const ENTRY: ExposedPortInfo = {
         invert: false,
         unitOverride: null,
         inheritedUnit: 'Normalized',
+        travel: { exponent: 1, reversed: false },
     },
 };
 
@@ -49,6 +50,7 @@ const PORT: PortDef = {
     wire_type: 'Scalar',
     min: 0,
     max: 1,
+    travel_exponent: 1,
     step: 0,
     value: 0.5,
     wirable: true,

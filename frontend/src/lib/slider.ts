@@ -1,5 +1,13 @@
-// Pure value <-> position math for the shared Slider widget. Kept free of DOM
-// so it can be unit-tested headlessly (vitest runs in node, no `window`).
+// Pure value <-> position math for the shared Slider widget and every other
+// control that drags a value along a range. Kept free of DOM so it can be
+// unit-tested headlessly (vitest runs in node, no `window`).
+
+import type { TravelCurve } from '../engine/protocol_gen';
+
+export type { TravelCurve };
+
+/** Even travel: the fraction of the track is the fraction of the range. */
+const LINEAR: TravelCurve = { exponent: 1, reversed: false };
 
 /** Step between adjacent slider values. Explicit `step` wins; otherwise integer
  *  sliders move by 1 and continuous ones split the range into 200 notches. */
@@ -25,12 +33,36 @@ export function clampValue(value: number, min: number, max: number, integer: boo
     return v;
 }
 
-/** Fraction of the track a value occupies, in `[0, 1]`. Degenerate ranges
- *  (max <= min) collapse to 0 so the handle parks at the left. */
-export function valueToFraction(value: number, min: number, max: number): number {
+/** Fraction of the track a value occupies, in `[0, 1]`: the inverse of
+ *  {@link travelToValue} for the same curve. Degenerate ranges (max <= min)
+ *  collapse to 0 so the handle parks at the left. */
+export function valueToFraction(
+    value: number,
+    min: number,
+    max: number,
+    travel: TravelCurve = LINEAR,
+): number {
     if (max <= min) return 0;
-    const f = (value - min) / (max - min);
-    return Math.min(1, Math.max(0, f));
+    const f = Math.min(1, Math.max(0, (value - min) / (max - min)));
+    const p = 1 / travel.exponent;
+    return travel.reversed ? 1 - Math.pow(1 - f, p) : Math.pow(f, p);
+}
+
+/** The value a fraction `t` of the track reads, unquantized: `t^exponent`
+ *  of the range, so an exponent above 1 gives the low end more of the travel
+ *  (reflected about the range when `reversed`). The power curve is Krita's
+ *  slider exponent ratio (`KisSliderSpinBoxPrivate::valueForPoint`,
+ *  KDE/Krita, https://invent.kde.org/graphics/krita). */
+export function travelToValue(
+    t: number,
+    min: number,
+    max: number,
+    travel: TravelCurve = LINEAR,
+): number {
+    const u = Math.min(1, Math.max(0, t));
+    const p = travel.exponent;
+    const g = travel.reversed ? 1 - Math.pow(1 - u, p) : Math.pow(u, p);
+    return min + g * (max - min);
 }
 
 /** Snap a raw value to the nearest step (anchored at `min`), then clamp. */
@@ -57,6 +89,5 @@ export function fractionToValue(
     integer: boolean,
     step?: number,
 ): number {
-    const f = Math.min(1, Math.max(0, fraction));
-    return quantize(min + f * (max - min), min, max, integer, step);
+    return quantize(travelToValue(fraction, min, max), min, max, integer, step);
 }

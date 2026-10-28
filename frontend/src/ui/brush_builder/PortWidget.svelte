@@ -1,7 +1,8 @@
 <script lang="ts">
     import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
-    import { unitFor } from '../../lib/units';
+    import { formatScalar, unitFor } from '../../lib/units';
+    import { travelToValue, valueToFraction, type TravelCurve } from '../../lib/slider';
     import { pointerDrag } from '../../lib/pointerDrag';
     import { beginScrubDrag, type ScrubDrag } from '../../lib/scrubDrag';
     import { app } from '../../state/app.svelte';
@@ -239,10 +240,14 @@
         return Math.max(range.min, Math.min(range.max, stepped));
     }
 
+    /** The instance's travel curve. The node editor shows port space, which
+     *  is never mirrored. */
+    let travel = $derived<TravelCurve>({ exponent: port.travel_exponent, reversed: false });
+
     function valueFromFraction(frac: number): number {
-        const raw = range.min + frac * (range.max - range.min);
-        if (port.wire_type === 'Int') return Math.round(raw);
         if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
+        const raw = travelToValue(frac, range.min, range.max, travel);
+        if (port.wire_type === 'Int') return Math.round(raw);
         return snapToStep(raw);
     }
 
@@ -332,11 +337,7 @@
         }
     }
 
-    let sliderPercent = $derived(
-        range.max > range.min
-            ? ((numValue - range.min) / (range.max - range.min)) * 100
-            : 0
-    );
+    let sliderPercent = $derived(valueToFraction(numValue, range.min, range.max, travel) * 100);
 
     /** Display-unit conversion + formatting for the raw port value, resolved
      *  from the registration's `unit_type` (radians→degrees, ×100 percent, …). */
@@ -347,7 +348,7 @@
             ? (numValue >= 0.5 ? 'on' : 'off')
             : port.wire_type === 'Int'
                 ? String(Math.round(numValue))
-                : unit.format(unit.toDisplay(numValue))
+                : formatScalar(unit, unit.toDisplay(numValue), travel)
     );
 
     // --- Double-click to type a value ---

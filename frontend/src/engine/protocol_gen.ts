@@ -66,7 +66,12 @@ export type BeginTransformReq = { id: number, };
 
 export type BorderSelectionReq = { radius: number, };
 
-export type BrushCursorPreviewInfoResp = { halfExtent: [number, number], };
+export type BrushCursorPreviewInfoResp = { halfExtent: [number, number], 
+/**
+ * The half-extent before the dab's half-pixel radius floor, so it stays
+ * proportional to the brush size below it.
+ */
+nominalHalfExtent: [number, number], };
 
 export type BrushDabThumbnailReq = { name: string, };
 
@@ -412,7 +417,12 @@ unitOverride: UnitType | null,
  * has one implementation and it is [`scalar_display`]; a second one
  * in TypeScript would be free to disagree about the fallback.
  */
-inheritedUnit: UnitType, } | { "kind": "bool", 
+inheritedUnit: UnitType, 
+/**
+ * How a drag spends its travel across `[min, max]`, already oriented
+ * for this control (mirror included), so renderers apply it as is.
+ */
+travel: TravelCurve, } | { "kind": "bool", 
 /**
  * Current value.
  */
@@ -789,6 +799,19 @@ min: number,
  */
 max: number, 
 /**
+ * How a control spends its travel across `[min, max]`: at travel
+ * fraction `t` it reads `min + (max - min) * t^travel_exponent`. `1.0`
+ * is linear; larger values give more of the drag to the low end, for
+ * quantities artists mostly set near `min` (brush size). UI metadata
+ * only, like `min`/`max`, and per instance like them, so a brush can
+ * curve a generic node's port its registration knows nothing about.
+ *
+ * The power curve is Krita's slider exponent ratio
+ * (`KisSliderSpinBox::setExponentRatio`, KDE/Krita,
+ * <https://invent.kde.org/graphics/krita>, `libs/widgetutils/kis_slider_spin_box_p.h`).
+ */
+travel_exponent: number, 
+/**
  * The authored value used when this input port is disconnected: the
  * full typed value (scalar slider value, enum-dropdown index, texture
  * name, curve points, color). Wired inputs ignore it and take the
@@ -1115,6 +1138,8 @@ export type StrokeWire = { width: number, color: [number, number, number, number
 export type Transform = { "mode": "Basic", "data": [number, number, number, number, number, number] } | { "mode": "Perspective", "data": [number, number, number, number, number, number, number, number, number] };
 
 export type TransformCapabilityError = { endpoint: number, operation: PixelTransformOperation, };
+
+export type TravelCurve = { exponent: number, reversed: boolean, };
 
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 

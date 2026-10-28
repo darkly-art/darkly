@@ -1,6 +1,8 @@
 import { actions } from './registry';
 import { clamp } from '../lib/clamp';
-import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
+import { app } from '../state/app.svelte';
+import { brushGraph } from '../state/brush_graph.svelte';
+import { canvasToScreen } from '../canvas/coordinates';
 import { cursorPose, focusedBrushTool } from '../tools/brush.svelte';
 import { runHook } from '../tools/tool_session';
 
@@ -67,7 +69,7 @@ function setBrushParam(role: Role, absolute: number): void {
     commit(port.nodeId, port.portName, clamp(absolute, data.min, data.max));
 }
 
-/** Transient state held while a drag-scrub is in flight. Module-level
+/** Transient state held while a canvas size drag is in flight. Module-level
  *  because there's only ever one active drag at a time, gated by
  *  pointer capture. The cursor preview is *anchored* at the pointerdown
  *  position so only size changes visibly during the drag. */
@@ -75,8 +77,37 @@ type SizeDragState = {
     startVal: number;
     anchorX: number;
     anchorY: number;
+    /** The outline's on-screen diameter at `startVal`, in CSS px, and the
+     *  pointer travel when it was measured: `null` until a cursor preview
+     *  exists to measure. */
+    outline: { diameter: number; dx: number } | null;
 };
 let sizeDrag: SizeDragState | null = null;
+
+/** On-screen diameter, in CSS px, of the brush outline the focused brush
+ *  tool last drew, or `null` when it has none to measure. Measured through
+ *  `canvasToScreen`, which carries zoom, view rotation and the device pixel
+ *  ratio, so it is in the same unit as the pointer's travel. Uses the extent
+ *  before the dab's half-pixel floor, which keeps tracking the size below it. */
+function outlineDiameter(): number | null {
+    const preview = focusedBrushTool()?.lastPreview;
+    const el = app.canvasEl;
+    if (!preview || !el) return null;
+    const { cx, cy, info } = preview;
+    const a = canvasToScreen(cx, cy, el);
+    const b = canvasToScreen(cx + 2 * info.nominalHalfExtent[0], cy, el);
+    const diameter = Math.hypot(b.x - a.x, b.y - a.y);
+    return diameter > 0 ? diameter : null;
+}
+
+/** The size whose outline is `dx` CSS px wider on screen than an outline
+ *  `diameter` px across at size `start`: the outline's edge follows the
+ *  pointer at any zoom, as in Krita's canvas resize
+ *  (`KisToolFreehand::continueAlternateAction`, KDE/Krita,
+ *  https://invent.kde.org/graphics/krita). */
+function sizeFollowingPointer(start: number, dx: number, diameter: number, min: number, max: number): number {
+    return clamp((start * (diameter + dx)) / diameter, min, max);
+}
 
 export function registerBrushParamActions() {
     actions.register({
@@ -98,18 +129,41 @@ export function registerBrushParamActions() {
                 sizeDrag = null;
                 return;
             }
+            const { value, min } = found.data;
+            // A size below the floor (a brush saved at 0) has no outline to
+            // scale from: lift it to the floor and measure that outline once
+            // the next preview draws it.
+            if (value < min) setBrushParam('size', min);
             sizeDrag = {
-                startVal: found.data.value,
+                startVal: Math.max(value, min),
                 anchorX: typeof ctx.x === 'number' ? ctx.x : 0,
                 anchorY: typeof ctx.y === 'number' ? ctx.y : 0,
+                outline: null,
             };
+            if (value >= min) {
+                const diameter = outlineDiameter();
+                if (diameter !== null) sizeDrag.outline = { diameter, dx: 0 };
+            }
         },
         onMove: (_ctx, e, dx) => {
             if (!sizeDrag) return;
             const found = findScalarPort('size');
             if (!found) return;
-            const speed = exposedDragSpeed(found.data.min, found.data.max);
-            setBrushParam('size', sizeDrag.startVal + dx * speed);
+            // With no outline measured yet the size holds still until the
+            // preview pushed below resolves, rather than moving at some other
+            // rate in the meantime.
+            if (!sizeDrag.outline) {
+                const diameter = outlineDiameter();
+                if (diameter !== null) sizeDrag.outline = { diameter, dx };
+            }
+            const { outline } = sizeDrag;
+            if (outline) {
+                const { min, max } = found.data;
+                setBrushParam(
+                    'size',
+                    sizeFollowingPointer(sizeDrag.startVal, dx - outline.dx, outline.diameter, min, max),
+                );
+            }
             // Re-render the on-canvas brush cursor preview so the circle
             // grows/shrinks live during the drag. Anchored at the start
             // position; pose comes from the live event, matching the

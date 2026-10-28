@@ -1106,6 +1106,7 @@ impl DarklyEngine {
                         invert: meta.invert,
                         unit_override: meta.unit,
                         inherited_unit: inherited_unit(port, reg_port),
+                        travel: display.travel(),
                     }
                 }
                 BrushWireType::Bool => ExposedValue::Bool {
@@ -1427,6 +1428,9 @@ struct ScalarDisplay {
     unit: UnitType,
     /// `min + max` when the control is mirrored, `None` when it is not.
     pivot: Option<f32>,
+    /// The port's [`PortDef::travel_exponent`], which describes the stored
+    /// quantity; [`Self::travel`] orients it for the control.
+    exponent: f32,
 }
 
 impl ScalarDisplay {
@@ -1452,6 +1456,16 @@ impl ScalarDisplay {
 
     fn unit(self) -> UnitType {
         self.unit
+    }
+
+    /// The travel curve as the control runs. The curve gives its fine end to
+    /// small *stored* values, so on a mirrored control that end is the
+    /// display maximum, and the curve is reflected with it.
+    fn travel(self) -> TravelCurve {
+        TravelCurve {
+            exponent: self.exponent,
+            reversed: self.pivot.is_some(),
+        }
     }
 
     /// The single mirror. Private and its own inverse, so the two `value_*`
@@ -1531,6 +1545,7 @@ fn scalar_display(
     Some(ScalarDisplay {
         unit: meta.unit.unwrap_or_else(|| inherited_unit(port, reg_port)),
         pivot: meta.invert.then_some(port.min + port.max),
+        exponent: port.travel_exponent,
     })
 }
 
@@ -1546,6 +1561,16 @@ fn inherited_unit(
     reg_port: Option<&PortDef<BrushWireType>>,
 ) -> UnitType {
     reg_port.map_or(port.unit_type, |rp| rp.unit_type)
+}
+
+/// A control's travel curve: at travel fraction `t` it reads
+/// `min + (max - min) * t^exponent`, or the reflection of that about the
+/// range when `reversed`. `exponent` 1 is linear.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct TravelCurve {
+    pub exponent: f32,
+    pub reversed: bool,
 }
 
 /// Type-specific value data for an exposed port.
@@ -1596,6 +1621,9 @@ pub enum ExposedValue {
         /// in TypeScript would be free to disagree about the fallback.
         #[serde(rename = "inheritedUnit")]
         inherited_unit: UnitType,
+        /// How a drag spends its travel across `[min, max]`, already oriented
+        /// for this control (mirror included), so renderers apply it as is.
+        travel: TravelCurve,
     },
     /// Boolean toggle. Currently emitted by the Switch node's `select`
     /// port; any other Bool input port marked `exposed` works too.
@@ -1687,6 +1715,24 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The control carries the port's own curve, reflected exactly when the
+    /// entry mirrors it.
+    #[test]
+    fn scalar_display_orients_the_travel_curve() {
+        let mut port = scalar_port(0.0, 1.0);
+        port.travel_exponent = 3.0;
+        for invert in [false, true] {
+            let display = scalar_display(&port, None, &meta(invert)).expect("scalar maps");
+            assert_eq!(
+                display.travel(),
+                TravelCurve {
+                    exponent: 3.0,
+                    reversed: invert
+                }
+            );
         }
     }
 

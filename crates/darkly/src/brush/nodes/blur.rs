@@ -110,6 +110,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)

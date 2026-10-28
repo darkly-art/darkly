@@ -25,7 +25,7 @@ use darkly::brush::builtin_brushes;
 use darkly::engine::{DarklyEngine, ExposedValue};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::nodegraph::{ExposedPortMeta, NodeId, PortDir};
+use darkly::nodegraph::{ExposedPortMeta, NodeId, PortDir, NONZERO_FLOOR};
 use darkly::units::UnitType;
 
 fn fresh_engine() -> DarklyEngine {
@@ -555,4 +555,70 @@ fn inherited_unit_names_the_ports_own_unit() {
         (UnitType::Raw, Some(UnitType::Raw), UnitType::Percent),
         "an override changes the resolved unit but not what inheriting would mean"
     );
+}
+
+// ── low-end controls: size, opacity, flow ────────────────────────────
+
+/// The ports whose working values sit near the bottom of their range and
+/// whose zero means "paints nothing", with the travel exponent each declares:
+/// each floors at `NONZERO_FLOOR`, so no control that drives it can land on 0,
+/// and curves its travel toward the low end.
+const LOW_END_PORTS: [(&str, &str, f32); 7] = [
+    ("brush_settings", "size", 3.0),
+    ("paint", "opacity", 2.0),
+    ("paint", "build_flow", 2.0),
+    ("paint", "wash_flow", 2.0),
+    ("blur", "opacity", 2.0),
+    ("watercolor", "opacity", 2.0),
+    ("watercolor", "flow", 2.0),
+];
+
+/// Regression: a size scrubbed to 0 left a one-pixel brush that `]` could
+/// not grow (it multiplies), and 1% to 3% was a 2 px drag. The floor and the
+/// curve live on the registrations, so they hold however a brush labels the
+/// control.
+#[test]
+fn low_end_registrations_declare_a_floor_and_a_curve() {
+    let registry = darkly::brush::registry();
+    for (type_id, port_name, exponent) in LOW_END_PORTS {
+        let port = registry
+            .get(type_id)
+            .unwrap_or_else(|| panic!("no '{type_id}' registration"))
+            .ports
+            .iter()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .unwrap_or_else(|| panic!("'{type_id}' has no input '{port_name}'"));
+        assert_eq!(port.min, NONZERO_FLOOR, "{type_id}.{port_name} floor");
+        assert_eq!(
+            port.travel_exponent, exponent,
+            "{type_id}.{port_name} curve"
+        );
+    }
+}
+
+/// The brush-bar side of the same guard, per shipped brush: every Size,
+/// Opacity or Flow control the artist can see floors above zero and curves
+/// toward it, including the ones a brush exposes through a generic node
+/// (round's and flat_pen's Flow are `user_input` values).
+#[test]
+fn every_builtin_low_end_control_is_floored_and_curved() {
+    let mut engine = fresh_engine();
+    for brush in builtin_brushes::all() {
+        let name = &brush.metadata.name;
+        engine.brush_load(name).expect("builtin loads");
+        for info in engine.brush_exposed_ports() {
+            if !matches!(info.label.as_str(), "Size" | "Opacity" | "Flow") {
+                continue;
+            }
+            let ExposedValue::Scalar { min, travel, .. } = info.data else {
+                panic!("{name}: '{}' is not a scalar control", info.label);
+            };
+            assert!(min > 0.0, "{name}: '{}' floors at {min}", info.label);
+            assert!(
+                travel.exponent > 1.0 && !travel.reversed,
+                "{name}: '{}' travels {travel:?}",
+                info.label
+            );
+        }
+    }
 }

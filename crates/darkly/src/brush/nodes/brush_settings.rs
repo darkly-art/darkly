@@ -135,8 +135,12 @@ pub fn register() -> BrushNodeRegistration {
                 // from `brush_settings.size` to read the base size as a signal.
                 // `preview_value` pins previews to a canonical size so scrubbing
                 // it doesn't redraw the editor preview / cursor halo.
+                // Cubed travel gives sizes under 10% the first ~30% of the drag,
+                // the exponent Krita's toolbar size slider uses
+                // (`libs/ui/kis_paintop_box.cc`).
                 PortDef::input("size", BrushWireType::Scalar)
                     .with_range(0.0, 4.0, DEFAULT_BASE_SIZE)
+                    .with_fine_low_end(3.0)
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:up-right-and-down-left-from-center")
                     .with_label("Size")

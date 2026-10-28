@@ -32,7 +32,7 @@ pub mod types;
 mod undo_dispatch;
 mod voids;
 
-pub use brush_graph::{ExposedPortInfo, ExposedValue};
+pub use brush_graph::{ExposedPortInfo, ExposedValue, TravelCurve};
 pub use brush_library::BRUSH_THUMBNAIL_SIZE;
 pub use export::ExportImageResult;
 pub use load::LoadDocument;

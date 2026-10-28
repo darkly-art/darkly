@@ -55,6 +55,9 @@ export interface PortDef {
     wire_type: string;  // BrushWireType variant name
     min: number;
     max: number;
+    /** How the port's controls spend their travel: `t^travel_exponent` of
+     *  the range. `1` is linear. */
+    travel_exponent: number;
     /** The authored value used when the input is disconnected: the full
      *  typed value (scalar default, enum index, texture name, curve points).
      *  Replaces the old scalar-only `default`. */
@@ -134,14 +137,6 @@ export interface NodeTypeInfo {
 // source of truth: extending the control vocabulary (e.g. adding the
 // enum dropdown) happens once, on the Rust side, and flows here on regen.
 export type { ExposedValue, ExposedPortInfo };
-
-/** Display-pixels-per-unit for dragging an exposed port through its full
- *  range. ~400px of horizontal drag covers `[min, max]`. Shared by the
- *  brush bar's scrub controls and the canvas Shift+drag size adjustment so
- *  both react to drag motion at the same speed. */
-export function exposedDragSpeed(min: number, max: number): number {
-    return (max - min) / 400;
-}
 
 export const WIRE_COLORS: Record<string, string> = {
     Scalar: '#a0a0a0',

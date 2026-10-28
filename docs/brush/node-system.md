@@ -41,6 +41,8 @@ nodes:
       a: 0.5
     ranges:
       a: [-1.0, 1.0]        # re-range this instance's slider
+    curves:
+      a: 2.0                # spend more of its drag on the low end
 exposed_ports:
   brush_settings.size: {}   # inherits the port's own label, unit and icon
   multiply_2.a:
@@ -90,7 +92,9 @@ The other two reasons this section used to give are gone, absorbed by
 per-instance state on the entry itself:
 
 - **Range rescaling** is `ranges:` in the YAML, or the entry modal's Advanced
-  block (`Graph::set_port_range`).
+  block (`Graph::set_port_range`). Beside it, `curves:` gives the instance a
+  travel curve (`Graph::set_port_travel_exponent`): a `user_input` standing in
+  for flow takes a floor in `ranges` and a curve here, as round's does.
 - **Per-brush custom label** is `label:` on the entry (`ExposedPortMeta`),
   alongside `description`, `icon`, `invert` and `unit`.
 
@@ -179,6 +183,7 @@ learn your node's `type_id`.
 ```rust
 PortDef::input("my_knob", BrushWireType::Scalar)
     .with_range(0.0, 1.0, 0.5)        // min, max, default
+    .with_fine_low_end(2.0)           // optional: zero does nothing and artists work low
     .with_label("My Knob")            // shown in UI
     .with_unit(UnitType::Percent)     // Normalized | Percent | Degrees | Raw | Pixels
     .with_icon("fa6-solid:droplet")   // iconify name
@@ -191,6 +196,11 @@ PortDef::input("my_knob", BrushWireType::Scalar)
 the node is placed; a brush can still drop the entry. A port with no
 `.exposed()` can be surfaced per-instance instead, which is what the node
 editor's eye toggle does.
+
+`.with_fine_low_end(exponent)` is for a quantity whose zero does nothing and
+whose working values sit near the bottom (size, opacity, flow): it floors the
+range at `NONZERO_FLOOR` (0.01%) and curves every control that drives the port,
+so the low end gets most of the drag. Size uses 3; opacity and flow use 2.
 
 `.source()` makes an **input** port also a wire source: it keeps its scrubbable
 authored value *and* other nodes can wire from it. That is what lets one
