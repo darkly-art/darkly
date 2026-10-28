@@ -64,6 +64,17 @@ pub enum PortDir {
     Output,
 }
 
+/// The `min` of a port whose zero means "does nothing" (brush size,
+/// opacity, flow; see [`PortDef::with_fine_low_end`]): low enough to be
+/// sub-pixel or invisible in practice, but never exactly 0, so no control
+/// lands on a dead value and a multiplicative step (`]` on size) can always
+/// grow it again.
+pub const NONZERO_FLOOR: f32 = 0.0001;
+
+fn linear_travel() -> f32 {
+    1.0
+}
+
 /// Schema for a single port on a node type.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -77,6 +88,18 @@ pub struct PortDef<W: WireKind> {
     pub min: f32,
     /// Slider max when the port is disconnected (UI metadata only).
     pub max: f32,
+    /// How a control spends its travel across `[min, max]`: at travel
+    /// fraction `t` it reads `min + (max - min) * t^travel_exponent`. `1.0`
+    /// is linear; larger values give more of the drag to the low end, for
+    /// quantities artists mostly set near `min` (brush size). UI metadata
+    /// only, like `min`/`max`, and per instance like them, so a brush can
+    /// curve a generic node's port its registration knows nothing about.
+    ///
+    /// The power curve is Krita's slider exponent ratio
+    /// (`KisSliderSpinBox::setExponentRatio`, KDE/Krita,
+    /// <https://invent.kde.org/graphics/krita>, `libs/widgetutils/kis_slider_spin_box_p.h`).
+    #[serde(default = "linear_travel")]
+    pub travel_exponent: f32,
     /// The authored value used when this input port is disconnected: the
     /// full typed value (scalar slider value, enum-dropdown index, texture
     /// name, curve points, color). Wired inputs ignore it and take the
@@ -254,6 +277,7 @@ impl<W: WireKind> PortDef<W> {
             wire_type,
             min: 0.0,
             max: 1.0,
+            travel_exponent: 1.0,
             value: InputValue::Scalar(0.0),
             enum_options: Vec::new(),
             wirable: wire_type.is_wirable(),
@@ -281,6 +305,7 @@ impl<W: WireKind> PortDef<W> {
             wire_type,
             min: 0.0,
             max: 1.0,
+            travel_exponent: 1.0,
             value: InputValue::Scalar(0.0),
             enum_options: Vec::new(),
             wirable: wire_type.is_wirable(),
@@ -364,6 +389,18 @@ impl<W: WireKind> PortDef<W> {
     /// over-drag case) or a natural range without a slider (most outputs).
     pub fn with_natural_range(mut self, min: f32, max: f32) -> Self {
         self.natural_range = Some((min, max));
+        self
+    }
+
+    /// Declare a quantity artists mostly set near its bottom and whose zero
+    /// does nothing (brush size, opacity, flow): floor the range at
+    /// [`NONZERO_FLOOR`] and curve its controls with a power `exponent` (see
+    /// [`PortDef::travel_exponent`]) so the low end gets most of the drag.
+    /// Call after [`Self::with_range`], whose `min` this replaces.
+    pub fn with_fine_low_end(mut self, exponent: f32) -> Self {
+        debug_assert!(exponent.is_finite() && exponent > 1.0);
+        self.min = NONZERO_FLOOR;
+        self.travel_exponent = exponent;
         self
     }
 
@@ -563,6 +600,12 @@ pub enum GraphError {
         node: NodeId,
         port: String,
     },
+    /// A per-instance travel exponent was zero, negative, or non-finite:
+    /// `t^p` is then degenerate or undefined across the control's travel.
+    InvalidTravelExponent {
+        node: NodeId,
+        port: String,
+    },
 }
 
 /// Accept only the byte shape Iconify names use (`prefix:name`):
@@ -609,6 +652,13 @@ impl std::fmt::Display for GraphError {
                 write!(
                     f,
                     "slider range for '{}' on {:?} must be finite and ascending",
+                    port, node
+                )
+            }
+            Self::InvalidTravelExponent { node, port } => {
+                write!(
+                    f,
+                    "travel exponent for '{}' on {:?} must be finite and positive",
                     port, node
                 )
             }
@@ -1128,21 +1178,46 @@ impl<W: WireKind> Graph<W> {
                 port: port_name.to_string(),
             });
         }
-        let node = self
-            .nodes
+        let port = self.input_port_mut(id, port_name)?;
+        port.min = min;
+        port.max = max;
+        Ok(())
+    }
+
+    /// Override an input port's travel curve on this node instance (see
+    /// [`PortDef::travel_exponent`]): the sibling of [`Self::set_port_range`],
+    /// for a brush that curves a port its registration leaves linear.
+    pub fn set_port_travel_exponent(
+        &mut self,
+        id: &NodeId,
+        port_name: &str,
+        exponent: f32,
+    ) -> Result<(), GraphError> {
+        if !exponent.is_finite() || exponent <= 0.0 {
+            return Err(GraphError::InvalidTravelExponent {
+                node: id.clone(),
+                port: port_name.to_string(),
+            });
+        }
+        self.input_port_mut(id, port_name)?.travel_exponent = exponent;
+        Ok(())
+    }
+
+    fn input_port_mut(
+        &mut self,
+        id: &NodeId,
+        port_name: &str,
+    ) -> Result<&mut PortDef<W>, GraphError> {
+        self.nodes
             .get_mut(id)
-            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?;
-        let port = node
+            .ok_or_else(|| GraphError::NodeNotFound(id.clone()))?
             .ports
             .iter_mut()
             .find(|p| p.name == port_name && p.dir == PortDir::Input)
             .ok_or_else(|| GraphError::PortNotFound {
                 node: id.clone(),
                 port: port_name.to_string(),
-            })?;
-        port.min = min;
-        port.max = max;
-        Ok(())
+            })
     }
 
     // Note: brush-bar exposure / label / description / icon overrides
@@ -2019,6 +2094,39 @@ mod tests {
             .find(|p| p.name == "val")
             .unwrap();
         assert_eq!((port.min, port.max), (0.0, 1.0));
+    }
+
+    #[test]
+    fn set_port_travel_exponent_rejects_degenerate_curves() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")]);
+
+        for exponent in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+            let err = g
+                .set_port_travel_exponent(&id, "val", exponent)
+                .unwrap_err();
+            assert!(
+                matches!(err, GraphError::InvalidTravelExponent { .. }),
+                "{exponent} should be rejected, got {err:?}"
+            );
+        }
+        let port = g.nodes()[&id]
+            .ports
+            .iter()
+            .find(|p| p.name == "val")
+            .unwrap();
+        assert_eq!(port.travel_exponent, 1.0);
+    }
+
+    /// A port that never declares a curve is linear, including one
+    /// deserialized from JSON written before the field existed.
+    #[test]
+    fn travel_exponent_defaults_to_linear() {
+        assert_eq!(scalar_in("val").travel_exponent, 1.0);
+        let mut json = serde_json::to_value(scalar_in("val")).unwrap();
+        json.as_object_mut().unwrap().remove("travel_exponent");
+        let port: PortDef<TestWireKind> = serde_json::from_value(json).unwrap();
+        assert_eq!(port.travel_exponent, 1.0);
     }
 
     #[test]

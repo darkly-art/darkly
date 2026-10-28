@@ -7,7 +7,7 @@
 //!    identical graphs (independent of node ID allocation) hash to the
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
-//! 2. **The Rough Ink builtin compiles end-to-end**: the framework
+//! 2. **The Ink builtin compiles end-to-end**: the framework
 //!    handles a real graph with random + curve + shape + stamp +
 //!    paint and produces non-empty WGSL.
 
@@ -53,14 +53,14 @@ fn empty_graph_errors_cleanly() {
 
 #[test]
 fn rough_ink_brush_compiles_to_nonempty_wgsl() {
-    // Lift the Rough Ink graph straight from `builtin_brushes::all()`;
+    // Lift the Ink graph straight from `builtin_brushes::all()`;
     // it's the canonical demo brush this framework was built to support,
     // and a quick smoke test that every per-node `compile_wgsl` works in
     // the context of a real graph.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(
@@ -101,8 +101,8 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
 fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let reg = registry();
     let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(
@@ -229,11 +229,11 @@ fn stamp_rotation_counteracts_view_rotation() {
 fn topology_hash_is_stable_for_identical_graphs() {
     let rough_a = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
+        .find(|b| b.metadata.name == "Ink")
         .unwrap();
     let rough_b = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
+        .find(|b| b.metadata.name == "Ink")
         .unwrap();
     let reg = registry();
     let plan_a = compile(&rough_a.metadata.graph, reg.as_map()).unwrap();
@@ -1903,8 +1903,8 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
 
     let mut brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let graph = &mut brush.metadata.graph;
     let paint_id = graph
         .nodes()
@@ -1926,10 +1926,20 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
     // A ground's read-modify-write: the law runs on the loaded texel and
     // the packed result is stored only where it differs from what was
     // there, so a refused dab costs a load and no store.
+    // Build-up rounds its store stochastically; the other laws round to
+    // nearest.
     let guarded_store = |target: &str, law: &str, src: &str| {
+        let packed = if law == "accumulate_build" {
+            format!(
+                "pack_ground_dithered({law}({src}, unpack_ground({target}_was)), \
+                 build_dither(canvas_px, d.pos))"
+            )
+        } else {
+            format!("pack_ground({law}({src}, unpack_ground({target}_was)))")
+        };
         format!(
             "    let {target}_was = textureLoad({target}, layer_px);\n\
-             \x20   let {target}_now = pack_ground({law}({src}, unpack_ground({target}_was)));\n\
+             \x20   let {target}_now = {packed};\n\
              \x20   if ({target}_now.r != {target}_was.r) {{\n\
              \x20       textureStore({target}, layer_px, {target}_now);\n\
              \x20   }}\n"
@@ -1949,7 +1959,7 @@ fn paint_terminal_compiles_the_accumulation_dial_to_storage_and_stores() {
         ret < load
     };
 
-    // Rough Ink never mentions `buildup`, so it is on the registration
+    // Ink never mentions `buildup`, so it is on the registration
     // default: build-up alone, stored into the ground.
     let default = compile_it(graph);
     assert_eq!(default.dab_pass, DabPass::DispatchPerDab);
@@ -2185,8 +2195,8 @@ fn the_buildup_port_cannot_be_wired() {
     // And the refusal is real on a graph, not just a flag on a registration.
     let mut brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink brush registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush registered");
     let graph = &mut brush.metadata.graph;
     let pen = graph
         .nodes()
@@ -2271,9 +2281,14 @@ fn authored_buildup_picks_the_accumulation_shape() {
     // The law a ground accumulates under, as the line that computes its
     // next texel.
     let stores = |compiled: &darkly::brush::wgsl::CompiledBrush, target: &str, law: &str| {
+        let pack = if law == "accumulate_build" {
+            "pack_ground_dithered"
+        } else {
+            "pack_ground"
+        };
         compiled
             .stroke_wgsl
-            .contains(&format!("let {target}_now = pack_ground({law}("))
+            .contains(&format!("let {target}_now = {pack}({law}("))
     };
 
     let top = compiled_at(Some(1.0));

@@ -16,7 +16,7 @@ pub use compiler::{ExecStep, ExecutionPlan, InputSlot};
 pub use crate::units::UnitType;
 pub use graph::{
     exposed_port_key, Connection, ExposedPortMeta, FindTerminalError, Graph, GraphError, NodeId,
-    NodeInstance, PortDef, PortDir, PortRef,
+    NodeInstance, PortDef, PortDir, PortRef, NONZERO_FLOOR,
 };
 pub use layout::NodeLayout;
 pub use registration::NodeRegistration;

@@ -1,0 +1,41 @@
+---
+/*
+ * "On this page", from the headings Astro's `render()` already returns.
+ *
+ * The threshold is what makes this self-managing. A generated reference page is
+ * an intro line and one table (no headings at all), so it gets no rail, and
+ * nothing in the frontmatter has to say so (a rail with fewer than two entries
+ * would be a lone link to the top of the page you are already on, spending a
+ * whole column doing it). Prose from the manual has real headings and keeps
+ * its rail.
+ *
+ * h2 and h3 only: h4 and below are detail within a section, not somewhere you
+ * navigate to.
+ */
+interface Heading {
+    depth: number;
+    slug: string;
+    text: string;
+}
+
+interface Props {
+    headings: Heading[];
+}
+
+const shown = Astro.props.headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+
+{
+    shown.length >= 2 && (
+        <nav class="docs-toc" aria-labelledby="docs-toc-heading">
+            <h2 id="docs-toc-heading">On this page</h2>
+            <ul>
+                {shown.map((heading) => (
+                    <li data-depth={heading.depth}>
+                        <a href={`#${heading.slug}`}>{heading.text}</a>
+                    </li>
+                ))}
+            </ul>
+        </nav>
+    )
+}

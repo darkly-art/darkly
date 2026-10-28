@@ -1,0 +1,53 @@
+{
+  "svg": "c10a0ae6fc0b2d79",
+  "width": 1444,
+  "height": 396,
+  "catalog": "brushPacks",
+  "category": null,
+  "entry": "dry_media",
+  "context": {
+    "catalogs": {},
+    "entries": {
+      "brushPacks/dry_media": {
+        "type": "dry_media",
+        "displayName": "Dry Media",
+        "description": "Sticks and powders that catch on the paper's tooth.",
+        "icon": "mdi:pencil",
+        "palette": {
+          "chroma": "#c2521f",
+          "refraction": "#e0912b",
+          "surface": "#b4491a1a"
+        },
+        "members": {
+          "catalog": "brushes",
+          "entries": [
+            "pencil",
+            "charcoal",
+            "hair",
+            "sponge"
+          ]
+        }
+      },
+      "brushes/pencil": {
+        "type": "pencil",
+        "displayName": "Pencil",
+        "description": "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure adds nothing, pressing harder does."
+      },
+      "brushes/charcoal": {
+        "type": "charcoal",
+        "displayName": "Charcoal",
+        "description": "A soft stick that crumbles onto the tooth of the paper, for broad, smoky marks."
+      },
+      "brushes/hair": {
+        "type": "hair",
+        "displayName": "Hair",
+        "description": "A lock of individual strands with optional twirling"
+      },
+      "brushes/sponge": {
+        "type": "sponge",
+        "displayName": "Sponge",
+        "description": "A textured brush useful for laying down big, smooth shapes"
+      }
+    }
+  }
+}

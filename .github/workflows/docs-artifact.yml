@@ -1,30 +1,26 @@
 name: Docs artifact
 
-# Publishes the documentation artifact for a release: the hand-written manual
-# under `docs/manual/`, `metadata.json` (the projection of every registry
-# Darkly has), and a rendered preview for every entry that declares one. They
-# go in one tarball under one `version`, so a consumer can never pair prose
-# from one build with metadata, or a preview, from another.
+# Publishes the documentation site for a release: `make docs` builds it from
+# this checkout (the manual under `docs/manual/`, every registry's metadata,
+# and a rendered preview for every entry that declares one), and the asset
+# carries two trees from that one run:
+#
+#   site/    the built docs, rooted at the site root and built for /docs/
+#   shared/  docs-site/src/shared/ as source
 #
 # The consumer is pull-based and is not named here on purpose: this repo is
-# public and knows nothing about who reads the artifact. Whoever wants it
-# resolves this asset off the release and unpacks it.
+# public and knows nothing about who reads the asset. Whoever wants it
+# resolves it off the release and unpacks it.
 #
-# `docs/manual/` is **pure markdown**. It must not reference components from any
-# consumer, or the public repo acquires an invisible dependency on private code.
-# Anything needing a component is a generated page on the consumer side.
+# `shared/` is source other sites import by path and compile with their own
+# toolchain. Renaming or removing a file there, or changing BaseLayout's
+# props, breaks their next build; scripts/check-shared.mjs holds the tree to
+# importing nothing outside itself.
 #
-# Two exports, not one. `export-docs` is GPU-free by construction (it builds
-# from `&'static` registration data alone) while `render-docs` needs a device
-# and the `testing` feature, and runs here on the same Mesa software rasterizer
-# `ci.yml` already tests against. They travel in one tarball under one
-# `version` for the same reason the prose does: an entry's row and its preview
-# must come from the same build.
-#
-# Frames never leave this job. `render-docs` writes 1 599 PNGs and 75 MB, which
-# ffmpeg turns into a poster and a looping H.264 per entry (under 2 MB) before
-# anything is packed. That is the same shape as the icon step: resolve it here
-# so no consumer needs the toolchain.
+# Previews need a device and the `testing` feature, so `render-docs` runs here
+# on the same Mesa software rasterizer `ci.yml` already tests against. Frames
+# never leave this job: 1 599 PNGs and 75 MB, which ffmpeg turns into a poster
+# and a looping H.264 per entry (under 2 MB) before anything is packed.
 on:
   push:
     tags: ['v*']
@@ -38,53 +34,45 @@ on:
 
 jobs:
   docs-artifact:
-    name: export-docs + manual → release asset
+    name: make docs -> release asset
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       # Full checkout (with .git) so build.rs's `git describe --tags` resolves:
-      # that string is what stamps `version`, and a shallow checkout breaks it.
+      # that string is the version every page carries, and a shallow checkout
+      # breaks it.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # fontconfig for native font enumeration via fontique; lavapipe because
-      # `render-docs` below wants a Vulkan device and a runner has no GPU (the
-      # same software rasterizer the test suite runs on); ffmpeg to encode.
+      # `render-docs` wants a Vulkan device and a runner has no GPU (the same
+      # software rasterizer the test suite runs on); ffmpeg to encode.
       - name: Install fontconfig, Mesa lavapipe and ffmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev mesa-vulkan-drivers vulkan-tools libvulkan1 ffmpeg
           vulkaninfo --summary || true
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Export registry metadata
-        run: cargo run -p darkly --bin export-docs -- --out out/metadata.json
-
-      # Release, not debug: this renders 1 599 frames through the software
-      # rasterizer, and the compile is bought back many times over.
-      - name: Render previews
-        env:
-          WGPU_BACKEND: vulkan
-        run: cargo run --release -p darkly --features testing --bin render_docs -- --out frames
-
-      # An icon name is not self-describing, so the artifact carries resolved SVG
-      # rather than asking a consumer to own an icon toolchain. Needs the
-      # frontend's @iconify deps; the encoder below needs nothing but ffmpeg.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: npm ci
+      # The frontend's deps for the icon resolver (@iconify), the docs site's
+      # for the site itself.
+      - name: npm ci (frontend)
         working-directory: frontend
         run: npm ci
-      - name: Resolve icons
-        run: node frontend/scripts/export-doc-icons.mjs --metadata out/metadata.json --out out/icons.json
+      - name: npm ci (docs-site)
+        working-directory: docs-site
+        run: npm ci
 
-      - name: Encode previews
-        run: node scripts/encode-doc-previews.mjs --frames frames --out out
-
-      - name: Stage the manual
-        run: cp -r docs/manual out/manual
+      - name: Build the docs site
+        env:
+          WGPU_BACKEND: vulkan
+        run: make docs
+      - name: Links, search index, shared contract
+        working-directory: docs-site
+        run: npm test
 
       # Which release this ends up on: the pushed tag, or the one a manual run
       # names. A dispatch with no tag names nothing and stops after the upload
@@ -104,10 +92,14 @@ jobs:
           # Named like every other release artifact, Darkly-<version>-<what>;
           # a run off a branch carries the branch name as its version.
           VERSION="${TARGET:-${GITHUB_REF_NAME//\//-}}"
-          NAME="Darkly-${VERSION#v}-docs.tar.gz"
+          NAME="Darkly-${VERSION#v}-docs-site.tar.gz"
           echo "ARTIFACT=$NAME" >> "$GITHUB_ENV"
-          tar czf "$NAME" -C out .
-          tar tzf "$NAME"
+          mkdir stage
+          cp -r docs-site/dist stage/site
+          cp -r docs-site/src/shared stage/shared
+          tar czf "$NAME" -C stage site shared
+          # Exactly two top-level trees.
+          tar tzf "$NAME" | cut -d/ -f1 | sort -u
 
       - name: Upload for inspection
         uses: actions/upload-artifact@v7
@@ -131,7 +123,7 @@ jobs:
         #
         # The notes are GitHub's generated list, shaped by .github/release.yml.
         # Written only when this job creates the release: a re-run against an
-        # existing one re-attaches the tarball and leaves its body alone.
+        # existing one re-attaches the asset and leaves its body alone.
         run: |
           if ! gh release view "$TARGET" >/dev/null 2>&1; then
             gh release create "$TARGET" --draft --prerelease --generate-notes --title "$TARGET"

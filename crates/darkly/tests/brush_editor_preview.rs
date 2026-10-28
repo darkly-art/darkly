@@ -396,10 +396,10 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    // Ink Pen exposes both `stabilize` (default 0.6) and `size` so we can
+    // Ink exposes both `stabilize` (default 0.6) and `size` so we can
     // contrast a preview-irrelevant scrub against a preview-affecting
     // one in the same engine, which avoids creating a second wgpu device.
-    engine.brush_load("Ink Pen").expect("Ink Pen built-in");
+    engine.brush_load("Ink").expect("Ink built-in");
 
     // Prime the editor preview cache and let the readback land so the
     // version counter is at its post-init steady state.
@@ -413,7 +413,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "stabilize")
-        .expect("Ink Pen exposes a `stabilize` port");
+        .expect("Ink exposes a `stabilize` port");
     engine
         .brush_set_exposed_port(&stabilize.node_id, "stabilize", 90.0)
         .expect("scrub set");
@@ -438,7 +438,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "softness")
-        .expect("Ink Pen exposes a `softness` port (on shape after migration)");
+        .expect("Ink exposes a `softness` port (on shape after migration)");
     let v_before_softness = engine.brush_graph_version();
     engine
         .brush_set_exposed_port(&softness.node_id, "softness", 0.5)
@@ -489,7 +489,7 @@ fn pinned_ports_are_pinned_in_previews() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    for (brush, port, scrub_to) in [("Ink Pen", "size", 90.0), ("Blur", "strength", 90.0)] {
+    for (brush, port, scrub_to) in [("Ink", "size", 90.0), ("Blur", "strength", 90.0)] {
         engine
             .brush_load(brush)
             .unwrap_or_else(|e| panic!("'{brush}' is a built-in brush: {e}"));

@@ -91,10 +91,12 @@ connections:
 - stamp.dab -> paint.rgba
 - subtract.result -> add.a
 exposed_ports:
-  brush_settings.stabilize: {}
   brush_settings.size: {}
-  paint.build_flow: {}
   paint.opacity: {}
+  paint.build_flow:
+    label: Flow
+    description: How much paint each touch lays down.
+  brush_settings.stabilize: {}
   polygon.softness: {}
   polygon.rounding: {}
   curve_3.input:

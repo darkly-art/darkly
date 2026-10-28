@@ -4,6 +4,7 @@
     import ColorInput from '../settings/widgets/ColorInput.svelte';
     import OffsetPad from '../settings/widgets/OffsetPad.svelte';
     import { hexToRgb01, rgb01ToHex } from '../../lib/color';
+    import { readoutDecimals } from '../../lib/slider';
     import {
         cloneParamValue,
         paramIsResettable,
@@ -56,7 +57,10 @@
             integer={param.kind === 'int'}
             {disabled}
             onchange={commit}
-            format={(v) => (param.kind === 'int' ? String(v) : v.toFixed(2))}
+            format={(v) =>
+                param.kind === 'int'
+                    ? String(v)
+                    : v.toFixed(readoutDecimals((param.min ?? 0) as number, (param.max ?? 1) as number))}
         />
     {:else if param.kind === 'enum'}
         <EnumDropdown

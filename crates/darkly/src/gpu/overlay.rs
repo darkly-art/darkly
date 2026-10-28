@@ -15,6 +15,11 @@ pub const KIND_FILLED_ELLIPSE: u32 = 7;
 /// by construction. p0 = center, p1 = half-extent, rotation in radians.
 pub const KIND_MASKED_STAMP: u32 = 8;
 
+/// Format brush terminals render the hover dab into. Float, so a faint dab
+/// keeps its falloff until [`ToolOverlay::stretch_cursor_preview`] brings it
+/// to full strength in the 8-bit mask the overlay samples.
+pub const CURSOR_PREVIEW_RENDER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 pub const FLAG_CANVAS_SPACE: u32 = 1;
 pub const FLAG_INVERT_COLOR: u32 = 2;
 pub const FLAG_SOFT_CONTRAST: u32 = 4;
@@ -70,13 +75,7 @@ impl OverlayPrimitive {
 struct OverlayUniforms {
     screen_size: [f32; 2],
     time: f32,
-    /// Multiplier applied to KIND_MASKED_STAMP sampled coverage. Lifts
-    /// attenuated brushes (paper × shape masks) to the same apparent
-    /// visibility as natural full-coverage brushes (the cursor-follow
-    /// analogue of the dab-tile auto-brighten that used to live in
-    /// `frame_dab_thumbnail`). Set per cursor-preview re-compile via
-    /// `set_preview_coverage_scale`; defaults to 1.0 (no boost).
-    preview_coverage_scale: f32,
+    _pad: f32,
     fwd_row0: [f32; 4],
     fwd_row1: [f32; 4],
     fwd_row2: [f32; 4],
@@ -88,6 +87,12 @@ struct OverlayUniforms {
 // ---------------------------------------------------------------------------
 // ToolOverlay
 // ---------------------------------------------------------------------------
+
+/// The hover dab's two textures, always allocated together at one size.
+struct CursorPreviewTextures {
+    render_view: wgpu::TextureView,
+    mask_view: wgpu::TextureView,
+}
 
 pub struct ToolOverlay {
     solid_pipeline: wgpu::RenderPipeline,
@@ -112,21 +117,16 @@ pub struct ToolOverlay {
     /// KIND_MASKED_STAMP primitives to get the stamp shape + softness.
     mask: Option<wgpu::Texture>,
     mask_view: Option<wgpu::TextureView>,
-    /// Preview mask texture owned by the overlay and used as a render
-    /// target by brush nodes' `render_preview`. Separate from `mask` so
-    /// CPU uploads and GPU renders don't stomp each other. Allocated on
-    /// demand via `ensure_cursor_preview_mask`.
-    cursor_preview_mask: Option<wgpu::Texture>,
-    cursor_preview_mask_view: Option<wgpu::TextureView>,
+    /// The hover dab as a brush terminal's `render_preview` drew it, in
+    /// [`CURSOR_PREVIEW_RENDER_FORMAT`], and the mask the overlay samples,
+    /// stretched from it. Separate from `mask` so CPU uploads and GPU
+    /// renders don't stomp each other. Allocated on demand via
+    /// `ensure_cursor_preview_mask`.
+    cursor_preview: Option<CursorPreviewTextures>,
     cursor_preview_mask_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
-    /// Live coverage scale for the KIND_MASKED_STAMP preview-mask path.
-    /// Updated by the engine after each brush re-compile via
-    /// `set_preview_coverage_scale`; uploaded into the overlay uniform on
-    /// every `prepare()`.
-    preview_coverage_scale: f32,
     /// Cached bind group from prepare(), valid until next prepare() call.
     bind_group: Option<wgpu::BindGroup>,
     /// Partition counts set by prepare().
@@ -357,13 +357,11 @@ impl ToolOverlay {
             dummy_white_mask_view,
             mask: None,
             mask_view: None,
-            cursor_preview_mask: None,
-            cursor_preview_mask_view: None,
+            cursor_preview: None,
             cursor_preview_mask_size: (0, 0),
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
-            preview_coverage_scale: 1.0,
             bind_group: None,
             solid_count: 0,
             snapshot_count: 0,
@@ -431,77 +429,91 @@ impl ToolOverlay {
         self.mask_view = None;
     }
 
-    /// Ensure the preview-mask texture exists at the given dimensions, then
-    /// return a view a brush node can render into. Reallocates only when
+    /// Ensure the hover dab's textures exist at the given dimensions, then
+    /// return the view a brush terminal renders into. Reallocates only when
     /// size changes; otherwise returns the existing view.
-    ///
-    /// Allocated with RENDER_ATTACHMENT + TEXTURE_BINDING usage (RGBA8Unorm)
-    /// so nodes can render into it and the overlay can sample it as a mask.
     pub fn ensure_cursor_preview_mask(
         &mut self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
     ) -> &wgpu::TextureView {
-        if self.cursor_preview_mask_size != (width, height) || self.cursor_preview_mask.is_none() {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("overlay-preview-mask"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
+        if self.cursor_preview_mask_size != (width, height) || self.cursor_preview.is_none() {
+            let texture = |label, format, usage| {
+                let tex = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: usage
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                tex.create_view(&wgpu::TextureViewDescriptor::default())
+            };
+            let render_view = texture(
+                "overlay-preview-render",
+                CURSOR_PREVIEW_RENDER_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
+            let mask_view = texture(
+                "overlay-preview-mask",
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureUsages::STORAGE_BINDING,
+            );
+            self.cursor_preview = Some(CursorPreviewTextures {
+                render_view,
+                mask_view,
             });
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.cursor_preview_mask = Some(tex);
-            self.cursor_preview_mask_view = Some(view);
             self.cursor_preview_mask_size = (width, height);
         }
-        self.cursor_preview_mask_view.as_ref().unwrap()
+        &self.cursor_preview.as_ref().unwrap().render_view
     }
 
-    /// Point the overlay's mask binding at the preview-mask texture so
+    /// Record the stretch of the hover dab as rendered into the mask the
+    /// overlay samples, so its strongest texel shows at full coverage
+    /// whatever the brush's flow. Every render of the hover dab is followed
+    /// by this in the same submission. No-op before the first render.
+    pub fn stretch_cursor_preview(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        stretch: &super::tip_stretch::TipStretch,
+    ) {
+        if let Some(t) = &self.cursor_preview {
+            stretch.encode(
+                device,
+                encoder,
+                &t.render_view,
+                &t.mask_view,
+                self.cursor_preview_mask_size,
+                super::tip_stretch::TipStretchRefs::COVERAGE,
+            );
+        }
+    }
+
+    /// Point the overlay's mask binding at the hover dab's mask so
     /// subsequent `prepare()` calls bind it as the KIND_MASKED_STAMP source.
     pub fn use_cursor_preview_mask_as_mask(&mut self) {
-        if let Some(view) = &self.cursor_preview_mask_view {
-            self.mask_view = Some(view.clone());
+        if let Some(t) = &self.cursor_preview {
+            self.mask_view = Some(t.mask_view.clone());
             // Drop any CPU-uploaded texture; preview-mask is now authoritative.
             self.mask = None;
         }
     }
 
     /// Stop using the preview mask as the overlay mask source (falls back
-    /// to the 1×1 white default). Does not free the preview texture.
-    /// Also resets `preview_coverage_scale` to 1.0 so a stale boost can't
-    /// leak into a subsequent CPU-uploaded mask render.
+    /// to the 1×1 white default). Does not free the preview textures.
     pub fn clear_cursor_preview_mask(&mut self) {
         self.mask = None;
         self.mask_view = None;
-        self.preview_coverage_scale = 1.0;
-    }
-
-    /// Set the coverage scale applied to KIND_MASKED_STAMP samples. Used
-    /// by the engine to normalize attenuated cursor-preview masks (e.g.
-    /// charcoal's paper × shape product) up to natural full-coverage
-    /// visibility (the GPU-resident analogue of the dab-tile auto-bright
-    /// that used to live in `frame_dab_thumbnail`). Set to 1.0 to disable.
-    pub fn set_preview_coverage_scale(&mut self, scale: f32) {
-        self.preview_coverage_scale = scale;
-    }
-
-    /// Read the currently-applied coverage scale. Test-only: the
-    /// production overlay shader reads this from the uniform buffer.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn preview_coverage_scale(&self) -> f32 {
-        self.preview_coverage_scale
     }
 
     /// Current preview mask dimensions (0,0 if never allocated).
@@ -509,10 +521,13 @@ impl ToolOverlay {
         self.cursor_preview_mask_size
     }
 
-    /// Access the preview-mask texture (for engines that need the Texture,
-    /// not just the view, e.g. for a BrushGpuContext's canvas_texture slot).
-    pub fn cursor_preview_mask_texture(&self) -> Option<&wgpu::Texture> {
-        self.cursor_preview_mask.as_ref()
+    /// The hover dab as rendered and the mask stretched from it, `None`
+    /// before the first render. Test-only: production reads neither back.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn cursor_preview_textures(&self) -> Option<(&wgpu::Texture, &wgpu::Texture)> {
+        self.cursor_preview
+            .as_ref()
+            .map(|t| (t.render_view.texture(), t.mask_view.texture()))
     }
 
     /// Returns true if the overlay has content to render.
@@ -627,7 +642,7 @@ impl ToolOverlay {
         let uniforms = OverlayUniforms {
             screen_size: [viewport_w as f32, viewport_h as f32],
             time: self.time,
-            preview_coverage_scale: self.preview_coverage_scale,
+            _pad: 0.0,
             fwd_row0: plane_fwd[0],
             fwd_row1: plane_fwd[1],
             fwd_row2: plane_fwd[2],

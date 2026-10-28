@@ -20,7 +20,9 @@
         // Identity mapping: the tests that drag assert in client pixels.
         coords: {
             clientDeltaToGraph: (dx: number, dy: number) => ({ x: dx, y: dy }),
-        } as NodeCanvasContext['coords'],
+            // A wirable input's dot registers its offset on mount.
+            elementCenterInParent: () => ({ x: 0, y: 0 }),
+        } as unknown as NodeCanvasContext['coords'],
     });
 </script>
 

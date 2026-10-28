@@ -1,0 +1,62 @@
+/*
+ * What every page starts from: the palette, the display face, and the element
+ * rules for the page itself (body text, headings, links).
+ */
+@import './theme.css';
+
+/*
+ * Oldstyle HPLHS, by Andrew H. Leman, revived from the Linotype catalog of the
+ * mid 1930s for the H. P. Lovecraft Historical Society:
+ * https://www.hplhs.org/resources.php#fonts
+ *
+ * Upright and slanted share a family so they are picked by font-style; the
+ * italic's outlines are already slanted, and claiming that slot is what keeps
+ * browsers from slanting it a second time. A face is only fetched if
+ * something on the page actually asks for it.
+ */
+@font-face {
+    font-family: 'Oldstyle HPLHS';
+    src: url('../fonts/oldstyle-regular.woff2') format('woff2');
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Oldstyle HPLHS';
+    src: url('../fonts/oldstyle-italic.woff2') format('woff2');
+    font-style: italic;
+    font-weight: 400;
+    font-display: swap;
+}
+
+/* The display stack, for titles and wordmarks. Georgia covers the moment
+   before the face loads. */
+:root {
+    --font-display: 'Oldstyle HPLHS', Georgia, serif;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        Roboto, sans-serif;
+    font-weight: 300;
+    font-feature-settings: 'ss01', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 200;
+    letter-spacing: -0.02em;
+}
+body a {
+    color: var(--accent-text);
+    text-decoration: none;
+}
+body a:hover {
+    text-decoration: underline;
+}

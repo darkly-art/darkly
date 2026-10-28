@@ -8,6 +8,27 @@
 // recompiles the brush graph and re-derives its previews for values the artist is
 // only passing through.
 
+import { travelToValue, valueToFraction, type TravelCurve } from './slider';
+
+/** Horizontal drag, in CSS px, that carries a scrub across its whole range. */
+export const SCRUB_TRAVEL_PX = 400;
+
+/** The value a relative scrub reaches `dx` px from where it started. The drag
+ *  moves through the control's travel, not its range: the start is placed on
+ *  the curve, the pointer's travel added there, and the result read back, so
+ *  a curved control is fine where its curve is flat and a linear one moves
+ *  evenly. */
+export function scrubValue(
+    start: number,
+    dx: number,
+    min: number,
+    max: number,
+    travel?: TravelCurve,
+): number {
+    const t = valueToFraction(start, min, max, travel) + dx / SCRUB_TRAVEL_PX;
+    return travelToValue(t, min, max, travel);
+}
+
 export interface ScrubDragOptions {
     /** Map a pointer position to the value it represents. */
     toValue: (clientX: number, clientY: number) => number;

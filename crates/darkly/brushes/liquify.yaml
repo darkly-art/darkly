@@ -16,7 +16,7 @@ connections:
 - 'pen_input.motion -> liquify.motion'
 - 'pen_input.position -> liquify.position'
 exposed_ports:
-  "brush_settings.stabilize": {}
   "brush_settings.size": {}
+  "brush_settings.stabilize": {}
   "liquify.softness": {}
   "liquify.strength": {}

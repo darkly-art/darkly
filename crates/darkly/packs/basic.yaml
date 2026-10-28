@@ -5,4 +5,4 @@ palette:
   chroma: "#a89a78"
   refraction: "#c9b98f"
   surface: "#8a74421a"
-members: [airbrush, calligraphy, ink_pen, rough_ink]
+members: [ink, round, airbrush, technical_pen, flat_pen, calligraphy]

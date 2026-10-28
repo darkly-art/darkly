@@ -48,6 +48,35 @@ updates:
         exclude-patterns:
           - "electron"
 
+  - package-ecosystem: npm
+    directory: /docs-site
+    target-branch: dev
+    schedule:
+      interval: weekly
+    ignore:
+      # Kept in step with the frontend, where svelte-check's peer range caps
+      # it; @astrojs/check and svelte-check constrain it here too.
+      - dependency-name: "typescript"
+      # src/shared/ is written against these frameworks, and other sites
+      # compile it with their own copies, so a major moves by hand, with a
+      # release note that importers of shared/ must upgrade too. The
+      # @astrojs/* integrations and svelte-check track the Astro and Svelte
+      # majors, so they are held back with them.
+      - dependency-name: "astro"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@astrojs/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "svelte"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "svelte-check"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pagefind"
+        update-types: ["version-update:semver-major"]
+    groups:
+      docs-site:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev

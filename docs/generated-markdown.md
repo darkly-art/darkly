@@ -82,7 +82,34 @@ resvg rather than a browser; what that costs a component is documented at the to
 of the runner. `npm test` re-renders each one and fails if the committed image is
 stale.
 
+A region names a whole catalog, one of its categories (`category=Veils`), or one
+of its entries (`entry=dry_media`, a card per brush pack); the alt text lists
+what the picture shows either way. One component may own several images: a
+component that exports `instances(ctx)` renders one per entry id it returns,
+and each image carries its own `.hash.json` sidecar recording the catalog and
+entry views it was rendered from. Stills come first, since the brush pack cards
+are built from the brushes' stills:
+
 ```bash
+cargo run --release -p darkly --features testing --bin render_docs -- \
+  --stills --catalog brushes
 cargo run -q -p darkly --bin export-docs -- --out target/docs/metadata.json
 node frontend/scripts/render-doc-graphics.mjs --metadata target/docs/metadata.json
 ```
+
+The same cards reach the docs site: `make docs-content` copies
+`docs/images/graphics/` into the export as `graphics/`, and
+`docs-site/scripts/gen-docs.mjs` builds the Brush Packs reference page from
+them, one card per pack, failing by name if a pack has no card.
+
+### Banners
+
+A brush pack card may carry a banner, a hand-made picture of work done with the
+pack, across its top. A banner is declared by existing: commit a JPEG at
+`docs/images/banners/<catalog>/<entry>.jpg` (so
+`docs/images/banners/brushPacks/dry_media.jpg`) and re-render. There is no
+field for it in the pack's YAML, which is engine data embedded in the crate and
+has no business naming a path in the documentation tree. The runner and the
+test both refuse a file whose stem is not an entry with a card, or one narrower
+than the card, so a typo cannot silently render as "no banner". Banners live
+under `docs/`, outside the crate, and never affect its size.

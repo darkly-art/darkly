@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{event, headless, new_engine, readback};
+use common::{event, headless, new_engine, readback, Vehicle};
 use darkly::coord::CanvasRect;
 use darkly::document::SelectionMode;
 use darkly::engine::protocol::RawParams;
@@ -56,7 +56,7 @@ fn translate(engine: &mut DarklyEngine, dx: f32) {
 /// pending but not open.
 #[test]
 fn nothing_open_reports_no_session() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     assert_eq!(session_id(&engine), None);
 
     let layer = engine.add_raster_layer(None);
@@ -74,7 +74,7 @@ fn nothing_open_reports_no_session() {
 /// the paste made, and Apply lands it as one undo entry.
 #[test]
 fn floating_paste_session() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     let steps = engine.test_undo_len();
 
     let pasted = engine.paste_image_floating(8, 8, &red_square(8), 4, 4, None);
@@ -111,7 +111,7 @@ fn alpha_at((pixels, bounds): &(Vec<u8>, CanvasRect), x: i32, y: i32) -> u8 {
 /// and Apply lands the move as one undo entry.
 #[test]
 fn transform_session() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     let layer = selected_block(&mut engine);
     let before = readback(&mut engine, layer);
     let steps = engine.test_undo_len();
@@ -136,7 +136,7 @@ fn transform_session() {
 /// and Discard pass it by, and the next document edit still resolves it.
 #[test]
 fn shape_placement_is_not_presented() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     let steps = engine.test_undo_len();
     engine.begin_shape(
         "polygon".to_string(),
@@ -167,7 +167,7 @@ fn shape_placement_is_not_presented() {
 /// Apply and Discard both close it.
 #[test]
 fn stroke_edit_session() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     let layer = engine.add_raster_layer(None);
     stroke(&mut engine, layer);
 
@@ -189,7 +189,7 @@ fn stroke_edit_session() {
 /// and only that session is reported.
 #[test]
 fn starting_a_session_settles_a_kept_stroke() {
-    let mut engine = new_engine(CANVAS, "Ink Pen", 0.0);
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin("Ink"), 0.0);
     let layer = engine.add_raster_layer(None);
     let steps = engine.test_undo_len();
     stroke(&mut engine, layer);

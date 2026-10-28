@@ -344,8 +344,8 @@ fn export_is_a_faithful_projection() {
         }
     }
     assert_eq!(
-        previewable, 45,
-        "14 effects + 1 void + 16 blend modes + 14 brushes declare a preview \
+        previewable, 47,
+        "14 effects + 1 void + 16 blend modes + 16 brushes declare a preview \
          recipe"
     );
 
@@ -506,4 +506,55 @@ fn manifest_under_256_kb() {
         len < 256 * 1024,
         "the manifest is {len} bytes; over 256 KB means something is riding along that should not be"
     );
+}
+
+/// A pack row carries the two facts a card is drawn from, equal to the shipped
+/// pack's: its palette, and its members as ids of the brushes catalog in
+/// declared order. Rows of every other catalog carry neither.
+#[test]
+fn brush_packs_export_palette_and_members() {
+    let (json, _) = export();
+    let rows = catalog(&json, darkly::brush::packs::CATALOG_ID)["entries"]
+        .as_array()
+        .unwrap();
+    let packs = darkly::brush::packs::docs();
+    assert_eq!(rows.len(), packs.len());
+    for (row, pack) in rows.iter().zip(packs) {
+        assert_eq!(row["type"], pack.id.as_str());
+        for (role, value) in pack.palette.roles() {
+            assert_eq!(row["palette"][role], value, "`{}` palette {role}", pack.id);
+        }
+        assert_eq!(
+            row["members"]["catalog"],
+            darkly::brush::builtin_brushes::CATALOG_ID,
+            "`{}` members catalog",
+            pack.id
+        );
+        let ids: Vec<&str> = row["members"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(ids, pack.members, "`{}` members", pack.id);
+    }
+    for cat in catalogs_of(&json) {
+        if cat["id"] == darkly::brush::packs::CATALOG_ID {
+            continue;
+        }
+        for row in cat["entries"].as_array().unwrap() {
+            assert!(
+                row["palette"].is_null(),
+                "{}/{} has a palette",
+                cat["id"],
+                row["type"]
+            );
+            assert!(
+                row["members"].is_null(),
+                "{}/{} has members",
+                cat["id"],
+                row["type"]
+            );
+        }
+    }
 }

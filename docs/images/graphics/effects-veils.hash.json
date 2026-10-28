@@ -1,39 +1,67 @@
 {
-  "svg": "322f857f0201cc51",
+  "svg": "af28ace7c3ce453a",
   "width": 1472,
   "height": 802,
-  "entries": [
-    {
-      "type": "chromatic_aberration",
-      "displayName": "Chromatic Aberration"
+  "catalog": "effects",
+  "category": "Veils",
+  "entry": null,
+  "context": {
+    "catalogs": {
+      "effects#Veils": {
+        "id": "effects",
+        "title": "Veils",
+        "entries": [
+          {
+            "type": "chromatic_aberration",
+            "displayName": "Chromatic Aberration",
+            "description": "Split the color channels apart along their hue axes, like a misaligned lens.",
+            "icon": "lucide-lab:venn"
+          },
+          {
+            "type": "frozen",
+            "displayName": "Frozen",
+            "description": "Frost the view behind a pane of refracting ice.",
+            "icon": "fa6-solid:snowflake"
+          },
+          {
+            "type": "grain",
+            "displayName": "Grain",
+            "description": "Film grain noise over the view, optionally animated.",
+            "icon": "tabler:grain"
+          },
+          {
+            "type": "lens_blur",
+            "displayName": "Lens Blur",
+            "description": "Defocus the view with a soft camera-lens blur.",
+            "icon": "tabler:blur"
+          },
+          {
+            "type": "painting",
+            "displayName": "Painting",
+            "description": "Smooth the view into painterly, brush-like daubs.",
+            "icon": "fa6-solid:brush"
+          },
+          {
+            "type": "pixelate",
+            "displayName": "Pixelate",
+            "description": "Downsample the view into a blocky pixel mosaic.",
+            "icon": "fa6-solid:table-cells"
+          },
+          {
+            "type": "rainy_glass",
+            "displayName": "Rainy Glass",
+            "description": "Raindrops run down a pane of glass over the view.",
+            "icon": "fa6-solid:cloud-rain"
+          },
+          {
+            "type": "vhs",
+            "displayName": "VHS",
+            "description": "Analog VHS tape artifacts: scanlines, noise, and color bleed.",
+            "icon": "fa6-solid:tv"
+          }
+        ]
+      }
     },
-    {
-      "type": "frozen",
-      "displayName": "Frozen"
-    },
-    {
-      "type": "grain",
-      "displayName": "Grain"
-    },
-    {
-      "type": "lens_blur",
-      "displayName": "Lens Blur"
-    },
-    {
-      "type": "painting",
-      "displayName": "Painting"
-    },
-    {
-      "type": "pixelate",
-      "displayName": "Pixelate"
-    },
-    {
-      "type": "rainy_glass",
-      "displayName": "Rainy Glass"
-    },
-    {
-      "type": "vhs",
-      "displayName": "VHS"
-    }
-  ]
+    "entries": {}
+  }
 }

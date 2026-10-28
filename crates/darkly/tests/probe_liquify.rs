@@ -10,7 +10,7 @@ use darkly::brush::gpu_context::{
 };
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::gpu::test_utils::{readback_texture, test_device};
+use darkly::gpu::test_utils::{cursor_preview_target, readback_cursor_preview_render, test_device};
 
 const PREVIEW_SIDE: u32 = 256;
 
@@ -39,23 +39,7 @@ fn probe_softness_zero() {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("probe"),
-        size: wgpu::Extent3d {
-            width: PREVIEW_SIDE,
-            height: PREVIEW_SIDE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let (tex, view) = cursor_preview_target(&device, PREVIEW_SIDE, PREVIEW_SIDE);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).unwrap();
     let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -93,14 +77,7 @@ fn probe_softness_zero() {
     let bpi = ctx.preview.as_ref().and_then(|p| p.info).unwrap();
     eprintln!("bbox_half = {:?}", bpi.half_extent_canvas_px);
     queue.submit([ctx.encoder.finish()]);
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &tex,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW_SIDE,
-        PREVIEW_SIDE,
-    );
+    let rgba = readback_cursor_preview_render(&device, &queue, &tex, PREVIEW_SIDE, PREVIEW_SIDE);
     // Per-row opaque x range.
     for y in [51, 52, 60, 80, 128, 175, 200, 204, 205] {
         let mut row_first = None;

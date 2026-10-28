@@ -63,10 +63,10 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
-                .with_label("Softness")
+                .with_label("Feather")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa6-solid:feather")
-                .with_description("Edge softness (0% = hard, 100% = feathered)"),
+                .with_description("How far the edge fades out (0% = hard, 100% = fully feathered)"),
             // amplitude is meaningful for Sine and Perlin (modulates the
             // bumpy boundary); the Superformula's amplitude is implicit in
             // its n1/n2/n3 instead, so we hide this knob for it.
@@ -141,8 +141,12 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_visible_when("algorithm", [ALGO_PERLIN as i32])
                 .with_description("Per-octave amplitude falloff. Higher = rougher edge."),
+            // Seed 0 reduces the hash to the lattice index, and index 0
+            // hashes to exactly 0, so every octave bottoms out at angle 0 and
+            // the edge takes one deep bite there. 251 is an even, organic
+            // silhouette at the frequencies brushes use.
             PortDef::input("seed", BrushWireType::Scalar)
-                .with_range(0.0, 1024.0, 0.0)
+                .with_range(0.0, 1024.0, 251.0)
                 .with_natural_range(0.0, 1024.0)
                 .with_label("Seed")
                 .with_unit(UnitType::Raw)

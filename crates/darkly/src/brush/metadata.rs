@@ -131,12 +131,12 @@ mod tests {
     fn metadata_round_trips_through_json() {
         // The record shape a pack archive and a stored library record both
         // carry.
-        let metadata = BrushMetadata::from_graph("ink_pen", "Ink Pen", brush::default_graph());
+        let metadata = BrushMetadata::from_graph("ink", "Ink", brush::default_graph());
         let json = serde_json::to_string(&metadata).unwrap();
         let back: BrushMetadata = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(back.id, "ink_pen");
-        assert_eq!(back.name, "Ink Pen");
+        assert_eq!(back.id, "ink");
+        assert_eq!(back.name, "Ink");
         assert_eq!(
             serde_json::to_value(&metadata.graph).unwrap(),
             serde_json::to_value(&back.graph).unwrap(),

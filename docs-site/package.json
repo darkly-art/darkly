@@ -1,0 +1,34 @@
+{
+    "name": "darkly-docs-site",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "content": "node scripts/gen-docs.mjs",
+        "dev": "npm run content && astro dev",
+        "check": "astro check && svelte-check --tsconfig ./tsconfig.json",
+        "build": "npm run content && npm run check && astro build",
+        "preview": "astro preview",
+        "test": "node scripts/check-shared.mjs && node scripts/check-hotkeys.mjs && node scripts/check-dist.mjs",
+        "test:browser": "node scripts/check-browser.mjs"
+    },
+    "dependencies": {
+        "@astrojs/mdx": "^5.0.3",
+        "@astrojs/sitemap": "^3.7.4",
+        "@astrojs/svelte": "^8.1.0",
+        "astro": "^6.4.0",
+        "remark-directive": "^4.0.0",
+        "remark-parse": "^11.0.0",
+        "svelte": "^5.57.2",
+        "unified": "^11.0.5"
+    },
+    "devDependencies": {
+        "@astrojs/check": "^0.9.10",
+        "pagefind": "^1.5.2",
+        "svelte-check": "^4.7.7",
+        "typescript": "^6.0.3"
+    }
+}

@@ -11,7 +11,7 @@ use std::sync::Arc;
 const FROZEN_NORMAL_BYTES: &[u8] = include_bytes!("../../../resources/veils/frozen.jpg");
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::float("strength", 0.0, 0.2, 0.02)
+    ParamDef::float("strength", 0.0, 0.05, 0.02)
         .with_label("Strength")
         .with_description("How far the frosted surface displaces what is behind it."),
     ParamDef::float("scale", 0.1, 5.0, 1.0)

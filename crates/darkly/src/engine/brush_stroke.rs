@@ -53,6 +53,10 @@ pub(crate) struct StrokeConditions {
     pub canvas_per_css_px: f32,
     /// View rotation in radians: dab orientation is screen-relative.
     pub view_rotation: f32,
+    /// Direction of travel of the stroke's first dab, canvas-frame radians:
+    /// from the last hover sample to the pen-down point, so the stroke
+    /// continues the hover stream. 0 when the pen arrived with no hover.
+    pub start_direction: f32,
 }
 
 /// The stroke the pen is painting. The engine and its buffer live and die
@@ -239,8 +243,9 @@ impl DarklyEngine {
 
     /// The conditions a stroke starting now is painted under: the
     /// foreground colour, a seed (the pinned one, else fresh from the
-    /// clock), and the view's scale and rotation.
-    pub(crate) fn current_stroke_conditions(&self) -> StrokeConditions {
+    /// clock), the view's scale and rotation, and the `start_direction` the
+    /// caller measured from the hover.
+    pub(crate) fn current_stroke_conditions(&self, start_direction: f32) -> StrokeConditions {
         let view = &self.view_params;
         StrokeConditions {
             color: self.foreground_color,
@@ -250,6 +255,7 @@ impl DarklyEngine {
             // the same at every zoom and on every display.
             canvas_per_css_px: view.dpr / view.zoom.max(f32::MIN_POSITIVE),
             view_rotation: view.rotation,
+            start_direction,
         }
     }
 
@@ -320,6 +326,7 @@ impl DarklyEngine {
             self.clone_source_anchor.map(|p| [p.x as f32, p.y as f32]),
             conditions.seed,
             self.active_stamp_angle_rate(),
+            conditions.start_direction,
             self.doc.dpi,
         )
     }

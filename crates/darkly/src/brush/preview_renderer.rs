@@ -6,8 +6,9 @@
 //! editor's live preview and by brush thumbnail baking.
 //!
 //! Distinct from the hover overlay path (`render_preview_pipeline` in
-//! `eval.rs`), which forces `flow=1` and white color to produce a tip-mask
-//! for the cursor-follow overlay. The editor preview runs the real
+//! `eval.rs`), which renders one dab in white and stretches it to full
+//! strength (see [`crate::gpu::tip_stretch`]) to produce a tip-mask for the
+//! cursor-follow overlay. The editor preview runs the real
 //! deposition pipeline (`begin_stroke` / `execute_gpu` / `commit`) so
 //! flow, opacity, and other per-dab settings affect the output. The
 //! stroke/background colors are theme-sourced (set via the engine's
@@ -31,9 +32,10 @@ use crate::nodegraph::Graph;
 /// A preview is a picture of a brush, not of one stroke of it: five shipped
 /// brushes contain `random`/`noise` nodes, and seeding those from the clock
 /// would make a cached thumbnail differ from its own re-bake and a
-/// documentation asset differ from its own rebuild. The value is arbitrary; that
-/// it never changes is the point.
-const PREVIEW_STROKE_SEED: u32 = 0x5EED_B00C;
+/// documentation asset differ from its own rebuild. That it never changes is
+/// the point; the value itself is one whose draws give the shipped brushes'
+/// noisy round tips an even silhouette in the single-dab preview.
+const PREVIEW_STROKE_SEED: u32 = 0x5EED_891E;
 
 /// Reusable GPU scratch + layer textures for preview rendering.
 struct PreviewTarget {
@@ -231,6 +233,8 @@ impl BrushStrokePreviewRenderer {
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),
+            // A synthetic path has no hover to continue.
+            0.0,
             // Previews show brush identity, not momentary document state,
             // and a brush's identity is its reference-pixel tuning, so they
             // render at the reference (factor 1.0) whatever the focused
