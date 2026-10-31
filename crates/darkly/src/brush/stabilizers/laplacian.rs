@@ -4,7 +4,8 @@
 //! 1. Append to polyline
 //! 2. Run N sweeps of Laplacian smoothing on interior points (first + last
 //!    pinned), each moving a point onto the chord between its neighbours
-//! 3. Sensor values (pressure, tilt, etc.) smoothed the same way
+//! 3. The raw sensors ([`PaintInformation::raw_sensors`]: pressure, tilt,
+//!    rotation, tangential pressure) smoothed the same way
 //!
 //! The result is defined as relaxing the whole polyline from its raw points
 //! after every batch, but a batch can only move vertices from `N + 1` behind
@@ -180,34 +181,13 @@ impl LaplacianStabilizer {
                     _ => self.stabilized[i - 1],
                 };
                 let next = self.stabilized[i + 1];
-                let t = self.chord_t[i];
-                let pull = self.pull[i];
-                let cur = &mut self.stabilized[i];
-
-                // Position and every continuous sensor move toward the chord
-                // between their neighbours, at this point's own proportion,
-                // by this point's pull.
-                macro_rules! smooth_field {
-                    ($field:ident) => {
-                        let target = prev.$field + (next.$field - prev.$field) * t;
-                        cur.$field += (target - cur.$field) * pull;
-                    };
-                }
-
-                let target = [
-                    prev.pos[0] + (next.pos[0] - prev.pos[0]) * t,
-                    prev.pos[1] + (next.pos[1] - prev.pos[1]) * t,
-                ];
-                cur.pos[0] += (target[0] - cur.pos[0]) * pull;
-                cur.pos[1] += (target[1] - cur.pos[1]) * pull;
-                smooth_field!(pressure);
-                smooth_field!(x_tilt);
-                smooth_field!(y_tilt);
-                smooth_field!(rotation);
-                smooth_field!(tangential_pressure);
-                smooth_field!(speed);
-                smooth_field!(tilt_magnitude);
-                smooth_field!(tilt_direction);
+                relax_vertex(
+                    &mut self.stabilized[i],
+                    &prev,
+                    &next,
+                    self.chord_t[i],
+                    self.pull[i],
+                );
                 if Some(i) == edge {
                     trajectory.push(self.stabilized[i]);
                 }
@@ -232,6 +212,29 @@ impl LaplacianStabilizer {
             }
         };
     }
+}
+
+/// One relaxation step of `cur`: its position and raw sensors move toward
+/// the chord between `prev` and `next`, at proportion `t` along it, by
+/// `pull`.
+fn relax_vertex(
+    cur: &mut PaintInformation,
+    prev: &PaintInformation,
+    next: &PaintInformation,
+    t: f32,
+    pull: f32,
+) {
+    let toward = |cur: f32, prev: f32, next: f32| cur + (prev + (next - prev) * t - cur) * pull;
+    cur.pos = [
+        toward(cur.pos[0], prev.pos[0], next.pos[0]),
+        toward(cur.pos[1], prev.pos[1], next.pos[1]),
+    ];
+    let (before, after) = (prev.raw_sensors(), next.raw_sensors());
+    let mut sensors = cur.raw_sensors();
+    for (k, value) in sensors.iter_mut().enumerate() {
+        *value = toward(*value, before[k], after[k]);
+    }
+    cur.set_raw_sensors(sensors);
 }
 
 impl StabilizerAlgorithm for LaplacianStabilizer {
@@ -708,28 +711,7 @@ mod tests {
             for i in 1..len - 1 {
                 let prev = out[i - 1];
                 let next = out[i + 1];
-                let (t, p) = (chord_t[i], pull[i]);
-                let cur = &mut out[i];
-                macro_rules! smooth_field {
-                    ($field:ident) => {
-                        let target = prev.$field + (next.$field - prev.$field) * t;
-                        cur.$field += (target - cur.$field) * p;
-                    };
-                }
-                let target = [
-                    prev.pos[0] + (next.pos[0] - prev.pos[0]) * t,
-                    prev.pos[1] + (next.pos[1] - prev.pos[1]) * t,
-                ];
-                cur.pos[0] += (target[0] - cur.pos[0]) * p;
-                cur.pos[1] += (target[1] - cur.pos[1]) * p;
-                smooth_field!(pressure);
-                smooth_field!(x_tilt);
-                smooth_field!(y_tilt);
-                smooth_field!(rotation);
-                smooth_field!(tangential_pressure);
-                smooth_field!(speed);
-                smooth_field!(tilt_magnitude);
-                smooth_field!(tilt_direction);
+                relax_vertex(&mut out[i], &prev, &next, chord_t[i], pull[i]);
             }
         }
         out
@@ -747,9 +729,6 @@ mod tests {
             rotation: s * 0.01,
             tangential_pressure: (s * 0.2).sin(),
             time: t,
-            speed: (s * 0.13).cos(),
-            tilt_magnitude: 0.3 + 0.2 * (s * 0.17).sin(),
-            tilt_direction: (s * 0.03).sin(),
             ..Default::default()
         }
     }
