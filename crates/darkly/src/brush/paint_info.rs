@@ -73,7 +73,35 @@ pub struct PaintInformation {
 /// clamped to [0, 1] gives the `speed` sensor value.
 pub const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 
+/// Number of [`PaintInformation::raw_sensors`].
+pub const RAW_SENSORS: usize = 5;
+
 impl PaintInformation {
+    /// The sensors the tablet measures per sample, as opposed to position,
+    /// time and the values derived from the path: pressure, x and y tilt,
+    /// rotation and tangential pressure, in that order. What the stroke
+    /// stabilizer averages and smooths.
+    pub fn raw_sensors(&self) -> [f32; RAW_SENSORS] {
+        [
+            self.pressure,
+            self.x_tilt,
+            self.y_tilt,
+            self.rotation,
+            self.tangential_pressure,
+        ]
+    }
+
+    /// Replace the [`Self::raw_sensors`], in the same order.
+    pub fn set_raw_sensors(&mut self, sensors: [f32; RAW_SENSORS]) {
+        [
+            self.pressure,
+            self.x_tilt,
+            self.y_tilt,
+            self.rotation,
+            self.tangential_pressure,
+        ] = sensors;
+    }
+
     /// Synthetic pen input for dry-run previews.
     /// Full pressure so pressure-driven sensors show the brush at its
     /// fully-engaged tip: the silhouette the artist expects when previewing

@@ -581,6 +581,158 @@ mod tests {
         );
     }
 
+    /// Samples drawn along a line 2 px and 1/240 s apart at `pressures`, then
+    /// one sample per `lift` entry on the way off, each `(travel past the
+    /// last sample, pressure)`.
+    fn line_samples(pressures: &[f32], lift: &[(f32, f32)]) -> Vec<PaintInformation> {
+        let dt = 1.0 / 240.0;
+        let mut samples: Vec<PaintInformation> = pressures
+            .iter()
+            .enumerate()
+            .map(|(i, &pressure)| PaintInformation {
+                pos: [i as f32 * 2.0, 0.0],
+                pressure,
+                time: i as f32 * dt,
+                ..Default::default()
+            })
+            .collect();
+        let last = samples[samples.len() - 1];
+        for (j, &(dx, pressure)) in lift.iter().enumerate() {
+            samples.push(PaintInformation {
+                pos: [last.pos[0] + dx, 0.0],
+                pressure,
+                time: last.time + (j + 1) as f32 * dt,
+                ..last
+            });
+        }
+        samples
+    }
+
+    /// Pressure of each vertex `samples` leave through the whole stack at
+    /// `strength`.
+    fn stabilized_pressures(strength: f32, samples: &[PaintInformation]) -> Vec<f32> {
+        let mut stab = stroke_stabilizer_stack(
+            &StabilizerRegistry::new(),
+            &laplacian_config(strength),
+            0.0,
+            1.0,
+        );
+        stab.push_all(samples);
+        stab.stabilized().iter().map(|p| p.pressure).collect()
+    }
+
+    /// `n` pressures ramping from `from` to `to`.
+    fn ramp(n: usize, from: f32, to: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| from + (to - from) * i as f32 / (n - 1) as f32)
+            .collect()
+    }
+
+    /// Pressure of each stabilized vertex of a comet, `n` samples ramping
+    /// from 0.1 to 1, lifted off by `lift`.
+    fn comet_pressures(strength: f32, n: usize, lift: &[(f32, f32)]) -> Vec<f32> {
+        stabilized_pressures(strength, &line_samples(&ramp(n, 0.1, 1.0), lift))
+    }
+
+    /// Regression: lifting the pen off a stroke drawn light to heavy left it
+    /// thin at both ends. The zero-pressure lift sample, which adds no travel,
+    /// became the stroke's last vertex, and the relaxation carried its zero
+    /// back along the stroke. A sample weighs the travel adjacent to it, so a
+    /// stationary sample with nothing after it weighs nothing.
+    #[test]
+    fn a_stationary_lift_does_not_thin_the_stroke() {
+        // 150 samples end between commits; 151 end exactly on one.
+        for n in [150, 151] {
+            for strength in [0.4f32, 1.0] {
+                let p = comet_pressures(strength, n, &[(0.0, 0.0)]);
+                let head = p[p.len() - 1];
+                assert!(
+                    head > 0.95,
+                    "{n} samples, strength {strength}: the head reads {head:.2}, the pen read 1.0"
+                );
+            }
+        }
+    }
+
+    /// A lift that moves the pen weighs its own short travel: the head stays
+    /// thick, and at Ink's strength the stroke well behind it is untouched.
+    #[test]
+    fn a_short_lift_with_travel_stays_at_the_end() {
+        let lift = [(0.5, 0.6), (1.0, 0.3), (1.5, 0.0)];
+        for strength in [0.4f32, 1.0] {
+            let p = comet_pressures(strength, 150, &lift);
+            let head = p[p.len() - 1];
+            assert!(head > 0.8, "strength {strength}: the head reads {head:.2}");
+        }
+        let lifted = comet_pressures(0.4, 150, &lift);
+        let drawn = comet_pressures(0.4, 150, &[]);
+        assert_eq!(lifted.len(), drawn.len());
+        for (j, (a, b)) in lifted.iter().zip(&drawn).enumerate().take(drawn.len() - 15) {
+            assert!(
+                (a - b).abs() < 0.005,
+                "vertex {j} moved from {b:.3} to {a:.3}"
+            );
+        }
+    }
+
+    /// A taper the artist draws keeps its thin ends under stabilization.
+    #[test]
+    fn deliberate_tapers_keep_their_ends() {
+        let swell: Vec<f32> = ramp(75, 0.03, 1.0)
+            .into_iter()
+            .chain(ramp(75, 1.0, 0.03))
+            .collect();
+        // Full pressure, faded by hand to 0.05 over the last 40 px.
+        let fade: Vec<f32> = vec![1.0; 130]
+            .into_iter()
+            .chain(ramp(21, 1.0, 0.05))
+            .collect();
+        for strength in [0.4f32, 1.0] {
+            let p = stabilized_pressures(strength, &line_samples(&swell, &[]));
+            let (start, end) = (p[0], p[p.len() - 1]);
+            assert!(
+                start < 0.1 && end < 0.1,
+                "strength {strength}: thin-thick-thin ends read {start:.2} and {end:.2}"
+            );
+            let p = stabilized_pressures(strength, &line_samples(&fade, &[]));
+            let end = p[p.len() - 1];
+            assert!(
+                end < 0.15,
+                "strength {strength}: a hand fade ends at {end:.2}"
+            );
+        }
+    }
+
+    /// While drawing, the stroke's tip follows a pressure ramp within the
+    /// lag of averaging over the last spacing of travel: at most what the
+    /// ramp rises over five eighths of a spacing.
+    #[test]
+    fn the_tip_follows_a_pressure_ramp() {
+        // Rises from 0.1 to 1 over 298, 30 and 12 px.
+        for n in [150, 16, 7] {
+            let samples = line_samples(&ramp(n, 0.1, 1.0), &[]);
+            let rise = 0.9 / ((n - 1) as f32 * 2.0);
+            for strength in [0.4f32, 1.0] {
+                let mut stab = stroke_stabilizer_stack(
+                    &StabilizerRegistry::new(),
+                    &laplacian_config(strength),
+                    0.0,
+                    1.0,
+                );
+                for raw in &samples {
+                    stab.push(*raw);
+                    let tip = stab.stabilized().last().unwrap().pressure;
+                    let lag = raw.pressure - tip;
+                    assert!(
+                        (-1e-4..=0.625 * RESAMPLE_SPACING_CSS_PX * rise + 1e-4).contains(&lag),
+                        "{n} samples, strength {strength}: the tip reads {tip:.3} with the pen at {:.3}",
+                        raw.pressure
+                    );
+                }
+            }
+        }
+    }
+
     // ── PredictingStabilizer ────────────────────────────────────────────
 
     /// A pen sample at position `(x, y)` and timestamp `t` (seconds).
@@ -811,11 +963,15 @@ mod tests {
         let raws: Vec<PaintInformation> = (0..300)
             .map(|i| {
                 let th = i as f32 * 0.05;
-                mk(
-                    300.0 * th.cos() + i as f32,
-                    200.0 * (2.0 * th).sin(),
-                    i as f32 * 0.008,
-                )
+                PaintInformation {
+                    pressure: 0.5 + 0.4 * (i as f32 * 0.3).sin(),
+                    x_tilt: (i as f32 * 0.11).cos(),
+                    ..mk(
+                        300.0 * th.cos() + i as f32,
+                        200.0 * (2.0 * th).sin(),
+                        i as f32 * 0.008,
+                    )
+                }
             })
             .collect();
         let mut start = 0;
