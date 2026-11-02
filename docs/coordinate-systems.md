@@ -68,5 +68,15 @@ The invariant: **`plane = window_local + canvas_origin`**.
   same anchor (`canvas_origin`). Mixing a `(0, 0)`-anchored frame with a
   `canvas_origin`-anchored frame inside one pass is what offset the transform
   preview and left ghost pixels behind.
+- **A texture's extent is storage, not the node's boundary.** Past its texture
+  a node holds its uncovered value: transparent for a layer, white for a mask,
+  unselected for the selection (`MaskOutside`, read by `sample_selection`).
+  An edit bounded by the canvas window on a node that does not cover it either
+  clips (an erase changes nothing on uncovered content) or grows the node
+  first (a fill creates content there, `StrokeOp::required_coverage`). Anything
+  recorded about an edit (an undo snapshot's `saved`, a readback's label)
+  describes what the edit touched, never the rect it was asked for.
 - **Test with a non-zero `canvas_origin`** (crop first). A test at the default
-  origin exercises none of this and will pass while the app is broken.
+  origin exercises none of this and will pass while the app is broken. Test
+  with a node that only partly covers the window too (a paste, or a crop that
+  moves the window off a layer): a canvas-sized layer hides every bug above.

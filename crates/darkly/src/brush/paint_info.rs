@@ -80,7 +80,7 @@ impl PaintInformation {
     /// The sensors the tablet measures per sample, as opposed to position,
     /// time and the values derived from the path: pressure, x and y tilt,
     /// rotation and tangential pressure, in that order. What the stroke
-    /// stabilizer averages and smooths.
+    /// stabilizer smooths.
     pub fn raw_sensors(&self) -> [f32; RAW_SENSORS] {
         [
             self.pressure,

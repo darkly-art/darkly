@@ -165,7 +165,7 @@ impl DarklyEngine {
                 xform,
             );
         });
-        let entry = self.commit_selection_undo_entry(rect)?;
+        let entry = self.commit_selection_undo_entry()?;
         // The permuted mask invalidates the window-local bounds + cpu cache and
         // the marching ants; a readback repopulates them (and the ants).
         self.set_selection_pixel_bounds(None);

@@ -18,6 +18,42 @@ fn plane_to_selection_uv(p: vec2f, origin: vec2f, size: vec2f) -> vec2f {
     return (p - origin) / size;
 }
 
+// Sample the window-anchored selection mask at plane position `p`. Past the
+// mask's texture (outside the canvas window, for the document selection) it
+// reads `outside`, the value the bind group carries: 0 for a selection or
+// coverage mask (nothing beyond its edge is covered), 1 for the no-selection
+// default (everything is). Explicit LOD, so it is legal in a compute thread as
+// well as a fragment.
+fn sample_selection(
+    sel: texture_2d<f32>,
+    smp: sampler,
+    p: vec2f,
+    origin: vec2f,
+    size: vec2f,
+    outside: f32,
+) -> f32 {
+    let uv = plane_to_selection_uv(p, origin, size);
+    let in_bounds = all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0));
+    let raw = textureSampleLevel(sel, smp, uv, 0.0).r;
+    return select(outside, raw, in_bounds);
+}
+
+// Corner `vi` (0..6) of the unit square as two triangles. A pass that draws
+// six vertices and maps the square onto its region rasterizes exactly that
+// region; a single oversized triangle would also cover up to twice the region
+// past its far edges, bounded only by the target texture.
+fn quad_corner(vi: u32) -> vec2<f32> {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+    );
+    return corners[vi];
+}
+
 // Window UV (0..1 across the accumulator) → plane position. Inverse of the
 // above for the layer compositor, which rasterizes the window but samples
 // plane-anchored layer textures.

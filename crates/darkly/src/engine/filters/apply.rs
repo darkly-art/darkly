@@ -98,10 +98,12 @@ impl DarklyEngine {
             .node_texture(node_id)
             .expect("checked above")
             .canvas_frame();
-        let snap = self.gpu.encode_ret("filter-save", |enc| {
+        let Some(snap) = self.gpu.encode_ret("filter-save", |enc| {
             self.region_scratch
                 .save_region(&self.gpu.device, enc, &frame, format, region)
-        });
+        }) else {
+            return false;
+        };
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
@@ -109,7 +111,6 @@ impl DarklyEngine {
             "filter-commit",
             node_id,
             &snap,
-            region,
         );
 
         // Filter the region in place, masked to the selection shape when present.

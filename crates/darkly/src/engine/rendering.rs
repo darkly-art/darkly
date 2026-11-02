@@ -9,7 +9,6 @@ use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::preview::PreviewBackdrop;
 use crate::gpu::readback::{self, ReadbackRequest, ReadbackScheduler};
-use crate::gpu::region_runs::RegionRuns;
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::{ViewParams, ViewTransform};
 use crate::layer::LayerId;
@@ -891,12 +890,21 @@ impl DarklyEngine {
                 .doc
                 .node_pixel_bounds(node_id)
                 .filter(|b| *b != cur_extent);
+            // A restore is document-led too: the node grows to cover what the
+            // entry restores before anything is uploaded, so no upload can
+            // overhang its target whatever extent the node has reached since
+            // the entry was recorded (a rescale redone after later growth puts
+            // back the extent it recorded, smaller than the entry it restores).
+            let needed = entry.runs.bounds();
 
             match target_extent {
                 None => {
                     // Constant-extent restore (paint, transform, mask, and any
                     // rescale node whose size didn't change): capture the
                     // entry's rect and upload, in one encoder.
+                    if let Some(needed) = needed {
+                        self.grow_node_to_fit(node_id, needed);
+                    }
                     let frame = self
                         .compositor
                         .node_texture(node_id)
@@ -948,6 +956,9 @@ impl DarklyEngine {
                         target_extent,
                         None,
                     );
+                    if let Some(needed) = needed {
+                        self.grow_node_to_fit(node_id, needed);
+                    }
                     let new_frame = self
                         .compositor
                         .node_texture(node_id)
@@ -1178,11 +1189,12 @@ fn restore_gpu_region(
     );
 }
 
-/// Commit `runs` of a snapshot's saved pixels into a fresh undo entry and
-/// submit the staging-buffer readback that flips it `Pending → Ready`.
-/// Returns the entry for the caller to wrap in whichever action they're
-/// pushing (raw `GpuRegionAction`, selection action, mask compound action,
-/// etc).
+/// Commit a snapshot's saved pixels into a fresh undo entry and submit the
+/// staging-buffer readback that flips it `Pending → Ready`. The entry covers
+/// exactly `snapshot.saved`, so what was saved and what is committed cannot
+/// disagree. Returns the entry for the caller to wrap in whichever action
+/// they're pushing (raw `GpuRegionAction`, selection action, mask compound
+/// action, etc).
 ///
 /// Free function (not a `&mut self` method) so callers can hold borrows of
 /// other engine fields while passing in `&self.region_scratch` and
@@ -1195,10 +1207,9 @@ pub(crate) fn commit_undo_region(
     label: &'static str,
     layer_id: LayerId,
     snapshot: &Snapshot,
-    runs: impl Into<RegionRuns>,
 ) -> UndoRegionEntry {
     commit_undo_entry(gpu, scheduler, label, |encoder| {
-        region_scratch.commit_region(encoder, &gpu.device, layer_id, snapshot, runs)
+        region_scratch.commit_region(encoder, &gpu.device, layer_id, snapshot, snapshot.saved)
     })
 }
 

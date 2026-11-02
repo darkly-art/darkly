@@ -315,7 +315,7 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brush::stroke_engine::{DivergenceDiff, DIVERGENCE_EPSILON};
+    use crate::brush::stroke_engine::{DivergenceDiff, DivergenceTolerance};
 
     fn make_point(x: f32, y: f32) -> PaintInformation {
         PaintInformation {
@@ -422,7 +422,7 @@ mod tests {
     fn divergence_detected_near_turn() {
         let mut stab = LaplacianStabilizer::new(0.5, 1.0);
 
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         let window = stab.max_divergence_window();
 
         // Build a straight stroke much longer than the smoothing reach.

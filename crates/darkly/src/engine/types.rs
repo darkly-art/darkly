@@ -554,10 +554,10 @@ impl StrokeOp {
         match self {
             StrokeOp::LinearGradient { .. } => Some(canvas),
 
-            // The reachable region is the computed fill mask, which does not
-            // exist until the async readback lands, and that readback is bounded
-            // by the target texture. Coverage is settled there, not here.
-            StrokeOp::FloodFill { .. } => None,
+            // A fill reaches whatever its seed connects to across the window,
+            // uncovered area included (the target's content there is its
+            // uncovered value), so like a gradient it claims the window.
+            StrokeOp::FloodFill { .. } => Some(canvas),
 
             // Growth only once the dab CENTER escapes the target, matching
             // Krita's rule of growing when paint escapes the recorded bounds.
@@ -847,9 +847,9 @@ mod tests {
         assert_eq!(gradient().required_coverage(larger, canvas), Some(canvas));
     }
 
-    /// A flood fill's reach is settled by its async readback, not here.
+    /// A flood fill can reach anywhere in the window, so it claims it.
     #[test]
-    fn flood_fill_claims_nothing() {
+    fn flood_fill_claims_the_window() {
         let op = StrokeOp::FloodFill {
             x: 10.0,
             y: 10.0,
@@ -862,7 +862,7 @@ mod tests {
         let canvas = CanvasRect::from_xywh(0, 0, 128, 96);
         assert_eq!(
             op.required_coverage(CanvasRect::from_xywh(0, 0, 64, 64), canvas),
-            None
+            Some(canvas)
         );
     }
 

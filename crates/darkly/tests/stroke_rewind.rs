@@ -70,7 +70,7 @@ impl Cell<'_> {
     /// a fresh raster layer and the window cropped, before any stroke.
     fn engine(&self) -> (DarklyEngine, LayerId) {
         let mut engine = new_engine(self.canvas, self.brush, STABILIZE);
-        engine.test_set_divergence_epsilon(0.0);
+        engine.test_set_exact_divergence();
         if let Some(b) = self.buildup {
             set_input(&mut engine, "paint", "buildup", b);
         }

@@ -326,13 +326,15 @@ fn transform_commit_translate_undo() {
 
     // Save pre-commit state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(
-        &device,
-        &mut enc,
-        &frame(&target_tex, cw, ch),
-        fmt,
-        CanvasRect::from_xywh(0, 0, cw, ch),
-    );
+    let snap = store
+        .save_region(
+            &device,
+            &mut enc,
+            &frame(&target_tex, cw, ch),
+            fmt,
+            CanvasRect::from_xywh(0, 0, cw, ch),
+        )
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Commit with translation (15, 15).
@@ -618,13 +620,15 @@ fn paste_commit_undo() {
 
     // Save pre-paste state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(
-        &device,
-        &mut enc,
-        &frame(&target_tex, cw, ch),
-        fmt,
-        CanvasRect::from_xywh(0, 0, cw, ch),
-    );
+    let snap = store
+        .save_region(
+            &device,
+            &mut enc,
+            &frame(&target_tex, cw, ch),
+            fmt,
+            CanvasRect::from_xywh(0, 0, cw, ch),
+        )
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Commit paste.
@@ -1225,8 +1229,9 @@ fn cancel_floating_after_layer_grow() {
     // Floating transform setup snapshots a 100×100 region at canvas (50, 50).
     let saved_canvas_rect = CanvasRect::from_xywh(50, 50, 100, 100);
     let mut enc = encoder(&device);
-    let mut cancel_snapshot =
-        store.save_region(&device, &mut enc, &initial_frame, fmt, saved_canvas_rect);
+    let mut cancel_snapshot = store
+        .save_region(&device, &mut enc, &initial_frame, fmt, saved_canvas_rect)
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Simulate a grow that shifts the layer's local frame: new 512×512

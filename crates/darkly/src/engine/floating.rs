@@ -53,8 +53,9 @@ pub enum TransformCommitFailurePoint {
     TargetEncoding {
         target: usize,
     },
-    /// `save_region` is infallible; this checkpoint rejects readiness before
-    /// any target undo capture or readback is created.
+    /// `save_region` cannot come back empty here (each target saves its own
+    /// extent); this checkpoint rejects readiness before any target undo
+    /// capture or readback is created.
     PixelUndoCapture {
         target: usize,
     },
@@ -871,7 +872,8 @@ impl DarklyEngine {
                         target.semantics.format,
                         target.document_bounds,
                     )
-                });
+                })
+                .expect("a target's document bounds are its texture's extent");
             entries.push(commit_undo_region(
                 &self.gpu,
                 &self.region_scratch,
@@ -879,7 +881,6 @@ impl DarklyEngine {
                 "transform-stage-undo-entry",
                 target.node_id,
                 &snapshot,
-                target.document_bounds,
             ));
         }
         let selection_action = if let Some(selection) = &session.selection {
@@ -901,7 +902,8 @@ impl DarklyEngine {
                         wgpu::TextureFormat::R8Unorm,
                         rect,
                     )
-                });
+                })
+                .expect("the selection's bounds lie inside its window-sized texture");
             let Some(filter_id) = self.selection_modifier_id() else {
                 return Err(session);
             };
@@ -914,7 +916,6 @@ impl DarklyEngine {
                     "transform-selection-undo-entry",
                     filter_id,
                     &snapshot,
-                    rect,
                 ),
             ))
         } else {
@@ -1014,16 +1015,16 @@ impl DarklyEngine {
             (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
         );
 
-        let old_bounds = self.doc.node_pixel_bounds(layer_id);
-
         // Grow the target (or its host, for mask filters) so the layer
         // texture can hold any portion of the affected rect that lies
         // outside its current bounds, including pixels past the canvas
-        // edge. Best-effort: if growth is refused (cap, or target is
-        // neither raster nor filter with a raster host), commit falls
-        // back to the pre-grow extent and the texture-side clip below
-        // still keeps the commit consistent.
-        let grew = self.grow_node_to_fit(layer_id, affected_canvas).is_some();
+        // edge. Growth is document-led and, as for a stroke, not undone: the
+        // grown area held the uncovered value before the paste, which is what
+        // the undo entry restores there. Best-effort: if growth is refused
+        // (cap, or target is neither raster nor filter with a raster host),
+        // commit falls back to the pre-grow extent and the save below clips
+        // to it.
+        self.grow_node_to_fit(layer_id, affected_canvas);
 
         // Path A: paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single EntityAddAction
@@ -1049,53 +1050,32 @@ impl DarklyEngine {
             return;
         }
 
-        // Translate the canvas-space affected rect into the target's
-        // layer-local frame. After grow, the post-grow extent contains
-        // `affected_canvas`; the intersect is just a safety net for the
-        // growth-refused path.
-        let target_canvas_extent = self
-            .compositor
-            .node_texture(layer_id)
-            .map(|t| t.canvas_extent());
-        let affected_canvas_rect = match target_canvas_extent {
-            Some(extent) if grew => extent,
-            Some(extent) => match affected_canvas.intersect(extent) {
-                Some(c) => c,
-                None => {
-                    self.compositor.clear_floating_content();
-                    return;
-                }
-            },
-            None => {
-                self.compositor.clear_floating_content();
-                return;
-            }
-        };
-
         // The live target was never destructively touched during the
         // floating session; `setup_transform` only copied source pixels
         // out, and the per-frame preview ran into a dedicated preview
         // texture. So `save_region` here captures the genuine pre-
-        // transform state for undo, no un-clear dance required. The
-        // target's texture existence was already verified above when
-        // `target_canvas_extent` was read.
-        macro_rules! layer_frame {
-            () => {
-                self.compositor
-                    .node_texture(layer_id)
-                    .unwrap()
-                    .canvas_frame()
-            };
-        }
-        let commit_snap = self.gpu.encode_ret("transform-commit-save", |encoder| {
-            self.region_scratch.save_region(
-                &self.gpu.device,
-                encoder,
-                &layer_frame!(),
-                format,
-                affected_canvas_rect,
-            )
-        });
+        // transform state for undo, no un-clear dance required. Only the
+        // part of the affected rect the target holds is saved; a target that
+        // holds none of it has nothing to commit into.
+        let commit_snap = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.canvas_frame())
+            .and_then(|frame| {
+                self.gpu.encode_ret("transform-commit-save", |encoder| {
+                    self.region_scratch.save_region(
+                        &self.gpu.device,
+                        encoder,
+                        &frame,
+                        format,
+                        affected_canvas,
+                    )
+                })
+            });
+        let Some(commit_snap) = commit_snap else {
+            self.compositor.clear_floating_content();
+            return;
+        };
 
         // The undo entry has to be committed BEFORE the ClearShape + commit
         // pass writes to the target, because `commit_region` reads from the
@@ -1108,7 +1088,6 @@ impl DarklyEngine {
             "transform-commit-undo",
             layer_id,
             &commit_snap,
-            affected_canvas_rect,
         );
 
         self.gpu.encode("paste-commit", |encoder| {
@@ -1122,14 +1101,7 @@ impl DarklyEngine {
                 fc.source_height,
             );
         });
-        let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
-        if grew {
-            if let Some(old_bounds) = old_bounds {
-                actions.push(Box::new(PixelBoundsAction::new(layer_id, old_bounds)));
-            }
-        }
-        actions.push(Box::new(GpuRegionAction::new(entry)));
-        self.push_undo(Box::new(CompoundAction::new(actions)));
+        self.push_undo(Box::new(GpuRegionAction::new(entry)));
 
         // Clean up GPU state
         self.compositor.mark_node_pixels_dirty(layer_id);

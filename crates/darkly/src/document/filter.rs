@@ -32,6 +32,9 @@ pub struct FilterEntityRegistration {
     pub icon: &'static str,
     /// One-sentence summary of what attaching this filter does.
     pub description: &'static str,
+    /// The filter's value wherever its texture does not reach: the content
+    /// of its pixels outside their extent.
+    pub uncovered_value: crate::document::PixelValue,
     /// Produce the manifest body + any pixel-blob refs. Infallible by
     /// construction; see the analogous note on
     /// [`crate::document::layer_kind::LayerKindRegistration::serialize`].

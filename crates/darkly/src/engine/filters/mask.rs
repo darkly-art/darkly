@@ -168,27 +168,31 @@ impl DarklyEngine {
 
         // Save mask texture pixels to RegionScratch for undo before removing.
         let format = wgpu::TextureFormat::R8Unorm;
-        let gpu_region_entry = if let Some((frame, rect)) = self
+        let snap = self
             .compositor
             .node_texture(modifier_id)
-            .map(|t| (t.canvas_frame(), t.canvas_extent()))
-        {
-            let snap = self.gpu.encode_ret("remove-mask-save", |encoder| {
-                self.region_scratch
-                    .save_region(&self.gpu.device, encoder, &frame, format, rect)
+            .map(|t| t.canvas_frame())
+            .and_then(|frame| {
+                self.gpu.encode_ret("remove-mask-save", |encoder| {
+                    self.region_scratch.save_region(
+                        &self.gpu.device,
+                        encoder,
+                        &frame,
+                        format,
+                        frame.canvas_extent,
+                    )
+                })
             });
-            Some(commit_undo_region(
+        let gpu_region_entry = snap.map(|snap| {
+            commit_undo_region(
                 &self.gpu,
                 &self.region_scratch,
                 &mut self.readbacks,
                 "remove-mask-commit",
                 modifier_id,
                 &snap,
-                rect,
-            ))
-        } else {
-            None
-        };
+            )
+        });
 
         // Captured before the detach severs the parent link the position is
         // read from, so undo restores the mask at its original index.
@@ -244,15 +248,17 @@ impl DarklyEngine {
 
         // Save layer texture to region scratch for undo.
         let layer_frame = self.compositor.node_texture(id).map(|t| t.canvas_frame());
-        let snap = if let Some(frame) = layer_frame {
-            let rect = frame.canvas_extent;
-            Some(self.gpu.encode_ret("apply-mask-save", |encoder| {
-                self.region_scratch
-                    .save_region(&self.gpu.device, encoder, &frame, format, rect)
-            }))
-        } else {
-            None
-        };
+        let snap = layer_frame.and_then(|frame| {
+            self.gpu.encode_ret("apply-mask-save", |encoder| {
+                self.region_scratch.save_region(
+                    &self.gpu.device,
+                    encoder,
+                    &frame,
+                    format,
+                    frame.canvas_extent,
+                )
+            })
+        });
 
         // Save the mask's R8 pixels too. The filter is removed at the end
         // of apply_mask; without this save, undo gets back the filter shell
@@ -266,20 +272,17 @@ impl DarklyEngine {
             .node_texture(mask_id)
             .map(|t| t.canvas_frame());
         let mask_format = wgpu::TextureFormat::R8Unorm;
-        let mask_snap = if let Some(frame) = mask_frame {
-            let rect = frame.canvas_extent;
-            Some(self.gpu.encode_ret("apply-mask-save-mask", |encoder| {
+        let mask_snap = mask_frame.and_then(|frame| {
+            self.gpu.encode_ret("apply-mask-save-mask", |encoder| {
                 self.region_scratch.save_region(
                     &self.gpu.device,
                     encoder,
                     &frame,
                     mask_format,
-                    rect,
+                    frame.canvas_extent,
                 )
-            }))
-        } else {
-            None
-        };
+            })
+        });
 
         // Create a bind group from the mask GPU texture for the multiply pass.
         let mask_bind_group = self.compositor.node_texture(mask_id).map(|mask_tex| {
@@ -337,35 +340,27 @@ impl DarklyEngine {
         // independently lands in the `Pending → Ready` pipeline; the compound
         // becomes restorable once each branch has either flipped to `Ready` or
         // been hit by an undo that consumes its staging buffer directly.
-        let host_entry = if let (Some(snap), Some(frame)) = (snap, layer_frame) {
-            let rect = frame.canvas_extent;
-            Some(commit_undo_region(
+        let host_entry = snap.map(|snap| {
+            commit_undo_region(
                 &self.gpu,
                 &self.region_scratch,
                 &mut self.readbacks,
                 "apply-mask-undo",
                 id,
                 &snap,
-                rect,
-            ))
-        } else {
-            None
-        };
+            )
+        });
 
-        let mask_entry = if let (Some(snap), Some(frame)) = (mask_snap, mask_frame) {
-            let rect = frame.canvas_extent;
-            Some(commit_undo_region(
+        let mask_entry = mask_snap.map(|snap| {
+            commit_undo_region(
                 &self.gpu,
                 &self.region_scratch,
                 &mut self.readbacks,
                 "apply-mask-undo-mask",
                 mask_id,
                 &snap,
-                rect,
-            ))
-        } else {
-            None
-        };
+            )
+        });
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
         if let Some(entry) = host_entry {
@@ -467,7 +462,7 @@ impl DarklyEngine {
         self.set_selection_pixel_bounds(None);
         self.invalidate_selection_cpu_cache();
 
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
         self.kick_selection_readback();
     }
 
@@ -497,9 +492,11 @@ impl DarklyEngine {
     ///
     /// **Clear-then-copy, bounds-aware.** The two textures may have different
     /// plane extents (a sub-canvas mask vs. the canvas-sized selection). `dst`
-    /// is cleared to 0, then the plane-space *overlap* of the two extents is
-    /// copied into `dst`'s local origin, so `dst` faithfully equals `src` over
-    /// the overlap and reads 0 outside it, lossless across `dst`'s whole extent.
+    /// is cleared to `src`'s uncovered value (white for a mask, unselected for
+    /// the selection), then the plane-space *overlap* of the two extents is
+    /// copied into `dst`'s local origin, so `dst` equals `src`'s content across
+    /// its whole extent: its texels over the overlap, its uncovered value past
+    /// its texture.
     /// Disjoint extents degrade to a pure clear, never a `copy range touches
     /// outside` validation crash. Callers that need the whole source represented
     /// grow `dst` to the union first (see `selection_to_mask` / `add_mask`).
@@ -531,15 +528,21 @@ impl DarklyEngine {
             None => return,
         };
         let overlap = src_frame.canvas_extent.intersect(dst_frame.canvas_extent);
+        let uncovered = self
+            .doc
+            .find_filter(src_id)
+            .map_or(wgpu::Color::TRANSPARENT, |f| {
+                f.kind_reg().uncovered_value.clear_color()
+            });
         self.gpu.encode("clone-filter-pixels", |encoder| {
-            // Clear the destination to 0 over its whole extent first.
+            // Clear the destination to the source's uncovered value first.
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("clone-filter-clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dst_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: wgpu::LoadOp::Clear(uncovered),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
