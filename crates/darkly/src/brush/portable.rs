@@ -35,12 +35,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::brush::input_value::InputValue;
+use crate::brush::input_value::{InputValue, PortableValue};
 use crate::brush::metadata::{Brush, BrushMetadata};
 use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
-use crate::gpu::params::PortableValue;
 use crate::nodegraph::{exposed_port_key, ExposedPortMeta, Graph, NodeId, PortDir, PortRef};
 use indexmap::IndexMap;
 
@@ -328,8 +327,7 @@ impl PortableBrush {
                 .ok_or_else(|| format!("unknown node type '{}'", pn.type_id))?;
 
             // Ports: clone from registration, then apply the by-name input
-            // overrides, coercing each portable value to the port's wire type
-            // (the brush-side analog of the filter `coerce_portable` path).
+            // overrides, coercing each portable value to the port's wire type.
             let mut ports = reg.ports.clone();
             for (name, value) in &pn.inputs {
                 let port = ports
@@ -948,5 +946,27 @@ nodes:
         // BTreeMap iterates randomA before randomB, so randomA → "random".
         assert!(restored.nodes().contains_key(&NodeId("random".into())));
         assert!(restored.nodes().contains_key(&NodeId("random_2".into())));
+    }
+
+    /// A short decimal authored on a scalar input exports as written: the
+    /// format carries scalars at the f32 width the engine holds them in, so
+    /// the serializer prints the shortest f32 decimal rather than the f64
+    /// expansion of the f32 rounding error.
+    #[test]
+    fn short_decimal_inputs_export_without_float_noise() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+        graph.set_port_default(&circle, "softness", 0.12).unwrap();
+
+        let yaml =
+            serde_yaml_ng::to_string(&PortableBrush::from_graph_only(&graph, registry).unwrap())
+                .unwrap();
+        assert!(yaml.contains("softness: 0.12\n"), "{yaml}");
     }
 }

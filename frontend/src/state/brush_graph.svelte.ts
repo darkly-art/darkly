@@ -521,10 +521,11 @@ export class BrushGraphState {
         );
     }
 
-    /** Move a brush-bar entry to a target index in the display order. */
-    async reorderExposedPort(key: string, newIndex: number) {
+    /** Move a brush-bar entry so it sits immediately before the entry
+     *  keyed `before`, or last when `before` is null. */
+    async reorderExposedPort(key: string, before: string | null) {
         if (!app.engine) return;
-        await this.applyResult(await app.engine.api.brushGraphReorderExposedPort({ key, new_index: newIndex }));
+        await this.applyResult(await app.engine.api.brushGraphReorderExposedPort({ key, before }));
     }
 
     /**

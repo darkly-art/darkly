@@ -907,19 +907,41 @@ impl<W: WireKind> Graph<W> {
         Ok(())
     }
 
-    /// Move an exposed-port entry to position `new_index`. The map's
-    /// iteration order is the brush-bar display order, so this is how
-    /// drag-reorder is realised. `new_index` is clamped to the map's
-    /// length.
-    pub fn reorder_exposed_port(&mut self, key: &str, new_index: usize) -> Result<(), GraphError> {
-        let from = self.exposed_ports.get_index_of(key).ok_or_else(|| {
-            GraphError::ExposedPortNotFound {
-                key: key.to_string(),
+    /// Move an exposed-port entry so it sits immediately before `before`,
+    /// or last when `before` is `None`. The map's iteration order is the
+    /// brush-bar display order, so this is how drag-reorder is realised.
+    ///
+    /// Anchored on a key rather than an index because the bar renders a
+    /// filtered view of this map (an entry whose port is wire-driven stays
+    /// here but is not shown), so a position in the view is not a position
+    /// in the map. A neighbouring key means the same thing in both.
+    pub fn move_exposed_port_before(
+        &mut self,
+        key: &str,
+        before: Option<&str>,
+    ) -> Result<(), GraphError> {
+        let from = self.exposed_index(key)?;
+        let to = match before {
+            Some(anchor) => {
+                let anchor = self.exposed_index(anchor)?;
+                if anchor > from {
+                    anchor - 1
+                } else {
+                    anchor
+                }
             }
-        })?;
-        let target = new_index.min(self.exposed_ports.len().saturating_sub(1));
-        self.exposed_ports.move_index(from, target);
+            None => self.exposed_ports.len() - 1,
+        };
+        self.exposed_ports.move_index(from, to);
         Ok(())
+    }
+
+    fn exposed_index(&self, key: &str) -> Result<usize, GraphError> {
+        self.exposed_ports
+            .get_index_of(key)
+            .ok_or_else(|| GraphError::ExposedPortNotFound {
+                key: key.to_string(),
+            })
     }
 
     /// Connect an output port to an input port, checking types and cycles.
@@ -1147,7 +1169,7 @@ impl<W: WireKind> Graph<W> {
 
     // Note: brush-bar exposure / label / description / icon overrides
     // live in `Graph::exposed_ports` now. Use `expose_port`,
-    // `unexpose_port`, `set_exposed_port_meta`, and `reorder_exposed_port`.
+    // `unexpose_port`, `set_exposed_port_meta`, and `move_exposed_port_before`.
 
     /// Find the unique node in this graph whose registration declares
     /// `is_terminal: true`. By today's invariant a brush graph contains
@@ -1841,24 +1863,53 @@ mod tests {
         assert!(g.is_port_exposed(&b, "x"));
     }
 
-    #[test]
-    fn reorder_moves_entry_to_target_index() {
+    /// A graph exposing `a`, `b`, `c`, `d` in that order, and their keys.
+    fn four_exposed() -> (Graph<TestWireKind>, [String; 4]) {
         let mut g = Graph::<TestWireKind>::new();
-        let id = g.add_node("node", vec![scalar_in("a"), scalar_in("b"), scalar_in("c")]);
-        g.expose_port(&id, "a").unwrap();
-        g.expose_port(&id, "b").unwrap();
-        g.expose_port(&id, "c").unwrap();
-        let keys: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
-        assert_eq!(keys.len(), 3);
+        let names = ["a", "b", "c", "d"];
+        let id = g.add_node("node", names.iter().map(|n| scalar_in(n)).collect());
+        for n in names {
+            g.expose_port(&id, n).unwrap();
+        }
+        (g, names.map(|n| exposed_port_key(&id, n)))
+    }
 
-        // Move b to index 0.
-        let b_key = exposed_port_key(&id, "b");
-        g.reorder_exposed_port(&b_key, 0).unwrap();
+    fn exposed_order(g: &Graph<TestWireKind>) -> Vec<&str> {
+        g.exposed_ports.keys().map(String::as_str).collect()
+    }
 
-        let order: Vec<&str> = g.exposed_ports.keys().map(String::as_str).collect();
-        let a_key = exposed_port_key(&id, "a");
-        let c_key = exposed_port_key(&id, "c");
-        assert_eq!(order, vec![b_key.as_str(), a_key.as_str(), c_key.as_str()]);
+    #[test]
+    fn move_before_a_later_anchor() {
+        let (mut g, [a, b, c, d]) = four_exposed();
+        g.move_exposed_port_before(&a, Some(&d)).unwrap();
+        assert_eq!(exposed_order(&g), [&b, &c, &a, &d]);
+    }
+
+    #[test]
+    fn move_before_an_earlier_anchor() {
+        let (mut g, [a, b, c, d]) = four_exposed();
+        g.move_exposed_port_before(&d, Some(&b)).unwrap();
+        assert_eq!(exposed_order(&g), [&a, &d, &b, &c]);
+    }
+
+    #[test]
+    fn move_to_end_with_no_anchor() {
+        let (mut g, [a, b, c, d]) = four_exposed();
+        g.move_exposed_port_before(&b, None).unwrap();
+        assert_eq!(exposed_order(&g), [&a, &c, &d, &b]);
+    }
+
+    #[test]
+    fn move_with_unknown_key_or_anchor_is_an_error() {
+        let (mut g, [a, ..]) = four_exposed();
+        assert!(matches!(
+            g.move_exposed_port_before("node.nope", Some(&a)),
+            Err(GraphError::ExposedPortNotFound { .. })
+        ));
+        assert!(matches!(
+            g.move_exposed_port_before(&a, Some("node.nope")),
+            Err(GraphError::ExposedPortNotFound { .. })
+        ));
     }
 
     #[test]
