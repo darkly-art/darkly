@@ -22,6 +22,22 @@ const PREFS: &[Pref] = &[
         },
         widget: WidgetHint::Auto,
     },
+    Pref {
+        key: "input.pressureSettleTime",
+        display_name: "Pressure settle time",
+        description: Some(
+            "How long the pen takes to settle its pressure as it touches down \
+             and lifts off, in milliseconds (0 = off). The first and last \
+             this-many milliseconds of a stroke take the strongest pressure \
+             read in them, so a stroke starts and ends at full width and a \
+             hard tap leaves a full dot.",
+        ),
+        kind: PrefKind::Float {
+            min: 0.0,
+            max: 200.0,
+        },
+        widget: WidgetHint::Auto,
+    },
 ];
 
 pub fn register() -> SchemaSection {

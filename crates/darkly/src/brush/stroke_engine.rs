@@ -14,7 +14,8 @@
 use super::eval::BrushGraphRunner;
 use super::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
 use super::interpolation::lerp_paint_info;
-use super::paint_info::{PaintInformation, StrokeRecord};
+use super::paint_info::{PaintInformation, StrokeRecord, RAW_SENSORS};
+use super::pressure_settle::PressureSettle;
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
 use super::stabilizer::StabilizerAlgorithm;
@@ -46,77 +47,132 @@ pub struct RenderCheckpoint {
 /// look faintly jagged.
 pub const DIVERGENCE_EPSILON: f32 = 0.1;
 
-/// Find the earliest rendered index whose position is more than `epsilon`
-/// from where it was rendered, looking no further back than `max_window`
-/// indices behind the tip as last rendered.
-///
-/// `current` is the stabilized polyline now, `rendered` the positions its
-/// vertices were last rendered at. A stabilizer's window bounds how far
-/// behind the tip before a push that push can move a vertex; every push
-/// since the last render started at or beyond the rendered tip, so the walk
-/// starts `max_window` behind it however many pushes there were. Within the
-/// window every index is checked: vertices are re-rendered at different
-/// times, so one that sits within tolerance of its own recent render says
-/// nothing about the older renders behind it.
-///
-/// Returns `None` when every rendered index is within tolerance, even if the
-/// polyline grew: new indices have never been rendered, so appending them
-/// needs no rewind. An `epsilon` of zero reports any change at all.
-fn find_divergence(
-    current: &[PaintInformation],
-    rendered: &[[f32; 2]],
-    max_window: usize,
-    epsilon: f32,
-) -> Option<usize> {
-    let overlap = rendered.len().min(current.len());
-    let earliest = rendered.len().saturating_sub(max_window + 1);
-    let eps2 = epsilon * epsilon;
-    let moved = |i: usize| {
-        let cur = current[i].pos;
-        let was = rendered[i];
-        let dx = cur[0] - was[0];
-        let dy = cur[1] - was[1];
-        let d2 = dx * dx + dy * dy;
-        d2 > 0.0 && d2 >= eps2
+/// How far any raw sensor of a stabilized point may change before it is
+/// considered changed since it was rendered: a 500th of the pressure range,
+/// about 0.2 px of diameter on a 100 px brush, the same order as
+/// [`DIVERGENCE_EPSILON`].
+pub const SENSOR_DIVERGENCE_EPSILON: f32 = 0.002;
+
+/// How far a rendered vertex may change before it is re-rendered.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DivergenceTolerance {
+    /// Canvas distance a vertex may move.
+    pub position: f32,
+    /// How far each of its [`PaintInformation::raw_sensors`] may change.
+    pub sensor: f32,
+}
+
+impl DivergenceTolerance {
+    /// Any change at all.
+    pub const EXACT: Self = Self {
+        position: 0.0,
+        sensor: 0.0,
     };
-    debug_assert!(
-        !(0..earliest.min(overlap)).any(moved),
-        "a vertex more than {max_window} behind the rendered tip moved: \
-         the stabilizer's max_divergence_window is not a bound"
-    );
-    (earliest..overlap).find(|&i| moved(i))
-}
 
-/// The positions each vertex of a stabilized polyline was last rendered at,
-/// and the diff of the current polyline against them.
-///
-/// Comparing against rendered positions rather than the previous push keeps
-/// every rendered vertex within `epsilon` of where it now lies: a vertex that
-/// drifts a little on every push is re-rendered once its accumulated drift
-/// reaches `epsilon`, instead of never.
-pub struct DivergenceDiff {
-    rendered: Vec<[f32; 2]>,
-    epsilon: f32,
-}
-
-impl DivergenceDiff {
-    /// A diff that treats moves shorter than `epsilon` canvas px as unchanged.
-    pub fn new(epsilon: f32) -> Self {
+    /// [`DIVERGENCE_EPSILON`] measured on screen at `canvas_per_css_px`, and
+    /// [`SENSOR_DIVERGENCE_EPSILON`].
+    pub fn at_scale(canvas_per_css_px: f32) -> Self {
         Self {
-            rendered: Vec::with_capacity(256),
-            epsilon,
+            position: DIVERGENCE_EPSILON * canvas_per_css_px,
+            sensor: SENSOR_DIVERGENCE_EPSILON,
         }
     }
 
-    /// Diff `current` against the rendered positions and report the first
-    /// index to re-render, recording `current` as rendered from there on.
-    /// `max_window` is the stabilizer's bound on how far a push reaches
-    /// behind the tip before it.
+    /// Whether a vertex rendered as `was` has changed enough to re-render as
+    /// `now`. A zero tolerance reports any change at all.
+    fn changed(&self, now: &PaintInformation, was: &RenderedVertex) -> bool {
+        let dx = now.pos[0] - was.pos[0];
+        let dy = now.pos[1] - was.pos[1];
+        let d2 = dx * dx + dy * dy;
+        let moved = d2 > 0.0 && d2 >= self.position * self.position;
+        moved
+            || now.raw_sensors().iter().zip(&was.sensors).any(|(a, b)| {
+                let d = (a - b).abs();
+                d > 0.0 && d >= self.sensor
+            })
+    }
+}
+
+/// What a vertex was last rendered with.
+#[derive(Clone, Copy)]
+struct RenderedVertex {
+    pos: [f32; 2],
+    sensors: [f32; RAW_SENSORS],
+}
+
+impl From<&PaintInformation> for RenderedVertex {
+    fn from(p: &PaintInformation) -> Self {
+        Self {
+            pos: p.pos,
+            sensors: p.raw_sensors(),
+        }
+    }
+}
+
+/// Find the earliest rendered index whose position or sensors changed beyond
+/// `tolerance` since it was rendered, looking no further back than
+/// `max_window` indices behind the tip as last rendered.
+///
+/// `current` is the stabilized polyline now, `rendered` what its vertices
+/// were last rendered with. A stabilizer's window bounds how far behind the
+/// tip before a push that push can change a vertex; every push since the
+/// last render started at or beyond the rendered tip, so the walk starts
+/// `max_window` behind it however many pushes there were. Within the window
+/// every index is checked: vertices are re-rendered at different times, so
+/// one that sits within tolerance of its own recent render says nothing
+/// about the older renders behind it.
+///
+/// Returns `None` when every rendered index is within tolerance, even if the
+/// polyline grew: new indices have never been rendered, so appending them
+/// needs no rewind.
+fn find_divergence(
+    current: &[PaintInformation],
+    rendered: &[RenderedVertex],
+    max_window: usize,
+    tolerance: DivergenceTolerance,
+) -> Option<usize> {
+    let overlap = rendered.len().min(current.len());
+    let earliest = rendered.len().saturating_sub(max_window + 1);
+    let changed = |i: usize| tolerance.changed(&current[i], &rendered[i]);
+    debug_assert!(
+        !(0..earliest.min(overlap)).any(changed),
+        "a vertex more than {max_window} behind the rendered tip changed: \
+         the stabilizer's max_divergence_window is not a bound"
+    );
+    (earliest..overlap).find(|&i| changed(i))
+}
+
+/// What each vertex of a stabilized polyline was last rendered with, and the
+/// diff of the current polyline against it.
+///
+/// Comparing against what was rendered rather than the previous push keeps
+/// every rendered vertex within tolerance of what it now is: a vertex that
+/// drifts a little on every push is re-rendered once its accumulated drift
+/// reaches the tolerance, instead of never.
+pub struct DivergenceDiff {
+    rendered: Vec<RenderedVertex>,
+    tolerance: DivergenceTolerance,
+}
+
+impl DivergenceDiff {
+    /// A diff that treats changes within `tolerance` as unchanged.
+    pub fn new(tolerance: DivergenceTolerance) -> Self {
+        Self {
+            rendered: Vec::with_capacity(256),
+            tolerance,
+        }
+    }
+
+    /// Diff `current` against what was rendered and report the first index
+    /// to re-render, recording `current` as rendered from there on.
+    /// `max_window` bounds how far a change reaches behind the tip as last
+    /// rendered.
     pub fn update(&mut self, current: &[PaintInformation], max_window: usize) -> Option<usize> {
-        let divergence = find_divergence(current, &self.rendered, max_window, self.epsilon);
+        let divergence = find_divergence(current, &self.rendered, max_window, self.tolerance);
         let from = divergence.unwrap_or(self.rendered.len());
         self.rendered.truncate(from);
-        self.rendered.extend(current[from..].iter().map(|p| p.pos));
+        self.rendered
+            .extend(current[from..].iter().map(RenderedVertex::from));
         divergence
     }
 
@@ -153,6 +209,13 @@ pub struct StrokeEngine {
     /// Events of `record` already handed to the stabilizer. Those after it
     /// are pending until the next [`Self::take_divergence`].
     stabilized_events: usize,
+    /// How the stroke's ends take their pressure, if they are settled.
+    settle: Option<PressureSettle>,
+    /// Whether the pen is up ([`Self::pen_up`]).
+    pen_is_up: bool,
+    /// Whether the stabilizer has been fed the stroke settled for a pen
+    /// that is up.
+    pen_up_fed: bool,
 
     /// Per-dab save points for rewind capability.
     pub save_points: SavePointStore,
@@ -215,14 +278,15 @@ impl StrokeEngine {
     ///
     /// `runner` is a pre-compiled brush graph.  `color` is the foreground
     /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
-    /// `stabilizer` is the stroke stabilization algorithm.  `stamp_angle_rate`
-    /// caps how fast the stamp pivots to follow the stroke, in radians per
-    /// brush diameter of travel.  `stroke_seed` drives every `random` node in
+    /// `stabilizer` is the stroke stabilization algorithm, and `settle` how
+    /// the stroke's ends take their pressure.
+    /// `stamp_angle_rate` caps how fast the stamp pivots to follow the
+    /// stroke, in radians per brush diameter of travel.  `stroke_seed` drives every `random` node in
     /// the graph, reaching them through [`EvalContext::prng_at`]: a real
     /// stroke passes [`Self::random_seed`], a render that has to be
-    /// reproducible passes a constant. `divergence_epsilon` is the canvas
-    /// distance a rendered vertex may drift before it is re-rendered
-    /// ([`DIVERGENCE_EPSILON`] at the stroke's view scale). It does **not** reach `noise`, which
+    /// reproducible passes a constant. `divergence` is how far a rendered
+    /// vertex may drift before it is re-rendered
+    /// ([`DivergenceTolerance::at_scale`] at the stroke's view scale). It does **not** reach `noise`, which
     /// seeds from its own compile-time `seed` port and so is identical from
     /// stroke to stroke.  `dpi` is the owning document's DPI, from which the
     /// runner derives the reference-to-canvas factor; a render with no
@@ -234,7 +298,8 @@ impl StrokeEngine {
         spacing: SpacingConfig,
         base_size: f32,
         stabilizer: Box<dyn StabilizerAlgorithm>,
-        divergence_epsilon: f32,
+        settle: Option<PressureSettle>,
+        divergence: DivergenceTolerance,
         clone_source_anchor: Option<[f32; 2]>,
         stroke_seed: u32,
         stamp_angle_rate: f32,
@@ -270,8 +335,11 @@ impl StrokeEngine {
             record: StrokeRecord::new(color, "default".into()),
             spacing,
             stabilizer,
-            rendered: DivergenceDiff::new(divergence_epsilon),
+            rendered: DivergenceDiff::new(divergence),
             stabilized_events: 0,
+            settle,
+            pen_is_up: false,
+            pen_up_fed: false,
             save_points: SavePointStore::new(),
             last_point: None,
             accumulated_distance: 0.0,
@@ -349,17 +417,49 @@ impl StrokeEngine {
     }
 
     /// Hand the stabilizer every event recorded since it last ran, as one
-    /// batch.
+    /// batch, with the stroke's ends settled.
+    ///
+    /// Once the start is settled and until the pen is up, settling changes
+    /// no sample the stabilizer has seen or is about to, so the raw events go
+    /// in as they are. Otherwise the stroke is settled whole, and if that
+    /// changed a sample already fed, the stabilizer is rebuilt from it: its
+    /// batch-equals-sequential contract makes the rebuild the polyline it
+    /// would have produced had the pen read the settled pressures all along.
     fn stabilize_pending(&mut self) {
-        self.stabilizer
-            .push_all(&self.record.events[self.stabilized_events..]);
-        self.stabilized_events = self.record.events.len();
+        let fed = self.stabilized_events;
+        let events = &self.record.events;
+        match self.settle {
+            Some(settle)
+                if self.pen_is_up != self.pen_up_fed
+                    || !settle.start_settled(&events[..fed]) =>
+            {
+                let mut was = events[..fed].to_vec();
+                settle.apply(&mut was, self.pen_up_fed);
+                let mut now = events.clone();
+                settle.apply(&mut now, self.pen_is_up);
+                if was.iter().zip(&now).any(|(a, b)| a.pressure != b.pressure) {
+                    self.stabilizer.clear();
+                    self.stabilizer.push_all(&now);
+                } else {
+                    self.stabilizer.push_all(&now[fed..]);
+                }
+            }
+            _ => self.stabilizer.push_all(&events[fed..]),
+        }
+        self.stabilized_events = events.len();
+        self.pen_up_fed = self.pen_is_up;
     }
 
-    /// Whether events have been recorded since the last
+    /// The pen has lifted: the next [`Self::take_divergence`] settles the
+    /// stroke's end and reports the first rendered vertex that changed.
+    pub fn pen_up(&mut self) {
+        self.pen_is_up = true;
+    }
+
+    /// Whether events have been recorded, or the pen lifted, since the last
     /// [`Self::take_divergence`].
     pub fn has_unrendered_input(&self) -> bool {
-        self.stabilized_events < self.record.events.len()
+        self.stabilized_events < self.record.events.len() || self.pen_is_up != self.pen_up_fed
     }
 
     /// Number of stabilized vertices recorded as rendered: the index of the
@@ -368,20 +468,54 @@ impl StrokeEngine {
         self.rendered.len()
     }
 
-    /// Diff the stabilized polyline against where it was last rendered, then
-    /// record it as rendered: the earliest vertex to re-render, or `None`
-    /// when nothing rendered has moved and only the vertices from
+    /// Diff the stabilized polyline against what it was last rendered with,
+    /// then record it as rendered: the earliest vertex to re-render, or
+    /// `None` when nothing rendered has changed and only the vertices from
     /// [`Self::rendered_len`] (read before this call) need rendering. Called
     /// once per render of the stroke, whatever number of events it covers.
     pub fn take_divergence(&mut self) -> Option<usize> {
+        // The reach as of the last render: how far back what is fed now can
+        // change what was rendered then.
+        let window = self.max_divergence_window();
         self.stabilize_pending();
-        let window = self.stabilizer.max_divergence_window();
         self.rendered.update(self.stabilizer.stabilized(), window)
     }
 
-    /// The stabilizer's conservative max divergence window (vector indices).
+    /// Conservative bound, in vector indices behind the tip, on how far the
+    /// next render can reach back: the stabilizer's window, and until the
+    /// pen-up has been fed, as far back as settling the stroke's ends could
+    /// change.
     pub fn max_divergence_window(&self) -> usize {
-        self.stabilizer.max_divergence_window()
+        let window = self.stabilizer.max_divergence_window();
+        match self.settle {
+            Some(settle) if !self.pen_up_fed => {
+                let tip = self.stabilizer.len().saturating_sub(1);
+                window.max(tip.saturating_sub(self.settle_floor(&settle)))
+            }
+            _ => window,
+        }
+    }
+
+    /// The first stabilized vertex settling can still change, at the next
+    /// event or the pen-up: the vertices from the one on the segment into
+    /// the first raw sample whose settled pressure is not final
+    /// ([`PressureSettle::final_before`]), found by the time the pen passed
+    /// it, less how far the stabilizer carries a change back. Relies on
+    /// every vertex carrying the time the pen passed it, rising along the
+    /// stroke.
+    fn settle_floor(&self, settle: &PressureSettle) -> usize {
+        let fed = &self.record.events[..self.stabilized_events];
+        let Some(passed) = settle
+            .final_before(fed)
+            .checked_sub(1)
+            .map(|k| fed[k].time)
+        else {
+            return 0;
+        };
+        self.stabilizer
+            .stabilized()
+            .partition_point(|v| v.time < passed)
+            .saturating_sub(self.stabilizer.max_divergence_window())
     }
 
     /// Number of points in the stabilized polyline.
@@ -505,11 +639,13 @@ impl StrokeEngine {
         // epsilon, so that vertex can drift a little, event after event,
         // after the checkpoint holding `last_point` was captured. Without the
         // snap the first re-rendered segment starts off its vertex and the
-        // dab chain shows a step.
+        // dab chain shows a step. Its sensors drift within their own
+        // tolerance the same way, and are snapped with it.
         if start > 0 {
-            let snap_pos = self.stabilizer.stabilized().get(start - 1).map(|p| p.pos);
-            if let (Some(pos), Some(lp)) = (snap_pos, self.last_point.as_mut()) {
-                lp.pos = pos;
+            let snap = self.stabilizer.stabilized().get(start - 1).copied();
+            if let (Some(vertex), Some(lp)) = (snap, self.last_point.as_mut()) {
+                lp.pos = vertex.pos;
+                lp.set_raw_sensors(vertex.raw_sensors());
             }
         }
 
@@ -726,8 +862,10 @@ impl StrokeEngine {
     /// state and commit it, all into `gpu`: the stroke as a from-scratch
     /// re-render of its final polyline would leave it. For a path whose
     /// every sample is known up front, such as the brush preview, so no
-    /// segment is ever drawn without its real lookahead.
+    /// segment is ever drawn without its real lookahead. A path known up
+    /// front is a finished stroke, so its pen is up.
     pub fn render_whole(&mut self, gpu: &mut BrushGpuContext) {
+        self.pen_up();
         self.stabilize_pending();
         self.begin_stroke(gpu, None);
         self.reset_render_state();
@@ -1111,7 +1249,10 @@ mod tests {
     /// and snapped into place much later, leaving a visible disconnect.
     #[test]
     fn moved_vertex_behind_an_unchanged_one_is_reported() {
-        let mut diff = DivergenceDiff::new(0.5);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance {
+            position: 0.5,
+            sensor: SENSOR_DIVERGENCE_EPSILON,
+        });
         assert_eq!(diff.update(&[at(0.0), at(10.0), at(20.0)], 10), None);
         assert_eq!(
             diff.update(&[at(0.0), at(10.6), at(20.0)], 10),
@@ -1128,7 +1269,7 @@ mod tests {
     /// out of the window.
     #[test]
     fn divergence_walk_starts_from_the_rendered_tip() {
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         let rendered: Vec<_> = (0..10).map(|i| at(i as f32 * 6.0)).collect();
         assert_eq!(diff.update(&rendered, 5), None);
         let mut current: Vec<_> = (0..30).map(|i| at(i as f32 * 6.0)).collect();
@@ -1138,5 +1279,26 @@ mod tests {
             Some(8),
             "vertex 8 moved, within the window behind the rendered tip at 9"
         );
+    }
+
+    /// A vertex whose sensors changed beyond the sensor tolerance without
+    /// moving is reported; one within it is not, and an exact tolerance
+    /// reports any change.
+    #[test]
+    fn a_sensor_change_is_reported() {
+        let pressed = |q: f32| PaintInformation {
+            pressure: q,
+            ..at(5.0)
+        };
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
+        assert_eq!(diff.update(&[at(0.0), pressed(0.5), at(10.0)], 10), None);
+        assert_eq!(diff.update(&[at(0.0), pressed(0.501), at(10.0)], 10), None);
+        assert_eq!(
+            diff.update(&[at(0.0), pressed(0.503), at(10.0)], 10),
+            Some(1)
+        );
+        let mut exact = DivergenceDiff::new(DivergenceTolerance::EXACT);
+        assert_eq!(exact.update(&[at(0.0), pressed(0.5)], 10), None);
+        assert_eq!(exact.update(&[at(0.0), pressed(0.5001)], 10), Some(1));
     }
 }

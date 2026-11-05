@@ -19,7 +19,7 @@
 
 Do you suffer from the _oppressive sanity_ of rulers, guides, and nondestructive workflows? Break free with [Darkly](https://darkly.art), home of happy accidents and beautiful catastrophies.
 
-Darkly is a paint app for artists. Are you an artist? I think you are. <!-- ([How a Demon Stole Your Creativity, and How to Steal it Back]()) -->
+Darkly is a paint app for artists. Are you an artist? I think so. <!-- ([How a Demon Stole Your Creativity, and How to Steal it Back]()) -->
 
 I made Darkly because using Krita and Photoshop felt like work. I needed an uncluttered editor where I could play and explore. Darkly has a buttery smooth brush engine, and special **[dark arts](#dark-arts)** to help you commune with your imagination.
 
@@ -197,8 +197,7 @@ For a feature to count, it must be:
 - [ ] Trim to content / autocrop
 - [ ] Stroke selection
 - [ ] Save / load selection to channel
-- [ ] Snap canvas to right angles
-- [ ] Branched history
+- [x] Snap canvas to right angles
 
 ## Getting started
 

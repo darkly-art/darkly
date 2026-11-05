@@ -1053,7 +1053,7 @@ fn assemble_shader(
     graph_sources: &[crate::brush::texture_source::ResolvedSource],
 ) -> String {
     let mut out = String::new();
-    // Shared canvas-window helpers (plane_to_selection_uv): WGSL has no
+    // Shared canvas-window helpers (sample_selection): WGSL has no
     // `#include`, so prepend the lib ahead of the assembled brush shader.
     out.push_str(crate::gpu::canvas_lib::CANVAS_LIB);
     out.push('\n');
@@ -1122,6 +1122,7 @@ fn assemble_shader(
     if matches!(mode, ShaderMode::Stroke(_)) {
         out.push_str("@group(2) @binding(0) var sel_tex: texture_2d<f32>;\n");
         out.push_str("@group(2) @binding(1) var sel_smp: sampler;\n");
+        out.push_str("@group(2) @binding(2) var<uniform> sel_outside: vec4<f32>;\n");
         if !terminal_bindings.is_empty() {
             out.push_str(terminal_bindings);
             if !terminal_bindings.ends_with('\n') {
@@ -1309,12 +1310,11 @@ fn push_pixel_locals(out: &mut String, mode: ShaderMode) {
     out.push_str("        f32(u.intrinsic.canvas_origin.y),\n");
     out.push_str("    );\n");
     match mode {
-        // Stroke: `target_pos` is a plane position; the window-anchored
-        // selection mask maps via `(target_pos - canvas_origin) / canvas_size`
-        // (see shaders/lib/canvas.wgsl). Explicit LOD, so the sample is
-        // legal in a compute thread as well as a fragment.
+        // Stroke: `target_pos` is a plane position, sampled against the
+        // window-anchored selection mask and its past-the-window value (see
+        // `sample_selection` in shaders/lib/canvas.wgsl).
         ShaderMode::Stroke(_) => out.push_str(
-            "    let sel = textureSampleLevel(sel_tex, sel_smp, plane_to_selection_uv(target_pos, canvas_origin, canvas_size), 0.0).r;\n",
+            "    let sel = sample_selection(sel_tex, sel_smp, target_pos, canvas_origin, canvas_size, sel_outside.x);\n",
         ),
         ShaderMode::CursorPreview => out.push_str("    let sel: f32 = 1.0;\n"),
     }
@@ -1322,27 +1322,15 @@ fn push_pixel_locals(out: &mut String, mode: ShaderMode) {
 
 /// Stroke-mode vertex stage: instanced quad per dab, mapped against
 /// the layer's NDC viewport. Used by every compiled brush in stroke
-/// mode. Includes `VsOut` + `quad_corner` since the preview vertex
-/// stage uses them too and we splice exactly one of the two stages
-/// into each assembled shader.
+/// mode. Includes `VsOut` since the preview vertex stage uses it too
+/// and we splice exactly one of the two stages into each assembled
+/// shader; `quad_corner` comes from the canvas lib.
 const STROKE_VERTEX_STAGE_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) clip:        vec4<f32>,
     @location(0) target_pos:        vec2<f32>,
     @location(1) @interpolate(flat) dab_idx: u32,
 };
-
-fn quad_corner(vi: u32) -> vec2<f32> {
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(0.0, 1.0),
-    );
-    return corners[vi];
-}
 
 @vertex
 fn vs_main(
@@ -1381,27 +1369,15 @@ fn vs_main(
 /// `u.intrinsic.cursor_preview_centre`, mapped against the preview mask's
 /// NDC viewport (`u.intrinsic.cursor_preview_size`). The fragment shader
 /// reads `dabs[0]` for the (single) record's pose; the per-fragment
-/// math is unchanged from stroke mode. Repeats the `VsOut` /
-/// `quad_corner` declarations so the two vertex stages are
-/// drop-in alternatives; assemble_shader splices exactly one.
+/// math is unchanged from stroke mode. Repeats the `VsOut`
+/// declaration so the two vertex stages are drop-in alternatives;
+/// assemble_shader splices exactly one.
 const PREVIEW_VERTEX_STAGE_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) clip:        vec4<f32>,
     @location(0) target_pos:        vec2<f32>,
     @location(1) @interpolate(flat) dab_idx: u32,
 };
-
-fn quad_corner(vi: u32) -> vec2<f32> {
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(0.0, 1.0),
-    );
-    return corners[vi];
-}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {

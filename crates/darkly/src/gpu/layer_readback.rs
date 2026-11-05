@@ -8,8 +8,11 @@
 //!
 //! [`request_layer_readback`] + [`LayerReadbackExtent`] are the single place
 //! that owns that translation: the readback samples the texture's full extent,
-//! and the extent projects the resulting layer-local bytes into a window-local
-//! R8 mask: the frame the selection texture and the paint mask are indexed in.
+//! and the extent projects the resulting layer-local bytes onto the canvas
+//! window: the frame the selection texture and the paint mask are indexed in.
+//! Window pixels the texture does not reach hold the node's uncovered value
+//! (transparent for a layer, white for a mask), which is the node's content
+//! there: the extent is storage, not a boundary the producers can see.
 //! **Do not** call `request_readback` with a canvas rect from such a call site;
 //! go through this module.
 //!
@@ -69,11 +72,13 @@ impl LayerReadbackExtent {
         }
     }
 
-    /// Run the CPU scanline fill on the texture-extent buffer and project the
-    /// result into a window-local R8 mask (see [`Self::project_to_window_mask`]).
+    /// Run the CPU scanline fill over the node's content on the canvas
+    /// window (see [`Self::window_content`]) and return the window-local R8
+    /// fill mask. The fill's domain is the window, so a click on window area
+    /// the texture does not reach fills the uncovered content there.
     ///
     /// `seed_canvas` is the click point in plane coordinates, translated to
-    /// texture-local coords before the fill runs. Format dispatch matches the
+    /// window-local coords before the fill runs. Format dispatch matches the
     /// texture's own format: RGBA reads four bytes per pixel, R8 reads one.
     pub fn flood_fill_to_canvas_mask(
         &self,
@@ -83,29 +88,21 @@ impl LayerReadbackExtent {
     ) -> Vec<u8> {
         use crate::gpu::flood_fill::{flood_fill_r8, flood_fill_rgba};
 
-        let layer_seed_x = seed_canvas.x - self.offset_x;
-        let layer_seed_y = seed_canvas.y - self.offset_y;
-
-        let layer_mask = match self.format {
-            wgpu::TextureFormat::R8Unorm => flood_fill_r8(
-                pixels,
-                self.width,
-                self.height,
-                layer_seed_x,
-                layer_seed_y,
-                tolerance,
-            ),
-            _ => flood_fill_rgba(
-                pixels,
-                self.width,
-                self.height,
-                layer_seed_x,
-                layer_seed_y,
-                tolerance,
-            ),
+        let content = self.window_content(pixels);
+        let seed_x = seed_canvas.x - self.canvas_origin_x;
+        let seed_y = seed_canvas.y - self.canvas_origin_y;
+        let fill = match self.format {
+            wgpu::TextureFormat::R8Unorm => flood_fill_r8,
+            _ => flood_fill_rgba,
         };
-
-        self.project_to_window_mask(&layer_mask)
+        fill(
+            &content,
+            self.canvas_width,
+            self.canvas_height,
+            seed_x,
+            seed_y,
+            tolerance,
+        )
     }
 
     /// The node's per-pixel opacity as a window-local R8 mask: the coverage
@@ -113,24 +110,23 @@ impl LayerReadbackExtent {
     /// channel; an R8 texture (mask / selection filter) *is* coverage already,
     /// so its bytes pass through.
     pub fn opacity_to_canvas_mask(&self, pixels: &[u8]) -> Vec<u8> {
+        let content = self.window_content(pixels);
         match self.format {
-            wgpu::TextureFormat::R8Unorm => self.project_to_window_mask(pixels),
-            _ => {
-                let alpha: Vec<u8> = pixels.iter().skip(3).step_by(4).copied().collect();
-                self.project_to_window_mask(&alpha)
-            }
+            wgpu::TextureFormat::R8Unorm => content,
+            _ => content.iter().skip(3).step_by(4).copied().collect(),
         }
     }
 
-    /// Project a layer-local R8 buffer (one byte per texture pixel) into a
-    /// **window-local** R8 mask sized `canvas_width × canvas_height`: the
-    /// frame the selection texture is indexed in (see `crate::coord`).
-    ///
-    /// Pixels outside the layer's canvas-window footprint stay 0.
-    fn project_to_window_mask(&self, layer_mask: &[u8]) -> Vec<u8> {
+    /// The node's content over the canvas window: a **window-local** buffer
+    /// sized `canvas_width × canvas_height` in the texture's own format (the
+    /// frame the selection texture is indexed in, see `crate::coord`). Window
+    /// pixels the texture covers take its texels; the rest take the format's
+    /// uncovered value ([`crate::gpu::default_texel`]).
+    fn window_content(&self, pixels: &[u8]) -> Vec<u8> {
+        let bpp = crate::gpu::region_runs::bytes_per_pixel(self.format) as usize;
         let cw = self.canvas_width as usize;
         let ch = self.canvas_height as usize;
-        let mut canvas_mask = vec![0u8; cw * ch];
+        let mut content = crate::gpu::default_texel(self.format).repeat(cw * ch);
 
         let (cox, coy) = (self.canvas_origin_x, self.canvas_origin_y);
         // Plane-space bounds of the layer footprint clipped to the canvas
@@ -141,22 +137,22 @@ impl LayerReadbackExtent {
         let x1 = (self.offset_x + self.width as i32).min(cox + self.canvas_width as i32);
         let y1 = (self.offset_y + self.height as i32).min(coy + self.canvas_height as i32);
         if x0 >= x1 || y0 >= y1 {
-            return canvas_mask;
+            return content;
         }
 
         let stride = self.width as usize;
+        let row_bytes = (x1 - x0) as usize * bpp;
+        let tx = (x0 - self.offset_x) as usize; // layer-local col
+        let wx = (x0 - cox) as usize; // window-local col
         for py in y0..y1 {
             let ty = (py - self.offset_y) as usize; // layer-local row
-            let src_row = ty * stride;
-            let dst_row = (py - coy) as usize * cw; // window-local row
-            for px in x0..x1 {
-                let tx = (px - self.offset_x) as usize; // layer-local col
-                let wx = (px - cox) as usize; // window-local col
-                canvas_mask[dst_row + wx] = layer_mask[src_row + tx];
-            }
+            let wy = (py - coy) as usize; // window-local row
+            let src = (ty * stride + tx) * bpp;
+            let dst = (wy * cw + wx) * bpp;
+            content[dst..dst + row_bytes].copy_from_slice(&pixels[src..src + row_bytes]);
         }
 
-        canvas_mask
+        content
     }
 }
 
@@ -210,8 +206,9 @@ mod tests {
     /// crop, i.e. at `plane − canvas_origin`, not at the raw plane coordinate.
     #[test]
     fn flood_fill_mask_is_window_local_after_crop() {
-        // A small 2×2 R8 layer, fully opaque.
-        let pixels = vec![255u8; 2 * 2];
+        // A small 2×2 R8 layer, fully black: distinct from the white a mask
+        // holds outside its texture, so the fill stops at the layer.
+        let pixels = vec![0u8; 2 * 2];
         let ext = cropped_extent(wgpu::TextureFormat::R8Unorm);
 
         // Seed inside the layer (plane (3, 2)); uniform color floods all of it.
@@ -264,7 +261,23 @@ mod tests {
         assert_eq!(at(2, 1), 64);
         assert_eq!(at(1, 2), 0);
         assert_eq!(at(2, 2), 32);
-        assert_eq!(at(0, 0), 0, "outside the layer footprint stays empty");
+        assert_eq!(at(0, 0), 255, "outside its texture a mask reveals");
+    }
+
+    /// The fill's domain is the window: seeded on window area the texture does
+    /// not reach, it fills the uncovered (transparent) content there and
+    /// stops at the layer's opaque pixels.
+    #[test]
+    fn flood_fill_seeded_outside_the_texture_fills_uncovered_content() {
+        let pixels = [255u8, 0, 0, 255].repeat(2 * 2);
+        let ext = cropped_extent(wgpu::TextureFormat::Rgba8Unorm);
+
+        let mask = ext.flood_fill_to_canvas_mask(&pixels, crate::coord::CanvasPoint::new(2, 1), 0);
+        let at = |x: usize, y: usize| mask[y * 6 + x];
+
+        assert_eq!(at(0, 0), 255, "the seed, outside the texture");
+        assert_eq!(at(5, 5), 255, "the far corner of the window");
+        assert_eq!(at(1, 1), 0, "the opaque layer bounds the fill");
     }
 
     /// A layer entirely outside the canvas window projects to an empty mask

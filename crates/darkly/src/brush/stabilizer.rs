@@ -413,7 +413,8 @@ pub struct StabilizerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brush::stroke_engine::{DivergenceDiff, DIVERGENCE_EPSILON};
+    use crate::brush::stroke_engine::{DivergenceDiff, DivergenceTolerance, DIVERGENCE_EPSILON};
+    use crate::brush::pressure_settle::PressureSettle;
 
     #[test]
     fn pass_through_identity() {
@@ -513,9 +514,8 @@ mod tests {
     /// the tip.
     #[test]
     fn rendered_positions_stay_within_epsilon() {
-        let mut stab =
-            stroke_stabilizer_stack(&StabilizerRegistry::new(), &laplacian_config(1.0), 0.0, 1.0);
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut stab = laplacian_stack(1.0, 0.0);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         let mut rendered: Vec<[f32; 2]> = vec![];
         for i in 0..1200 {
             let th = i as f32 * 0.003;
@@ -546,11 +546,17 @@ mod tests {
         }
     }
 
+    /// The stroke stack over the Laplacian at `strength`, at 1:1 zoom.
+    fn laplacian_stack(strength: f32, prediction_horizon_ms: f32) -> Box<dyn StabilizerAlgorithm> {
+        let registry = StabilizerRegistry::new();
+        let config = laplacian_config(strength);
+        stroke_stabilizer_stack(&registry, &config, prediction_horizon_ms, 1.0)
+    }
+
     /// Distance from the raw corner (40, 0) of an L path to the nearest
     /// stabilized vertex, with the path sampled every `step` px.
     fn l_corner_cut(step: f32) -> f32 {
-        let mut stab =
-            stroke_stabilizer_stack(&StabilizerRegistry::new(), &laplacian_config(0.8), 0.0, 1.0);
+        let mut stab = laplacian_stack(0.8, 0.0);
         let n = (40.0 / step).round() as usize;
         for i in 0..=n {
             stab.push(mk(i as f32 * step, 0.0, 0.0));
@@ -579,6 +585,203 @@ mod tests {
             (sparse - dense).abs() < 0.05,
             "corner cut must not depend on sample density: sparse {sparse}, dense {dense}"
         );
+    }
+
+    /// Samples drawn along a line 2 px and 1/240 s apart at `pressures`, then
+    /// one sample per `lift` entry on the way off, 4.5 ms apart (so a lift of
+    /// whole samples never ends on the 50 ms lift-off time), each `(travel
+    /// past the last sample, pressure)`.
+    fn line_samples(pressures: &[f32], lift: &[(f32, f32)]) -> Vec<PaintInformation> {
+        let dt = 1.0 / 240.0;
+        let mut samples: Vec<PaintInformation> = pressures
+            .iter()
+            .enumerate()
+            .map(|(i, &pressure)| PaintInformation {
+                pos: [i as f32 * 2.0, 0.0],
+                pressure,
+                time: i as f32 * dt,
+                ..Default::default()
+            })
+            .collect();
+        let last = samples[samples.len() - 1];
+        for (j, &(dx, pressure)) in lift.iter().enumerate() {
+            samples.push(PaintInformation {
+                pos: [last.pos[0] + dx, 0.0],
+                pressure,
+                time: last.time + (j + 1) as f32 * 0.0045,
+                ..last
+            });
+        }
+        samples
+    }
+
+    /// Pressure of each vertex `samples` leave through the whole stack at
+    /// `strength`.
+    fn stabilized_pressures(strength: f32, samples: &[PaintInformation]) -> Vec<f32> {
+        let mut stab = laplacian_stack(strength, 0.0);
+        stab.push_all(samples);
+        stab.stabilized().iter().map(|p| p.pressure).collect()
+    }
+
+    /// `n` pressures ramping from `from` to `to`.
+    fn ramp(n: usize, from: f32, to: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| from + (to - from) * i as f32 / (n - 1) as f32)
+            .collect()
+    }
+
+    /// The settle rule at its default 50 ms.
+    const SETTLE: PressureSettle = PressureSettle::new(0.05);
+
+    /// The polyline a comet, `n` samples ramping from 0.1 to 1 and lifted
+    /// off by `lift`, leaves through the stack at `strength` once the pen is
+    /// up, settled.
+    fn settled_comet(strength: f32, n: usize, lift: &[(f32, f32)]) -> Vec<PaintInformation> {
+        let mut stack = laplacian_stack(strength, 0.0);
+        let mut samples = line_samples(&ramp(n, 0.1, 1.0), lift);
+        SETTLE.apply(&mut samples, true);
+        stack.push_all(&samples);
+        stack.stabilized().to_vec()
+    }
+
+    /// Once the pen is up, a settled comet ends at the strongest reading
+    /// since its end boundary, and lets up into exactly the polyline of a pen
+    /// held to the end.
+    #[test]
+    fn a_settled_comet_ends_at_the_held_pressure() {
+        let decelerating: Vec<(f32, f32)> = (1..=12)
+            .scan(0.0, |x, k| {
+                *x += 0.4 * (13 - k) as f32;
+                Some((*x, 1.0 - k as f32 / 12.0))
+            })
+            .collect();
+        let let_ups: [(&str, Vec<(f32, f32)>); 4] = [
+            ("a stationary zero sample", vec![(0.0, 0.0)]),
+            (
+                "a flick over 8 px",
+                (1..=4)
+                    .map(|k| (2.0 * k as f32, 1.0 - k as f32 / 4.0))
+                    .collect(),
+            ),
+            (
+                "54 ms over 24 px",
+                (1..=12)
+                    .map(|k| (2.0 * k as f32, 1.0 - k as f32 / 12.0))
+                    .collect(),
+            ),
+            ("54 ms decelerating", decelerating),
+        ];
+        // The pen holds the comet's last reading through the let-up.
+        let last = ramp(150, 0.1, 1.0)[149];
+        for strength in [0.4f32, 1.0] {
+            for (what, let_up) in &let_ups {
+                let held: Vec<(f32, f32)> = let_up.iter().map(|&(x, _)| (x, last)).collect();
+                let settled = settled_comet(strength, 150, let_up);
+                assert_eq!(
+                    settled,
+                    settled_comet(strength, 150, &held),
+                    "strength {strength}, {what}"
+                );
+                // The pinned tip reads the strongest sample from the last one
+                // at least 50 ms before the pen's last on.
+                let drawn = line_samples(&ramp(150, 0.1, 1.0), let_up);
+                let cut = drawn[drawn.len() - 1].time - 0.05;
+                let e = drawn.iter().rposition(|s| s.time <= cut).unwrap();
+                let strongest = drawn[e..].iter().fold(0.0f32, |q, s| q.max(s.pressure));
+                let end = settled[settled.len() - 1].pressure;
+                assert!(
+                    (end - strongest).abs() < 1e-4,
+                    "strength {strength}, {what}: the head reads {end:.3}, held {strongest:.3}"
+                );
+            }
+        }
+    }
+
+    /// Re-stabilizing a stroke whose pressure settling rewrote moves no
+    /// vertex: positions never depend on pressure.
+    #[test]
+    fn settling_moves_no_vertex() {
+        let raws: Vec<PaintInformation> = (0..400)
+            .map(|i| {
+                let th = i as f32 * 0.03;
+                PaintInformation {
+                    pos: [300.0 * th.cos(), 200.0 * (th * 1.3).sin()],
+                    pressure: 0.5 + 0.4 * (i as f32 * 0.2).sin(),
+                    time: i as f32 / 240.0,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        for strength in [0.4f32, 1.0] {
+            let mut live = laplacian_stack(strength, 0.0);
+            let mut start = 0;
+            for batch in [1usize, 3, 7, 2, 11].iter().cycle() {
+                let end = (start + batch).min(raws.len());
+                live.push_all(&raws[start..end]);
+                start = end;
+                if start == raws.len() {
+                    break;
+                }
+            }
+            let mut rewritten = raws.clone();
+            SETTLE.apply(&mut rewritten, true);
+            assert_ne!(rewritten, raws);
+            let mut settled = laplacian_stack(strength, 0.0);
+            settled.push_all(&rewritten);
+            let positions = |s: &dyn StabilizerAlgorithm| -> Vec<[f32; 2]> {
+                s.stabilized().iter().map(|v| v.pos).collect()
+            };
+            assert_eq!(positions(live.as_ref()), positions(settled.as_ref()));
+        }
+    }
+
+    /// A taper the artist draws keeps its thin ends under stabilization.
+    #[test]
+    fn deliberate_tapers_keep_their_ends() {
+        let swell: Vec<f32> = ramp(75, 0.03, 1.0)
+            .into_iter()
+            .chain(ramp(75, 1.0, 0.03))
+            .collect();
+        // Full pressure, faded by hand to 0.05 over the last 40 px.
+        let fade: Vec<f32> = vec![1.0; 130]
+            .into_iter()
+            .chain(ramp(21, 1.0, 0.05))
+            .collect();
+        for strength in [0.4f32, 1.0] {
+            let p = stabilized_pressures(strength, &line_samples(&swell, &[]));
+            let (start, end) = (p[0], p[p.len() - 1]);
+            assert!(
+                start < 0.1 && end < 0.1,
+                "strength {strength}: thin-thick-thin ends read {start:.2} and {end:.2}"
+            );
+            let p = stabilized_pressures(strength, &line_samples(&fade, &[]));
+            let end = p[p.len() - 1];
+            assert!(
+                end < 0.15,
+                "strength {strength}: a hand fade ends at {end:.2}"
+            );
+        }
+    }
+
+    /// While drawing, the stroke's tip reads the pen's pressure exactly.
+    #[test]
+    fn the_tip_follows_a_pressure_ramp() {
+        // Rises from 0.1 to 1 over 298, 30 and 12 px.
+        for n in [150, 16, 7] {
+            let samples = line_samples(&ramp(n, 0.1, 1.0), &[]);
+            for strength in [0.4f32, 1.0] {
+                let mut stab = laplacian_stack(strength, 0.0);
+                for raw in &samples {
+                    stab.push(*raw);
+                    let tip = stab.stabilized().last().unwrap().pressure;
+                    assert!(
+                        (raw.pressure - tip).abs() < 1e-4,
+                        "{n} samples, strength {strength}: the tip reads {tip:.3} with the pen at {:.3}",
+                        raw.pressure
+                    );
+                }
+            }
+        }
     }
 
     // ── PredictingStabilizer ────────────────────────────────────────────
@@ -642,7 +845,7 @@ mod tests {
     #[test]
     fn prediction_self_corrects_via_combined_divergence() {
         let mut stab = PredictingStabilizer::new(laplacian_inner(0.5), 30.0);
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         for i in 0..8 {
             stab.push(mk(i as f32 * 10.0, 0.0, i as f32 * 0.01));
             diff.update(stab.stabilized(), stab.max_divergence_window());
@@ -767,7 +970,7 @@ mod tests {
     #[test]
     fn stroke_start_ramps_without_breaking_growth() {
         let mut stab = PredictingStabilizer::new(laplacian_inner(0.5), 30.0);
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         let mut prev_len = 0usize;
         for i in 0..12 {
             stab.push(mk(i as f32 * 10.0, 0.0, i as f32 * 0.01));
@@ -805,17 +1008,20 @@ mod tests {
     /// time.
     #[test]
     fn batched_stack_matches_sequential() {
-        let registry = StabilizerRegistry::new();
-        let mut single = stroke_stabilizer_stack(&registry, &laplacian_config(0.6), 10.0, 1.0);
-        let mut batched = stroke_stabilizer_stack(&registry, &laplacian_config(0.6), 10.0, 1.0);
+        let mut single = laplacian_stack(0.6, 10.0);
+        let mut batched = laplacian_stack(0.6, 10.0);
         let raws: Vec<PaintInformation> = (0..300)
             .map(|i| {
                 let th = i as f32 * 0.05;
-                mk(
-                    300.0 * th.cos() + i as f32,
-                    200.0 * (2.0 * th).sin(),
-                    i as f32 * 0.008,
-                )
+                PaintInformation {
+                    pressure: 0.5 + 0.4 * (i as f32 * 0.3).sin(),
+                    x_tilt: (i as f32 * 0.11).cos(),
+                    ..mk(
+                        300.0 * th.cos() + i as f32,
+                        200.0 * (2.0 * th).sin(),
+                        i as f32 * 0.008,
+                    )
+                }
             })
             .collect();
         let mut start = 0;
@@ -839,9 +1045,8 @@ mod tests {
 
     #[test]
     fn batched_pushes_keep_rendered_positions_within_epsilon() {
-        let mut stab =
-            stroke_stabilizer_stack(&StabilizerRegistry::new(), &laplacian_config(0.1), 0.0, 1.0);
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut stab = laplacian_stack(0.1, 0.0);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         let mut rendered: Vec<[f32; 2]> = vec![];
         for i in 0..200 {
             // About 40 px of arc per push: several commits each.

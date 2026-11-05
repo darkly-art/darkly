@@ -93,6 +93,7 @@ pub fn register() -> FilterEntityRegistration {
         display_name: "Selection",
         icon: "fa6-solid:vector-square",
         description: "The active marching-ants region that confines edits to part of the canvas.",
+        uncovered_value: crate::document::PixelValue::Transparent,
         serialize,
         deserialize,
         remap_ids,

@@ -81,9 +81,8 @@ impl CompositePipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("brush-composite"),
-                // No canvas lib: the commit samples no selection, so
-                // `plane_to_selection_uv` (the only symbol it supplies)
-                // has no caller here.
+                // No canvas lib: the commit samples no selection, so none
+                // of its helpers has a caller here.
                 source: wgpu::ShaderSource::Wgsl(
                     concat!(
                         include_str!("../../shaders/source_over.wgsl"),

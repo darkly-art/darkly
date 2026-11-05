@@ -300,11 +300,18 @@ impl DarklyEngine {
             self.prediction_horizon_ms(),
             conditions.canvas_per_css_px,
         );
+        let settle_ms = crate::config::get_f64("input.pressureSettleTime") as f32;
+        let settle = (settle_ms > 0.0)
+            .then(|| crate::brush::pressure_settle::PressureSettle::new(settle_ms / 1000.0));
         // What counts as a move is measured on screen too.
-        let divergence_epsilon =
-            crate::brush::stroke_engine::DIVERGENCE_EPSILON * conditions.canvas_per_css_px;
+        let divergence =
+            crate::brush::stroke_engine::DivergenceTolerance::at_scale(conditions.canvas_per_css_px);
         #[cfg(any(test, feature = "testing"))]
-        let divergence_epsilon = self.test_divergence_epsilon.unwrap_or(divergence_epsilon);
+        let divergence = if self.test_exact_divergence {
+            crate::brush::stroke_engine::DivergenceTolerance::EXACT
+        } else {
+            divergence
+        };
 
         // The colour selector's jitter is a pure function of the stroke
         // seed, so a pinned seed replays the same colour.
@@ -316,7 +323,8 @@ impl DarklyEngine {
             self.active_spacing_config(),
             self.active_base_size(),
             stabilizer,
-            divergence_epsilon,
+            settle,
+            divergence,
             self.clone_source_anchor.map(|p| [p.x as f32, p.y as f32]),
             conditions.seed,
             self.active_stamp_angle_rate(),

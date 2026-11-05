@@ -3,7 +3,7 @@
 use darkly_macros::handlers;
 
 use super::brush_stroke::{stroke_gpu_setup, BrushStroke};
-use super::rendering::commit_undo_region;
+use super::rendering::{commit_undo_entry, commit_undo_region};
 use super::types::StrokeOp;
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use crate::brush::checkpoint_ring::CheckpointRing;
@@ -101,15 +101,15 @@ impl DarklyEngine {
         let Some(runs) = runs else {
             return;
         };
-        let entry = commit_undo_region(
-            &self.gpu,
-            &self.region_scratch,
-            &mut self.readbacks,
-            label,
-            commit.layer_id,
-            &commit.snapshot,
-            runs,
-        );
+        let entry = commit_undo_entry(&self.gpu, &mut self.readbacks, label, |encoder| {
+            self.region_scratch.commit_region(
+                encoder,
+                &self.gpu.device,
+                commit.layer_id,
+                &commit.snapshot,
+                runs,
+            )
+        });
         self.push_undo_without_flush(Box::new(GpuRegionAction::new(entry)));
     }
 
@@ -120,8 +120,12 @@ impl DarklyEngine {
     /// `GpuRegionAction`, and mark the node dirty. The canonical "edit a region
     /// with undo" unit. `mutate` receives the node's paint target, the paint
     /// pipelines, and the queue, so it never re-borrows `self`. The texture
-    /// format is resolved from the node. Returns `false` if the node has no
-    /// texture.
+    /// format is resolved from the node.
+    ///
+    /// Only the part of `rect` the texture holds is saved, so `mutate` must
+    /// not write outside `rect`. A mutation that creates content where the
+    /// node has none yet grows the node to cover `rect` first. Returns `false`
+    /// if the node has no texture or holds nothing inside `rect`.
     pub(crate) fn region_undo_inplace(
         &mut self,
         node_id: LayerId,
@@ -151,10 +155,12 @@ impl DarklyEngine {
             label_commit,
             1,
         );
-        let snap = encoder.with_raw(|raw| {
+        let Some(snap) = encoder.with_raw(|raw| {
             self.region_scratch
                 .save_region(&self.gpu.device, raw, &frame, format, rect)
-        });
+        }) else {
+            return false;
+        };
         mutate(&mut encoder, target, &self.paint_pipelines, &self.gpu.queue);
         encoder.submit();
 
@@ -167,7 +173,6 @@ impl DarklyEngine {
             label_commit,
             node_id,
             &snap,
-            rect,
         );
         self.push_undo(Box::new(GpuRegionAction::new(entry)));
         self.compositor.mark_node_pixels_dirty(node_id);
@@ -190,7 +195,7 @@ impl DarklyEngine {
         let snap = self.gpu.encode_ret(label_save, |encoder| {
             self.region_scratch
                 .save_region(&self.gpu.device, encoder, &frame, format, rect)
-        });
+        })?;
         Some(commit_undo_region(
             &self.gpu,
             &self.region_scratch,
@@ -198,12 +203,12 @@ impl DarklyEngine {
             label_commit,
             node_id,
             &snap,
-            rect,
         ))
     }
 
     /// Fill the layer with the default background image, centered and clipped
-    /// to the canvas. The image is baked into the binary at build time.
+    /// to the canvas window, growing the layer to cover the window first. The
+    /// image is baked into the binary at build time.
     #[handler]
     pub fn fill_background(&mut self, id: LayerId) {
         if !self.is_node_paintable(id) {
@@ -215,6 +220,7 @@ impl DarklyEngine {
         let canvas_h = self.compositor.canvas_height();
         let rect = self.doc.canvas_rect();
         let format = wgpu::TextureFormat::Rgba8Unorm;
+        self.grow_node_to_fit(id, rect);
 
         let layer_tex = match self.compositor.node_texture(id) {
             Some(t) => t,
@@ -223,10 +229,12 @@ impl DarklyEngine {
         let layer_frame = layer_tex.canvas_frame();
 
         // Save current state to scratch for undo.
-        let snap = self.gpu.encode_ret("fill-background-save", |encoder| {
+        let Some(snap) = self.gpu.encode_ret("fill-background-save", |encoder| {
             self.region_scratch
                 .save_region(&self.gpu.device, encoder, &layer_frame, format, rect)
-        });
+        }) else {
+            return;
+        };
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
@@ -234,7 +242,6 @@ impl DarklyEngine {
             "fill-background-commit",
             id,
             &snap,
-            rect,
         );
         self.push_undo(Box::new(GpuRegionAction::new(entry)));
 
@@ -253,7 +260,16 @@ impl DarklyEngine {
         let copy_w = (img_w - src_x).min(canvas_w - dst_x);
         let copy_h = (img_h - src_y).min(canvas_h - dst_y);
 
-        if copy_w > 0 && copy_h > 0 {
+        // `(dst_x, dst_y)` is window-local: lift it to the plane, then into the
+        // layer texture's own frame.
+        let dst = crate::coord::WindowRect::from_xywh(dst_x as i32, dst_y as i32, copy_w, copy_h)
+            .to_canvas(self.doc.canvas_origin);
+        let layer_dst = self
+            .compositor
+            .node_texture(id)
+            .and_then(|t| t.canvas_to_layer_rect(dst))
+            .filter(|local| (local.width, local.height) == (copy_w, copy_h));
+        if let Some(layer_dst) = layer_dst {
             let layer_tex = self.compositor.node_texture(id).unwrap();
             let row_bytes = copy_w as usize * 4;
             let mut buf = vec![0u8; row_bytes * copy_h as usize];
@@ -269,8 +285,8 @@ impl DarklyEngine {
                     texture: layer_tex.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d {
-                        x: dst_x,
-                        y: dst_y,
+                        x: layer_dst.x0(),
+                        y: layer_dst.y0(),
                         z: 0,
                     },
                     aspect: wgpu::TextureAspect::All,
@@ -292,16 +308,18 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(id);
     }
 
-    /// Fill the layer with a solid RGBA color, clipped to the canvas. Used by
-    /// the "New Document" flow to seed a fresh raster layer with the artist's
-    /// chosen background color. Pushes a `GpuRegionAction` for undo, matching
-    /// `fill_background`'s pattern.
+    /// Fill the canvas window of the layer with a solid RGBA color, growing
+    /// the layer to cover the window first. Used by the "New Document" flow to
+    /// seed a fresh raster layer with the artist's chosen background color.
+    /// Pushes a `GpuRegionAction` for undo, matching `fill_background`'s
+    /// pattern.
     #[handler]
     pub fn fill_background_color(&mut self, id: LayerId, rgba: [u8; 4]) {
         if !self.is_node_paintable(id) {
             return;
         }
         let rect = self.doc.canvas_rect();
+        self.grow_node_to_fit(id, rect);
         self.region_undo_inplace(
             id,
             rect,
@@ -612,11 +630,10 @@ impl DarklyEngine {
         };
         let (frame, format) = (tex.canvas_frame(), tex.format());
         let saved_rect = frame.canvas_extent;
-        let snap = self.gpu.encode_ret("stroke-begin", |encoder| {
+        self.scratch_snapshot = self.gpu.encode_ret("stroke-begin", |encoder| {
             self.region_scratch
                 .save_region(&self.gpu.device, encoder, &frame, format, saved_rect)
         });
-        self.scratch_snapshot = Some(snap);
     }
 
     /// Canvas extent of whichever pixel-bearing node `node_id` names, or `None`
@@ -1060,13 +1077,16 @@ impl DarklyEngine {
                 if div_idx > 0 && self.checkpoint_ring.has_any_valid() {
                     self.brush_full_rerender_events += 1;
                 }
+                // Read before the save points are cleared: the slots now
+                // hold the baseline outside every dab discarded.
+                let discarded = engine.save_points.full_bbox().unwrap_or(CanvasRect::empty());
                 {
                     let mut gpu_ctx = setup.ctx(stroke_buffer, "brush-begin-stroke-rewind");
                     engine.begin_stroke(&mut gpu_ctx, None);
                     self.brush_perf += gpu_ctx.submit_final();
                 }
                 engine.reset_render_state();
-                self.checkpoint_ring.clear();
+                self.checkpoint_ring.rewind_to_baseline(discarded);
                 0
             };
 
@@ -1266,7 +1286,11 @@ impl DarklyEngine {
 
     #[handler]
     pub fn end_stroke(&mut self) {
-        // Render whatever the last frame did not, so the stroke lands whole.
+        if let Some(stroke) = self.brush_stroke.as_mut() {
+            stroke.engine.pen_up();
+        }
+        // Render whatever the last frame did not, and what settling the
+        // stroke's end rewrote, so the stroke lands whole.
         self.flush_stroke(true);
         let Some(layer_id) = self.active_stroke_layer.take() else {
             return;
@@ -1439,7 +1463,7 @@ fn save_checkpoint(
         .expect("a stroke setup's context carries stroke resources");
     let stroke_frame = stroke.scratch_frame();
     let channels = stroke.channel_textures();
-    ring.save(
+    let whole_frame = ring.save(
         gpu_ctx.device,
         &mut gpu_ctx.encoder,
         &stroke_frame,
@@ -1451,4 +1475,5 @@ fn save_checkpoint(
         tip_vi,
         max_div,
     );
+    gpu_ctx.perf.checkpoint_full_copies += u32::from(whole_frame);
 }

@@ -639,12 +639,11 @@ pub struct DarklyEngine {
     /// rewind path against it byte for byte.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) test_full_rerender: bool,
-    /// Overrides the distance a rendered stroke vertex may drift before it
-    /// is re-rendered, for strokes begun after it is set. Zero re-renders
-    /// every vertex that moved at all, which makes a stabilized stroke's
+    /// Re-render every rendered stroke vertex that changed at all, for
+    /// strokes begun after it is set, which makes a stabilized stroke's
     /// incremental rewinds comparable byte for byte with a full re-render.
     #[cfg(any(test, feature = "testing"))]
-    pub(crate) test_divergence_epsilon: Option<f32>,
+    pub(crate) test_exact_divergence: bool,
     /// Pending layer/selection flip waiting for the selection CPU cache.
     pub(crate) pending_flip: Option<PendingFlip>,
     /// Pending destructive filter waiting for the selection CPU cache.
@@ -871,7 +870,7 @@ impl DarklyEngine {
             #[cfg(any(test, feature = "testing"))]
             test_full_rerender: false,
             #[cfg(any(test, feature = "testing"))]
-            test_divergence_epsilon: None,
+            test_exact_divergence: false,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
             recorder: ProcessRecorder::new(),
@@ -1477,11 +1476,11 @@ impl DarklyEngine {
         self.test_full_rerender = on;
     }
 
-    /// Override the stroke divergence epsilon in canvas px (see the
-    /// `test_divergence_epsilon` field). Test-only.
+    /// Re-render every stroke vertex that changed at all (see the
+    /// `test_exact_divergence` field). Test-only.
     #[cfg(any(test, feature = "testing"))]
-    pub fn test_set_divergence_epsilon(&mut self, epsilon: f32) {
-        self.test_divergence_epsilon = Some(epsilon);
+    pub fn test_set_exact_divergence(&mut self) {
+        self.test_exact_divergence = true;
     }
 
     /// Count of mid-stroke full-re-render fallbacks observed during the
@@ -1497,6 +1496,12 @@ impl DarklyEngine {
     /// An unstabilized stroke never diverges, so it must read zero.
     pub fn test_stroke_rewinds(&self) -> u32 {
         self.brush_rewinds
+    }
+
+    /// Checkpoint saves during the most recent stroke that copied a slot's
+    /// whole layer-sized frame.
+    pub fn test_stroke_checkpoint_full_copies(&self) -> u32 {
+        self.brush_perf.checkpoint_full_copies
     }
 
     /// Total dabs placed during the most recent stroke. `brush_perf` is

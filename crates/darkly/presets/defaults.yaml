@@ -177,6 +177,9 @@ settings:
   input.fingerPainting: true
   # Stroke prediction look-ahead in ms (0 = off). See config/sections/input.rs.
   input.predictionHorizon: 10.0
+  # How long a stroke's touch-down and lift-off pressure takes to settle, in
+  # ms (0 = off). See config/sections/input.rs.
+  input.pressureSettleTime: 50.0
   # Editing.
   edit.activateTransformAfterPaste: true
   # Colors.

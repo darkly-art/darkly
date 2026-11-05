@@ -217,6 +217,11 @@ impl RegionRuns {
         &self.0
     }
 
+    /// The smallest rect containing every run.
+    pub fn bounds(&self) -> Option<CanvasRect> {
+        self.0.iter().copied().reduce(|a, b| a.union(b))
+    }
+
     /// Bytes the packed buffer holds: each run's padded rows.
     pub fn byte_size(&self, bpp: u32) -> u64 {
         byte_size_of(&self.0, bpp)

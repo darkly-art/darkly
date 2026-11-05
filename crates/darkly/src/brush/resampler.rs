@@ -180,7 +180,7 @@ impl StabilizerAlgorithm for ResamplingStabilizer {
 mod tests {
     use super::*;
     use crate::brush::stabilizer::StabilizerRegistry;
-    use crate::brush::stroke_engine::{DivergenceDiff, DIVERGENCE_EPSILON};
+    use crate::brush::stroke_engine::{DivergenceDiff, DivergenceTolerance};
     use crate::gpu::params::ParamValue;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -249,7 +249,12 @@ mod tests {
         let raws: Vec<PaintInformation> = (0..50)
             .map(|i| {
                 let s = i as f32;
-                mk(s * s * 0.8, (s * 0.3).sin() * 20.0, 0.5, s * 0.01)
+                mk(
+                    s * s * 0.8,
+                    (s * 0.3).sin() * 20.0,
+                    0.5 + 0.4 * (s * 0.7).sin(),
+                    s * 0.01,
+                )
             })
             .collect();
         let (mut single, _) = counting();
@@ -363,7 +368,12 @@ mod tests {
             let angle = i as f32 * 0.07;
             x += step * angle.cos();
             y += step * angle.sin();
-            stab.push(mk(x, y, 0.5, i as f32 * 0.004));
+            stab.push(mk(
+                x,
+                y,
+                0.5 + 0.4 * (i as f32 * 0.3).sin(),
+                i as f32 * 0.004,
+            ));
             let cur = stab.stabilized();
             for (earlier, what) in [(&per_push, "push"), (&per_batch, "batch")] {
                 let settled = earlier
@@ -387,7 +397,7 @@ mod tests {
     #[test]
     fn stroke_start_appends_without_divergence() {
         let mut stab = laplacian(0.5);
-        let mut diff = DivergenceDiff::new(DIVERGENCE_EPSILON);
+        let mut diff = DivergenceDiff::new(DivergenceTolerance::at_scale(1.0));
         assert_eq!(stab.max_divergence_window(), 41);
         stab.push(mk(10.0, 10.0, 0.5, 0.0));
         assert_eq!(stab.stabilized().len(), 1);
