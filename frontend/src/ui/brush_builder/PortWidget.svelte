@@ -1,7 +1,8 @@
 <script lang="ts">
     import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, EXTENDED_RANGE_MAX, type PortDef } from '../../state/brush_graph.svelte';
-    import { unitFor } from '../../lib/units';
+    import { formatScalar, unitFor } from '../../lib/units';
+    import { travelToValue, valueToFraction, type TravelCurve } from '../../lib/slider';
     import { pointerDrag } from '../../lib/pointerDrag';
     import { beginScrubDrag, type ScrubDrag } from '../../lib/scrubDrag';
     import { app } from '../../state/app.svelte';
@@ -239,10 +240,14 @@
         return Math.max(range.min, Math.min(range.max, stepped));
     }
 
+    /** The instance's travel curve. The node editor shows port space, which
+     *  is never mirrored. */
+    let travel = $derived<TravelCurve>({ exponent: port.travel_exponent, reversed: false });
+
     function valueFromFraction(frac: number): number {
-        const raw = range.min + frac * (range.max - range.min);
-        if (port.wire_type === 'Int') return Math.round(raw);
         if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
+        const raw = travelToValue(frac, range.min, range.max, travel);
+        if (port.wire_type === 'Int') return Math.round(raw);
         return snapToStep(raw);
     }
 
@@ -307,6 +312,22 @@
     let canExpose = $derived(port.dir === 'Input' && !connected && port.exposable);
     let isExposed = $derived(brushGraph.isPortExposed(nodeId, port.name));
 
+    /** Lit while this input is the highlighted port. Hovering an exposed
+     *  input points at it in turn, so its brush bar row lights. Leave clears
+     *  only what this port holds, exposed or not, so unexposing a hovered
+     *  port does not strand the light. */
+    let highlighted = $derived(
+        port.dir === 'Input' &&
+            brushGraph.highlightedPort?.node === nodeId &&
+            brushGraph.highlightedPort.port === port.name
+    );
+    function onRowEnter() {
+        if (isExposed) brushGraph.highlightedPort = { node: nodeId, port: port.name };
+    }
+    function onRowLeave() {
+        if (highlighted) brushGraph.highlightedPort = null;
+    }
+
     function toggleExposed(e: MouseEvent) {
         e.stopPropagation();
         if (isExposed) {
@@ -316,11 +337,7 @@
         }
     }
 
-    let sliderPercent = $derived(
-        range.max > range.min
-            ? ((numValue - range.min) / (range.max - range.min)) * 100
-            : 0
-    );
+    let sliderPercent = $derived(valueToFraction(numValue, range.min, range.max, travel) * 100);
 
     /** Display-unit conversion + formatting for the raw port value, resolved
      *  from the registration's `unit_type` (radians→degrees, ×100 percent, …). */
@@ -331,7 +348,7 @@
             ? (numValue >= 0.5 ? 'on' : 'off')
             : port.wire_type === 'Int'
                 ? String(Math.round(numValue))
-                : unit.format(unit.toDisplay(numValue))
+                : formatScalar(unit, unit.toDisplay(numValue), travel)
     );
 
     // --- Double-click to type a value ---
@@ -367,11 +384,15 @@
     }
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="port-row"
     class:port-right={side === 'right'}
     class:port-block={showCurve}
+    class:highlighted
     title={regPort?.description || ''}
+    onpointerenter={onRowEnter}
+    onpointerleave={onRowLeave}
 >
     {#if showDot}
         <div
@@ -499,6 +520,10 @@
         gap: 4px;
         height: 18px;
         padding-left: 10px;
+    }
+    .port-row.highlighted {
+        background: color-mix(in srgb, var(--accent) 25%, transparent);
+        border-radius: 3px;
     }
     .port-right {
         flex-direction: row-reverse;

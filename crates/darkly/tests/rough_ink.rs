@@ -1,4 +1,4 @@
-//! Integration tests for the Rough Ink brush (the first 100%-compiled brush).
+//! Integration tests for the Ink brush (the first 100%-compiled brush).
 //! Exercises the full `paint` pipeline
 //! end-to-end on a real GPU device:
 //!
@@ -345,7 +345,7 @@ fn two_dabs_same_flush_both_deposit() {
 
 #[test]
 fn builtin_rough_ink_brush_renders_within_declared_bbox() {
-    // Render the actual Rough Ink builtin: exercises `random →
+    // Render the actual Ink builtin: exercises `random →
     // shape` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
     // for the case where the shape evaluator's body was emitted as a
@@ -360,8 +360,8 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // the protocol was introduced to fix.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink registered");
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
         create_test_texture(&device, &queue, CANVAS, CANVAS, &black_canvas());
@@ -382,7 +382,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
         )
         .unwrap();
 
-    let runner = compile_graph(&graph).expect("Rough Ink compiles");
+    let runner = compile_graph(&graph).expect("Ink compiles");
     let stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
@@ -404,7 +404,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     queue.submit([enc.finish()]);
 
     let compiled = runner.compiled_brush().expect("compiled brush attached");
-    // Rough Ink wires `random → circle.amplitude` (natural_range max
+    // Ink wires `random → circle.amplitude` (natural_range max
     // = 0.5) so the brush extent factor composes to 1.5.
     assert!(
         (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
@@ -492,8 +492,8 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     // dab would be clipped by the smaller's quad.
     let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Rough Ink")
-        .expect("Rough Ink registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink registered");
     let mut graph = rough_ink.metadata.graph.clone();
     let _term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph
@@ -503,7 +503,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
             0.15,
         )
         .unwrap();
-    // Rough Ink wires `pen_input.pressure` straight into `paint.size`, so
+    // Ink wires `pen_input.pressure` straight into `paint.size`, so
     // radius is already ∝ pressure and the `r_a` / `r_b` math below lines
     // up with what the CPU side packs into the dab record without any
     // shaping to undo. The QUAD_R_MAX-vs-radius divergence this guards

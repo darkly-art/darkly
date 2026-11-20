@@ -350,8 +350,19 @@ pub fn read_mirror_pipeline_reg(id: &'static str) -> BrushPipelineRegistration {
 /// 0.5 floor sits outside the product because it is a raster constant: half
 /// a pixel is half a pixel at any DPI.
 pub fn effective_radius(ctx: &EvalContext) -> f32 {
+    floor_radius(nominal_radius(ctx))
+}
+
+/// [`effective_radius`] before the raster floor: the radius the brush's size
+/// asks for, which stays proportional to it below half a pixel.
+pub fn nominal_radius(ctx: &EvalContext) -> f32 {
     let modulation = ctx.input_f32("size").max(0.0);
-    (ctx.base_size() * modulation * SIZE_REFERENCE_PX * ctx.dpi_factor() * 0.5).max(0.5)
+    ctx.base_size() * modulation * SIZE_REFERENCE_PX * ctx.dpi_factor() * 0.5
+}
+
+/// The raster floor on a dab radius, so a dab always has positive area.
+pub fn floor_radius(nominal: f32) -> f32 {
+    nominal.max(0.5)
 }
 
 /// Insert a per-dab value into `dab_batch.slot_outputs` under this node's
@@ -647,13 +658,12 @@ pub fn commit(gpu: &mut BrushGpuContext) {
 }
 
 /// Hover-cursor preview. Routes through the shared preview helper at the
-/// dab's effective radius.
+/// dab's radius.
 pub fn render_cursor_preview(
     ctx: &EvalContext,
     gpu: &mut BrushGpuContext,
 ) -> Vec<(String, ScalarValue)> {
-    let radius = effective_radius(ctx);
-    let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
+    let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, nominal_radius(ctx));
     vec![]
 }
 

@@ -506,22 +506,6 @@ impl DarklyEngine {
                     crate::brush::library::with_mut(|lib| lib.set_dab_thumbnail(&id, png_bytes));
                 }
             }
-            ReadbackContext::BrushCursorPreviewScale {
-                topology_version,
-                width,
-                height,
-            } => {
-                // Drop stale results: a later compile may have already
-                // queued its own readback, and the one in hand is no
-                // longer descriptive of the active brush.
-                if topology_version == self.brush_topology_version() {
-                    let scale = cursor_preview_scale_from_mask(&pixels, width, height);
-                    self.compositor
-                        .tool_overlay_mut()
-                        .set_preview_coverage_scale(scale);
-                    self.compositor.mark_needs_present();
-                }
-            }
             ReadbackContext::PreviewFrame {
                 catalog,
                 type_id,
@@ -1278,20 +1262,6 @@ fn generate_rgba_thumbnail_from_pixels(
 /// device-pixel-ratio (the node-preview and picker displays).
 const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 192;
 
-/// Target mean luminance the cursor-preview mask gets normalized to,
-/// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).
-/// Sized to roughly match what a natural full-coverage brush like
-/// Ink Pen produces unboosted, so attenuated brushes (Charcoal: paper
-/// texture × shape masks → ~0.2 unboosted) land at the same apparent
-/// visibility under the cursor. Multiplier-only against an empty
-/// background: preserves true zero coverage exactly; the shader
-/// saturates highlights at 1.0.
-const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
-
-/// Cap on the boost so a near-empty preview mask can't get an extreme
-/// scale that amplifies noise.
-const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
-
 /// Tight bounding box of the pixels a caller deems "interesting", scanning
 /// an unpadded RGBA8 buffer of `width × height`. Returns `[min_x, min_y,
 /// max_x, max_y]` (inclusive) or `None` when no pixel qualifies.
@@ -1299,9 +1269,9 @@ const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 /// This is the single CPU implementation of "bounding box of the changed
 /// pixels": the same min/max reduction the GPU [`reduction`] runs, on
 /// the CPU side of an already-read-back buffer. The two thumbnail framers
-/// pass a "differs from the backdrop" predicate; the cursor-preview coverage
-/// scan passes an alpha-threshold predicate. Keeping the scan in one place
-/// means a border/empty-region convention can't drift between the callers.
+/// pass a "differs from the backdrop" predicate. Keeping the scan in one
+/// place means a border/empty-region convention can't drift between the
+/// callers.
 ///
 /// The predicate is given the pixel's position as well as its value, because a
 /// stroke staged over a field is only "changed" relative to what that field put
@@ -1342,7 +1312,7 @@ pub(crate) fn changed_pixels_bbox(
 /// solid `bg` on any RGB channel by more than `tol`? The tolerance
 /// accommodates the GPU's premultiplied-alpha rounding and any
 /// color-management drift while still catching a pale stroke against the bg.
-fn quantize_rgb(c: [f32; 4]) -> [u8; 3] {
+pub(crate) fn quantize_rgb(c: [f32; 4]) -> [u8; 3] {
     std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
@@ -1431,62 +1401,6 @@ pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4])
         return Vec::new();
     }
     out
-}
-
-/// Compute the coverage scale to apply to the cursor-preview overlay
-/// from a freshly-rendered preview-mask readback. Same content-bbox +
-/// 10% margin shape as `frame_dab_thumbnail` (so attenuated brushes
-/// hit the same target mean coverage they hit pre-removal), only the
-/// post-process changes: instead of multiplying RGB bytes we hand the
-/// scale to the overlay shader as a uniform.
-///
-/// `pixels` is the unpadded RGBA8 readback of the preview mask
-/// (`width × height × 4` bytes). The runner forces `paint_color.color`
-/// to white in the preview path, so alpha and red channels carry the
-/// same coverage signal; we read alpha as the canonical one.
-pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: u32) -> f32 {
-    let expected = (width * height * 4) as usize;
-    if pixels.len() < expected || width == 0 || height == 0 {
-        return 1.0;
-    }
-
-    // Content bbox via the same alpha tolerance the bake's bg detection
-    // uses (matched against the bake's clear-to-zero, which makes the
-    // "no content" pixel value 0 exactly).
-    const TOLERANCE: u8 = 12;
-    let Some([min_x, min_y, max_x, max_y]) =
-        changed_pixels_bbox(pixels, width, height, |_, _, px| px[3] > TOLERANCE)
-    else {
-        return 1.0;
-    };
-
-    let bbox_w = max_x - min_x + 1;
-    let bbox_h = max_y - min_y + 1;
-    let raw_side = bbox_w.max(bbox_h);
-    let margin = (raw_side / 10).max(2);
-    let side = (raw_side + 2 * margin).min(width.min(height));
-    let cx = min_x + bbox_w / 2;
-    let cy = min_y + bbox_h / 2;
-    let half = side / 2;
-    let crop_x = cx.saturating_sub(half).min(width - side);
-    let crop_y = cy.saturating_sub(half).min(height - side);
-
-    let mut sum: u64 = 0;
-    let mut count: u64 = 0;
-    for y in crop_y..(crop_y + side) {
-        for x in crop_x..(crop_x + side) {
-            sum += pixels[((y * width + x) * 4 + 3) as usize] as u64;
-            count += 1;
-        }
-    }
-    if count == 0 {
-        return 1.0;
-    }
-    let mean = (sum as f32 / count as f32) / 255.0;
-    if mean <= 0.0 || mean >= CURSOR_PREVIEW_TARGET_COVERAGE {
-        return 1.0;
-    }
-    (CURSOR_PREVIEW_TARGET_COVERAGE / mean).min(CURSOR_PREVIEW_MAX_BOOST)
 }
 
 /// Frame a rendered stroke into the cache aspect ratio and resize.

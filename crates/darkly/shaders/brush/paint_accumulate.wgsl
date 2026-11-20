@@ -48,3 +48,28 @@ fn accumulate_wash(src: vec4f, dst: vec4f) -> vec4f {
     }
     return vec4f(src.rgb / src.a * t, t) + dst * (1.0 - t);
 }
+
+// Build-up's increments shrink as coverage rises, and once one falls below
+// half an 8-bit step a round-to-nearest store discards it, so low flow stalls
+// well short of opaque. Rounding stochastically keeps each increment's
+// expected value: the texel moves up one step with probability equal to the
+// fraction it rounded away. One draw for all four channels keeps colour at
+// or under alpha. The draw hashes the canvas pixel and the dab's position,
+// so a replayed or rewound stroke rounds the same way.
+fn build_dither(px: vec2<i32>, dab_pos: vec2<f32>) -> f32 {
+    var h = (bitcast<u32>(px.x) * 0x8da6b343u)
+        ^ (bitcast<u32>(px.y) * 0xd8163841u)
+        ^ (bitcast<u32>(dab_pos.x) * 0xcb1ab31fu)
+        ^ (bitcast<u32>(dab_pos.y) * 0x165667b1u);
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return f32(h >> 8u) / 16777216.0;
+}
+
+fn pack_ground_dithered(c: vec4f, r: f32) -> vec4<u32> {
+    let q = floor(clamp(c, vec4f(0.0), vec4f(1.0)) * 255.0 + vec4f(r));
+    return vec4<u32>(pack4x8unorm(min(q, vec4f(255.0)) / 255.0), 0u, 0u, 0u);
+}

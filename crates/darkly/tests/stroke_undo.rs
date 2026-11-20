@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{event, headless, new_engine, readback};
+use common::{event, headless, new_engine, readback, Vehicle};
 use darkly::brush::input_value::InputValue;
 use darkly::coord::CanvasRect;
 use darkly::engine::{DarklyEngine, SavePurpose};
@@ -20,7 +20,7 @@ use darkly::engine::{DarklyEngine, SavePurpose};
 #[test]
 fn edit_right_after_a_stroke_leaves_its_undo_entry_intact() {
     let canvas = (96, 96);
-    let mut engine = new_engine(canvas, "Ink Pen", 0.0);
+    let mut engine = new_engine(canvas, Vehicle::Builtin("Ink"), 0.0);
     let layer = engine.add_raster_layer(None);
     let (before, _) = readback(&mut engine, layer);
 
@@ -57,7 +57,7 @@ fn edit_right_after_a_stroke_leaves_its_undo_entry_intact() {
 #[test]
 fn mask_grown_mid_stroke_stays_white_outside_the_dabs() {
     let (cw, ch) = (128u32, 128u32);
-    let mut engine = new_engine((cw, ch), "Ink Pen", 0.0);
+    let mut engine = new_engine((cw, ch), Vehicle::Builtin("Ink"), 0.0);
     // A non-zero canvas origin exercises the frame math.
     let (ox, oy) = (15i32, 9i32);
     engine.resize_canvas(CanvasRect::from_xywh(ox, oy, cw, ch));
@@ -113,7 +113,7 @@ fn mask_grown_mid_stroke_stays_white_outside_the_dabs() {
 /// dabs it actually drew, not an envelope around the pen's events.
 #[test]
 fn undo_covers_dabs_placed_away_from_the_pen() {
-    let mut engine = new_engine((128, 128), "Ink Pen", 0.0);
+    let mut engine = new_engine((128, 128), Vehicle::Builtin("Ink"), 0.0);
     // Paint at a fixed point rather than at the pen: every dab lands at
     // (100, 24) while the pen moves along the bottom-left.
     let id = |engine: &darkly::engine::DarklyEngine, type_id: &str| {
@@ -130,7 +130,7 @@ fn undo_covers_dabs_placed_away_from_the_pen() {
     let (pen, paint) = (id(&engine, "pen_input"), id(&engine, "paint"));
     engine
         .brush_graph_disconnect(&pen, "position", &paint, "position")
-        .expect("Ink Pen wires the pen to the dab position");
+        .expect("Ink wires the pen to the dab position");
     engine
         .brush_graph_set_input(&paint, "position", InputValue::Vec2([100.0, 24.0]))
         .expect("position takes a constant");
@@ -176,7 +176,7 @@ fn a_stroke_is_unsaved_from_pen_up_until_saved() {
         }
         panic!("save should complete within 16 frames");
     };
-    let mut engine = new_engine((64, 64), "Ink Pen", 0.0);
+    let mut engine = new_engine((64, 64), Vehicle::Builtin("Ink"), 0.0);
     let layer = engine.add_raster_layer(None);
     save(&mut engine);
     assert!(!engine.is_dirty(), "test setup: saved");

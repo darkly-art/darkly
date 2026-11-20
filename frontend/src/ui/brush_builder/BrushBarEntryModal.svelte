@@ -114,13 +114,19 @@
 <Modal bind:open size="sm" title="Brush bar entry">
     {#if entry}
         <form class="entry-form" onsubmit={(e) => { e.preventDefault(); onSave(); }}>
+            <div class="field">
+                <span class="field-label">Controls</span>
+                <p class="origin">
+                    <strong>{entry.portLabel}</strong> on <strong>{entry.nodeDisplayName}</strong>
+                </p>
+            </div>
             <label class="field">
                 <span class="field-label">Label</span>
                 <input
                     type="text"
                     class="text-input"
                     bind:value={labelInput}
-                    placeholder={entry.portName}
+                    placeholder={entry.portLabel}
                 />
             </label>
             <label class="field">
@@ -263,6 +269,11 @@
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.04em;
+    }
+    .origin {
+        margin: 0;
+        font-size: 11px;
+        color: var(--text-muted);
     }
     .hint {
         margin: 0;

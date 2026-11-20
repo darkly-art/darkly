@@ -1,16 +1,15 @@
 ---
 title: Basics
 description: Forbidden Editor for Artists
-template: doc
 ---
 
 **I hate writing documentation, and you probably hate reading it too. So by design, everything is searchable inside the app.**
 
 If you have any questions or can't find what you're looking for, come talk to us in [Discord](https://discord.gg/kFz2FGhbpu)!
 
-## `CTRL+F` Global Search
+## Global Search
 
-In Darkly, press **`CTRL+F`** to bring up the search bar, and type what you want to do, e.g. 'invert' or 'select'. Press enter to execute.
+In Darkly, press :hotkey[commandPalette] to bring up the search bar, and type what you want to do, e.g. 'invert' or 'select'. Press enter to execute.
 
 <br>
 
@@ -24,7 +23,7 @@ Darkly is **desktop-first** which means it works best with a keyboard. Hotkeys a
 
 ![hotkey-labels](https://github.com/user-attachments/assets/a9ac790e-0457-4fed-9477-7e9161bcc678)
 
-### Hotkey Presets
+### Hotkey Presets (Photoshop, Krita, etc.)
 
 Almost ***everything has a hotkey.*** The first time you start Darkly, you can choose which hotkey preset you want - Photoshop, GIMP, Krita, or Clip Studio Paint. You can change this anytime in settings.
 

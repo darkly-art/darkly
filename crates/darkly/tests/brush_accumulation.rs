@@ -849,6 +849,34 @@ fn the_top_of_the_dial_stacks_dabs_by_source_over() {
     );
 }
 
+/// Regression: low-flow build-up stalled well short of opaque. The ground is
+/// 8-bit, and a source-over increment of `flow * (1 - a)` rounds to nothing
+/// once it falls below half a step, so at 1% flow a pixel stopped at about
+/// 80% however often the stroke went back over it. Stochastic rounding keeps
+/// the increments, so the same scrub carries on to nearly opaque.
+#[test]
+fn low_flow_build_up_keeps_darkening_toward_opaque() {
+    let mut engine = test_engine();
+    let layer = engine.add_raster_layer(None);
+    install_fixture(&mut engine, Some(BUILD_UP));
+    set_spacing(&mut engine, 0.02);
+    // Flow per dab is `pressure * b`; at pressure 1.0 it is 1%.
+    let mul = find_node_id(&engine, "multiply");
+    engine
+        .brush_graph_set_input(&mul, "b", InputValue::Scalar(0.01))
+        .expect("multiply factor port");
+    // Ten passes at this spacing land several hundred dabs on each interior
+    // pixel: 1 - 0.99^500 is above 99%.
+    stroke_centreline(&mut engine, layer, 1.0, 10);
+
+    let density = median(&centreline_alpha(&engine, layer));
+    assert!(
+        density >= 245,
+        "a 1% flow scrubbed over itself should approach opaque; the median \
+         centreline alpha stopped at {density}"
+    );
+}
+
 /// A `buildup` authored in a brush file reaches *both* reads of the port.
 ///
 /// Every other test here selects the law with `brush_graph_set_input`, which

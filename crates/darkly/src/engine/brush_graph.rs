@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use darkly_macros::handlers;
 
+use super::rendering::quantize_rgb;
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::input_value::InputValue;
 use crate::brush::pack::BrushId;
@@ -14,6 +15,7 @@ use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
 use crate::document::canvas_per_reference_px;
 use crate::gpu::preview::PreviewBackdrop;
+use crate::gpu::tip_stretch::TipStretchRefs;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{
     exposed_port_key, ExposedPortMeta, NodeId, PortDef, PortDir, PortRef, UnitType,
@@ -23,6 +25,15 @@ use crate::nodegraph::{
 /// session is seeded with `BrushState::new()` at engine construction;
 /// `None` here would mean someone removed the entry, which is a bug.
 const NO_BRUSH_STATE: &str = "BrushState registered at session init";
+
+/// How a single-dab preview shows its dab. A dab shown as the brush's tip is
+/// stretched to full contrast, so flow cannot decide whether it is visible; a
+/// node's preview shows the node's value as it is.
+#[derive(Copy, Clone)]
+pub(crate) enum DabFraming {
+    Tip,
+    Natural,
+}
 
 /// Classifies a brush-graph mutation by which preview consumers it
 /// actually invalidates.
@@ -249,8 +260,9 @@ impl DarklyEngine {
 
     /// Drop the remembered hover pose so the next
     /// `regenerate_brush_cursor_preview_with_pen` starts a fresh hover with no
-    /// derived direction/motion/distance/speed. Call this on pointer-leave
-    /// and at the start of a stroke.
+    /// derived direction/motion/distance/speed. Call this on pointer-leave,
+    /// and at pen-down by a pointer other than the one that hovered (a
+    /// touch), whose stroke must not continue another pointer's hover.
     #[handler]
     pub fn clear_brush_cursor_preview_pose(&mut self) {
         self.last_cursor_preview_pose = None;
@@ -387,74 +399,30 @@ impl DarklyEngine {
         runner.execute_cpu();
         runner.render_cursor_preview_pipeline(&mut gpu_ctx);
 
-        let info = gpu_ctx.preview.as_ref().and_then(|p| p.info);
-        let command_buf = gpu_ctx.encoder.finish();
-        self.gpu.queue.submit([command_buf]);
-
+        let BrushGpuContext {
+            mut encoder,
+            preview,
+            ..
+        } = gpu_ctx;
+        let (info, overlay) = preview
+            .map(|p| (p.info, p.mask_overlay))
+            .expect("the driver supplies a preview state");
+        let overlay = overlay.expect("the driver supplies the overlay");
         if info.is_some() {
-            self.compositor
-                .tool_overlay_mut()
-                .use_cursor_preview_mask_as_mask();
-            self.request_brush_cursor_preview_scale_readback();
+            // In the render's own submission, so the mask the overlay samples
+            // never shows a dab other than the one just rendered.
+            overlay.stretch_cursor_preview(
+                &self.gpu.device,
+                &mut encoder,
+                self.brush_pipelines.tip_stretch(),
+            );
+            overlay.use_cursor_preview_mask_as_mask();
         } else {
-            self.compositor
-                .tool_overlay_mut()
-                .clear_cursor_preview_mask();
+            overlay.clear_cursor_preview_mask();
         }
+        self.gpu.queue.submit([encoder.finish()]);
         self.compositor.mark_needs_present();
         self.brush_cursor_preview_info = info;
-    }
-
-    /// Queue a readback of the freshly-rendered preview-mask so the
-    /// completion handler can normalize the cursor overlay's coverage
-    /// scale to the bake's target mean. Skips when:
-    ///   - the current topology matches the one we already requested a
-    ///     readback for (scale is a property of the graph shape, not
-    ///     the cursor pose);
-    ///   - another `BrushCursorPreviewScale` is already in flight;
-    ///   - the preview-mask texture hasn't been allocated yet.
-    fn request_brush_cursor_preview_scale_readback(&mut self) {
-        let current_topology = self.brush_topology_version();
-        if self.last_requested_cursor_scale_topology_version == current_topology {
-            return;
-        }
-        if self
-            .readbacks
-            .any(|c| matches!(c, ReadbackContext::BrushCursorPreviewScale { .. }))
-        {
-            return;
-        }
-        let overlay = self.compositor.tool_overlay_mut();
-        let (width, height) = overlay.cursor_preview_mask_size();
-        if width == 0 || height == 0 {
-            return;
-        }
-        let Some(texture) = overlay.cursor_preview_mask_texture() else {
-            return;
-        };
-        let mut encoder = self
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("brush-cursor-preview-scale-readback"),
-            });
-        let request = crate::gpu::readback::request_readback(
-            &self.gpu.device,
-            &mut encoder,
-            texture,
-            wgpu::TextureFormat::Rgba8Unorm,
-            crate::coord::LayerRect::from_xywh(0, 0, width, height),
-        );
-        self.gpu.queue.submit([encoder.finish()]);
-        self.readbacks.submit(
-            request,
-            ReadbackContext::BrushCursorPreviewScale {
-                topology_version: current_topology,
-                width,
-                height,
-            },
-        );
-        self.last_requested_cursor_scale_topology_version = current_topology;
     }
 
     /// Read-only snapshot of the current brush preview info, for the
@@ -654,11 +622,13 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        self.request_dab_preview_readback(self.active_brush_graph(), |_width, _height| {
-            ReadbackContext::ActiveBrushDab {
+        self.request_dab_preview_readback(
+            self.active_brush_graph(),
+            DabFraming::Tip,
+            |_width, _height| ReadbackContext::ActiveBrushDab {
                 topology_version: current_topology,
-            }
-        });
+            },
+        );
         self.last_rendered_dab_topology_version = current_topology;
 
         cached.unwrap_or_default()
@@ -713,9 +683,11 @@ impl DarklyEngine {
         };
 
         let node_id = node_id.to_string();
-        self.request_dab_preview_readback(sub, move |_w, _h| ReadbackContext::NodePreview {
-            node_id,
-            topology_version: current_topology,
+        self.request_dab_preview_readback(sub, DabFraming::Natural, move |_w, _h| {
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version: current_topology,
+            }
         });
 
         cached_bytes.unwrap_or_default()
@@ -737,6 +709,7 @@ impl DarklyEngine {
         bg: [f32; 4],
         backdrop: PreviewBackdrop,
         base_size_override: Option<f32>,
+        stretch: Option<TipStretchRefs>,
         context: ReadbackContext,
     ) {
         let Some(texture) = self.brush_stroke_preview_renderer.render_stroke(
@@ -765,10 +738,37 @@ impl DarklyEngine {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("brush-editor-preview-readback"),
             });
+        // A tip is read back from its stretch, which lives only as long as
+        // the copy that reads it is being encoded.
+        let stretched = stretch.map(|refs| {
+            let tip = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("brush-preview-tip"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            self.brush_pipelines.tip_stretch().encode(
+                &self.gpu.device,
+                &mut encoder,
+                &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                &tip.create_view(&wgpu::TextureViewDescriptor::default()),
+                (width, height),
+                refs,
+            );
+            tip
+        });
         let request = crate::gpu::readback::request_readback(
             &self.gpu.device,
             &mut encoder,
-            texture,
+            stretched.as_ref().unwrap_or(texture),
             wgpu::TextureFormat::Rgba8Unorm,
             crate::coord::LayerRect::from_xywh(0, 0, width, height),
         );
@@ -816,6 +816,7 @@ impl DarklyEngine {
             bg,
             backdrop,
             None,
+            None,
             make_context(rw, rh, backdrop),
         );
     }
@@ -836,6 +837,7 @@ impl DarklyEngine {
     pub(crate) fn request_dab_preview_readback(
         &mut self,
         mut graph: Graph<BrushWireType>,
+        framing: DabFraming,
         make_context: impl FnOnce(u32, u32) -> ReadbackContext,
     ) {
         crate::brush::reset_exposed_scrubs(&mut graph);
@@ -843,6 +845,10 @@ impl DarklyEngine {
         let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
+        let stretch = match framing {
+            DabFraming::Tip => Some(TipStretchRefs::over(quantize_rgb(fg), quantize_rgb(bg))),
+            DabFraming::Natural => None,
+        };
         self.render_preview_and_request_readback(
             &graph,
             &path,
@@ -852,6 +858,7 @@ impl DarklyEngine {
             bg,
             PreviewBackdrop::Flat,
             Some(super::brush_library::DAB_PREVIEW_BASE_SIZE),
+            stretch,
             make_context(rw, rh),
         );
     }
@@ -1099,6 +1106,7 @@ impl DarklyEngine {
                         invert: meta.invert,
                         unit_override: meta.unit,
                         inherited_unit: inherited_unit(port, reg_port),
+                        travel: display.travel(),
                     }
                 }
                 BrushWireType::Bool => ExposedValue::Bool {
@@ -1120,16 +1128,19 @@ impl DarklyEngine {
                 _ => continue,
             };
 
+            // The port as the node card names it: registration label, else
+            // the port name.
+            let port_label = reg_port
+                .map(|rp| &rp.label)
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_else(|| port_name.to_string());
             // Brush-bar entry meta wins; fall back to registration label /
             // description / icon, then to the port name.
             let label = if !meta.label.is_empty() {
                 meta.label.clone()
             } else {
-                reg_port
-                    .map(|rp| &rp.label)
-                    .filter(|l| !l.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| port_name.to_string())
+                port_label.clone()
             };
             let icon = if !meta.icon.is_empty() {
                 meta.icon.clone()
@@ -1149,7 +1160,14 @@ impl DarklyEngine {
                 label,
                 icon,
                 description,
-                node_display_name: reg.map(|r| r.display_name).unwrap_or("").to_string(),
+                port_label,
+                // The node's title as the builder shows it: the author's
+                // name, else the type's display name.
+                node_display_name: if node.name.is_empty() {
+                    reg.map_or("", |r| r.display_name).to_string()
+                } else {
+                    node.name.clone()
+                },
                 data,
             });
         }
@@ -1410,6 +1428,9 @@ struct ScalarDisplay {
     unit: UnitType,
     /// `min + max` when the control is mirrored, `None` when it is not.
     pivot: Option<f32>,
+    /// The port's [`PortDef::travel_exponent`], which describes the stored
+    /// quantity; [`Self::travel`] orients it for the control.
+    exponent: f32,
 }
 
 impl ScalarDisplay {
@@ -1435,6 +1456,16 @@ impl ScalarDisplay {
 
     fn unit(self) -> UnitType {
         self.unit
+    }
+
+    /// The travel curve as the control runs. The curve gives its fine end to
+    /// small *stored* values, so on a mirrored control that end is the
+    /// display maximum, and the curve is reflected with it.
+    fn travel(self) -> TravelCurve {
+        TravelCurve {
+            exponent: self.exponent,
+            reversed: self.pivot.is_some(),
+        }
     }
 
     /// The single mirror. Private and its own inverse, so the two `value_*`
@@ -1514,6 +1545,7 @@ fn scalar_display(
     Some(ScalarDisplay {
         unit: meta.unit.unwrap_or_else(|| inherited_unit(port, reg_port)),
         pivot: meta.invert.then_some(port.min + port.max),
+        exponent: port.travel_exponent,
     })
 }
 
@@ -1529,6 +1561,16 @@ fn inherited_unit(
     reg_port: Option<&PortDef<BrushWireType>>,
 ) -> UnitType {
     reg_port.map_or(port.unit_type, |rp| rp.unit_type)
+}
+
+/// A control's travel curve: at travel fraction `t` it reads
+/// `min + (max - min) * t^exponent`, or the reflection of that about the
+/// range when `reversed`. `exponent` 1 is linear.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct TravelCurve {
+    pub exponent: f32,
+    pub reversed: bool,
 }
 
 /// Type-specific value data for an exposed port.
@@ -1579,6 +1621,9 @@ pub enum ExposedValue {
         /// in TypeScript would be free to disagree about the fallback.
         #[serde(rename = "inheritedUnit")]
         inherited_unit: UnitType,
+        /// How a drag spends its travel across `[min, max]`, already oriented
+        /// for this control (mirror included), so renderers apply it as is.
+        travel: TravelCurve,
     },
     /// Boolean toggle. Currently emitted by the Switch node's `select`
     /// port; any other Bool input port marked `exposed` works too.
@@ -1616,8 +1661,11 @@ pub struct ExposedPortInfo {
     pub node_id: String,
     pub port_name: String,
     pub label: String,
+    /// The target port's own label, ignoring the entry's relabel.
+    pub port_label: String,
     pub icon: String,
     pub description: String,
+    /// The owning node's effective title (author's name, else type name).
     pub node_display_name: String,
     pub data: ExposedValue,
 }
@@ -1667,6 +1715,24 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The control carries the port's own curve, reflected exactly when the
+    /// entry mirrors it.
+    #[test]
+    fn scalar_display_orients_the_travel_curve() {
+        let mut port = scalar_port(0.0, 1.0);
+        port.travel_exponent = 3.0;
+        for invert in [false, true] {
+            let display = scalar_display(&port, None, &meta(invert)).expect("scalar maps");
+            assert_eq!(
+                display.travel(),
+                TravelCurve {
+                    exponent: 3.0,
+                    reversed: invert
+                }
+            );
         }
     }
 

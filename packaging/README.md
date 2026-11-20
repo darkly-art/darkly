@@ -66,6 +66,9 @@ Electron package lists the same set, e.g. `pacman -Qi electron44`).
 | `tools` | `rustup target add wasm32-unknown-unknown` and `cargo install` of the pinned `wasm-bindgen` CLI. For contributors: a packager on distro Rust already has the target |
 | `deps` | `npm ci` in `frontend/` and `desktop/` |
 | `clean` | removes the build outputs |
+| `docs-content` | the docs site's export into `$(TARGET_DIR)/docs-site`: registry metadata, resolved icons, rendered previews and the manual. For contributors and CI, not a channel; needs `frontend/` node_modules, and for previews a GPU and ffmpeg |
+| `docs` | `docs-content`, then the docs site type-checked and built into `docs-site/dist` (after `npm ci` in `docs-site/`). For contributors and CI |
+| `docs-dev` | `docs-content`, then the docs site's dev server. For contributors |
 
 | Variable | Default |
 | --- | --- |
@@ -77,6 +80,7 @@ Electron package lists the same set, e.g. `pacman -Qi electron44`).
 | `PREFIX` | `/usr/local` |
 | `BINDIR`, `LIBDIR`, `DATADIR` | `$(PREFIX)/bin`, `$(PREFIX)/lib`, `$(PREFIX)/share` |
 | `LICENSEDIR` | `$(DATADIR)/licenses/darkly` |
+| `DOCS_PREVIEWS` | `1`; `0` skips the GPU preview render in `docs-content` |
 | `DARKLY_ELECTRON_ZIP_DIR` (environment) | none; a directory holding `electron-v<version>-linux-<arch>.zip`, read by `desktop/forge.config.js` |
 
 `tools`, `deps` and `bundle` use the network; everything else is offline.

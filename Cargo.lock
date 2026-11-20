@@ -186,6 +186,7 @@ dependencies = [
  "base64",
  "bytemuck",
  "darkly-macros",
+ "half",
  "image",
  "indexmap",
  "kurbo",

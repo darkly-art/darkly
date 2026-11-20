@@ -8,7 +8,7 @@ use crate::gpu::preview::{PreviewAnim, ANIMATED_FRAMES};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::float("speed", 0.0, 1.0, 0.05)
+    ParamDef::float("speed", 0.0, 0.1, 0.02)
         .with_label("Speed")
         .with_description("How fast the grain reshuffles; zero holds a single still pattern."),
     ParamDef::float("color", 0.0, 1.0, 0.0)
@@ -29,13 +29,7 @@ pub fn register() -> EffectRegistration {
         description: "Film grain noise over the view, optionally animated.",
         params: PARAMS,
         preview: Some(PreviewAnim::ONE_WAY),
-        // The preview runs the grain at full reshuffle rate; `color` and
-        // `opacity` hold at their defaults so what moves is only the noise.
-        preview_at: Some(|_t| {
-            let mut params: Vec<ParamValue> = PARAMS.iter().map(ParamDef::default_value).collect();
-            params[0] = ParamValue::Float(1.0);
-            params
-        }),
+        preview_at: None,
         targets: COLOR_TARGETS,
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {

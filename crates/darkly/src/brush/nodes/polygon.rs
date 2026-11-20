@@ -66,10 +66,10 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("softness", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 0.0)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Softness")
+                    .with_label("Feather")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa6-solid:feather")
-                    .with_description("Edge softness (0% = hard, 100% = feathered)"),
+                    .with_description("How far the edge fades out (0% = hard, 100% = fully feathered)"),
                 // No `natural_range`: radians are a unit, not a normalized
                 // signal. `pen.drawing_angle → rotation_input` passes through
                 // raw and sums with the artist's `rotation` offset.

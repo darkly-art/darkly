@@ -20,7 +20,10 @@ use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::texture_source::{LiveSource, ResolvedSource};
 use darkly::brush::wire::BrushWireType;
 use darkly::coord::CanvasRect;
-use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
+use darkly::gpu::test_utils::{
+    create_test_texture, cursor_preview_target, readback_cursor_preview_render, readback_texture,
+    test_device,
+};
 use darkly::nodegraph::{Graph, NodeId, PortRef};
 
 const SIDE: u32 = 128;
@@ -324,7 +327,7 @@ fn live_sampler_compiles_beside_baked_noise_and_image() {
     );
     assert!(compiled.stroke_wgsl.contains("= clone_live_clone_source("));
 
-    for name in ["Clone", "Ink Pen"] {
+    for name in ["Clone", "Ink"] {
         let runner = compile_graph(&builtin(name)).unwrap();
         assert!(
             !runner.compiled_brush().unwrap().reads_stroke_appearance(),
@@ -587,23 +590,7 @@ fn hover_preview_is_a_neutral_footprint() {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview-target"),
-        size: wgpu::Extent3d {
-            width: PREVIEW,
-            height: PREVIEW,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = target.create_view(&Default::default());
+    let (target, view) = cursor_preview_target(&device, PREVIEW, PREVIEW);
     let mut runner = compile_graph(&builtin("Smudge")).expect("compiles");
     let mut ctx = BrushGpuContext {
         encoder: device.create_command_encoder(&Default::default()),
@@ -637,14 +624,7 @@ fn hover_preview_is_a_neutral_footprint() {
     runner.render_cursor_preview_pipeline(&mut ctx);
     assert!(ctx.preview.as_ref().and_then(|p| p.info).is_some());
     queue.submit([ctx.encoder.finish()]);
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &target,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW,
-        PREVIEW,
-    );
+    let rgba = readback_cursor_preview_render(&device, &queue, &target, PREVIEW, PREVIEW);
     let i = ((PREVIEW / 2 * PREVIEW + PREVIEW / 2) * 4) as usize;
     let c = &rgba[i..i + 4];
     assert!(c[3] > 0, "the tip has coverage at its centre: {c:?}");

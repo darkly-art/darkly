@@ -174,6 +174,103 @@ fn small_size_brush_dab_thumbnail_is_framed() {
     );
 }
 
+/// Regression: a brush that builds opacity from many low-flow dabs showed a
+/// near-invisible dab preview, because the preview is one dab and one dab
+/// carries only the per-dab flow. The preview is the tip's shape, so its
+/// strongest pixel reaches the full foreground whatever the flow.
+#[test]
+fn low_flow_dab_preview_shows_the_tip_at_full_strength() {
+    let mut engine = fresh_engine();
+    let portable: darkly::brush::portable::PortableBrush =
+        serde_yaml_ng::from_str(include_str!("fixtures/analytic_disc.yaml"))
+            .expect("fixture parses");
+    let mut graph = portable
+        .into_brush(darkly::brush::registry(), "fixture")
+        .expect("fixture builds")
+        .metadata
+        .graph;
+    // Flow per dab is `pressure * b`; the preview dab is at full pressure.
+    let mul = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "multiply")
+        .expect("fixture has a multiply")
+        .id
+        .clone();
+    graph
+        .set_port_default(&mul, "b", 0.05)
+        .expect("multiply factor");
+    engine
+        .set_brush_graph(&serde_json::to_string(&graph).unwrap())
+        .expect("fixture compiles");
+
+    let _ = engine.brush_active_dab_preview();
+    engine.test_flush_readbacks();
+    let png = engine.brush_active_dab_preview();
+    let img = image::load_from_memory(&png).expect("valid PNG").to_rgba8();
+    let brightest = img.pixels().map(|p| p.0[0]).max().unwrap_or(0);
+    assert!(
+        brightest > 240,
+        "a 5% flow dab should still show its tip at full strength; the \
+         brightest pixel was {brightest}"
+    );
+}
+
+/// A node's preview shows the node's value as it is: only the brush's tip is
+/// stretched to full strength. A stamp whose tip is scaled to 30% previews at
+/// 30% while the dab tile of the same graph reaches full.
+#[test]
+fn node_preview_keeps_its_natural_strength() {
+    let mut engine = fresh_engine();
+    let yaml = include_str!("fixtures/analytic_disc.yaml")
+        .replace(
+            "  stamp:\n    type: stamp\n",
+            "  stamp:\n    type: stamp\n  tip_scale:\n    type: multiply\n    inputs:\n      b: 0.3\n",
+        )
+        .replace(
+            "- circle.mask -> stamp.tip",
+            "- circle.mask -> tip_scale.a\n- tip_scale.result -> stamp.tip",
+        );
+    let portable: darkly::brush::portable::PortableBrush =
+        serde_yaml_ng::from_str(&yaml).expect("fixture parses");
+    let graph = portable
+        .into_brush(darkly::brush::registry(), "fixture")
+        .expect("fixture builds")
+        .metadata
+        .graph;
+    let stamp = graph
+        .nodes()
+        .values()
+        .find(|n| n.type_id == "stamp")
+        .expect("fixture has a stamp")
+        .id
+        .0
+        .clone();
+    engine
+        .set_brush_graph(&serde_json::to_string(&graph).unwrap())
+        .expect("fixture compiles");
+
+    let brightest = |png: &[u8]| {
+        let img = image::load_from_memory(png).expect("valid PNG").to_rgba8();
+        img.pixels().map(|p| p.0[0]).max().unwrap_or(0)
+    };
+    let _ = engine.brush_node_preview(&stamp);
+    let _ = engine.brush_active_dab_preview();
+    engine.test_flush_readbacks();
+    let node = brightest(&engine.brush_node_preview(&stamp));
+    let tip = brightest(&engine.brush_active_dab_preview());
+    assert!(
+        (60..=100).contains(&node),
+        "the stamp's preview should show its 30% tip as it is; the brightest \
+         pixel was {node}"
+    );
+    assert!(
+        tip > 240,
+        "the dab tile of the same graph should show the tip at full \
+         strength; the brightest pixel was {tip}"
+    );
+}
+
 #[test]
 fn brush_thumbnail_unknown_name_returns_empty() {
     let mut engine = fresh_engine();
@@ -385,6 +482,67 @@ fn set_node_name_does_not_advance_topology_version() {
 }
 
 #[test]
+fn exposed_entry_names_its_node_and_port() {
+    // A relabelled brush-bar entry still says which control it drives: the
+    // port's own label (the entry's relabel aside) and the node's title as
+    // the builder shows it, the author's name when there is one.
+    let mut engine = fresh_engine();
+
+    let target = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .next()
+        .expect("default brush exposes at least one port");
+    let type_id = engine
+        .active_brush_graph()
+        .nodes()
+        .get(&darkly::nodegraph::NodeId(target.node_id.clone()))
+        .expect("target node exists in the active graph")
+        .type_id
+        .clone();
+    let reg = darkly::brush::registry()
+        .get(&type_id)
+        .expect("target node type is registered");
+    let reg_label = reg
+        .ports
+        .iter()
+        .find(|p| p.name == target.port_name)
+        .map(|p| p.label.clone())
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| target.port_name.clone());
+
+    engine
+        .brush_graph_set_exposed_port_meta(
+            &target.key,
+            darkly::nodegraph::ExposedPortMeta {
+                label: "Twirl".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("relabel");
+    engine
+        .brush_graph_set_node_name(&target.node_id, "Twirl amount".to_string())
+        .expect("set name");
+
+    let entry = |engine: &DarklyEngine| {
+        engine
+            .brush_exposed_ports()
+            .into_iter()
+            .find(|p| p.key == target.key)
+            .expect("the entry survives the edits")
+    };
+    let named = entry(&engine);
+    assert_eq!(named.label, "Twirl");
+    assert_eq!(named.port_label, reg_label);
+    assert_eq!(named.node_display_name, "Twirl amount");
+
+    engine
+        .brush_graph_set_node_name(&target.node_id, String::new())
+        .expect("clear name");
+    assert_eq!(entry(&engine).node_display_name, reg.display_name);
+}
+
+#[test]
 fn set_node_comment_does_not_advance_topology_version() {
     // A node comment is inert w.r.t. render output, so setting one must NOT
     // advance `brush_topology_version` and rebake the dab thumbnail the
@@ -447,11 +605,9 @@ fn brush_active_capabilities_reflect_loaded_brush() {
     );
     assert_eq!(caps.preview_fallback_icon, Some("mdi:blur"));
 
-    engine
-        .brush_load("Ink Pen")
-        .expect("Ink Pen is a built-in brush");
+    engine.brush_load("Ink").expect("Ink is a built-in brush");
     let caps = engine.brush_active_capabilities();
-    assert!(caps.supports_erase, "Ink Pen honours erase");
+    assert!(caps.supports_erase, "Ink honours erase");
     assert_eq!(
         caps.preview_fallback_icon, None,
         "content-free brushes keep the baked previews"
@@ -476,9 +632,7 @@ fn graph_change_triggers_active_dab_rebake() {
     // the graph version through `compile_active`. The version mismatch
     // queues a fresh render on the next call (the previous bytes are
     // returned as fallback to avoid a flash to zeros mid-swap).
-    engine
-        .brush_load("Ink Pen")
-        .expect("Ink Pen is a built-in brush");
+    engine.brush_load("Ink").expect("Ink is a built-in brush");
     let _stale_fallback = engine.brush_active_dab_preview();
 
     engine.test_flush_readbacks();
@@ -489,7 +643,7 @@ fn graph_change_triggers_active_dab_rebake() {
     );
     assert_ne!(
         after, before,
-        "swapping Airbrush for Ink Pen should produce different dab pixels"
+        "swapping Airbrush for Ink should produce different dab pixels"
     );
 }
 

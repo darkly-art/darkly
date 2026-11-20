@@ -10,14 +10,21 @@ homepage = "https://github.com/darkly-art/darkly"
 readme = "README.md"
 keywords = ["paint", "gpu", "webgpu", "graphics", "wgpu"]
 categories = ["graphics", "rendering", "wasm"]
+# Left out of the published package: a consumer of the crate builds neither,
+# and crates.io caps a `.crate` at 10 MiB (the CI package job checks it), of
+# which the embedded fonts and textures already take most. Everything the
+# library compiles from, including the Krita importer's test data under
+# `src/`, is still packaged.
+exclude = ["tests/", "bench-results/"]
 
 [features]
 profile = []
 # Enables blocking GPU readbacks, `gpu::test_utils`, and `*::test_readback_*`
 # accessors. WebGPU/WASM deadlocks on these (see CONTRIBUTING.md "No Blocking GPU
 # Readbacks"); the feature exists so `cargo test` and the bench bins can opt
-# in while production / WASM builds cannot reach the API at all.
-testing = []
+# in while production / WASM builds cannot reach the API at all. `half` decodes
+# the float hover-dab render those readbacks return.
+testing = ["dep:half"]
 # Pulls in `ts-rs` and the `#[derive(TS)]`/registration metadata that the
 # `protocol` codegen test reads to emit the typed `EngineApi` (`engine.api.*`).
 # Native-only: enabled solely for the codegen test run. Production and wasm
@@ -43,6 +50,7 @@ slotmap = { workspace = true }
 smallvec = { workspace = true }
 darkly-macros = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
+half = { version = "2.7", optional = true }
 
 # Vector / text. The document model speaks the kurbo/peniko geometry+style
 # vocabulary directly (objects persist via their `serde` features); parley

@@ -822,7 +822,9 @@ pub fn pack_uniforms(
 
 /// Shared compiled-brush preview render path. Sized, packed, and
 /// dispatched identically across paint / watercolor / blur /
-/// liquify, the only caller-supplied difference is `effective_radius`.
+/// liquify, the only caller-supplied difference is the dab's
+/// [`nominal_radius`](crate::brush::read_mirror_terminal::nominal_radius),
+/// floored here as every stroke dab is.
 /// Rotation lives entirely in the rendered mask (via the skeleton's
 /// `theta - view_rotation` and any wired `circle.rotation_input`), so
 /// the overlay quad samples a pre-oriented mask without a CPU-side
@@ -830,7 +832,7 @@ pub fn pack_uniforms(
 /// no compiled state or the preview mask refuses to allocate.
 ///
 /// What this does:
-/// 1. Grows the preview mask to fit `radius × brush_extent_factor +
+/// 1. Grows the preview mask to fit `floored radius × brush_extent_factor +
 ///    brush_extent_extra_px` (rounded to the next power of two).
 /// 2. Packs the intrinsic uniform header: `cursor_preview_centre` /
 ///    `cursor_preview_size` set live; `layer_offset` / `layer_size` /
@@ -847,13 +849,15 @@ pub fn pack_uniforms(
 ///    overlay's `KIND_MASKED_STAMP` primitive to consume.
 pub fn render_compiled_cursor_preview(
     gpu: &mut crate::brush::gpu_context::BrushGpuContext,
-    radius: f32,
+    nominal_radius: f32,
 ) -> Option<()> {
     let compiled = gpu.dab_batch.compiled_brush.clone()?;
     // Brush-intrinsic bbox in canvas pixels: this is the dab's
     // footprint as it will be deposited on the canvas, and what the
     // overlay quad consumes via `half_extent_canvas_px` below.
-    let bbox_canvas_px = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
+    let radius = crate::brush::read_mirror_terminal::floor_radius(nominal_radius);
+    let bbox_of = |r: f32| r * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
+    let bbox_canvas_px = bbox_of(radius);
     let (target_view, target_w, target_h) = gpu.ensure_cursor_preview_mask(bbox_canvas_px)?;
     if target_w == 0 || target_h == 0 || bbox_canvas_px < EPS_BBOX_CANVAS_PX {
         return None;
@@ -926,8 +930,10 @@ pub fn render_compiled_cursor_preview(
     // UV [0, 1] across the quad. With the dab filling the mask's
     // inscribed disc by construction (above), this matches.
     if let Some(preview) = gpu.preview.as_mut() {
+        let nominal_bbox_canvas_px = bbox_of(nominal_radius);
         preview.info = Some(crate::brush::eval::BrushCursorPreviewInfo {
             half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
+            nominal_half_extent_canvas_px: [nominal_bbox_canvas_px, nominal_bbox_canvas_px],
         });
     }
     Some(())

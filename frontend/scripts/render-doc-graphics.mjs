@@ -10,6 +10,12 @@
  * layout is authored the way the rest of the frontend is authored, and this
  * script is the part that turns it into pixels without a browser.
  *
+ * A component declares what it depicts (`catalog`, optionally `category`) and
+ * renders one image, or declares `instances(ctx)` and renders one image per
+ * entry id it returns (a card per brush pack). Everything it draws it asks the
+ * `GraphicContext` for by name; what it asked for is recorded beside the image
+ * so the test can re-render without a cargo build.
+ *
  * The pipeline, and why each step is where it is:
  *
  *   svelte/server render()   the component's markup, via a real Vite server so
@@ -45,6 +51,8 @@ import { compile } from 'svelte/compiler';
 import { Resvg } from '@resvg/resvg-js';
 import jpeg from 'jpeg-js';
 
+import { resolveIcon } from './doc-icons.mjs';
+
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = path.resolve(FRONTEND, '..');
 const GRAPHICS_SRC = path.join(FRONTEND, 'src', 'graphics');
@@ -56,17 +64,25 @@ const GRAPHICS_SRC = path.join(FRONTEND, 'src', 'graphics');
 const GRAPHICS_DIR = 'docs/images/graphics';
 
 /** The file stem of a catalog graphic: the catalog id, plus the category when a
- *  graphic depicts one, so one catalog can carry a picture per category without
- *  two of them claiming the same file.
+ *  graphic depicts one, or the entry when it depicts one, so one catalog can
+ *  carry a picture per category or per entry without two of them claiming the
+ *  same file. A category is a display label and is slugged; an entry is a type
+ *  id, already a filename component, and is appended verbatim.
  *
  *  CANONICAL TWIN of `graphic_name` in
  *  `crates/darkly/src/docs_md/fragments/catalog_graphic.rs`, which links the
  *  file this writes. If you change one, change the other. */
-export function graphicName(catalog, category) {
-    return category
-        ? `${catalog}-${category.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
-        : catalog;
+export function graphicName(catalog, category, entry) {
+    if (category) return `${catalog}-${category.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`;
+    if (entry) return `${catalog}-${entry}`;
+    return catalog;
 }
+
+/** Where an entry's optional hand-made banner lives:
+ *  `docs/images/banners/<catalog>/<type>.jpg`. Rust never links a banner (it is
+ *  an input to a picture, not a picture the markdown embeds), so unlike the two
+ *  constants above this has no twin. */
+const BANNERS_DIR = 'docs/images/banners';
 
 /** CANONICAL TWIN of `STILLS_DIR` in `crates/darkly/src/docs_md/mod.rs`, which
  *  is also where `render_docs --stills` writes. */
@@ -75,6 +91,10 @@ const STILLS_DIR = 'docs/images/previews';
 /** Matches `write_jpeg` in `crates/darkly/src/docs_render/mod.rs`, and for the
  *  reason recorded there: below this, the pixelate veil's hard block edges ring. */
 const JPEG_QUALITY = 90;
+
+/** The website's palette and type, spliced into every graphic ahead of the
+ *  component's own scoped stylesheet. See the file for why it is unscoped. */
+const SITE_CSS = fs.readFileSync(path.join(GRAPHICS_SRC, 'site.css'), 'utf8');
 
 /** Every font a graphic may name, by path. resvg cannot read woff2 and ignores
  *  `@font-face`, so this list is the complete set of faces that exist as far as
@@ -103,24 +123,101 @@ function parseArgs(argv) {
 }
 
 /**
+ * An export entry narrowed to what a graphic may read (`CatalogEntryView`).
+ * Also exactly what a sidecar records, so the recording is a view of the
+ * export and not a copy of it, and does not churn on fields no picture shows.
+ */
+function entryView(e) {
+    const view = { type: e.type, displayName: e.displayName };
+    if (e.description) view.description = e.description;
+    if (e.icon) view.icon = e.icon;
+    if (e.palette) view.palette = e.palette;
+    if (e.members) view.members = e.members;
+    return view;
+}
+
+/**
+ * The banners on disk for every catalog in `known`, checked once.
+ *
+ * `known` maps a catalog id to the entry ids a banner may belong to. A banner
+ * is declared by existing, so the scan is what makes that a safe authority: a
+ * file under a known catalog whose stem is not one of its entries (a typo) is
+ * refused by name, as is a directory that is not a known catalog, and a banner
+ * that would be upscaled is refused when it is asked for at a width it cannot
+ * fill. Anything other than `.jpg` is an orphan by the same rule.
+ *
+ * Returns the context's `banner(catalogId, typeId, slotWidth)`. The runner
+ * calls this with the metadata's entries; the test calls it against the real
+ * directory with the entries the committed sidecars record, which is the gate
+ * that runs in CI.
+ */
+export function bannerLookup(bannersRoot, known) {
+    const files = new Map();
+    if (fs.existsSync(bannersRoot)) {
+        for (const dir of fs.readdirSync(bannersRoot).sort()) {
+            const catalogDir = path.join(bannersRoot, dir);
+            if (!fs.statSync(catalogDir).isDirectory()) {
+                throw new Error(`${catalogDir} is not a catalog directory; banners live in ${BANNERS_DIR}/<catalog>/`);
+            }
+            const entries = known.get(dir);
+            if (!entries) throw new Error(`${catalogDir}: \`${dir}\` is not a catalog with per-entry graphics`);
+            for (const file of fs.readdirSync(catalogDir).sort()) {
+                const stem = file.replace(/\.jpg$/, '');
+                if (stem === file || !entries.includes(stem)) {
+                    throw new Error(
+                        `${path.join(catalogDir, file)} is not a banner for any entry of \`${dir}\`; ` +
+                            `expected one of: ${entries.map(e => `${e}.jpg`).join(', ')}`,
+                    );
+                }
+                files.set(`${dir}/${stem}`, path.join(catalogDir, file));
+            }
+        }
+    }
+    return (catalogId, typeId, slotWidth) => {
+        const file = files.get(`${catalogId}/${typeId}`);
+        if (!file) return undefined;
+        const bytes = fs.readFileSync(file);
+        const { width } = jpeg.decode(bytes, { useTArray: true });
+        if (width < slotWidth) {
+            throw new Error(`${file} is ${width} px wide; the banner slot is ${slotWidth} px and it would be upscaled`);
+        }
+        return `data:image/jpeg;base64,${bytes.toString('base64')}`;
+    };
+}
+
+/**
  * A context backed by the real metadata export and the committed stills.
  *
- * Both lookups throw by name. A graphic is a picture with no error state: a
- * missing still would render as a hole and get committed.
+ * Every lookup but `banner` throws by name. A graphic is a picture with no
+ * error state: a missing still would render as a hole and get committed.
  */
-export function diskContext(metadata, { stillsRoot = path.join(REPO, STILLS_DIR) } = {}) {
+export function diskContext(
+    metadata,
+    { stillsRoot = path.join(REPO, STILLS_DIR), bannersRoot = path.join(REPO, BANNERS_DIR) } = {},
+) {
+    const catalogs = metadata.catalogs ?? [];
+    const raw = id => {
+        const found = catalogs.find(c => c.id === id);
+        if (!found) throw new Error(`no catalog \`${id}\` in the metadata export`);
+        return found;
+    };
+    const banner = bannerLookup(bannersRoot, new Map(catalogs.map(c => [c.id, c.entries.map(e => e.type)])));
     return {
         catalog(id, category) {
-            const found = (metadata.catalogs ?? []).find(c => c.id === id);
-            if (!found) throw new Error(`no catalog \`${id}\` in the metadata export`);
-            if (!category) return found;
+            const found = raw(id);
+            if (!category) return { id, title: found.title, entries: found.entries.map(entryView) };
             const entries = found.entries.filter(e => e.category === category);
             if (!entries.length) {
                 throw new Error(`catalog \`${id}\` has no entries in category \`${category}\``);
             }
             // The category names the narrowed view, matching the alt text the
             // Rust fragment generates for the same region.
-            return { ...found, title: category, entries };
+            return { id, title: category, entries: entries.map(entryView) };
+        },
+        entry(catalogId, typeId) {
+            const found = raw(catalogId).entries.find(e => e.type === typeId);
+            if (!found) throw new Error(`catalog \`${catalogId}\` has no entry \`${typeId}\``);
+            return entryView(found);
         },
         still(catalogId, typeId) {
             const file = path.join(stillsRoot, catalogId, `${typeId}.jpg`);
@@ -133,22 +230,87 @@ export function diskContext(metadata, { stillsRoot = path.join(REPO, STILLS_DIR)
             }
             return `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}`;
         },
+        icon: iconLookup,
+        banner,
+    };
+}
+
+/** The context's `icon`: a glyph by name, or an error naming it. The same
+ *  typo net `export-doc-icons.mjs` keeps. */
+export function iconLookup(name) {
+    const glyph = resolveIcon(name);
+    if (!glyph) throw new Error(`no icon \`${name}\` in any installed icon set`);
+    return glyph;
+}
+
+/**
+ * A context that records what a component asked another context for.
+ *
+ * Only the catalog and entry answers are recorded, projected as views, so the
+ * recording is proportional to the picture. Stills and banners are read from
+ * disk again at test time and icons are resolved again from the installed icon
+ * sets, so a change to any of them fails the hash as "stale, re-render" rather
+ * than being replayed. `replayContext` is the inverse.
+ */
+export function recordingContext(ctx) {
+    const record = { catalogs: {}, entries: {} };
+    return {
+        record,
+        context: {
+            catalog(id, category) {
+                const view = ctx.catalog(id, category);
+                record.catalogs[category ? `${id}#${category}` : id] = view;
+                return view;
+            },
+            entry(catalogId, typeId) {
+                const view = ctx.entry(catalogId, typeId);
+                record.entries[`${catalogId}/${typeId}`] = view;
+                return view;
+            },
+            still: (c, t) => ctx.still(c, t),
+            icon: n => ctx.icon(n),
+            banner: (c, t, w) => ctx.banner(c, t, w),
+        },
+    };
+}
+
+/** A context over a sidecar's recording plus the lookups that are not recorded. */
+export function replayContext(record, { still, icon, banner }) {
+    return {
+        catalog(id, category) {
+            const view = record.catalogs[category ? `${id}#${category}` : id];
+            if (!view) throw new Error(`the recording has no catalog \`${id}\`${category ? ` in category \`${category}\`` : ''}`);
+            return view;
+        },
+        entry(catalogId, typeId) {
+            const view = record.entries[`${catalogId}/${typeId}`];
+            if (!view) throw new Error(`the recording has no entry \`${catalogId}/${typeId}\``);
+            return view;
+        },
+        still,
+        icon,
+        banner,
     };
 }
 
 /**
- * The component's markup and its scoped stylesheet, as one SVG string.
+ * The component's markup and its stylesheets, as one SVG string.
  *
  * Svelte's SSR output carries the scope class but not the CSS (`head` comes back
  * empty), so the stylesheet is compiled separately from the same source and
  * spliced in. The scope hash the compiler derives is identical to the one the
- * SSR module emitted, so the two halves line up without being coordinated.
+ * SSR module emitted, so the two halves line up without being coordinated. The
+ * shared `site.css` goes in ahead of it, unconditionally: a component with no
+ * styles of its own still has a card to colour.
+ *
+ * `entry` is one of the component's `instances()`, or undefined for a component
+ * that renders one image.
  */
-export function renderGraphic(component, source, filename, ssrRender, ctx) {
-    const body = ssrRender(component.default, { props: component.graphicProps(ctx) }).body;
+export function renderGraphic(component, source, filename, ssrRender, ctx, entry) {
+    const body = ssrRender(component.default, { props: component.graphicProps(ctx, entry) }).body;
     const { css } = compile(source, { generate: 'server', filename });
     const svg = body.replace(/<!--\[-->|<!--\]-->/g, '');
-    return css?.code ? svg.replace(/(<svg\b[^>]*>)/, `$1<style>${css.code}</style>`) : svg;
+    return svg.replace(/(<svg\b[^>]*>)/, `$1<style>${SITE_CSS}${css?.code ?? ''}</style>`);
 }
 
 /**
@@ -156,8 +318,9 @@ export function renderGraphic(component, source, filename, ssrRender, ctx) {
  *
  * Two normalizations, both load-bearing:
  *
- * - Base64 stills become a hash of their bytes. The hash then covers *which*
- *   stills were used, without carrying half a megabyte of base64.
+ * - Base64 JPEGs (stills and banners) become a hash of their bytes. The hash
+ *   then covers *which* images were used, without carrying half a megabyte of
+ *   base64.
  * - Svelte's scope class becomes a constant. It changes between Vite server
  *   instances with the component byte-identical on disk, and it reaches no
  *   pixel; left in, this hash would differ on every run.
@@ -241,22 +404,28 @@ export function worstTileRmse(a, b, cols = 8, rows = 6) {
  * component, its stylesheet, its layout constants or the stills' pixels change
  * without the image being regenerated.
  *
- * `entries` is what the test needs in order to re-render at all, since the
- * display names live in the Rust registries and reaching them requires a cargo
- * build that the frontend suite does not have. It is deliberately *not* the
- * catalog's authority: if a veil is added or renamed, this file goes stale and
- * says nothing, and the thing that notices is the generated alt text in
- * `README.md`, which comes straight from `catalogs()` and is checked by
- * `crates/darkly/tests/docs_md.rs`. Registry drift is Rust's gate; "the picture
- * matches its inputs" is this one's.
+ * `context` is what the test needs in order to re-render at all: the catalog
+ * and entry views the component asked for, since the display names live in the
+ * Rust registries and reaching them requires a cargo build that the frontend
+ * suite does not have. It is deliberately *not* the catalog's authority: if a
+ * veil is added or renamed, this file goes stale and says nothing, and the
+ * thing that notices is the generated alt text in `README.md`, which comes
+ * straight from `catalogs()` and is checked by `crates/darkly/tests/docs_md.rs`.
+ * Registry drift is Rust's gate; "the picture matches its inputs" is this one's.
+ *
+ * `catalog`, `category` and `entry` say which component and which of its
+ * instances the file belongs to, so the test can pair them without parsing
+ * the file name.
  */
-function sidecar(component, ctx, svg, raster) {
-    const catalog = ctx.catalog(component.catalog, component.category);
+function sidecar(component, entry, svg, raster, record) {
     return {
         svg: normalizedHash(svg),
         width: raster.width,
         height: raster.height,
-        entries: catalog.entries.map(e => ({ type: e.type, displayName: e.displayName })),
+        catalog: component.catalog,
+        category: component.category ?? null,
+        entry: entry ?? null,
+        context: record,
     };
 }
 
@@ -324,21 +493,29 @@ async function main() {
         if (args.svg) fs.mkdirSync(args.svg, { recursive: true });
 
         for (const { file, component, source } of graphics) {
-            const svg = renderGraphic(component, source, file, render, ctx);
-            const raster = rasterize(svg);
+            // A picture is of a group or of an entry, never both; the Rust
+            // fragment refuses the same combination.
+            if (component.category && component.instances) {
+                throw new Error(`${file} declares both a category and instances`);
+            }
+            for (const entry of component.instances?.(ctx) ?? [undefined]) {
+                const { record, context } = recordingContext(ctx);
+                const svg = renderGraphic(component, source, file, render, context, entry);
+                const raster = rasterize(svg);
 
-            const name = graphicName(component.catalog, component.category);
-            fs.writeFileSync(path.join(args.out, `${name}.jpg`), encodeJpeg(raster));
-            fs.writeFileSync(
-                path.join(args.out, `${name}.hash.json`),
-                JSON.stringify(sidecar(component, ctx, svg, raster), null, 2) + '\n',
-            );
-            if (args.svg) fs.writeFileSync(path.join(args.svg, `${name}.svg`), svg);
+                const name = graphicName(component.catalog, component.category, entry);
+                fs.writeFileSync(path.join(args.out, `${name}.jpg`), encodeJpeg(raster));
+                fs.writeFileSync(
+                    path.join(args.out, `${name}.hash.json`),
+                    JSON.stringify(sidecar(component, entry, svg, raster, record), null, 2) + '\n',
+                );
+                if (args.svg) fs.writeFileSync(path.join(args.svg, `${name}.svg`), svg);
 
-            const bytes = fs.statSync(path.join(args.out, `${name}.jpg`)).size;
-            console.log(
-                `${name}: ${raster.width} x ${raster.height}, ${(bytes / 1024).toFixed(0)} KB`,
-            );
+                const bytes = fs.statSync(path.join(args.out, `${name}.jpg`)).size;
+                console.log(
+                    `${name}: ${raster.width} x ${raster.height}, ${(bytes / 1024).toFixed(0)} KB`,
+                );
+            }
         }
     } finally {
         await close();

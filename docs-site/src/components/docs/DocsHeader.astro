@@ -1,0 +1,231 @@
+---
+/*
+ * The docs header.
+ *
+ * The flame and "Darkly Docs" as the wordmark, and no Demo/Download: someone
+ * reading the reference for a blend mode has already arrived. What it does
+ * carry is search, on Ctrl/⌘+K, where documentation sites conventionally put
+ * it.
+ *
+ * One grid, two arrangements. Desktop puts the nav toggle, brand, search, the
+ * hotkey control and the icon links on a single row; mobile drops search to a
+ * row of its own, where it gets the full width: a real field visible without
+ * scrolling rather than a magnifier tucked in among the icons. The hotkey
+ * control ends that row, so the top row stays the nav toggle, the wordmark and
+ * the icons at every width. It is a reflow, not a second copy: DocsSearch is
+ * mounted once, so Ctrl/⌘+K has exactly one listener and one modal to open.
+ *
+ * The nav toggle is one button doing the same job at both sizes: show or hide
+ * the navigation, which is the rail on desktop and the drawer on mobile.
+ * DocsLayout owns what it does, because that is where both of those live.
+ */
+import ThemeToggle from '../../shared/ThemeToggle.svelte';
+import GitHubStars from '../../shared/GitHubStars.svelte';
+import DocsSearch from './DocsSearch.svelte';
+import HotkeyPresetToggle from './HotkeyPresetToggle.astro';
+import icon from '../../shared/darkly-icon.png';
+---
+
+<header class="docs-header">
+    <div class="docs-header-grid">
+        {/*
+            Deliberately in the header and not on the rail itself. At the top
+            of the sidebar it would put the pointer inside the pane the moment
+            you clicked it, so hover-peek would hold the pane open at full
+            width while the content had already reflowed to the rail, and the
+            sidebar would sit on top of the text. A control cannot live inside
+            the thing it collapses.
+        */}
+        <button
+            class="docs-nav-toggle"
+            type="button"
+            aria-label="Toggle navigation"
+            aria-controls="docs-nav"
+            aria-expanded="true"
+        >
+            <i class="fa-solid fa-bars"></i>
+        </button>
+
+        <a class="docs-brand" href="/">
+            <img src={icon.src} alt="" width="28" height="28" />
+            <span>Darkly Docs</span>
+        </a>
+
+        <div class="docs-search-area">
+            <DocsSearch client:load />
+        </div>
+
+        <div class="docs-hotkeys-area">
+            <HotkeyPresetToggle />
+        </div>
+
+        <div class="docs-header-controls">
+            <a
+                class="docs-icon-link"
+                href="https://github.com/darkly-art/darkly"
+                target="_blank"
+                rel="noopener"
+                aria-label="GitHub"
+            >
+                <i class="fa-brands fa-github"></i>
+                <GitHubStars client:idle />
+            </a>
+            <a
+                class="docs-icon-link"
+                href="https://discord.gg/kFz2FGhbpu"
+                target="_blank"
+                rel="noopener"
+                aria-label="Discord"
+            >
+                <i class="fa-brands fa-discord"></i>
+            </a>
+            <ThemeToggle client:load />
+        </div>
+    </div>
+</header>
+
+{/* The button's behaviour lives in DocsLayout, with the drawer it opens. This
+    header is parsed before the sidebar exists, so a script here could not see
+    the backdrop or the nav to bind them. */}
+
+<style>
+    .docs-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: color-mix(in srgb, var(--bg) 85%, transparent);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--bg-active);
+    }
+
+    :global([data-theme='light']) .docs-header {
+        background: color-mix(in srgb, #ffffff 92%, transparent);
+    }
+
+    .docs-header-grid {
+        display: grid;
+        grid-template-areas: 'toggle brand search hotkeys controls';
+        grid-template-columns: auto auto 1fr auto auto;
+        align-items: center;
+        gap: 1.25rem;
+        min-height: var(--docs-header);
+        padding: 0 1rem;
+    }
+
+    /* The display face; one shipped weight, so 400. */
+    .docs-brand {
+        grid-area: brand;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: var(--text);
+        font-family: var(--font-display);
+        font-size: 1.15rem;
+        font-weight: 400;
+        letter-spacing: 0.02em;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .docs-brand:hover {
+        text-decoration: none;
+    }
+
+    .docs-brand img {
+        display: block;
+        border-radius: 50%;
+    }
+
+    .docs-search-area {
+        grid-area: search;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        min-width: 0;
+    }
+
+    .docs-hotkeys-area {
+        grid-area: hotkeys;
+        display: flex;
+    }
+
+    .docs-header-controls {
+        grid-area: controls;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .docs-icon-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 1.25rem;
+        color: var(--text-muted);
+        transition: color 0.1s;
+    }
+
+    .docs-icon-link:hover {
+        color: var(--text);
+        text-decoration: none;
+    }
+
+    .docs-nav-toggle {
+        grid-area: toggle;
+        flex: none;
+        width: 2.25rem;
+        height: 2.25rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-raised);
+        border: 1px solid var(--bg-active);
+        border-radius: var(--radius-md, 6px);
+        color: var(--text-muted);
+        font-size: 1rem;
+        cursor: pointer;
+        transition: color 0.1s, border-color 0.1s;
+    }
+
+    .docs-nav-toggle:hover {
+        color: var(--text);
+        border-color: var(--text-dim);
+    }
+
+    @media (max-width: 49.999em) {
+        /* Search gets a row to itself, full width; the one thing that has to be
+           reachable without scrolling or tapping anything first. */
+        .docs-header-grid {
+            grid-template-areas:
+                'toggle brand controls controls'
+                'search search search hotkeys';
+            grid-template-columns: auto 1fr auto auto;
+            gap: 0.6rem 0.75rem;
+            padding: 0.6rem 1rem 0.7rem;
+        }
+        /* The top row is the nav toggle, the wordmark and the controls; the
+           star count is what gives way, the GitHub mark stays. */
+        .docs-header-controls {
+            --stars-display: none;
+        }
+        /* Icon-only, as tall as the search field it sits beside. */
+        .docs-hotkeys-area {
+            --theme-toggle-size: 2.3rem;
+            --theme-toggle-font: 15px;
+        }
+    }
+
+    /* Three controls plus the toggle and a nowrap wordmark overrun the top row
+       on the narrow phones, so the icons close ranks rather than the wordmark
+       shrinking out of step with the rail's. */
+    @media (max-width: 26.875em) {
+        .docs-header-controls {
+            gap: 0.6rem;
+            --theme-toggle-size: 28px;
+            --theme-toggle-font: 13px;
+        }
+        .docs-icon-link {
+            font-size: 1.1rem;
+        }
+    }
+</style>

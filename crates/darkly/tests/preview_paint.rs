@@ -15,30 +15,9 @@ use darkly::brush::gpu_context::{
 };
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::gpu::test_utils::{readback_texture, test_device};
+use darkly::gpu::test_utils::{cursor_preview_target, readback_cursor_preview_render, test_device};
 
 const PREVIEW_SIDE: u32 = 256;
-
-fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview-target"),
-        size: wgpu::Extent3d {
-            width: PREVIEW_SIDE,
-            height: PREVIEW_SIDE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (tex, view)
-}
 
 struct PreviewOutput {
     rgba: Vec<u8>,
@@ -68,7 +47,7 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let (target_tex, target_view) = preview_target(&device);
+    let (target_tex, target_view) = cursor_preview_target(&device, PREVIEW_SIDE, PREVIEW_SIDE);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
 
@@ -114,14 +93,8 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
         .expect("paint publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &target_tex,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW_SIDE,
-        PREVIEW_SIDE,
-    );
+    let rgba =
+        readback_cursor_preview_render(&device, &queue, &target_tex, PREVIEW_SIDE, PREVIEW_SIDE);
     PreviewOutput {
         rgba,
         info: published,
@@ -135,14 +108,14 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn ink_pen_preview_shows_color_and_shape() {
-    // Ink Pen: pressure=1 → flow=1 → centre pixel must be the seeded
+    // Ink: pressure=1 → flow=1 → centre pixel must be the seeded
     // color at near-full alpha.
-    let out = render_cursor_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink", 0.1, [0.0, 0.6, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
         centre[1] > 100 && centre[0] < 30 && centre[3] > 200,
-        "Ink Pen centre should be green-ish and opaque; got {centre:?}",
+        "Ink centre should be green-ish and opaque; got {centre:?}",
     );
 
     // Sanity-check bbox info published.
@@ -171,16 +144,36 @@ fn airbrush_preview_shows_color_with_alpha_falloff() {
 
 #[test]
 fn rough_ink_preview_shows_color() {
-    let out = render_cursor_preview("Rough Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should be the brush color (orange-ish). Perlin noise can
     // dip flow at the centre, so only assert color, not full opacity.
     assert!(
         centre[0] > centre[2] && centre[3] > 0,
-        "Rough Ink centre should be visible and lean orange; got {centre:?}",
+        "Ink centre should be visible and lean orange; got {centre:?}",
     );
     // (Boundary-variance check lives in `preview_watercolor.rs` against
     // Rough Watercolor: that brush has a much larger amplitude so the
     // shape modulation reads cleanly at our sampling resolution.)
+}
+
+/// The canvas size drag scales the brush by the ratio of its outline's
+/// extent, so the extent it reads must keep tracking the size below the
+/// dab's half-pixel radius floor, where the drawn outline stops shrinking.
+/// Otherwise a drag starting at the smallest sizes crawls.
+#[test]
+fn nominal_half_extent_stays_proportional_below_the_radius_floor() {
+    let small = render_cursor_preview("Ink", 0.0001, [0.0, 0.0, 0.0, 1.0]).info;
+    let double = render_cursor_preview("Ink", 0.0002, [0.0, 0.0, 0.0, 1.0]).info;
+
+    assert_eq!(
+        small.half_extent_canvas_px, double.half_extent_canvas_px,
+        "both sizes sit under the floor, so the drawn outline is the same"
+    );
+    let ratio = double.nominal_half_extent_canvas_px[0] / small.nominal_half_extent_canvas_px[0];
+    assert!(
+        (ratio - 2.0).abs() < 1e-4,
+        "nominal extent should double with the size; ratio {ratio}"
+    );
 }

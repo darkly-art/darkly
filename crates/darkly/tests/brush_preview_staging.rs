@@ -377,10 +377,10 @@ fn every_declaring_node_declares_both_halves() {
 fn previews_are_reproducible() {
     let mut engine = fresh_engine();
     for name in [
-        "Rough Ink",
+        "Ink",
         "Rough Watercolor",
         "Smooth Watercolor",
-        "Ink Pen",
+        "Ink",
         "Clone",
     ] {
         let (first, _, _) = stroke_thumbnail(&mut engine, name);
@@ -410,9 +410,9 @@ fn previews_are_reproducible() {
 fn channels_do_not_outlive_the_brush_that_declared_them() {
     let mut engine = fresh_engine();
 
-    // Watercolor declares a deposit channel, the Ink Pen declares none:
+    // Watercolor declares a deposit channel, the Ink declares none:
     // the second must free the first's rather than inherit it.
-    for name in ["Smooth Watercolor", "Ink Pen", "Smooth Watercolor"] {
+    for name in ["Smooth Watercolor", "Ink", "Smooth Watercolor"] {
         let (pixels, _, _) = stroke_thumbnail(&mut engine, name);
         assert!(
             luminance_sd(&pixels) > 0.0,

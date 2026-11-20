@@ -12,6 +12,29 @@ use serde::{Deserialize, Serialize};
 /// sampler) contributes nothing for it.
 pub const STATIONARY_MOTION_PX: f32 = 0.5;
 
+/// Distance, in canvas pixels, under which two samples coincide: there is no
+/// travel between them to measure a direction or place dabs along.
+pub const COINCIDENT_PX: f32 = 1.0e-3;
+
+/// Direction of travel from `from` to `to` in canvas radians (0 = right), or
+/// `fallback` when the two coincide and there is no travel to measure.
+///
+/// The one direction rule: a hover sample measures it against the hover
+/// sample before it, a stroke dab against the dab before it, and a stroke's
+/// first dab against the hover the pen arrived from, so the hover preview and
+/// the stroke it turns into face the same way.
+///
+/// After Krita's `KisAlgebra2D::directionBetweenPoints`, by Dmitry Kazakov
+/// (<https://invent.kde.org/graphics/krita/-/blob/master/libs/global/kis_algebra_2d.cpp>).
+pub fn direction_between(from: [f32; 2], to: [f32; 2], fallback: f32) -> f32 {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    if dx.hypot(dy) > COINCIDENT_PX {
+        dy.atan2(dx)
+    } else {
+        fallback
+    }
+}
+
 /// All sensor data for a single pen sample.
 ///
 /// Modelled after Krita's `KisPaintInformation`: every field the tablet
@@ -42,12 +65,12 @@ pub struct PaintInformation {
     /// Cumulative distance travelled in pixels (not normalised; used for
     /// spacing calculations, normalised on demand by sensor nodes).
     pub distance: f32,
-    /// Drawing angle in radians (0 = right). `derive_sensors` computes the
-    /// directed angle of pen travel; for dabs emitted through
-    /// `StrokeEngine::place_dab` that value is then replaced by the stamp
-    /// orientation: the stroke's undirected axis, approached no faster than
-    /// the brush's turn rate. Paths with no stroke engine behind them (the
-    /// hover preview) keep the raw directed value.
+    /// Drawing angle in radians (0 = right), measured by [`direction_between`].
+    /// `derive_sensors` measures it between consecutive samples, which is what
+    /// the hover preview shows. A stroke dab measures its own in
+    /// `StrokeEngine::place_dab`, against the dab before it, and replaces the
+    /// vertex value with the stamp orientation: the stroke's undirected axis,
+    /// approached no faster than the brush's turn rate.
     pub drawing_angle: f32,
     /// Per-dab motion vector in canvas pixels: the position delta from the
     /// previous *emitted dab* into this one. Populated by the stroke engine
@@ -108,19 +131,10 @@ impl PaintInformation {
             return;
         };
 
-        let dx = self.pos[0] - prev.pos[0];
-        let dy = self.pos[1] - prev.pos[1];
-        // Coalesced pointer events at the same coords would make
-        // `atan2(0, 0) = 0` snap drawing_angle to 0 on stationary
-        // frames, flickering the cursor preview between the real
-        // direction and 0. Mirrors `stroke_engine.rs`'s 0.001 px
-        // arc-length floor: preserve prev's direction across a
-        // stationary segment.
-        if segment_length > 1.0e-3 {
-            self.drawing_angle = dy.atan2(dx);
-        } else {
-            self.drawing_angle = prev.drawing_angle;
-        }
+        // Coalesced pointer events at the same coords keep prev's direction
+        // rather than snapping to `atan2(0, 0) = 0`, which would flicker the
+        // cursor preview between the real direction and 0.
+        self.drawing_angle = direction_between(prev.pos, self.pos, prev.drawing_angle);
         self.distance = prev.distance + segment_length;
 
         let dt = self.time - prev.time;

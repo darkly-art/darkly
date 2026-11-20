@@ -121,6 +121,9 @@
         }
         dragKey = null;
         liveOrder = null;
+        // A drop on the row it started from gets no fresh `pointerenter`
+        // until the pointer moves, so the row would otherwise keep the light.
+        hoveredRow = null;
     }
 
     // Edit modal state.
@@ -129,6 +132,27 @@
     function openEditor(port: ExposedPortInfo) {
         modalEntry = port;
         modalOpen = true;
+    }
+
+    // The row under the cursor, published below as the highlighted port.
+    let hoveredRow = $state<{ node: string; port: string } | null>(null);
+
+    // The editor's entry owns the spotlight while it is open; otherwise the
+    // row under the cursor does. Teardown clears it so a collapsed builder
+    // never leaves a light on in the next graph.
+    $effect(() => {
+        brushGraph.highlightedPort =
+            modalOpen && modalEntry
+                ? { node: modalEntry.nodeId, port: modalEntry.portName }
+                : hoveredRow;
+        return () => {
+            brushGraph.highlightedPort = null;
+        };
+    });
+
+    function isHighlighted(port: ExposedPortInfo): boolean {
+        const h = brushGraph.highlightedPort;
+        return h?.node === port.nodeId && h.port === port.portName;
     }
 </script>
 
@@ -153,12 +177,15 @@
                     <li
                         class="entry-row"
                         class:dragging={dragKey === port.key}
+                        class:highlighted={isHighlighted(port)}
                         animate:flip={{ duration: 100, easing: cubicOut }}
                         draggable="true"
                         ondragstart={(e) => onRowDragStart(e, port)}
                         ondragover={(e) => onRowDragOver(e, idx)}
                         ondragleave={onRowDragLeave}
                         ondrop={onRowDrop}
+                        onpointerenter={() => (hoveredRow = { node: port.nodeId, port: port.portName })}
+                        onpointerleave={() => (hoveredRow = null)}
                     >
                         <span class="row-grip" aria-hidden="true">
                             <Icon name="fa6-solid:grip-vertical" />
@@ -245,6 +272,9 @@
     .entry-row:hover {
         background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
         border-color: var(--bg-hover);
+    }
+    .entry-row.highlighted {
+        background: color-mix(in srgb, var(--accent) 25%, transparent);
     }
     .entry-row.dragging {
         opacity: 0.55;

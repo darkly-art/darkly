@@ -138,7 +138,7 @@ mod tests {
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [10.0, 10.0],
-            last_dab_pos: None,
+            last_dab: None,
             dab_count: 0,
             stamp_angle: None,
         }

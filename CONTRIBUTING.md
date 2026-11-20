@@ -22,6 +22,12 @@ make wasm
 
 # Frontend dev server
 (cd frontend && npm run dev)
+
+# Docs site (darkly.art/docs), served at localhost:4321/docs/. The export runs
+# at start: restart to see manual or registry edits. DOCS_PREVIEWS=0 skips the
+# GPU preview render.
+(cd docs-site && npm ci)    # once
+make docs-dev
 ```
 
 Before opening a PR, run the full suite under [Lint / CI Checks](#lint--ci-checks) and read the [Testing Principle](#testing-principle).
@@ -99,6 +105,12 @@ crates/darkly/presets/  Bundled per-editor config overlays
 frontend/wasm/          WASM bridge (wasm-bindgen): single API surface
 frontend/src/           Svelte UI
   graphics/       ★     README graphics, rendered to PNG/JPEG headlessly
+docs-site/              darkly.art/docs: Astro site built from docs/manual/
+                        and the registries (`make docs`). The manual names
+                        keys only as `:hotkey[id]` / `:action[id]`
+  src/shared/           pieces other sites import too; shipped as source in
+                        the release asset, so a renamed file or changed prop
+                        is a breaking change for them
 desktop/                Electron host: main, preload, storage bridge, forge
 packaging/              Desktop-integration resources shared by every
                         channel (desktop entry, AppStream metainfo, icons)
@@ -117,6 +129,7 @@ Each of these is required reading *before* you change the area it covers, and sa
 | Hotkeys, the config schema, or editor presets | [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml) header | Settings resolve `user → overlay (the active editor's) → defaults`, and where a key belongs follows from that. Host-editor reference hotkeys are in [`docs/*-default-hotkeys.md`](docs/) |
 | A registration a README table or graphic names | [`docs/generated-markdown.md`](docs/generated-markdown.md) | Those spans are generated from the registries; see [Generated Markdown](#generated-markdown) |
 | The JS/Rust boundary or the async model | [`docs/architecture-history.md`](docs/architecture-history.md) | Most "obvious simplifications" there have already been tried and reverted |
+| A shipped brush or pack (`crates/darkly/brushes/`, `crates/darkly/packs/`) | [`docs/brush/node-system.md`](docs/brush/node-system.md#shipped-brushes) | A builtin brush is a worked example artists read in the builder: names and comments only where they help an artist reading the graph, names that say what the brush does, and the checklist for packs, previews and tests |
 | The brush engine or its node graph | [`docs/brush/README.md`](docs/brush/README.md) | Stroke engine, node system, stabilization, and the imported brush formats |
 | Making a release, the version string, or anything a `v*` tag triggers | [`docs/versioning.md`](docs/versioning.md) | "Cutting a release" there is the whole procedure, every step from choosing the version to a published release, including the release PR, whose body is a plain list of PR links rather than the two-part form. The annotated tag is the release record; the metainfo's release history is generated from the tags and committed after each release. The version itself is derived from git tags at build time, once, in `build.rs` (a tarball reads it from `version.txt`); the `Cargo.toml` / `package.json` values are vestigial |
 
@@ -269,6 +282,8 @@ make wasm
 (cd frontend && npm run build)
 (cd frontend && npm test)
 (cd desktop && npm ci && npx tsc --noEmit && npm test)
+DOCS_PREVIEWS=0 make docs && (cd docs-site && npm test)
+(cd docs-site && npm run test:browser)
 ```
 
 Every flag above is load-bearing. What each one defends against, the shape Vitest tests have to take with no DOM, and the `cargo sweep` housekeeping that keeps `target/` from ballooning are in [`docs/checks.md`](docs/checks.md).

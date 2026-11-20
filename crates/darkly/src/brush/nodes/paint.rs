@@ -618,6 +618,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("wash_flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow (Wash)")
                     .with_unit(UnitType::Percent)
@@ -629,6 +630,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("build_flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Flow (Build-up)")
                     .with_unit(UnitType::Percent)
@@ -639,6 +641,7 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
+                    .with_fine_low_end(2.0)
                     .with_natural_range(0.0, 1.0)
                     .with_label("Opacity")
                     .with_unit(UnitType::Percent)
@@ -1010,8 +1013,10 @@ impl BrushNodeEvaluator for PaintEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(
+            gpu,
+            crate::brush::read_mirror_terminal::nominal_radius(ctx),
+        );
         vec![]
     }
 
@@ -1035,14 +1040,24 @@ impl BrushNodeEvaluator for PaintEvaluator {
         // standing for the loaded texel. The store is skipped where the
         // packed result equals the loaded word (a refused wash dab, say),
         // which is exact: an equal store changes nothing.
-        let store = |target: &str, law: &str| {
+        let store_with = |target: &str, law: &str, pack: &str| {
             let law = law.replace("DST", &format!("unpack_ground({target}_was)"));
+            let packed = pack.replace("LAW", &law);
             format!(
                 "    let {target}_was = textureLoad({target}, layer_px);\n\
-                 \x20   let {target}_now = pack_ground({law});\n\
+                 \x20   let {target}_now = {packed};\n\
                  \x20   if ({target}_now.r != {target}_was.r) {{\n\
                  \x20       textureStore({target}, layer_px, {target}_now);\n\
                  \x20   }}\n"
+            )
+        };
+        let store = |target: &str, law: &str| store_with(target, law, "pack_ground(LAW)");
+        // Build-up rounds stochastically; see `build_dither`.
+        let store_build = |target: &str, law: &str| {
+            store_with(
+                target,
+                law,
+                "pack_ground_dithered(LAW, build_dither(canvas_px, d.pos))",
             )
         };
         if cctx.input("mode").enum_index() == MODE_MOVE {
@@ -1100,7 +1115,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
         } else if wash_share <= 0.0 {
             // Build-up alone: the ground composites every dab over the last.
             body.push_str("    let src = rgba * build_flow * sel;\n");
-            body.push_str(&store(GROUND_NAME, "accumulate_build(src, DST)"));
+            body.push_str(&store_build(GROUND_NAME, "accumulate_build(src, DST)"));
         } else {
             // Both: the one dispatch writes each half into the
             // accumulation that runs its law, scaled by its share.
@@ -1111,7 +1126,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
                 "    let build_src = rgba * build_flow * sel * {build_share:.6};\n"
             ));
             body.push_str(&store(GROUND_NAME, "accumulate_wash(wash_src, DST)"));
-            body.push_str(&store(
+            body.push_str(&store_build(
                 BUILD_CHANNEL.name,
                 "accumulate_build(build_src, DST)",
             ));

@@ -25,8 +25,8 @@ use darkly::config::{preset_bindings, Binding, OVERLAYS};
 #[derive(serde::Serialize)]
 struct DocsManifest {
     schema: u32,
-    /// `git describe` of the build that wrote this, which is also what
-    /// `render-docs` stamps: the pairing key between the two artifacts.
+    /// `git describe` of the build that wrote this: what the docs site prints
+    /// as the version each page describes.
     version: &'static str,
     catalogs: Vec<Catalog>,
     /// Preset name → action id → the chords it resolves to. Keyed by the

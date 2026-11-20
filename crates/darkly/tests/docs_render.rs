@@ -300,11 +300,11 @@ fn every_previewable_entry_has_a_renderer() {
     assert!(!manifest.assets.is_empty());
 }
 
-/// Fourteen effects, one void, sixteen blend modes and fourteen brushes:
-/// counted **per catalog**. A bare total of forty-five would not notice a whole
+/// Fourteen effects, one void, sixteen blend modes and sixteen brushes:
+/// counted **per catalog**. A bare total would not notice a whole
 /// catalog dropping out and another gaining entries.
 #[test]
-fn all_forty_five_assets_land() {
+fn every_catalog_lands_every_asset() {
     let (_, manifest) = assets();
     let counts: BTreeMap<&str, usize> = manifest
         .assets
@@ -317,10 +317,10 @@ fn all_forty_five_assets_land() {
             ("effects", 14),
             ("voids", 1),
             ("blendModes", 16),
-            ("brushes", 14),
+            ("brushes", 16),
         ])
     );
-    assert_eq!(counts.values().sum::<usize>(), 45);
+    assert_eq!(counts.values().sum::<usize>(), 47);
 }
 
 /// The set of directories **found by walking the output** equals the previewable
@@ -392,7 +392,7 @@ fn every_frame_is_the_size_its_entry_declares() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 45);
+    assert_eq!(checked, 47);
 }
 
 /// For every asset the PNG count equals the frame count the declaration says
@@ -536,7 +536,7 @@ fn rendering_an_entry_twice_is_deterministic() {
         ("effects", "frozen"),
         ("voids", "noise"),
         ("blendModes", "multiply"),
-        ("brushes", "ink_pen"),
+        ("brushes", "ink"),
     ] {
         let first = render_one(&mut gpu, catalog, type_id);
         let again = render_one(&mut gpu, catalog, type_id);
@@ -776,7 +776,7 @@ fn every_brush_renders_the_same_bytes_twice() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 14, "the shipped brush set");
+    assert_eq!(checked, 16, "the shipped brush set");
 }
 
 /// Every brush asset is one frame, and that frame shows a stroke.
@@ -788,7 +788,7 @@ fn every_brush_renders_the_same_bytes_twice() {
 fn every_brush_asset_shows_a_stroke() {
     let (dir, manifest) = assets();
     let entries = &manifest.assets[darkly::brush::builtin_brushes::CATALOG_ID];
-    assert_eq!(entries.len(), 14);
+    assert_eq!(entries.len(), 16);
 
     for (type_id, asset) in entries {
         assert_eq!(asset.frames, 1, "`{type_id}` is a still");

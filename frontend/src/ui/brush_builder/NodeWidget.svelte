@@ -17,6 +17,10 @@
     const { coords } = getContext<NodeCanvasContext>('node-canvas');
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
+    /** Ringed while one of this node's ports is highlighted. The port row
+     *  lights too, but an exposed port hidden by `visible_when` has no row,
+     *  so the ring is the only light it gets. */
+    let isHighlighted = $derived(brushGraph.highlightedPort?.node === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
     /** A node shows an in-card preview thumbnail iff one of its outputs is
@@ -197,6 +201,7 @@
 <div
     class="node-widget"
     class:selected={isSelected}
+    class:highlighted={isHighlighted}
     style="transform: translate({position[0]}px, {position[1]}px);"
     data-node-id={node.id}
     bind:this={nodeEl}
@@ -299,6 +304,9 @@
     }
     .node-widget.selected {
         border-color: var(--accent);
+    }
+    .node-widget.highlighted {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
     }
     .node-header {
         display: flex;

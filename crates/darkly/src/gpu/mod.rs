@@ -189,6 +189,7 @@ pub mod straight_composite;
 pub mod test_utils;
 pub mod texture_registry;
 pub mod textured_void;
+pub mod tip_stretch;
 pub mod transform;
 pub mod vector_content;
 pub mod vector_renderer;

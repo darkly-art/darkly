@@ -119,7 +119,7 @@ impl CheckpointSlot {
                 accumulated_distance: 0.0,
                 leftover_distance: 0.0,
                 last_dab_size: [0.0, 0.0],
-                last_dab_pos: None,
+                last_dab: None,
                 dab_count: 0,
                 stamp_angle: None,
             },
@@ -671,7 +671,7 @@ mod tests {
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [0.0, 0.0],
-            last_dab_pos: None,
+            last_dab: None,
             dab_count: 0,
             stamp_angle: None,
         }

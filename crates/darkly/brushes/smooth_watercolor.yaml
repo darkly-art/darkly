@@ -25,11 +25,11 @@ connections:
 - 'circle.mask -> watercolor.mask'
 - 'random.value -> circle.rotation_input'
 exposed_ports:
-  "brush_settings.stabilize": {}
   "brush_settings.size": {}
+  "watercolor.opacity": {}
+  "watercolor.flow": {}
+  "brush_settings.stabilize": {}
   "circle.softness": {}
   "watercolor.deposit": {}
-  "watercolor.flow": {}
-  "watercolor.opacity": {}
   "watercolor.wetness": {}
   "watercolor.pickup_size": {}

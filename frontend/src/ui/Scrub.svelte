@@ -1,7 +1,7 @@
 <script lang="ts">
-    import { exposedDragSpeed } from '../state/brush_graph.svelte';
     import { app } from '../state/app.svelte';
-    import { beginScrubDrag, type ScrubDrag } from '../lib/scrubDrag';
+    import { beginScrubDrag, scrubValue, type ScrubDrag } from '../lib/scrubDrag';
+    import type { TravelCurve } from '../lib/slider';
     import { pointerDrag } from '../lib/pointerDrag';
     import Icon from '../icons/Icon.svelte';
 
@@ -13,6 +13,9 @@
         min: number;
         max: number;
         default: number;
+        /** How the drag spends its travel across `[min, max]`; linear when
+         *  omitted. */
+        travel?: TravelCurve;
         formatValue?: (v: number) => string;
         /** Apply the value under the pointer. Fires on every move, so it must
          *  be cheap: local or session state, not an engine round-trip. */
@@ -53,15 +56,13 @@
 
     function startDrag(e: PointerEvent): boolean | void {
         if (props.mode !== 'drag') return false;
-        const { min, max, onChange, onCommit } = props;
+        const { min, max, travel, onChange, onCommit } = props;
         const startX = e.clientX;
         const startVal = props.value;
-        const speed = exposedDragSpeed(min, max);
         dragging = true;
         app.beginInteraction();
         drag = beginScrubDrag({
-            toValue: (clientX) =>
-                Math.min(max, Math.max(min, startVal + (clientX - startX) * speed)),
+            toValue: (clientX) => scrubValue(startVal, clientX - startX, min, max, travel),
             onPreview: onChange,
             onCommit: (v) => onCommit?.(v),
             onFinish: () => {

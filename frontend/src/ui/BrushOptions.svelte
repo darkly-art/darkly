@@ -2,7 +2,7 @@
     import { app } from '../state/app.svelte';
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo, ExposedPortInfo } from '../state/brush_graph.svelte';
-    import { unitFor } from '../lib/units';
+    import { formatScalar, unitFor } from '../lib/units';
     import { brushSession, focusedBrushTool, strokeEditOpen, toggleStrokeEdit } from '../tools/brush.svelte';
     import LiveBrushPreviewStrip from './brush_library/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
@@ -162,7 +162,8 @@
                     min={d.min}
                     max={d.max}
                     default={d.default}
-                    formatValue={(v) => unitFor(d.unitType).format(v)}
+                    travel={d.travel}
+                    formatValue={(v) => formatScalar(unitFor(d.unitType), v, d.travel)}
                     onChange={(v) => previewExposedPort(port.nodeId, port.portName, v)}
                     onCommit={(v) => void commitExposedPort(port.nodeId, port.portName, v)}
                     title={port.description || undefined}

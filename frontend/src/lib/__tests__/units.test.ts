@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { UNITS, unitFor, unitOptions } from '../units';
+import { UNITS, formatScalar, unitFor, unitOptions } from '../units';
 import type { UnitType } from '../../engine/protocol_gen';
 
 const PI = Math.PI;
@@ -72,5 +72,30 @@ describe('units', () => {
         expect(offered).toHaveLength(new Set(offered).size);
         expect(offered).not.toContain('Normalized');
         for (const [, label] of unitOptions()) expect(label.length).toBeGreaterThan(0);
+    });
+});
+
+describe('fine readout', () => {
+    it('keeps two significant digits below 10', () => {
+        expect(UNITS.Percent.format(1.44, true)).toBe('1.4%');
+        expect(UNITS.Percent.format(0.25, true)).toBe('0.25%');
+        expect(UNITS.Percent.format(0.01, true)).toBe('0.01%');
+        expect(UNITS.Degrees.format(2.5, true)).toBe('2.5°');
+    });
+
+    it('reads whole from 10 up', () => {
+        expect(UNITS.Percent.format(9.96, true)).toBe('10%');
+        expect(UNITS.Percent.format(45.4, true)).toBe('45%');
+        expect(UNITS.Pixels.format(12.6, true)).toBe('13px');
+    });
+
+    it('stays whole by default', () => {
+        expect(UNITS.Percent.format(1.44)).toBe('1%');
+    });
+
+    it('formatScalar reads finely exactly when the control is curved', () => {
+        expect(formatScalar(UNITS.Percent, 1.44, { exponent: 3, reversed: false })).toBe('1.4%');
+        expect(formatScalar(UNITS.Percent, 1.44, { exponent: 1, reversed: false })).toBe('1%');
+        expect(formatScalar(UNITS.Percent, 1.44)).toBe('1%');
     });
 });

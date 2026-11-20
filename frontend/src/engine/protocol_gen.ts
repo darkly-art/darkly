@@ -66,7 +66,12 @@ export type BeginTransformReq = { id: number, };
 
 export type BorderSelectionReq = { radius: number, };
 
-export type BrushCursorPreviewInfoResp = { halfExtent: [number, number], };
+export type BrushCursorPreviewInfoResp = { halfExtent: [number, number], 
+/**
+ * The half-extent before the dab's half-pixel radius floor, so it stays
+ * proportional to the brush size below it.
+ */
+nominalHalfExtent: [number, number], };
 
 export type BrushDabThumbnailReq = { name: string, };
 
@@ -231,7 +236,17 @@ supportsPreview: boolean,
  * other registry, whose entries are effects over an existing image rather
  * than sources of one.
  */
-source: VoidSource | null, };
+source: VoidSource | null, 
+/**
+ * The entries of another catalog this entry groups; brush packs only.
+ * `None` for every registry whose entries stand alone.
+ */
+members: Membership | null, 
+/**
+ * Identity colours; brush packs only. `None` for every registry whose
+ * entries are told apart by icon and name.
+ */
+palette: PackPalette | null, };
 
 export type ClearSelectionContentsReq = { id: number, };
 
@@ -303,7 +318,15 @@ export type ExposedPortInfo = {
  * `set_exposed_port_meta` / `reorder_exposed_port` without having
  * to reconstruct the format.
  */
-key: string, nodeId: string, portName: string, label: string, icon: string, description: string, nodeDisplayName: string, data: ExposedValue, };
+key: string, nodeId: string, portName: string, label: string, 
+/**
+ * The target port's own label, ignoring the entry's relabel.
+ */
+portLabel: string, icon: string, description: string, 
+/**
+ * The owning node's effective title (author's name, else type name).
+ */
+nodeDisplayName: string, data: ExposedValue, };
 
 export type ExposedPortMeta = { label?: string, description?: string, icon?: string, 
 /**
@@ -394,7 +417,12 @@ unitOverride: UnitType | null,
  * has one implementation and it is [`scalar_display`]; a second one
  * in TypeScript would be free to disagree about the fallback.
  */
-inheritedUnit: UnitType, } | { "kind": "bool", 
+inheritedUnit: UnitType, 
+/**
+ * How a drag spends its travel across `[min, max]`, already oriented
+ * for this control (mirror included), so renderers apply it as is.
+ */
+travel: TravelCurve, } | { "kind": "bool", 
 /**
  * Current value.
  */
@@ -582,6 +610,16 @@ modified: boolean, };
 
 export type MaskToSelectionReq = { id: number, };
 
+export type Membership = { 
+/**
+ * Id of the catalog the members are entries of.
+ */
+catalog: string, 
+/**
+ * Member type ids, in the group's declared order.
+ */
+entries: Array<string>, };
+
 export type MergeDownReq = { source_id: number, };
 
 export type MergeLayersReq = { ids: Array<number>, };
@@ -760,6 +798,19 @@ min: number,
  * Slider max when the port is disconnected (UI metadata only).
  */
 max: number, 
+/**
+ * How a control spends its travel across `[min, max]`: at travel
+ * fraction `t` it reads `min + (max - min) * t^travel_exponent`. `1.0`
+ * is linear; larger values give more of the drag to the low end, for
+ * quantities artists mostly set near `min` (brush size). UI metadata
+ * only, like `min`/`max`, and per instance like them, so a brush can
+ * curve a generic node's port its registration knows nothing about.
+ *
+ * The power curve is Krita's slider exponent ratio
+ * (`KisSliderSpinBox::setExponentRatio`, KDE/Krita,
+ * <https://invent.kde.org/graphics/krita>, `libs/widgetutils/kis_slider_spin_box_p.h`).
+ */
+travel_exponent: number, 
 /**
  * The authored value used when this input port is disconnected: the
  * full typed value (scalar slider value, enum-dropdown index, texture
@@ -1087,6 +1138,8 @@ export type StrokeWire = { width: number, color: [number, number, number, number
 export type Transform = { "mode": "Basic", "data": [number, number, number, number, number, number] } | { "mode": "Perspective", "data": [number, number, number, number, number, number, number, number, number] };
 
 export type TransformCapabilityError = { endpoint: number, operation: PixelTransformOperation, };
+
+export type TravelCurve = { exponent: number, reversed: boolean, };
 
 export type UnitType = "Normalized" | "Percent" | "Degrees" | "Raw" | "Pixels";
 

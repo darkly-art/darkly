@@ -108,8 +108,17 @@ pub fn catalog() -> Catalog {
                 CatalogEntry::new(pack.id.as_str(), pack.name.as_str())
                     .with_description(pack.description.as_str())
                     .with_icon(pack.icon.as_str())
+                    .with_palette(pack.palette.clone())
+                    // Membership projected whole, in declared order; the
+                    // brushes catalog's `category` is the same fact flattened
+                    // to the first declaring pack.
+                    .with_members(
+                        crate::brush::builtin_brushes::CATALOG_ID,
+                        pack.members.iter().map(String::as_str).collect(),
+                    )
                     // A pack has nothing to render: it is a grouping, and its
-                    // brushes carry their own previews.
+                    // brushes carry their own previews; `members` is how a
+                    // consumer finds them.
                     .with_supports_preview(false)
             })
             .collect(),
@@ -194,6 +203,34 @@ mod tests {
         let ids: Vec<&str> = catalog.entries.iter().map(|e| e.type_id).collect();
         let stems: Vec<&str> = docs().iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, stems, "catalog entries must match the shipped packs");
+    }
+
+    /// The two facts a card is drawn from, projected whole and in declared
+    /// order: the pack's own palette, and its members as entries of the
+    /// brushes catalog.
+    #[test]
+    fn the_pack_catalog_carries_palette_and_members() {
+        let catalog = catalog();
+        for (entry, pack) in catalog.entries.iter().zip(docs()) {
+            assert_eq!(
+                entry.palette.as_ref(),
+                Some(&pack.palette),
+                "`{}` palette",
+                pack.id
+            );
+            let members = entry
+                .members
+                .as_ref()
+                .unwrap_or_else(|| panic!("`{}` exports no members", pack.id));
+            assert_eq!(
+                members.catalog,
+                crate::brush::builtin_brushes::CATALOG_ID,
+                "`{}` members catalog",
+                pack.id
+            );
+            let ids: Vec<&str> = pack.members.iter().map(String::as_str).collect();
+            assert_eq!(members.entries, ids, "`{}` members", pack.id);
+        }
     }
 
     #[test]

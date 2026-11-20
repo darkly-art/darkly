@@ -27,7 +27,7 @@ use darkly::brush::gpu_context::{
 };
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::gpu::test_utils::{readback_texture, test_device};
+use darkly::gpu::test_utils::{cursor_preview_target, readback_cursor_preview_render, test_device};
 
 /// Deliberately undersized vs the brush's natural bbox: simulates the
 /// production `MAX_PREVIEW_MASK_SIDE` clamp without needing a real
@@ -35,43 +35,22 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 /// the dab well over the texture's inscribed disc (`texture_half = 64`).
 const PREVIEW_SIDE: u32 = 128;
 
-fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview-unit-invariance-mask"),
-        size: wgpu::Extent3d {
-            width: PREVIEW_SIDE,
-            height: PREVIEW_SIDE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (tex, view)
-}
-
 struct Out {
     rgba: Vec<u8>,
     half_extent_canvas_px: [f32; 2],
 }
 
-/// Render `Ink Pen` at a brush size whose canvas-px bbox exceeds the
+/// Render `Ink` at a brush size whose canvas-px bbox exceeds the
 /// 128² test mask's inscribed half-side (64). The exact size value
-/// is pinned so future default-tuning of `Ink Pen` doesn't drift the
+/// is pinned so future default-tuning of `Ink` doesn't drift the
 /// assertions.
 fn render_big_disc() -> Out {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Ink Pen")
-        .expect("Ink Pen brush is registered");
+        .find(|b| b.metadata.name == "Ink")
+        .expect("Ink brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink Pen has a terminal");
+    let _term_id = darkly::brush::find_terminal(&graph).expect("Ink has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).
@@ -91,7 +70,7 @@ fn render_big_disc() -> Out {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let (target_tex, target_view) = preview_target(&device);
+    let (target_tex, target_view) = cursor_preview_target(&device, PREVIEW_SIDE, PREVIEW_SIDE);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
 
@@ -142,14 +121,8 @@ fn render_big_disc() -> Out {
         .expect("render_compiled_preview publishes BrushCursorPreviewInfo");
     queue.submit([ctx.encoder.finish()]);
 
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &target_tex,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW_SIDE,
-        PREVIEW_SIDE,
-    );
+    let rgba =
+        readback_cursor_preview_render(&device, &queue, &target_tex, PREVIEW_SIDE, PREVIEW_SIDE);
     Out {
         rgba,
         half_extent_canvas_px: published.half_extent_canvas_px,

@@ -252,14 +252,14 @@ mod tests {
         p.members = vec!["a".into()];
         let one = vec![BrushMetadata::from_graph(
             "a",
-            "Ink Pen",
+            "Ink",
             brush::default_graph(),
         )];
         let bytes = PackFile::new(&p, one).to_bytes().unwrap();
 
         let back = PackFile::from_bytes(&bytes).unwrap();
         assert_eq!(back.brushes.len(), 1);
-        assert_eq!(back.brushes[0].name, "Ink Pen");
+        assert_eq!(back.brushes[0].name, "Ink");
     }
 
     #[test]

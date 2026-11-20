@@ -12,9 +12,9 @@
  *
  * This lives here rather than in `crates/darkly` on purpose: encoding is one
  * ffmpeg invocation per entry, and folding it into `render-docs` would add a
- * codec dependency to the editor's own crate to save a shell loop. The
- * documentation workflow runs it the same way it runs the icon resolver, so the
- * consumer never sees a frame.
+ * codec dependency to the editor's own crate to save a shell loop. `make
+ * docs-content` runs it the same way it runs the icon resolver, so the docs
+ * site never sees a frame.
  *
  * ## What it writes
  *
@@ -98,7 +98,7 @@ USAGE:
 OPTIONS:
     --frames <dir>  A render_docs output directory: assets.json plus one
                     directory of numbered PNGs per entry
-    --out <dir>     Artifact directory to write assets.json and previews/ into
+    --out <dir>     Export directory to write assets.json and previews/ into
 `;
 
 function ffmpeg(args) {
@@ -213,7 +213,7 @@ function main() {
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(
         path.join(out, 'assets.json'),
-        `${JSON.stringify({ version: manifest.version, assets }, null, 2)}\n`,
+        `${JSON.stringify({ assets }, null, 2)}\n`,
     );
 
     const bytes = (dir) =>
@@ -223,7 +223,7 @@ function main() {
             .reduce((sum, e) => sum + fs.statSync(path.join(e.parentPath, e.name)).size, 0);
 
     log(
-        `${manifest.version}: ${videos} loop(s), ${stills} still(s), ` +
+        `${videos} loop(s), ${stills} still(s), ` +
             `${(bytes(media) / 1024 / 1024).toFixed(1)} MB`,
     );
 }

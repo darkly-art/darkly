@@ -14,7 +14,7 @@
 use super::eval::BrushGraphRunner;
 use super::gpu_context::{BrushGpuContext, MAX_DABS_PER_PHASE};
 use super::interpolation::lerp_paint_info;
-use super::paint_info::{PaintInformation, StrokeRecord};
+use super::paint_info::{direction_between, PaintInformation, StrokeRecord, COINCIDENT_PX};
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
 use super::stabilizer::StabilizerAlgorithm;
@@ -30,9 +30,18 @@ pub struct RenderCheckpoint {
     pub accumulated_distance: f32,
     pub leftover_distance: f32,
     pub last_dab_size: [f32; 2],
-    pub last_dab_pos: Option<[f32; 2]>,
+    pub last_dab: Option<LastDab>,
     pub dab_count: u32,
     pub stamp_angle: Option<f32>,
+}
+
+/// The most recently emitted dab, as the next one measures itself against it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LastDab {
+    pub pos: [f32; 2],
+    /// Its direction of travel as measured, before the stamp tracker: what a
+    /// dab placed on the same spot falls back to.
+    pub direction: f32,
 }
 
 /// Distance in CSS pixels below which a stabilized point is considered
@@ -166,11 +175,12 @@ pub struct StrokeEngine {
     leftover_distance: f32,
     /// Dab size [w, h] from the last evaluated dab (for spacing).
     last_dab_size: [f32; 2],
-    /// Position of the most recently *emitted* dab: source-of-truth for
-    /// `PaintInformation.motion` (per-dab delta, populated in `place_dab`).
-    /// Distinct from `last_point` which tracks the previous stabilized
-    /// *event*. Reset to `None` at stroke start and on full re-render.
-    last_dab_pos: Option<[f32; 2]>,
+    /// The most recently *emitted* dab: source-of-truth for
+    /// `PaintInformation.motion` (per-dab delta) and the next dab's direction
+    /// of travel, both filled in `place_dab`. Distinct from `last_point`
+    /// which tracks the previous stabilized *event*. Reset to `None` at
+    /// stroke start and on full re-render.
+    last_dab: Option<LastDab>,
     /// Running dab index within the stroke.
     dab_count: u32,
     /// Pointer timestamp (ms) of the stroke's first event: the origin of
@@ -187,6 +197,11 @@ pub struct StrokeEngine {
     /// How far `stamp_angle` may turn per brush diameter of travel (radians).
     /// Stroke-constant, read from `brush_settings` at stroke start.
     stamp_angle_rate: f32,
+    /// Direction of travel of the stroke's first dab (canvas-frame radians),
+    /// which has no dab behind it: measured from the hover the pen arrived
+    /// from, so the stroke continues the hover stream. Stroke-constant, so a
+    /// full re-render starts the same way.
+    start_direction: f32,
 
     /// Stroke seed for deterministic per-dab randomness.  Passed to
     /// the runner so random nodes can generate independent sequences.
@@ -217,7 +232,9 @@ impl StrokeEngine {
     /// color (raw sRGB RGBA, as picked).  `spacing` controls dab placement.
     /// `stabilizer` is the stroke stabilization algorithm.  `stamp_angle_rate`
     /// caps how fast the stamp pivots to follow the stroke, in radians per
-    /// brush diameter of travel.  `stroke_seed` drives every `random` node in
+    /// brush diameter of travel, and `start_direction` is the direction of
+    /// travel of the stroke's first dab, measured from the hover the pen
+    /// arrived from (0 with none).  `stroke_seed` drives every `random` node in
     /// the graph, reaching them through [`EvalContext::prng_at`]: a real
     /// stroke passes [`Self::random_seed`], a render that has to be
     /// reproducible passes a constant. `divergence_epsilon` is the canvas
@@ -238,6 +255,7 @@ impl StrokeEngine {
         clone_source_anchor: Option<[f32; 2]>,
         stroke_seed: u32,
         stamp_angle_rate: f32,
+        start_direction: f32,
         dpi: f32,
     ) -> Self {
         // Base brush size is stroke-constant, read out-of-band from
@@ -277,11 +295,12 @@ impl StrokeEngine {
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [d, d],
-            last_dab_pos: None,
+            last_dab: None,
             dab_count: 0,
             time_origin_ms: None,
             stamp_angle: None,
             stamp_angle_rate,
+            start_direction,
             stroke_seed,
             clone_source_anchor,
             clone_dest_anchor: None,
@@ -396,7 +415,7 @@ impl StrokeEngine {
             accumulated_distance: self.accumulated_distance,
             leftover_distance: self.leftover_distance,
             last_dab_size: self.last_dab_size,
-            last_dab_pos: self.last_dab_pos,
+            last_dab: self.last_dab,
             dab_count: self.dab_count,
             stamp_angle: self.stamp_angle,
         }
@@ -408,7 +427,7 @@ impl StrokeEngine {
         self.accumulated_distance = checkpoint.accumulated_distance;
         self.leftover_distance = checkpoint.leftover_distance;
         self.last_dab_size = checkpoint.last_dab_size;
-        self.last_dab_pos = checkpoint.last_dab_pos;
+        self.last_dab = checkpoint.last_dab;
         self.dab_count = checkpoint.dab_count;
         self.stamp_angle = checkpoint.stamp_angle;
     }
@@ -423,10 +442,10 @@ impl StrokeEngine {
         self.leftover_distance = 0.0;
         let d = Self::default_diameter(self.runner.dpi_factor());
         self.last_dab_size = [d, d];
-        self.last_dab_pos = None;
+        self.last_dab = None;
         self.dab_count = 0;
         // Re-seeded from the first travelling dab of the re-render. The rate
-        // itself is stroke-constant configuration and survives.
+        // and the start direction are stroke-constant and survive.
         self.stamp_angle = None;
         // Recapture the destination anchor from the re-stabilized first
         // dab on the next `place_dab`.
@@ -434,18 +453,18 @@ impl StrokeEngine {
         self.save_points.clear();
     }
 
-    /// Compute the per-dab motion vector for a dab about to be placed at
-    /// `pos`, and advance the last-dab-position tracker. Thin wrapper over
-    /// the free function so the motion contract can be unit-tested without
-    /// constructing a full `StrokeEngine` (which would require a runner +
-    /// stabilizer + GPU).
-    fn next_dab_motion(&mut self, pos: [f32; 2]) -> [f32; 2] {
-        advance_dab_motion(&mut self.last_dab_pos, pos)
+    /// Compute the per-dab motion vector and direction of travel for a dab
+    /// about to be placed at `pos`, and advance the last-dab tracker. Thin
+    /// wrapper over the free function so the contract can be unit-tested
+    /// without constructing a full `StrokeEngine` (which would require a
+    /// runner + stabilizer + GPU).
+    fn next_dab_travel(&mut self, pos: [f32; 2]) -> ([f32; 2], f32) {
+        advance_last_dab(&mut self.last_dab, pos, self.start_direction)
     }
 
     /// Advance the held stamp orientation for a dab travelling `travel` canvas
     /// pixels in direction `direction`, at brush diameter `diameter`. Thin
-    /// wrapper over the free function, mirroring [`Self::next_dab_motion`], so
+    /// wrapper over the free function, mirroring [`Self::next_dab_travel`], so
     /// the orientation contract is unit-testable without a GPU.
     fn next_stamp_angle(&mut self, direction: f32, travel: f32, diameter: f32) -> f32 {
         advance_stamp_angle(
@@ -536,7 +555,7 @@ impl StrokeEngine {
             info.derive_sensors(Some(&prev), seg_len);
             self.accumulated_distance = info.distance;
 
-            if seg_len < 0.001 {
+            if seg_len < COINCIDENT_PX {
                 self.last_point = Some(info);
                 self.save_points
                     .finalize_render_state(i, self.capture_render_state());
@@ -580,18 +599,20 @@ impl StrokeEngine {
     ) {
         let mut dab_info = *info;
         dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
-        // Motion is a per-dab quantity: the previous-dab → this-dab delta.
-        // Interpolators leave it zero (they have no view of dab order); we
-        // fill it here so smudge sees the correct smear-sample offset.
-        dab_info.motion = self.next_dab_motion(dab_info.pos);
-        // Stamp orientation is likewise per-dab and order-dependent: the stamp
-        // pivots as the brush travels, toward the stroke's undirected axis and
-        // no faster than the brush's turn rate. Runs after interpolation (the
-        // caller interpolates before every `place_dab`), so it is the last
-        // transform on the angle before the graph sees it.
-        let travel = dab_info.motion[0].hypot(dab_info.motion[1]);
+        // Motion and direction are per-dab quantities: the previous-dab →
+        // this-dab delta, and the direction of that travel, measured the way
+        // a hover sample measures its own. Interpolators have no view of dab
+        // order, so the vertex values they carry are replaced here: smudge
+        // sees the correct smear-sample offset, and the stamp faces the way
+        // this dab actually moved.
+        let (motion, direction) = self.next_dab_travel(dab_info.pos);
+        dab_info.motion = motion;
+        // The stamp then pivots toward the stroke's undirected axis no faster
+        // than the brush's turn rate: the last transform on the angle before
+        // the graph sees it.
+        let travel = motion[0].hypot(motion[1]);
         let diameter = self.effective_diameter();
-        dab_info.drawing_angle = self.next_stamp_angle(dab_info.drawing_angle, travel, diameter);
+        dab_info.drawing_angle = self.next_stamp_angle(direction, travel, diameter);
 
         // Clone uniforms: capture the destination at the first rendered
         // dab (post-stabilization), then seed the runner's CloneState so
@@ -688,7 +709,7 @@ impl StrokeEngine {
                 accumulated_distance: 0.0,
                 leftover_distance: 0.0,
                 last_dab_size: [0.0, 0.0],
-                last_dab_pos: None,
+                last_dab: None,
                 dab_count: 0,
                 stamp_angle: None,
             },
@@ -762,17 +783,29 @@ impl StrokeEngine {
     }
 }
 
-/// Per-dab motion: delta from the previous emitted dab. `tracker` is the
-/// position of the most recently emitted dab, or `None` at stroke start /
-/// after a rewind. Returns `[0, 0]` when there is no previous dab: that's
-/// the contract smudge relies on (zero motion → identity smear write).
-fn advance_dab_motion(tracker: &mut Option<[f32; 2]>, pos: [f32; 2]) -> [f32; 2] {
-    let motion = match *tracker {
-        Some(prev) => [pos[0] - prev[0], pos[1] - prev[1]],
-        None => [0.0, 0.0],
+/// Per-dab travel: the motion from the previous emitted dab and the
+/// direction of that travel. `tracker` is the most recently emitted dab, or
+/// `None` at stroke start / after a rewind. With no previous dab the motion
+/// is `[0, 0]`, the contract smudge relies on (zero motion → identity smear
+/// write), and the direction is `start_direction`. A dab on the previous
+/// dab's spot keeps its direction.
+fn advance_last_dab(
+    tracker: &mut Option<LastDab>,
+    pos: [f32; 2],
+    start_direction: f32,
+) -> ([f32; 2], f32) {
+    let travel = match *tracker {
+        Some(prev) => (
+            [pos[0] - prev.pos[0], pos[1] - prev.pos[1]],
+            direction_between(prev.pos, pos, prev.direction),
+        ),
+        None => ([0.0, 0.0], start_direction),
     };
-    *tracker = Some(pos);
-    motion
+    *tracker = Some(LastDab {
+        pos,
+        direction: travel.1,
+    });
+    travel
 }
 
 /// Advance the held stamp orientation one dab and return what the dab should
@@ -781,9 +814,10 @@ fn advance_dab_motion(tracker: &mut Option<[f32; 2]>, pos: [f32; 2]) -> [f32; 2]
 /// `held` carries the orientation from the previous emitted dab. It is `None`
 /// at stroke start and after a full re-render; while it is `None` and `travel`
 /// is zero the direction passes through untouched and nothing is adopted,
-/// because a dab that has not travelled has no measured direction to adopt
-/// (`PaintInformation::derive_sensors` leaves a stroke's first `drawing_angle`
-/// at its default of zero). The first dab that has travelled seeds `held`.
+/// because a dab that has not travelled has no direction of its own: a
+/// stroke's first dab faces the hover it arrived from (or 0 with none), which
+/// the stroke need not continue. The first dab that has travelled seeds
+/// `held`.
 ///
 /// `direction` is the dab's signed travel angle, `travel` the canvas-pixel
 /// distance from the previous dab, `diameter` the brush's effective canvas
@@ -850,15 +884,18 @@ mod tests {
     /// the fix, each dab sees its own ~5px step.
     #[test]
     fn motion_is_per_dab_delta_not_segment_delta() {
-        let mut tracker: Option<[f32; 2]> = None;
+        let mut tracker: Option<LastDab> = None;
 
         // First dab: no prior dab, motion must be zero.
-        assert_eq!(advance_dab_motion(&mut tracker, [0.0, 0.0]), [0.0, 0.0]);
+        assert_eq!(
+            advance_last_dab(&mut tracker, [0.0, 0.0], 0.0).0,
+            [0.0, 0.0]
+        );
 
         // 20 dabs at 5px spacing along x: each motion must be ~5px, not 100px.
         for i in 1..=20 {
             let pos = [i as f32 * 5.0, 0.0];
-            let m = advance_dab_motion(&mut tracker, pos);
+            let (m, _) = advance_last_dab(&mut tracker, pos, 0.0);
             assert!(
                 (m[0] - 5.0).abs() < 1e-6 && m[1].abs() < 1e-6,
                 "dab {i}: expected ~[5,0], got {m:?} (regression: per-segment motion leaking through)"
@@ -868,20 +905,48 @@ mod tests {
 
     #[test]
     fn motion_resets_to_zero_after_rewind() {
-        let mut tracker: Option<[f32; 2]> = None;
-        advance_dab_motion(&mut tracker, [10.0, 10.0]);
-        advance_dab_motion(&mut tracker, [20.0, 10.0]);
+        let mut tracker: Option<LastDab> = None;
+        advance_last_dab(&mut tracker, [10.0, 10.0], 0.0);
+        advance_last_dab(&mut tracker, [20.0, 10.0], 0.0);
         // Simulate `reset_render_state` clearing the tracker.
         tracker = None;
-        assert_eq!(advance_dab_motion(&mut tracker, [100.0, 100.0]), [0.0, 0.0]);
+        assert_eq!(
+            advance_last_dab(&mut tracker, [100.0, 100.0], 0.0).0,
+            [0.0, 0.0]
+        );
     }
 
     #[test]
     fn motion_diagonal_step() {
-        let mut tracker: Option<[f32; 2]> = None;
-        advance_dab_motion(&mut tracker, [10.0, 20.0]);
-        let m = advance_dab_motion(&mut tracker, [13.0, 24.0]);
+        let mut tracker: Option<LastDab> = None;
+        advance_last_dab(&mut tracker, [10.0, 20.0], 0.0);
+        let (m, _) = advance_last_dab(&mut tracker, [13.0, 24.0], 0.0);
         assert!((m[0] - 3.0).abs() < 1e-6 && (m[1] - 4.0).abs() < 1e-6);
+    }
+
+    /// A dab's direction is its own travel from the previous dab, not the
+    /// direction carried by the vertices it was interpolated between; the
+    /// first dab, with no dab behind it, takes the stroke's start direction,
+    /// and a dab on the previous one's spot keeps that dab's direction.
+    #[test]
+    fn direction_is_travel_from_the_previous_dab() {
+        use std::f32::consts::FRAC_PI_2;
+        let mut tracker: Option<LastDab> = None;
+
+        let (_, first) = advance_last_dab(&mut tracker, [10.0, 10.0], FRAC_PI_2);
+        assert_eq!(first, FRAC_PI_2, "the first dab takes the start direction");
+
+        let (_, same_spot) = advance_last_dab(&mut tracker, [10.0, 10.0], 0.0);
+        assert_eq!(
+            same_spot, FRAC_PI_2,
+            "a coincident dab keeps the previous direction"
+        );
+
+        let (_, moved) = advance_last_dab(&mut tracker, [10.0, 4.0], 0.0);
+        assert!(
+            (moved + FRAC_PI_2).abs() < 1e-6,
+            "a dab that moved up faces up; got {moved}"
+        );
     }
 
     // ── Stamp orientation tracker ───────────────────────────────────────
@@ -1036,10 +1101,10 @@ mod tests {
         );
     }
 
-    /// A stroke's first point has no segment behind it, so `derive_sensors`
-    /// leaves its `drawing_angle` at the default 0; see
-    /// `tests/paint_info_derive_sensors.rs`. Adopting that would point every
-    /// stroke rightward at birth and then rate-limit the recovery.
+    /// A stroke's first dab has not travelled, so it has no direction of its
+    /// own: it faces the hover it arrived from, or 0 with no hover. Adopting
+    /// that would hold the stamp to wherever the pen came from and then
+    /// rate-limit the recovery into the stroke's real direction.
     #[test]
     fn stroke_start_does_not_adopt_zero() {
         use std::f32::consts::FRAC_PI_2;

@@ -8,7 +8,10 @@
 //!
 //! This module owns the machinery every reduction shares: seeding the storage
 //! buffer, the staging buffer, the `div_ceil(16)` dispatch tiling, and the
-//! `map_async` → poll round-trip. What stays per-caller is the shader (with
+//! `map_async` → poll round-trip. A reduction whose result feeds another GPU
+//! pass rather than the CPU uses the first and third alone
+//! ([`seeded_storage`], [`encode_over_grid`]) and never leaves the GPU, as
+//! [`TipStretch`](super::tip_stretch::TipStretch) does. What stays per-caller is the shader (with
 //! its bind-group layout) and the meaning of the words it produces. The most
 //! common shape, a tight bounding box via atomic min/max, has its seed and
 //! decoding here ([`BOUNDS_INIT`], [`decode_bounds`]): both
@@ -28,6 +31,41 @@ pub const BOUNDS_INIT: [u32; 4] = [u32::MAX, u32::MAX, 0, 0];
 pub fn decode_bounds([min_x, min_y, max_x, max_y]: [u32; 4]) -> Option<[u32; 4]> {
     // +1 because max is an inclusive pixel coordinate.
     (min_x <= max_x && min_y <= max_y).then(|| [min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
+}
+
+/// A storage buffer of atomics holding `seed`, for a reduction to fold into.
+/// Usable as `COPY_SRC` so a reduction read on the CPU can stage it.
+pub fn seeded_storage(device: &wgpu::Device, seed: &[u32]) -> wgpu::Buffer {
+    let storage = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("reduction-storage"),
+        size: std::mem::size_of_val(seed) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: true,
+    });
+    storage
+        .slice(..)
+        .get_mapped_range_mut()
+        .copy_from_slice(bytemuck::cast_slice(seed));
+    storage.unmap();
+    storage
+}
+
+/// Record one dispatch of `pipeline` over a `width × height` grid of texels,
+/// one thread each, in the 16x16 workgroups every reduction shader declares.
+pub fn encode_over_grid(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::ComputePipeline,
+    bind_group: &wgpu::BindGroup,
+    width: u32,
+    height: u32,
+) {
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some("reduction"),
+        timestamp_writes: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, Some(bind_group), &[]);
+    pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
 }
 
 /// An in-flight reduction awaiting its async buffer mapping.
@@ -56,19 +94,8 @@ impl PendingReduction {
         width: u32,
         height: u32,
     ) -> Self {
-        let size = std::mem::size_of_val(seed) as u64;
-        let storage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("reduction-storage"),
-            size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
-        });
-        storage
-            .slice(..)
-            .get_mapped_range_mut()
-            .copy_from_slice(bytemuck::cast_slice(seed));
-        storage.unmap();
-
+        let storage = seeded_storage(device, seed);
+        let size = storage.size();
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("reduction-staging"),
             size,
@@ -81,15 +108,7 @@ impl PendingReduction {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("reduction"),
         });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("reduction"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, Some(&bind_group), &[]);
-            pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
-        }
+        encode_over_grid(&mut encoder, pipeline, &bind_group, width, height);
         encoder.copy_buffer_to_buffer(&storage, 0, &staging, 0, size);
         queue.submit([encoder.finish()]);
 

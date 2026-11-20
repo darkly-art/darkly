@@ -42,14 +42,14 @@ fn scrub_size(engine: &mut DarklyEngine, display: f32) {
 #[test]
 fn tweak_survives_switching_away_and_back() {
     let mut engine = fresh_engine();
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     let (ink_saved, _) = size(&engine);
     engine.brush_load("Airbrush").unwrap();
     let (air_saved, _) = size(&engine);
     assert_ne!(air_saved, 250.0, "the fixture scrub must be a real change");
 
     scrub_size(&mut engine, 250.0);
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     assert_eq!(
         size(&engine).0,
         ink_saved,
@@ -97,7 +97,7 @@ fn reset_default_is_the_saved_value_under_a_working_copy() {
     engine.brush_load("Airbrush").unwrap();
     let (saved, _) = size(&engine);
     scrub_size(&mut engine, 250.0);
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.brush_load("Airbrush").unwrap();
 
     let (value, default) = size(&engine);
@@ -131,7 +131,7 @@ fn save_clears_the_working_copy() {
     engine.brush_save("mine", "Mine").unwrap();
     assert_eq!(loaded(&engine), Some(("mine".into(), false)));
 
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.brush_load("Mine").unwrap();
     assert_eq!(
         size(&engine),
@@ -157,7 +157,7 @@ fn save_over_own_brush_clears_it_too() {
     assert_eq!(loaded(&engine), Some(("mine".into(), true)));
     engine.brush_save("mine", "Mine").unwrap();
 
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.brush_load("Mine").unwrap();
     assert_eq!(size(&engine).0, 250.0);
     assert_eq!(loaded(&engine), Some(("mine".into(), false)));
@@ -172,7 +172,7 @@ fn reset_discards_the_working_copy() {
     engine.reset_brush_graph();
     assert_eq!(loaded(&engine), None);
 
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.brush_load("Airbrush").unwrap();
     assert_eq!(size(&engine).0, saved);
 }
@@ -182,9 +182,7 @@ fn yaml_import_stashes_the_outgoing_brush() {
     let mut engine = fresh_engine();
     engine.brush_load("Airbrush").unwrap();
     scrub_size(&mut engine, 250.0);
-    let yaml = engine
-        .brush_export_yaml(&id_of(&engine, "Ink Pen"))
-        .unwrap();
+    let yaml = engine.brush_export_yaml(&id_of(&engine, "Ink")).unwrap();
     engine.set_brush_graph_yaml(&yaml).unwrap();
     assert_eq!(loaded(&engine), None, "an imported graph is nobody's");
 
@@ -203,7 +201,7 @@ fn delete_forgets_the_loaded_brush() {
     assert_eq!(size(&engine).0, 250.0, "its graph stays live, as nobody's");
 
     // Leaving a graph that belongs to no brush stashes nothing and fails nothing.
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
 }
 
 #[test]
@@ -244,9 +242,7 @@ fn hydration_sequence_leaves_no_copies() {
     let air = engine
         .brush_export_yaml(&id_of(&engine, "Airbrush"))
         .unwrap();
-    let ink = engine
-        .brush_export_yaml(&id_of(&engine, "Ink Pen"))
-        .unwrap();
+    let ink = engine.brush_export_yaml(&id_of(&engine, "Ink")).unwrap();
     engine.set_brush_graph_yaml(&air).unwrap();
     engine.brush_save("x", "X").unwrap();
     engine.set_brush_graph_yaml(&ink).unwrap();
@@ -270,7 +266,7 @@ fn revert_restores_the_saved_graph_and_clears_modified() {
     assert_eq!(size(&engine).0, saved);
     assert_eq!(loaded(&engine), Some((id_of(&engine, "Airbrush"), false)));
 
-    engine.brush_load("Ink Pen").unwrap();
+    engine.brush_load("Ink").unwrap();
     engine.brush_load("Airbrush").unwrap();
     assert_eq!(
         size(&engine).0,

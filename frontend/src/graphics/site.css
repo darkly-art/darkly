@@ -1,0 +1,53 @@
+/*
+ * The website's palette and type, shared by every documentation graphic.
+ *
+ * Spliced into each graphic's SVG by `scripts/render-doc-graphics.mjs` ahead of
+ * the component's own scoped stylesheet. Unscoped on purpose: Svelte's SSR
+ * markup carries the plain class beside the scope hash, so `.card` here matches
+ * a component's `class="card svelte-..."`, and the component's own style block
+ * holds only what is particular to it. No angle brackets in these comments:
+ * the sheet lands inside an SVG style element, which XML does not treat as
+ * character data.
+ *
+ * This is a marketing surface and these are the site's values, not the editor's
+ * chrome (`src/styles/tokens.css`). Do not "fix" them to the app tokens; the two
+ * are deliberately unrelated. resvg does not resolve `var()`, so they are hex.
+ */
+
+.card {
+    fill: #0b0a0d;
+}
+
+/* Display type, from the website's masthead. `OldStyle 1` is the family in the
+   font file; see fonts/NOTICE.md before changing this string. */
+.title {
+    fill: #e9e3d9;
+    font-family: 'OldStyle 1';
+    font-size: 72px;
+}
+
+.rule {
+    fill: #2a2630;
+}
+
+.frame {
+    fill: none;
+    stroke: #241f2b;
+    stroke-width: 1;
+}
+
+/* 20px rather than the title's scale because Noto sets wider than OldStyle,
+   and "Chromatic Aberration" has to fit inside one 256px cell. */
+.label {
+    fill: #b9b2a6;
+    font-family: 'Noto Sans';
+    font-size: 20px;
+    text-anchor: middle;
+}
+
+/* A line of prose under a title. */
+.desc {
+    fill: #b9b2a6;
+    font-family: 'Noto Sans';
+    font-size: 22px;
+}

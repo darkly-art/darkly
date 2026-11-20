@@ -1,0 +1,213 @@
+---
+/*
+ * The hotkey control: which preset's keys every docs page shows, and in which
+ * convention. One per page, in the header.
+ *
+ * Nothing here renders from state. The label is the preset names as variants,
+ * selected by the same CSS as every key (lib/hotkeys.ts), so it is right from
+ * first paint; the menu is a popover, which opens, closes and dismisses with no
+ * script; and the script only checks the radios that match and writes the
+ * choice. Without JavaScript the control could not do anything, so it hides.
+ */
+import actions from '../../generated/docs-actions.json';
+import { OSES, presetLabelHtml } from '../../lib/hotkeys';
+
+const OS_LABEL = { other: 'Windows / Linux', mac: 'macOS' };
+---
+
+<button class="hk-toggle" type="button" popovertarget="hk-menu" aria-haspopup="true" aria-label="Hotkey preset" title="Hotkey preset">
+    <i class="fa-regular fa-keyboard" aria-hidden="true"></i>
+    <span class="hk-toggle-label" set:html={presetLabelHtml(actions.presets)} />
+    <i class="hk-caret fa-solid fa-chevron-down" aria-hidden="true"></i>
+</button>
+
+<div id="hk-menu" class="hk-menu" popover>
+    <fieldset>
+        <legend>Preset</legend>
+        {actions.presets.map((p) => <label><input type="radio" name="hk-preset" value={p} /> {p}</label>)}
+    </fieldset>
+    <fieldset>
+        <legend>Keys</legend>
+        {OSES.map((os) => <label><input type="radio" name="hk-os" value={os} /> {OS_LABEL[os]}</label>)}
+    </fieldset>
+    <p>Each preset's default keys. Keys you rebind in Darkly's Settings are not shown.</p>
+</div>
+
+<script>
+    import { choiceToken, choose, current, type Os } from '../../lib/hotkeys';
+
+    const menu = document.getElementById('hk-menu')!;
+    const button = document.querySelector<HTMLElement>('.hk-toggle')!;
+    const radios = [...menu.querySelectorAll<HTMLInputElement>('input')];
+    const presets = radios.filter((r) => r.name === 'hk-preset').map((r) => r.value);
+
+    const { preset, os } = current(presets);
+    for (const r of radios) r.checked = r.value === (r.name === 'hk-preset' ? preset : os);
+
+    menu.addEventListener('change', () => {
+        const value = (name: string) => radios.find((r) => r.name === name && r.checked)!.value;
+        choose(choiceToken(value('hk-preset'), value('hk-os') as Os));
+    });
+
+    // Hung from the button's right edge, wherever the header has put it, and
+    // never narrower than the button.
+    menu.addEventListener('beforetoggle', (event) => {
+        if ((event as ToggleEvent).newState === 'open') {
+            const rect = button.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + 4}px`;
+            menu.style.right = `${Math.max(document.documentElement.clientWidth - rect.right, 8)}px`;
+            menu.style.minWidth = `${rect.width}px`;
+        }
+    });
+</script>
+
+<style>
+    /* Sized by the header that mounts it, like the theme toggle beside it. */
+    .hk-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        min-width: var(--theme-toggle-size, 32px);
+        height: var(--theme-toggle-size, 32px);
+        padding: 0 0.55rem;
+        background: none;
+        border: 1px solid var(--bg-active);
+        border-radius: var(--radius-md, 6px);
+        color: var(--text-muted);
+        font: inherit;
+        font-size: 0.85rem;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+
+    .hk-toggle i {
+        font-size: var(--theme-toggle-font, 14px);
+    }
+
+    .hk-toggle:hover,
+    .hk-toggle:has(+ .hk-menu:popover-open) {
+        background: var(--bg-hover);
+        color: var(--text);
+        border-color: var(--text-muted);
+    }
+
+    .hk-caret {
+        margin-left: 0.1rem;
+        font-size: 0.6rem;
+        opacity: 0.7;
+        transition: transform 0.15s;
+    }
+
+    .hk-toggle:has(+ .hk-menu:popover-open) .hk-caret {
+        transform: rotate(180deg);
+    }
+
+    :global(html:not([data-hotkeys])) .hk-toggle {
+        display: none;
+    }
+
+    @media (max-width: 49.999em) {
+        .hk-toggle {
+            padding: 0;
+        }
+        .hk-toggle-label,
+        .hk-caret {
+            display: none;
+        }
+    }
+
+    .hk-menu {
+        position: fixed;
+        inset: calc(var(--docs-header) + 0.25rem) 1rem auto auto;
+        margin: 0;
+        padding: 0.35rem;
+        width: max-content;
+        max-width: 16rem;
+        background: var(--bg-raised);
+        color: var(--text);
+        border: 1px solid var(--bg-active);
+        border-radius: 0.5rem;
+        box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 35%);
+        font-size: 0.875rem;
+    }
+
+    fieldset {
+        display: grid;
+        margin: 0;
+        padding: 0 0 0.3rem;
+        border: 0;
+    }
+
+    fieldset + fieldset {
+        padding-top: 0.3rem;
+        border-top: 1px solid var(--bg-active);
+    }
+
+    legend {
+        float: left;
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.3rem 0.6rem 0.2rem;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    /* Each choice is a menu row; its radio stays in the page for the keyboard
+       and assistive tech, and the row shows the check. */
+    label {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        padding: 0.35rem 0.6rem;
+        border-radius: var(--radius-sm, 4px);
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    label:hover {
+        background: var(--bg-hover);
+    }
+
+    label:has(input:focus-visible) {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+    }
+
+    label:has(input:checked) {
+        color: var(--accent-text);
+    }
+
+    label::after {
+        content: '\f00c';
+        margin-left: auto;
+        font-family: 'Font Awesome 6 Free';
+        font-weight: 900;
+        font-size: 0.75rem;
+        visibility: hidden;
+    }
+
+    label:has(input:checked)::after {
+        visibility: visible;
+    }
+
+    input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    p {
+        margin: 0;
+        padding: 0.4rem 0.6rem 0.3rem;
+        border-top: 1px solid var(--bg-active);
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        line-height: 1.45;
+        white-space: normal;
+    }
+</style>

@@ -312,6 +312,10 @@ pub(crate) fn prng_f32(seed: u32, index: u32) -> f32 {
 pub struct BrushCursorPreviewInfo {
     /// Half-extent in canvas pixels: the overlay primitive's `p1`.
     pub half_extent_canvas_px: [f32; 2],
+    /// The half-extent before the dab's half-pixel radius floor, which
+    /// stays proportional to the brush size all the way down: what a
+    /// gesture that scales the size by the outline's extent measures.
+    pub nominal_half_extent_canvas_px: [f32; 2],
 }
 
 /// Trait implemented by each node to produce output values.

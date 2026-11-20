@@ -1,0 +1,41 @@
+{
+  "svg": "288d30f65c901916",
+  "width": 1444,
+  "height": 396,
+  "catalog": "brushPacks",
+  "category": null,
+  "entry": "wet_media",
+  "context": {
+    "catalogs": {},
+    "entries": {
+      "brushPacks/wet_media": {
+        "type": "wet_media",
+        "displayName": "Wet Media",
+        "description": "Pigment carried by water; it pools, blooms and blends.",
+        "icon": "mdi:water",
+        "palette": {
+          "chroma": "#2f7fe0",
+          "refraction": "#2fd0c0",
+          "surface": "#1f63c41a"
+        },
+        "members": {
+          "catalog": "brushes",
+          "entries": [
+            "rough_watercolor",
+            "smooth_watercolor"
+          ]
+        }
+      },
+      "brushes/rough_watercolor": {
+        "type": "rough_watercolor",
+        "displayName": "Rough Watercolor",
+        "description": "The same bleeding pigment over a rougher paper (granulated, with a broken edge)."
+      },
+      "brushes/smooth_watercolor": {
+        "type": "smooth_watercolor",
+        "displayName": "Smooth Watercolor",
+        "description": "Wet pigment that pools and blends into what is already on the canvas, with a soft, even edge."
+      }
+    }
+  }
+}

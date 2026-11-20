@@ -27,31 +27,10 @@ use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
 use darkly::brush::wire::BrushWireType;
-use darkly::gpu::test_utils::{readback_texture, test_device};
+use darkly::gpu::test_utils::{cursor_preview_target, readback_cursor_preview_render, test_device};
 use darkly::nodegraph::{Graph, PortRef};
 
 const PREVIEW_SIDE: u32 = 128;
-
-fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview-target"),
-        size: wgpu::Extent3d {
-            width: PREVIEW_SIDE,
-            height: PREVIEW_SIDE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (tex, view)
-}
 
 /// Build a minimal paint graph with `pen.drawing_angle → circle.rotation_input`.
 /// Shape is set to the superformula algorithm so the silhouette has a four-fold
@@ -139,7 +118,7 @@ fn render_at_angle(angle_rad: f32) -> Vec<u8> {
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let (target_tex, target_view) = preview_target(&device);
+    let (target_tex, target_view) = cursor_preview_target(&device, PREVIEW_SIDE, PREVIEW_SIDE);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
 
@@ -184,14 +163,7 @@ fn render_at_angle(angle_rad: f32) -> Vec<u8> {
     runner.render_cursor_preview_pipeline(&mut ctx);
     queue.submit([ctx.encoder.finish()]);
 
-    readback_texture(
-        &device,
-        &queue,
-        &target_tex,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW_SIDE,
-        PREVIEW_SIDE,
-    )
+    readback_cursor_preview_render(&device, &queue, &target_tex, PREVIEW_SIDE, PREVIEW_SIDE)
 }
 
 fn alpha(rgba: &[u8], x: u32, y: u32) -> u8 {

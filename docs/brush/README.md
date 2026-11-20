@@ -18,7 +18,56 @@ Start here:
 
 Prior-art references (for research, not implementation detail):
 
-- [krita-brush-system.md](krita-brush-system.md)
+- [krita-brush-system.md](krita-brush-system.md): Krita's paintop engines and preset format
+- [infinite-painter-engine.md](infinite-painter-engine.md): Infinite Painter's stabilization and dab engine
+- [brush-packs-prior-art.md](brush-packs-prior-art.md): what every serious paint
+  program ships as default brushes, how they are grouped and named, which ones
+  artists use, and the pack lineup that evidence supports. Synthesizes the
+  per-program surveys: [what-artists-use.md](what-artists-use.md),
+  [krita-default-brushes.md](krita-default-brushes.md),
+  [mypaint-default-brushes.md](mypaint-default-brushes.md),
+  [gimp-default-brushes.md](gimp-default-brushes.md),
+  [photoshop-default-brushes.md](photoshop-default-brushes.md),
+  [fresco-default-brushes.md](fresco-default-brushes.md),
+  [procreate-default-brushes.md](procreate-default-brushes.md),
+  [clip-studio-paint-default-brushes.md](clip-studio-paint-default-brushes.md),
+  [paint-tool-sai-default-brushes.md](paint-tool-sai-default-brushes.md),
+  [medibang-firealpaca-default-brushes.md](medibang-firealpaca-default-brushes.md),
+  [corel-painter-default-brushes.md](corel-painter-default-brushes.md),
+  [rebelle-default-brushes.md](rebelle-default-brushes.md),
+  [artrage-default-brushes.md](artrage-default-brushes.md),
+  [infinite-painter-default-brushes.md](infinite-painter-default-brushes.md),
+  [other-paint-programs-default-brushes.md](other-paint-programs-default-brushes.md)
+
+## Brush packs
+
+A pack is a named, iconed, coloured group of brushes: one YAML file under
+[`crates/darkly/packs/`](../../crates/darkly/packs/) naming its palette and its
+members. Membership lives on the pack, never on the brush, so a brush may be in
+several packs and copying it into one never removes it from another. The cards
+below are generated from the shipped packs (see
+[`docs/generated-markdown.md`](../generated-markdown.md)); each stroke is the
+brush's own preview, tinted with its pack's colours.
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=basic -->
+<img src="../images/graphics/brushPacks-basic.jpg" alt="Basic: Ink, Round, Airbrush, Technical Pen, Flat Pen, Calligraphy">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=dry_media -->
+<img src="../images/graphics/brushPacks-dry_media.jpg" alt="Dry Media: Pencil, Charcoal, Hair, Sponge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=wet_media -->
+<img src="../images/graphics/brushPacks-wet_media.jpg" alt="Wet Media: Rough Watercolor, Smooth Watercolor">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=effects -->
+<img src="../images/graphics/brushPacks-effects.jpg" alt="Effects: Blur, Liquify, Smudge">
+<!-- /darkly:catalog-graphic -->
+
+<!-- darkly:catalog-graphic catalog=brushPacks entry=misc -->
+<img src="../images/graphics/brushPacks-misc.jpg" alt="Misc: Clone">
+<!-- /darkly:catalog-graphic -->
 
 ## Importers
 

@@ -41,6 +41,8 @@ nodes:
       a: 0.5
     ranges:
       a: [-1.0, 1.0]        # re-range this instance's slider
+    curves:
+      a: 2.0                # spend more of its drag on the low end
 exposed_ports:
   brush_settings.size: {}   # inherits the port's own label, unit and icon
   multiply_2.a:
@@ -56,7 +58,10 @@ description** from the node definition
 (`PortDef::input(...).with_label(...).with_unit(...)` etc.). Everything under
 the entry overrides that for this brush only. The same edits are available at
 runtime through the brush bar's entry modal, so an author never has to
-hand-edit YAML to rename or re-range a control.
+hand-edit YAML to rename or re-range a control. However an entry is
+relabelled, it stays traceable: the modal names the node and port it
+controls, and in the builder hovering an entry lights the port it drives
+(and hovering an exposed port lights its entry).
 
 `unit:` is worth a word, because it converts rather than just relabelling.
 Percent is a factor of 100 and degrees are radians on the wire, so choosing one
@@ -87,7 +92,9 @@ The other two reasons this section used to give are gone, absorbed by
 per-instance state on the entry itself:
 
 - **Range rescaling** is `ranges:` in the YAML, or the entry modal's Advanced
-  block (`Graph::set_port_range`).
+  block (`Graph::set_port_range`). Beside it, `curves:` gives the instance a
+  travel curve (`Graph::set_port_travel_exponent`): a `user_input` standing in
+  for flow takes a floor in `ranges` and a curve here, as round's does.
 - **Per-brush custom label** is `label:` on the entry (`ExposedPortMeta`),
   alongside `description`, `icon`, `invert` and `unit`.
 
@@ -176,6 +183,7 @@ learn your node's `type_id`.
 ```rust
 PortDef::input("my_knob", BrushWireType::Scalar)
     .with_range(0.0, 1.0, 0.5)        // min, max, default
+    .with_fine_low_end(2.0)           // optional: zero does nothing and artists work low
     .with_label("My Knob")            // shown in UI
     .with_unit(UnitType::Percent)     // Normalized | Percent | Degrees | Raw | Pixels
     .with_icon("fa6-solid:droplet")   // iconify name
@@ -188,6 +196,11 @@ PortDef::input("my_knob", BrushWireType::Scalar)
 the node is placed; a brush can still drop the entry. A port with no
 `.exposed()` can be surfaced per-instance instead, which is what the node
 editor's eye toggle does.
+
+`.with_fine_low_end(exponent)` is for a quantity whose zero does nothing and
+whose working values sit near the bottom (size, opacity, flow): it floors the
+range at `NONZERO_FLOOR` (0.01%) and curves every control that drives the port,
+so the low end gets most of the drag. Size uses 3; opacity and flow use 2.
 
 `.source()` makes an **input** port also a wire source: it keeps its scrubbable
 authored value *and* other nodes can wire from it. That is what lets one
@@ -257,3 +270,88 @@ default can express.
 - **Don't** reach for `user_input` reflexively. If one control feeds one port,
   a brush-bar entry on that port is simpler, and it can be renamed, re-ranged
   and inverted without a node.
+
+## Shipped brushes
+
+Everything under [`crates/darkly/brushes/`](../../crates/darkly/brushes/) is
+embedded by `build.rs` and shipped to every painter, and a shipped brush is
+also a worked example: artists open it in the builder to learn how brushes are
+made. These rules apply to every builtin brush, and a brush that breaks one is
+not ready to ship.
+
+### Names and comments earn their place
+
+A node's `name:` replaces its type name as its title in the builder, and its
+`comment:` shows as a note beneath it. Both are optional, and both are written
+for an artist reading the graph for the first time.
+
+- **Name a node only when its type name does not already say what it does
+  here.** "Paper grain texture" on an `image` node and "Squash pen pressure" on
+  a `curve` tell the reader something; renaming a `paint` or `stamp` node after
+  its own job does not.
+- **Comment a node only when the graph alone would leave the reader asking
+  why.** The comment says the node's role in producing the brush's intended
+  effect: why it can't be deleted. "Pressure sets the width, eased so a light
+  touch draws a thin line." One short sentence; if it takes more than that, or
+  it restates the node's type, its settings or its port descriptions, leave it
+  out.
+- **Describe the mark in the artist's own color.** The artist paints in
+  whatever color is current, so say what changes: opacity, coverage, how much
+  color a dab lays down. "Dark" and "light" belong to a brush whose job is
+  value, such as dodge or burn.
+- **Only say what is true.** A comment or description that promises behavior
+  the engine does not have is worse than none.
+
+[`pencil.yaml`](../../crates/darkly/brushes/pencil.yaml) and
+[`ink.yaml`](../../crates/darkly/brushes/ink.yaml) are the models to match.
+
+### Names say what the brush does
+
+Noun first (Pen, Pencil, Chalk, Knife, Wash), behavior second (Flat, Rough,
+Dry, Hard), grades for pencils, and the pressure target named when it is what
+separates two siblings. No person names, author prefixes, sort prefixes or pixel
+sizes. Flavor lives in the `description`, which the picker shows on hover and
+the docs render. The evidence behind this grammar is the Naming section of
+[`brush-packs-prior-art.md`](brush-packs-prior-art.md).
+
+### Exposed knobs read as the artist's, not the graph's
+
+An exposed port whose meaning in this brush differs from the port's own gets a
+`label`, `description` and `icon` on its `exposed_ports` entry (the Pencil's
+`paint.buildup` is exposed as Strength). An entry that inherits is fine only
+when the port's own label is exactly what the knob does here.
+
+Nothing about how the brush is built leaks into what the painter sees: the
+brush bar's labels and tooltips, and the brush's `description` in the picker.
+Port labels are written for the builder, so they carry node-graph and terminal
+vocabulary (which half of the paint law a flow feeds, which node a value comes
+from, which law is active); a painter has no use for any of it. If an
+inherited label or description names a mechanism instead of an effect on the
+mark, override it. The paint terminal's `build_flow` is the standing example:
+its port label is "Flow (Build-up)", and every brush that exposes it says
+"Flow", with a description of how much paint each touch lays down.
+
+### Familiar settings come first
+
+The brush bar shows exposed entries in their `exposed_ports` order, left to
+right, and every brush starts it the same way: Size, then Opacity and Flow,
+then Stabilize, followed by the settings particular to this brush. A painter
+switching brushes finds the controls they reach for most in the same place
+every time, and the brush's own character is what comes after. A brush that
+does not expose one of the familiar settings skips it and keeps the rest in
+order.
+
+### Adding a brush: the checklist
+
+1. Write `crates/darkly/brushes/<id>.yaml` in the portable format described
+   above; `build.rs` embeds it. The file stem is the brush's permanent id.
+2. Add the id to the pack's member list in `crates/darkly/packs/<pack>.yaml`.
+3. Regenerate previews and documentation (`cargo sync-docs`, the graphics
+   runner; see [`docs/generated-markdown.md`](../generated-markdown.md)).
+   `tests/docs_md.rs` fails on a stale region.
+4. Run the brush accumulation and preview tests. A brush that uses `random`
+   needs the fixture approach in
+   [`docs/plans/decouple-tests-from-shipped-brushes.md`](../plans/decouple-tests-from-shipped-brushes.md).
+5. Read the brush back in the builder as an artist would: every knob labeled
+   for what it does here, and no name or comment that is not pulling its
+   weight.

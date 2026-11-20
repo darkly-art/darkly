@@ -2,6 +2,7 @@
 
 use darkly_macros::handlers;
 
+use super::brush_graph::DabFraming;
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::library::{self as library, BrushInfo, LibrarySnapshot};
 use crate::brush::metadata::{Brush, BrushMetadata};
@@ -366,7 +367,7 @@ impl DarklyEngine {
         // one helper means `brush_dab_thumbnail(active_name)` and
         // `brush_active_dab_preview()` produce byte-identical PNGs, so the
         // picker tile and the BrushBar trigger always agree.
-        self.request_dab_preview_readback(graph, |width, height| {
+        self.request_dab_preview_readback(graph, DabFraming::Tip, |width, height| {
             ReadbackContext::BrushDabThumbnail {
                 id: id.clone(),
                 width,

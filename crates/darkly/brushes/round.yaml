@@ -1,0 +1,106 @@
+name: Round
+description: "The painter's round: a hard disc that holds its size and lays down more color the harder you press. Roughness bites the edge; zero is a clean disc."
+nodes:
+  pen_input:
+    type: pen_input
+    name: Pen
+  brush_settings:
+    type: brush_settings
+    name: Brush settings
+    inputs:
+      spacing: 0.02
+      stabilize: 0.4
+  flow_curve:
+    type: curve
+    name: Pressure to flow
+    comment: Pressure sets how much color each dab lays down, not the width, with a faint floor so the lightest touch still shows.
+    inputs:
+      curve:
+      - - 0.0
+        - 0.04
+      - - 0.5
+        - 0.4
+      - - 1.0
+        - 1.0
+  flow:
+    type: user_input
+    name: Flow
+    inputs:
+      value: 0.05
+    ranges:
+      value:
+      - 0.0001
+      - 1.0
+    curves:
+      value: 2.0
+  flow_scale:
+    type: multiply
+    name: Flow times pressure
+  roughness:
+    type: user_input
+    name: Roughness
+    comment: How far the edge is bitten; zero is a clean disc.
+    inputs:
+      value: 0.15
+  bite_draw:
+    type: random
+    name: Bite per dab
+    comment: A fresh bite every dab, so the edge varies along the stroke.
+  bite:
+    type: multiply
+    name: Edge bite
+    comment: Roughness scaled by the per-dab draw.
+  seed_draw:
+    type: random
+    name: Edge pattern per dab
+    comment: A new edge pattern every dab.
+  spin_draw:
+    type: random
+    name: Edge spin per dab
+    comment: Spins the edge pattern each dab so bumps never line up.
+  circle:
+    type: circle
+    name: Tip
+    comment: A hard disc with a finely noisy edge.
+    inputs:
+      algorithm: 1
+      frequency: 12.0
+      octaves: 4.0
+      softness: 0.1
+  paint_color:
+    type: paint_color
+    name: Paint color
+  stamp:
+    type: stamp
+    name: Stamp
+    comment: The tip filled with the current color.
+  paint:
+    type: paint
+connections:
+- pen_input.position -> paint.position
+- pen_input.pressure -> flow_curve.input
+- flow_curve.output -> flow_scale.a
+- flow.value -> flow_scale.b
+- flow_scale.result -> paint.build_flow
+- roughness.value -> bite.a
+- bite_draw.value -> bite.b
+- bite.result -> circle.amplitude
+- seed_draw.value -> circle.seed
+- spin_draw.value -> circle.rotation_input
+- circle.mask -> stamp.tip
+- paint_color.color -> stamp.color
+- stamp.dab -> paint.rgba
+exposed_ports:
+  brush_settings.size: {}
+  paint.opacity: {}
+  flow.value:
+    label: Flow
+    description: How much color each touch lays down.
+    icon: fa6-solid:droplet
+    unit: Percent
+  brush_settings.stabilize: {}
+  roughness.value:
+    label: Roughness
+    description: How far the edge of the tip is bitten. Zero is a clean round.
+    icon: tabler:grain
+  circle.softness: {}

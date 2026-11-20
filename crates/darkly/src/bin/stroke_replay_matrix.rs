@@ -13,7 +13,7 @@
 //!
 //! Each cell:
 //!   - Builds a fresh `DarklyEngine` at the cell's canvas size.
-//!   - Loads the topology's brush (`Ink Pen` for paint-family
+//!   - Loads the topology's brush (`Ink` for paint-family
 //!     topologies, `Smooth Watercolor` for the watercolor topology,
 //!     `Pencil` for the mid-dial one, `Smudge` for the live sampler),
 //!     sets `brush_settings.stabilize` to
@@ -31,7 +31,7 @@
 //! matrix.
 //!
 //! Note on `dab_radius_px`: this is the `pen_input.size` base value at
-//! terminal modulation = 1.0. Ink Pen modulates the terminal's `size`
+//! terminal modulation = 1.0. Ink modulates the terminal's `size`
 //! (per-touch multiplier) through a pressure curve, so the *actual rendered*
 //! radius for the recording's mouse-only pen (constant pressure = 0.5) will be ~71 % of
 //! the column value. The matrix axis is the configured cap.
@@ -60,11 +60,11 @@ const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 2000.0];
 const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
 
 /// Built-in brush names: must match the strings in
-/// `builtin_brushes::ink_pen()` and `builtin_brushes::smooth_watercolor()`.
+/// `builtin_brushes::ink()` and `builtin_brushes::smooth_watercolor()`.
 /// `Topology::brush_name` picks the right one for the cell.
-const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
+const BRUSH_NAME_INK_PEN: &str = "Ink";
 const BRUSH_NAME_WATERCOLOR: &str = "Smooth Watercolor";
-const BRUSH_NAME_ROUGH_INK: &str = "Rough Ink";
+const BRUSH_NAME_ROUGH_INK: &str = "Ink";
 const BRUSH_NAME_SMUDGE: &str = "Smudge";
 const BRUSH_NAME_LIQUIFY: &str = "Liquify";
 const BRUSH_NAME_PENCIL: &str = "Pencil";
@@ -79,7 +79,7 @@ const STABILIZE: f32 = 1.0;
 /// Which terminal topology the bench's brush graph uses for each cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
-    /// Ink Pen brush through the `paint` terminal:
+    /// Ink brush through the `paint` terminal:
     /// `pen → paint_color → circle (disc) → stamp → paint`.
     /// Single instanced render pass per phase.
     Paint,
@@ -87,7 +87,7 @@ enum Topology {
     /// (sine) → watercolor`. Two-pass per phase (pickup atlas
     /// + composite), composite shader is per-brush compiled.
     Watercolor,
-    /// Rough Ink: `pen + 3×random → circle(perlin) → stamp →
+    /// Ink: `pen + 3×random → circle(perlin) → stamp →
     /// paint`. The original demo brush for the compiled
     /// framework; same terminal as Paint but a more elaborate upstream
     /// graph (per-dab random nodes drive the perlin silhouette).
@@ -115,7 +115,7 @@ impl Topology {
         match s {
             "paint" => Some(Topology::Paint),
             "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
-            "rough-ink" | "rough_ink" | "compiled" => Some(Topology::RoughInk),
+            "rough-ink" | "ink" | "compiled" => Some(Topology::RoughInk),
             "smudge" => Some(Topology::Smudge),
             "liquify" => Some(Topology::Liquify),
             "pencil" => Some(Topology::Pencil),
@@ -237,7 +237,7 @@ fn parse_args() -> Args {
                      Axes are constants at the top of stroke_replay_matrix.rs; `--only` picks cells.\n\
                      `--buildup` overrides `paint.buildup`; `--gpu-sync` blocks on the device after\n\
                      every event so `cpu` includes the GPU's work.\n\
-                     `paint` = Ink Pen (compiled). `watercolor` = Smooth Watercolor (compiled).\n\
+                     `paint` = Ink (compiled). `watercolor` = Smooth Watercolor (compiled).\n\
                      `rough-ink` = the demo brush with the upstream random graph.\n\
                      `smudge` = the live canvas sampler on `paint` (a snapshot dispatch per dab).\n\
                      `liquify` = the read-mirror terminal, one pass per dab.\n\

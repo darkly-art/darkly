@@ -14,6 +14,19 @@ via `render_compiled_cursor_preview`
 and returns a `BrushCursorPreviewInfo`, which the frontend draws as a
 `KIND_MASKED_STAMP` overlay at the cursor. No preview info ⇒ no dab shown.
 
+The terminal renders into a float texture
+(`CURSOR_PREVIEW_RENDER_FORMAT`, [`crates/darkly/src/gpu/overlay.rs`](../crates/darkly/src/gpu/overlay.rs)),
+and the driver stretches it, in the same submission, into the 8-bit mask the
+overlay samples: the strongest texel reaches full coverage and every other
+texel scales by the same factor
+([`crates/darkly/src/gpu/tip_stretch.rs`](../crates/darkly/src/gpu/tip_stretch.rs)).
+One dab carries only the brush's per-dab flow, so without the stretch a brush
+that builds opacity from many faint dabs would hover invisibly; the float
+render keeps a faint dab's falloff intact through it. The overlay applies no
+scale of its own. The dab thumbnail tile runs the same pass before its
+readback; a node's preview does not, since it shows the node's value as it
+is.
+
 ## On-canvas overlays
 
 Tools build primitives with `OverlayBuilder`

@@ -12,7 +12,9 @@
 
 mod common;
 
-use common::{assert_same, event, headless, install_builtin, new_engine, readback, set_input};
+use common::{
+    assert_same, event, headless, install_builtin, new_engine, readback, set_input, Vehicle,
+};
 use darkly::brush::color_jitter;
 use darkly::config::{self, ConfigValue};
 use darkly::coord::CanvasRect;
@@ -42,8 +44,8 @@ fn curve() -> Vec<StrokeOp> {
 }
 
 /// An engine with `brush` at stabilize 0, a pinned seed and a fresh layer.
-fn engine_with(brush: &str) -> (DarklyEngine, LayerId) {
-    let mut engine = new_engine(CANVAS, brush, 0.0);
+fn engine_with(brush: &'static str) -> (DarklyEngine, LayerId) {
+    let mut engine = new_engine(CANVAS, Vehicle::Builtin(brush), 0.0);
     engine.set_stroke_seed(Some(SEED));
     let layer = engine.add_raster_layer(None);
     (engine, layer)
@@ -52,7 +54,7 @@ fn engine_with(brush: &str) -> (DarklyEngine, LayerId) {
 /// What a fresh engine paints: `brush`, configured by `setup` before the
 /// stroke, painting `ops`.
 fn fresh(
-    brush: &str,
+    brush: &'static str,
     setup: impl FnOnce(&mut DarklyEngine),
     ops: &[StrokeOp],
 ) -> (Vec<u8>, CanvasRect) {
@@ -69,10 +71,10 @@ fn editing(engine: &DarklyEngine) -> bool {
         .is_some_and(|kind| kind.id == "strokeEdit")
 }
 
-/// The Ink Pen stroke `curve()` paints at `size`, from a fresh engine.
+/// The Ink stroke `curve()` paints at `size`, from a fresh engine.
 fn fresh_at(size: f32) -> (Vec<u8>, CanvasRect) {
     fresh(
-        "Ink Pen",
+        "Ink",
         |e| set_input(e, "brush_settings", "size", size),
         &curve(),
     )
@@ -84,7 +86,7 @@ fn fresh_at(size: f32) -> (Vec<u8>, CanvasRect) {
 #[test]
 fn size_change_redraws_and_matches_fresh_stroke() {
     let ops = curve();
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     set_input(&mut engine, "brush_settings", "size", 0.2);
     headless(&mut engine, layer, &ops);
     let original = readback(&mut engine, layer);
@@ -110,11 +112,7 @@ fn size_change_redraws_and_matches_fresh_stroke() {
         "the edited stroke",
         edited,
         "a fresh stroke at 0.5",
-        fresh(
-            "Ink Pen",
-            |e| set_input(e, "brush_settings", "size", 0.5),
-            &ops,
-        ),
+        fresh("Ink", |e| set_input(e, "brush_settings", "size", 0.5), &ops),
     );
 }
 
@@ -123,7 +121,7 @@ fn size_change_redraws_and_matches_fresh_stroke() {
 #[test]
 fn stabilizer_change_reshapes_the_stroke() {
     let ops = curve();
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     headless(&mut engine, layer, &ops);
     let unstabilized = readback(&mut engine, layer);
 
@@ -140,7 +138,7 @@ fn stabilizer_change_reshapes_the_stroke() {
         edited,
         "a fresh stroke at 0.5",
         fresh(
-            "Ink Pen",
+            "Ink",
             |e| set_input(e, "brush_settings", "stabilize", 0.5),
             &ops,
         ),
@@ -206,7 +204,7 @@ fn colour_change_redraws_with_the_same_jitter() {
     for jitter in [0.0, 0.3] {
         set_jitter(jitter);
         let ops = curve();
-        let (mut engine, layer) = engine_with("Ink Pen");
+        let (mut engine, layer) = engine_with("Ink");
         headless(&mut engine, layer, &ops);
         let black = readback(&mut engine, layer);
 
@@ -222,7 +220,7 @@ fn colour_change_redraws_with_the_same_jitter() {
             "the edited stroke",
             edited,
             "a fresh blue stroke",
-            fresh("Ink Pen", |e| e.set_foreground_color(blue), &ops),
+            fresh("Ink", |e| e.set_foreground_color(blue), &ops),
         );
     }
     set_jitter(0.0);
@@ -232,9 +230,9 @@ fn colour_change_redraws_with_the_same_jitter() {
 /// entry, which restores the pre-stroke pixels; redo restores the edit.
 #[test]
 fn settling_an_edited_stroke_pushes_one_undo_entry() {
-    for brush in ["Ink Pen", "Liquify"] {
+    for brush in ["Ink", "Liquify"] {
         let ops = curve();
-        let (mut engine, layer) = engine_with("Ink Pen");
+        let (mut engine, layer) = engine_with("Ink");
         // A ground for liquify to push.
         headless(
             &mut engine,
@@ -303,7 +301,7 @@ fn engine_grown_ground((pixels, old): &(Vec<u8>, CanvasRect), bounds: CanvasRect
 /// restores the mask's pre-stroke bytes.
 #[test]
 fn mask_stroke_edit_undoes_to_the_pre_stroke_mask() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     engine.add_mask(layer).expect("add mask");
     let mask = engine.host_mask_id(layer).expect("mask exists");
     engine.test_flush_readbacks();
@@ -341,7 +339,7 @@ fn mask_stroke_edit_undoes_to_the_pre_stroke_mask() {
 #[test]
 fn the_next_action_ends_the_edit() {
     // A new stroke.
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let steps = engine.test_undo_len();
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
@@ -356,7 +354,7 @@ fn the_next_action_ends_the_edit() {
     engine.end_stroke();
 
     // A document edit that pushes its own entry.
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let steps = engine.test_undo_len();
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
@@ -368,7 +366,7 @@ fn the_next_action_ends_the_edit() {
     assert!(engine.has_layer(layer));
 
     // A pending-edit session, which resolves edits before pushing anything.
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let steps = engine.test_undo_len();
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
@@ -381,7 +379,7 @@ fn the_next_action_ends_the_edit() {
     );
 
     // Leaving the edit is not an action: the stroke stays editable.
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
     engine.stroke_edit_end();
@@ -392,7 +390,7 @@ fn the_next_action_ends_the_edit() {
 /// Undo while editing ends the edit and undoes the stroke.
 #[test]
 fn undo_while_editing_removes_the_stroke() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let before = readback(&mut engine, layer);
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
@@ -418,7 +416,7 @@ fn terminal_change_reallocates_the_scratch() {
         set_input(e, "brush_settings", "stabilize", 0.0);
     };
 
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     paint_ground(&mut engine, layer);
     headless(&mut engine, layer, &ops);
     let ink = readback(&mut engine, layer);
@@ -428,7 +426,7 @@ fn terminal_change_reallocates_the_scratch() {
     set_input(&mut engine, "brush_settings", "stabilize", 0.0);
     assert!(editing(&engine), "a brush load keeps the edit");
     let liquify_oracle = {
-        let (mut fresh, layer) = engine_with("Ink Pen");
+        let (mut fresh, layer) = engine_with("Ink");
         paint_ground(&mut fresh, layer);
         install_builtin(&mut fresh, "Liquify");
         set_input(&mut fresh, "brush_settings", "stabilize", 0.0);
@@ -436,20 +434,20 @@ fn terminal_change_reallocates_the_scratch() {
         readback(&mut fresh, layer)
     };
     assert_same(
-        "Ink Pen edited to Liquify",
+        "Ink edited to Liquify",
         "the edited stroke",
         readback(&mut engine, layer),
         "a fresh Liquify stroke",
         liquify_oracle,
     );
 
-    install_builtin(&mut engine, "Ink Pen");
+    install_builtin(&mut engine, "Ink");
     set_input(&mut engine, "brush_settings", "stabilize", 0.0);
     assert_same(
-        "back to Ink Pen",
+        "back to Ink",
         "the edited stroke",
         readback(&mut engine, layer),
-        "the original Ink Pen stroke",
+        "the original Ink stroke",
         ink,
     );
 }
@@ -489,7 +487,7 @@ fn an_edit_stays_in_its_own_engine() {
 /// as one undo entry.
 #[test]
 fn apply_keeps_the_stroke_editable() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let before = readback(&mut engine, layer);
     let steps = engine.test_undo_len();
     headless(&mut engine, layer, &curve());
@@ -528,7 +526,7 @@ fn apply_keeps_the_stroke_editable() {
 #[test]
 fn discard_reverts_to_the_stroke_as_entered() {
     let red = [0.9, 0.2, 0.1, 1.0];
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     set_input(&mut engine, "brush_settings", "size", 0.2);
     headless(&mut engine, layer, &curve());
     let original = readback(&mut engine, layer);
@@ -562,7 +560,7 @@ fn discard_reverts_to_the_stroke_as_entered() {
         readback(&mut engine, layer),
         "a fresh red stroke at 0.3",
         fresh(
-            "Ink Pen",
+            "Ink",
             |e| {
                 set_input(e, "brush_settings", "size", 0.3);
                 e.set_foreground_color(red);
@@ -576,7 +574,7 @@ fn discard_reverts_to_the_stroke_as_entered() {
 /// version.
 #[test]
 fn discard_after_apply_returns_the_applied_version() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     headless(&mut engine, layer, &curve());
     engine.stroke_edit_begin();
     set_input(&mut engine, "brush_settings", "size", 0.4);
@@ -598,7 +596,7 @@ fn discard_after_apply_returns_the_applied_version() {
 /// and redoes to the stroke as entered.
 #[test]
 fn discard_restores_beyond_a_grown_footprint() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let before = readback(&mut engine, layer);
     set_input(&mut engine, "brush_settings", "size", 0.1);
     headless(&mut engine, layer, &curve());
@@ -631,7 +629,7 @@ fn discard_restores_beyond_a_grown_footprint() {
 /// would undo only the shrunk rect and leave the ring around it painted.
 #[test]
 fn discard_restores_a_shrunk_footprint() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     let before = readback(&mut engine, layer);
     set_input(&mut engine, "brush_settings", "size", 0.8);
     headless(&mut engine, layer, &curve());
@@ -653,7 +651,7 @@ fn discard_restores_a_shrunk_footprint() {
 /// On a mask, Discard restores the mask's bytes as they were at entry.
 #[test]
 fn mask_discard_restores_the_mask() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     engine.add_mask(layer).expect("add mask");
     let mask = engine.host_mask_id(layer).expect("mask exists");
     // Inside the mask, so it does not grow.
@@ -680,7 +678,7 @@ fn mask_discard_restores_the_mask() {
 /// Entering while already editing keeps the first revert point.
 #[test]
 fn entering_twice_keeps_the_first_revert_point() {
-    let (mut engine, layer) = engine_with("Ink Pen");
+    let (mut engine, layer) = engine_with("Ink");
     headless(&mut engine, layer, &curve());
     let original = readback(&mut engine, layer);
     engine.stroke_edit_begin();

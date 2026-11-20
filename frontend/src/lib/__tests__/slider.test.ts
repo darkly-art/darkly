@@ -5,6 +5,8 @@ import {
     valueToFraction,
     quantize,
     fractionToValue,
+    readoutDecimals,
+    travelToValue,
 } from '../slider';
 
 describe('resolveStep', () => {
@@ -90,5 +92,71 @@ describe('fractionToValue', () => {
             const f = valueToFraction(v, min, max);
             expect(fractionToValue(f, min, max, false, 0.5)).toBeCloseTo(v, 6);
         }
+    });
+});
+
+describe('readoutDecimals', () => {
+    it('resolves a hundredth of the range', () => {
+        expect(readoutDecimals(0, 1)).toBe(2);
+        expect(readoutDecimals(0, 0.1)).toBe(3);
+        expect(readoutDecimals(0, 0.01)).toBe(4);
+    });
+    it('never drops below two places', () => {
+        expect(readoutDecimals(0, 360)).toBe(2);
+        expect(readoutDecimals(5, 5)).toBe(2);
+    });
+});
+
+describe('travel curve', () => {
+    const curves = [1, 1.5, 3].flatMap((exponent) => [
+        { exponent, reversed: false },
+        { exponent, reversed: true },
+    ]);
+    const ranges: [number, number][] = [
+        [0, 1],
+        [0.01, 400],
+        [-2, 5],
+    ];
+
+    it('travelToValue inverts valueToFraction', () => {
+        for (const travel of curves) {
+            for (const [min, max] of ranges) {
+                for (const f of [0, 0.1, 0.5, 0.9, 1]) {
+                    const v = min + f * (max - min);
+                    const back = travelToValue(valueToFraction(v, min, max, travel), min, max, travel);
+                    expect(back).toBeCloseTo(v, 6);
+                }
+            }
+        }
+    });
+
+    it('is the plain linear map at exponent 1', () => {
+        const linear = { exponent: 1, reversed: false };
+        for (const [min, max] of ranges) {
+            for (const t of [0, 0.3, 1]) {
+                expect(travelToValue(t, min, max, linear)).toBeCloseTo(min + t * (max - min), 9);
+                expect(valueToFraction(min + t * (max - min), min, max, linear)).toBeCloseTo(t, 9);
+            }
+        }
+    });
+
+    it('a reversed curve is the plain one reflected about the range', () => {
+        for (const exponent of [1.5, 3]) {
+            for (const [min, max] of ranges) {
+                for (const t of [0, 0.2, 0.7, 1]) {
+                    const reversed = travelToValue(t, min, max, { exponent, reversed: true });
+                    const plain = travelToValue(1 - t, min, max, { exponent, reversed: false });
+                    expect(reversed).toBeCloseTo(min + max - plain, 6);
+                }
+            }
+        }
+    });
+
+    it('gives the low end more travel above exponent 1', () => {
+        expect(valueToFraction(0.1, 0, 1, { exponent: 3, reversed: false })).toBeGreaterThan(0.4);
+    });
+
+    it('parks degenerate ranges at the left', () => {
+        expect(valueToFraction(3, 5, 5, { exponent: 3, reversed: false })).toBe(0);
     });
 });

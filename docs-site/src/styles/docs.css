@@ -1,0 +1,591 @@
+/*
+ * The docs' layout: the desktop icon rail, the mobile drawer, and the few
+ * things generated markdown drops into a page that need styling from here.
+ *
+ * Nothing here reaches into anything: every selector below belongs to a
+ * component in src/components/docs/.
+ *
+ * These are global rather than component-scoped because two components share
+ * them (DocsLayout owns the grid, DocsSidebar draws inside it) and because the
+ * collapsed state lives on <html>, which no scoped rule can see.
+ */
+
+:root {
+    /* Width of the sidebar column. The rail overwrites this, and the content
+       column's inset is derived from it, so one value moves both. */
+    --docs-sidebar: 17rem;
+    --docs-rail: 3.5rem;
+    --docs-header: 3.75rem;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.docs-shell {
+    min-height: 100vh;
+}
+
+.docs-main {
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+    padding: 2rem 2rem 6rem;
+    margin-inline-start: var(--docs-sidebar);
+    transition: margin-inline-start 0.18s ease;
+}
+
+.docs-content {
+    flex: 1;
+    min-width: 0;
+    max-width: 55rem;
+}
+
+/*
+ * The display face, on its own terms: it ships a single weight, so 400 it is
+ * (anything lighter only invites a synthetic one), and the tracking opens up
+ * rather than tightening, which is what the Inter headings elsewhere want and
+ * this one does not.
+ *
+ * Scoped to the article, so other `.prose` markdown keeps the Inter headings
+ * prose.css gives it.
+ */
+.docs-article.prose :is(h1, h2, h3, h4) {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: 0.02em;
+}
+
+.docs-article > h1 {
+    font-size: clamp(2rem, 3.6vw, 2.75rem);
+    line-height: 1.15;
+    margin: 0 0 1.5rem;
+}
+
+.docs-article.prose h2 {
+    font-size: 1.9rem;
+}
+
+.docs-article.prose h3 {
+    font-size: 1.45rem;
+}
+
+.docs-article.prose h4 {
+    font-size: 1.15rem;
+}
+
+/*
+ * Bold reads as accent through the whole section. Mostly this is a table rule
+ * wearing prose clothing: the generated pages emit the Name column as `**name**`
+ * and ActionsTable renders the same column as `<strong>`, so one selector colors
+ * every entry name on all nine pages and the emphasis in the manual besides.
+ *
+ * `--accent-text`, not `--accent`; the raw accent is a fill and a border color,
+ * too dark to read as text against black.
+ *
+ * Deliberately not guarded by `.not-content`: reaching into ActionsTable is the
+ * point, or its Name column would be the one that stayed grey. And `th` is bold
+ * by user-agent default rather than by `<strong>`, so header rows stay neutral
+ * and the color means "entry", not "bold".
+ */
+.docs-article.prose :is(strong, b) {
+    color: var(--accent-text);
+}
+
+/* ------------------------------------------------------------------ sidebar */
+
+.docs-sidebar {
+    position: fixed;
+    top: var(--docs-header);
+    bottom: 0;
+    inset-inline-start: 0;
+    z-index: 5;
+    /* The site has no box-sizing reset, and this width does arithmetic: the
+       content column's inset comes from the same --docs-sidebar. Border-box is
+       what makes the declared width the actual footprint, so the two agree
+       instead of differing by the padding. */
+    box-sizing: border-box;
+    width: var(--docs-sidebar);
+    padding: 1rem 0.75rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--bg-raised);
+    border-inline-end: 1px solid var(--bg-active);
+}
+
+/* Mobile only; the desktop rail has no drawer to close. */
+.docs-drawer-close {
+    display: none;
+    position: absolute;
+    top: 0.75rem;
+    inset-inline-end: 0.75rem;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--bg-active);
+    border-radius: var(--radius-md, 6px);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.docs-drawer-close:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+}
+
+/*
+ * The site has no box-sizing reset, and the sidebar cannot do without one: every
+ * row is `width: 100%` with padding, which under content-box makes it wider than
+ * the pane holding it. `overflow-y: auto` forces the x-axis to `auto` as well, so
+ * that few pixels of overflow showed up as a horizontal scrollbar along the
+ * bottom of the sidebar.
+ *
+ * Scoped to the sidebar rather than the whole docs shell; the article below
+ * holds generated tables and ActionsTable, which size themselves.
+ */
+.docs-sidebar,
+.docs-sidebar :is(ul, li, a, summary, span, button) {
+    box-sizing: border-box;
+}
+
+.docs-nav ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.docs-nav summary {
+    display: block;
+    list-style: none;
+    cursor: pointer;
+}
+
+.docs-nav summary::-webkit-details-marker {
+    display: none;
+}
+
+/*
+ * One item, at every depth. Top-level items carry an icon and sit flush; nested
+ * ones are indented by their list instead.
+ *
+ * One selector for both levels, so spacing, the current-page highlight and the
+ * indent guides apply the same inside groups and outside them. Two renderers
+ * with different Astro scope classes, one per level, would split them.
+ */
+.docs-item {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-muted);
+    text-decoration: none;
+    line-height: 1.4;
+    font-size: 0.95rem;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    font-family: inherit;
+    text-align: start;
+}
+
+.docs-item:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.docs-item[aria-current='page'] {
+    background: var(--bg-hover);
+    color: var(--accent-text);
+    font-weight: 500;
+}
+
+/* Top level reads as a section heading whether it is a link or a group. */
+.docs-nav > ul > li > .docs-item,
+.docs-nav > ul > li > details > summary > .docs-item {
+    font-size: 1.02rem;
+}
+
+.docs-nav > ul > li + li {
+    margin-top: 0.35rem;
+}
+
+/* The indent guide. On the list, so it runs the height of the whole group
+   rather than being reassembled per item. */
+.docs-sublist {
+    margin: 0.15rem 0 0.35rem;
+    padding-inline-start: 0.55rem;
+    border-inline-start: 1px solid var(--bg-active);
+    margin-inline-start: 1.15rem;
+}
+
+.docs-sublist li + li {
+    margin-top: 0.1rem;
+}
+
+.docs-caret {
+    flex: none;
+    color: var(--text-dim);
+    transition: transform 0.15s ease;
+}
+
+details[open] > summary .docs-caret {
+    transform: rotate(90deg);
+}
+
+/* Never collapses away: `flex: none` holds it at full size while the pane
+   animates down to the width of exactly this icon. */
+.docs-icon-rail {
+    flex: none;
+    width: 1.125rem;
+    height: 1.125rem;
+    color: var(--accent-text);
+}
+
+/*
+ * `min-width: 0` overrides the `auto` minimum every flex item gets, which would
+ * otherwise refuse to shrink a `nowrap` label below its own text width and push
+ * the row wider than the pane. With it, a label longer than the sidebar clips to
+ * an ellipsis instead of producing a scrollbar for every row on the page.
+ */
+.docs-label {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------- the desktop rail */
+
+@media (min-width: 50em) {
+    /*
+     * Collapsed, the pane is a strip of section icons; hovering or tabbing in
+     * slides the labels back out. Two things make that work without disturbing
+     * the page:
+     *
+     *   --docs-sidebar shrinks to the rail width, and .docs-main derives its
+     *   inset from it, so the content reclaims the space.
+     *
+     *   .docs-sidebar is `position: fixed`, so widening it back on hover
+     *   overlays the page rather than reflowing it; the table you were reading
+     *   does not move while the labels slide out over it.
+     */
+    html[data-sidebar-collapsed] {
+        --docs-sidebar: var(--docs-rail);
+    }
+
+    html[data-sidebar-collapsed] .docs-sidebar {
+        width: var(--docs-rail);
+        padding-inline: 0.5rem;
+        overflow-x: hidden;
+        transition: width 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    /*
+     * `:has(:focus-visible)`, not `:focus-within`. The collapse button lives
+     * inside the pane, so clicking it leaves focus inside the thing it just
+     * collapsed; under `:focus-within` the rail sprang straight back open and
+     * stayed open until you clicked somewhere else, which reads as the button
+     * not working. `:focus-visible` is not set by a mouse click, so the rail
+     * collapses on click and still peeks open for anyone tabbing into the nav,
+     * which is the case the focus rule exists for.
+     */
+    html[data-sidebar-collapsed] .docs-sidebar:hover,
+    html[data-sidebar-collapsed] .docs-sidebar:has(:focus-visible) {
+        width: 17rem;
+        padding-inline: 0.75rem;
+        box-shadow: 0 0 2rem rgb(0 0 0 / 35%);
+    }
+
+    /* At rest, everything that is not an icon folds away: labels fade, and a
+       group's children would otherwise make the strip as tall as the whole
+       expanded tree. */
+    html[data-sidebar-collapsed]
+        .docs-sidebar:not(:hover):not(:has(:focus-visible))
+        :is(.docs-label, .docs-caret) {
+        opacity: 0;
+    }
+
+    html[data-sidebar-collapsed] .docs-sidebar:not(:hover):not(:has(:focus-visible)) .docs-sublist {
+        display: none;
+    }
+
+    html[data-sidebar-collapsed] :is(.docs-label, .docs-caret) {
+        transition: opacity 0.14s ease;
+    }
+
+}
+
+/* ------------------------------------------------------- the mobile drawer */
+
+.docs-backdrop {
+    display: none;
+}
+
+@media (max-width: 49.999em) {
+    .docs-main {
+        margin-inline-start: 0;
+        padding: 1.25rem 1.25rem 5rem;
+    }
+
+    /* Off-canvas until opened. `visibility` rather than `display` so the slide
+       has something to animate, and so nothing inside is focusable while shut. */
+    .docs-sidebar {
+        top: 0;
+        width: min(20rem, 82vw);
+        padding-top: 1.25rem;
+        transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.2s ease, visibility 0.2s;
+        z-index: 30;
+        box-shadow: 0 0 2rem rgb(0 0 0 / 45%);
+    }
+
+    html[data-drawer-open] .docs-sidebar {
+        transform: translateX(0);
+        visibility: visible;
+    }
+
+    .docs-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        background: rgb(0 0 0 / 55%);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        border: 0;
+    }
+
+    html[data-drawer-open] .docs-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* The page behind the drawer must not scroll with it. */
+    html[data-drawer-open] body {
+        overflow: hidden;
+    }
+
+    .docs-drawer-close {
+        display: inline-flex;
+    }
+
+    /* Clears the close button in the corner above it. */
+    .docs-nav {
+        margin-top: 2.5rem;
+    }
+}
+
+/* ------------------------------------------------- generated page furniture */
+
+/*
+ * Icons inlined into the reference tables by scripts/gen-docs.mjs. They arrive
+ * as a bare <svg> in a markdown cell, so they need the baseline alignment and
+ * currentColor inheritance a component would otherwise have given them.
+ */
+.docs-icon {
+    display: inline-block;
+    vertical-align: -0.2em;
+    color: var(--accent-text);
+}
+
+/*
+ * Rendered previews, in the same leading column the icons use; a cell holds one
+ * or the other, never both.
+ *
+ * Sized by height so the two shapes the producer renders line up down the
+ * column: an effect is a 256 px square shot of the fixed subject, a brush is a
+ * 320 × 120 strip of one stroke, and matching their widths instead would leave
+ * the squares tiny beside the strips.
+ *
+ * 9rem is 144 px against a 256 px asset, under it on a 2× display, which is the
+ * ceiling this can grow to without the previews going soft. Half that, 4.5rem,
+ * is too small to read a veil off, and the whole reason the column exists is
+ * that a reader decides from the picture.
+ *
+ * Width comes from the aspect ratio, which the generator writes inline from the
+ * preview's own dimensions. An `<img>` would take it from its `width`/`height`
+ * attributes on its own, but a `<video>` that has not loaded any metadata (and
+ * with `preload="none"` none of these have) falls back to the 2:1 default video
+ * box, which letterboxes a square preview inside a wide one.
+ *
+ * Both caps are absolute, and never a percentage. A generated table is its own
+ * scroll container with an 18rem floor under the description column, so the
+ * columns beside it are what get squeezed, and a percentage cap resolves
+ * against a cell whose width this content was supposed to set, which lets the
+ * browser take a preview below its aspect width and letterbox the poster inside
+ * a sliver. A fixed `rem` cap has no such feedback loop.
+ *
+ * With both dimensions `auto` and a cap on each, the browser scales the intrinsic
+ * size down under whichever binds and keeps the ratio, so the two shapes land at
+ * 144 × 144 and 320 × 120 respectively. That is the point of the width cap: at a
+ * flat 9rem tall a brush strip is 384 px, which is 44 % of the content column and
+ * enough to push the brushes table into a horizontal scroll it does not need.
+ *
+ * Every asset is opaque (H.264 cannot carry alpha, and the renderers composite
+ * onto a background), so the panel behind them only ever shows while a poster
+ * is still loading.
+ *
+ * The selector names the element because it has to outrank `prose.css`'s
+ * `.prose img`, which is `max-width: 100%; height: auto` for the screenshots in
+ * the manual. Applied to a preview those two rules feed back on each other in a
+ * squeezed column: the cap resolves against a cell whose width its own content
+ * was supposed to set, and the image lands at 0 × 0. It did, at 390 px.
+ */
+.docs-article.prose :is(img, video).docs-preview {
+    display: block;
+    width: auto;
+    height: auto;
+    max-height: 9rem;
+    max-width: 20rem;
+    border-radius: var(--radius-sm, 4px);
+    background-color: var(--bg-active);
+}
+
+/*
+ * Motion is opt-in: a video sits on its poster until it is hovered, focused or
+ * tapped, which the script in DocsLayout drives. This is only the affordance;
+ * a preview that will move says so before it does.
+ */
+video.docs-preview {
+    cursor: pointer;
+    transition: outline-color 0.12s ease;
+    outline: 1px solid transparent;
+    outline-offset: 2px;
+}
+
+video.docs-preview:hover,
+video.docs-preview:focus-visible {
+    outline-color: var(--accent-text);
+}
+
+/*
+ * Keys, wherever an article shows one: the manual's prose, where gen-docs.mjs
+ * renders them, and ActionsTable's cells. Global rather than scoped because the
+ * table's come in through `{@html}`, which no component scope reaches.
+ */
+.docs-article kbd {
+    display: inline-block;
+    padding: 0.125rem 0.375rem;
+    border: 1px solid var(--bg-active);
+    border-bottom-width: 2px;
+    border-radius: 0.25rem;
+    background: var(--bg-hover);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+/* In a markdown page a key's text is a code span, the one inline construct
+   Astro's typographic substitutions leave alone. It reads as the key itself,
+   not as a code chip inside the key. */
+.docs-article.prose kbd.hk-key > code {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+}
+
+/* What `:hotkey[]` shows where the chosen preset binds nothing. */
+.hk-none {
+    color: var(--text-dim);
+    font-size: 0.8125rem;
+    font-style: italic;
+}
+
+/* --------------------------------------------------------------- prev/next */
+
+.docs-pager {
+    display: flex;
+    gap: 1rem;
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--bg-active);
+}
+
+.docs-pager a {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--bg-active);
+    border-radius: var(--radius-md, 6px);
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.1s, background 0.1s;
+}
+
+.docs-pager a:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-dim);
+    text-decoration: none;
+}
+
+.docs-pager .docs-pager-next {
+    text-align: end;
+}
+
+.docs-pager small {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------- table of contents */
+
+.docs-toc {
+    display: none;
+}
+
+@media (min-width: 72em) {
+    .docs-toc {
+        display: block;
+        position: sticky;
+        top: calc(var(--docs-header) + 2rem);
+        flex: none;
+        width: 13rem;
+        max-height: calc(100vh - var(--docs-header) - 4rem);
+        overflow-y: auto;
+        font-size: 0.875rem;
+    }
+
+    .docs-toc h2 {
+        margin: 0 0 0.6rem;
+        font-size: 0.75rem;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+    }
+
+    .docs-toc ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border-inline-start: 1px solid var(--bg-active);
+    }
+
+    .docs-toc li a {
+        display: block;
+        padding: 0.25rem 0 0.25rem 0.75rem;
+        color: var(--text-muted);
+        text-decoration: none;
+        line-height: 1.4;
+    }
+
+    .docs-toc li a:hover {
+        color: var(--text);
+        text-decoration: none;
+    }
+
+    .docs-toc li[data-depth='3'] a {
+        padding-inline-start: 1.5rem;
+    }
+}

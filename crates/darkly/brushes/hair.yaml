@@ -82,14 +82,16 @@ connections:
 - stamp.dab -> paint.rgba
 - subtract.result -> add.a
 exposed_ports:
-  brush_settings.stabilize: {}
   brush_settings.size: {}
+  paint.opacity: {}
+  paint.build_flow:
+    label: Flow
+    description: How much paint each touch lays down.
+  brush_settings.stabilize: {}
   multiply_2.a:
     label: Twirl
     description: Twirliness factor
     icon: tabler:galaxy
-  paint.build_flow: {}
-  paint.opacity: {}
   multiply_3.b:
     label: Hair Thickness
     description: Controls how many and how thick are the individual strands

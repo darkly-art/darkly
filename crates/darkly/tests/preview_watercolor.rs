@@ -13,30 +13,9 @@ use darkly::brush::gpu_context::{
 };
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::gpu::test_utils::{readback_texture, test_device};
+use darkly::gpu::test_utils::{cursor_preview_target, readback_cursor_preview_render, test_device};
 
 const PREVIEW_SIDE: u32 = 256;
-
-fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview-target"),
-        size: wgpu::Extent3d {
-            width: PREVIEW_SIDE,
-            height: PREVIEW_SIDE,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (tex, view)
-}
 
 struct PreviewOutput {
     rgba: Vec<u8>,
@@ -66,7 +45,7 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
         &queue,
         &darkly::gpu::selection::selection_mask_bgl(&device),
     );
-    let (target_tex, target_view) = preview_target(&device);
+    let (target_tex, target_view) = cursor_preview_target(&device, PREVIEW_SIDE, PREVIEW_SIDE);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
 
@@ -112,14 +91,8 @@ fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) 
         .expect("watercolor publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
-    let rgba = readback_texture(
-        &device,
-        &queue,
-        &target_tex,
-        wgpu::TextureFormat::Rgba8Unorm,
-        PREVIEW_SIDE,
-        PREVIEW_SIDE,
-    );
+    let rgba =
+        readback_cursor_preview_render(&device, &queue, &target_tex, PREVIEW_SIDE, PREVIEW_SIDE);
     PreviewOutput {
         rgba,
         info: published,

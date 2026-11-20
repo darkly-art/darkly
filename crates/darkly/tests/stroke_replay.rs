@@ -22,11 +22,11 @@ fn fixture(name: &str) -> PathBuf {
         .collect()
 }
 
-fn ink_pen_brush_graph_json() -> String {
+fn ink_brush_graph_json() -> String {
     let brush = builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name.eq_ignore_ascii_case("ink pen"))
-        .expect("`ink pen` brush is a built-in");
+        .find(|b| b.metadata.name.eq_ignore_ascii_case("ink"))
+        .expect("`ink` brush is a built-in");
     serde_json::to_string(&brush.metadata.graph).expect("serialize brush graph")
 }
 
@@ -93,7 +93,7 @@ fn replay_produces_paint_on_the_layer() {
 
     let mut engine = build_engine(canvas);
     engine
-        .set_brush_graph(&ink_pen_brush_graph_json())
+        .set_brush_graph(&ink_brush_graph_json())
         .expect("brush graph compiles");
     let layer_id = engine.add_raster_layer(None);
 

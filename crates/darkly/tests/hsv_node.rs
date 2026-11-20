@@ -141,7 +141,7 @@ fn random_into_hue_spans_a_full_turn() {
     assert!(close(got, want), "got {got:?}, want {want:?} for r = {r}");
 }
 
-/// Ink Pen with an `hsv` node spliced between `paint_color` and `stamp`.
+/// Ink with an `hsv` node spliced between `paint_color` and `stamp`.
 fn hsv_brush_yaml(consumed: bool) -> String {
     let color_wires = if consumed {
         "- paint_color.color -> hsv.color\n- hsv.output -> stamp.color\n"
@@ -150,7 +150,7 @@ fn hsv_brush_yaml(consumed: bool) -> String {
     };
     format!(
         "name: HSV Test
-description: Ink Pen through an HSV Adjust.
+description: Ink through an HSV Adjust.
 nodes:
   brush_settings:
     type: brush_settings

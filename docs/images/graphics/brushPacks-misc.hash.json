@@ -1,0 +1,36 @@
+{
+  "svg": "0b50c58d9dfc22dd",
+  "width": 1444,
+  "height": 396,
+  "catalog": "brushPacks",
+  "category": null,
+  "entry": "misc",
+  "context": {
+    "catalogs": {},
+    "entries": {
+      "brushPacks/misc": {
+        "type": "misc",
+        "displayName": "Misc",
+        "description": "Everything that fits nowhere else.",
+        "icon": "mdi:dots-horizontal",
+        "palette": {
+          "chroma": "#4f9e46",
+          "refraction": "#a8cc45",
+          "surface": "#3f8a361a"
+        },
+        "members": {
+          "catalog": "brushes",
+          "entries": [
+            "clone"
+          ]
+        }
+      },
+      "brushes/clone": {
+        "type": "clone",
+        "displayName": "Clone",
+        "description": "Paints with pixels sampled from elsewhere on the canvas rather than with the current color.",
+        "icon": "fa6-solid:clone"
+      }
+    }
+  }
+}

@@ -15,6 +15,9 @@ use crate::engine::protocol::{bad_payload, decode, RequestRegistration, Response
 #[serde(rename_all = "camelCase")]
 pub struct BrushCursorPreviewInfoResp {
     pub half_extent: [f32; 2],
+    /// The half-extent before the dab's half-pixel radius floor, so it stays
+    /// proportional to the brush size below it.
+    pub nominal_half_extent: [f32; 2],
 }
 
 /// Flat pen pose for a cursor-preview refresh.
@@ -37,6 +40,7 @@ fn preview_info(
     match engine.brush_cursor_preview_info() {
         Some(info) => serde_json::to_value(BrushCursorPreviewInfoResp {
             half_extent: info.half_extent_canvas_px,
+            nominal_half_extent: info.nominal_half_extent_canvas_px,
         })
         .map_err(bad_payload),
         None => Ok(serde_json::Value::Null),

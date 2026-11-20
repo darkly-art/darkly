@@ -1,5 +1,5 @@
 name: Pencil
-description: "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure does not darken it, pressing harder does."
+description: "A graphite tip over paper grain. A pass lays down what the pressure allows and no more: going back over a mark at the same pressure adds nothing, pressing harder does."
 nodes:
   add:
     type: add
@@ -169,8 +169,12 @@ connections:
 - user_input.value -> circle.amplitude
 - user_input.value -> invert.input
 exposed_ports:
-  brush_settings.stabilize: {}
   brush_settings.size: {}
+  paint.opacity:
+    label: Opacity
+    description: Transparency of the whole stroke
+    icon: mdi:texture-box
+  brush_settings.stabilize: {}
   paint.buildup:
     label: Strength
     description: How much graphite gets left by the pencil
@@ -179,7 +183,3 @@ exposed_ports:
     label: Roughness
     description: Roughness of edges and paper grain texture
     icon: tabler:grain
-  paint.opacity:
-    label: Opacity
-    description: Transparency of the whole stroke
-    icon: mdi:texture-box

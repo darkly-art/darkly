@@ -107,6 +107,14 @@ pub struct PortableNode {
     /// in the graph doing the arithmetic.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ranges: BTreeMap<String, [f32; 2]>,
+    /// Per-input travel-curve overrides, keyed by input name: the
+    /// [`PortDef::travel_exponent`](crate::nodegraph::PortDef::travel_exponent)
+    /// a control spends its drag by. Diffed against the registration like
+    /// `ranges`, beside which it is usually authored: a generic node standing
+    /// in for a quantity whose working values are low (a `user_input` as a
+    /// brush's flow) takes a floor in `ranges` and a curve here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub curves: BTreeMap<String, f32>,
 }
 
 /// A wire serialized as `"<from_id>.<from_port> -> <to_id>.<to_port>"`.
@@ -221,9 +229,11 @@ impl PortableBrush {
                 }
             }
 
-            // Slider bounds: the same diff-against-registration treatment,
-            // so a brush that never re-ranges anything emits no `ranges` key.
+            // Slider bounds and travel curves: the same diff-against-registration
+            // treatment, so a brush that never re-ranges or curves anything
+            // emits no `ranges` or `curves` key.
             let mut ranges = BTreeMap::new();
+            let mut curves = BTreeMap::new();
             for port in &node.ports {
                 if port.dir != PortDir::Input {
                     continue;
@@ -233,6 +243,9 @@ impl PortableBrush {
                 };
                 if reg_port.min != port.min || reg_port.max != port.max {
                     ranges.insert(port.name.clone(), [port.min, port.max]);
+                }
+                if reg_port.travel_exponent != port.travel_exponent {
+                    curves.insert(port.name.clone(), port.travel_exponent);
                 }
             }
 
@@ -244,6 +257,7 @@ impl PortableBrush {
                     comment: node.comment.clone(),
                     inputs,
                     ranges,
+                    curves,
                 },
             );
         }
@@ -363,6 +377,11 @@ impl PortableBrush {
                 graph
                     .set_port_range(&new_id, name, *min, *max)
                     .map_err(|e| format!("range '{name}' on '{}': {e}", pn.type_id))?;
+            }
+            for (name, exponent) in &pn.curves {
+                graph
+                    .set_port_travel_exponent(&new_id, name, *exponent)
+                    .map_err(|e| format!("curve '{name}' on '{}': {e}", pn.type_id))?;
             }
             id_map.insert(yaml_id.clone(), new_id);
         }
@@ -564,6 +583,44 @@ mod tests {
             .find(|p| p.name == "softness")
             .unwrap();
         assert_eq!((port.min, port.max), (-1.0, 2.5));
+    }
+
+    /// A curved port survives the yaml round trip, and a graph that curves
+    /// nothing emits no `curves` key: the same diff contract as `ranges`.
+    #[test]
+    fn port_curves_survive_and_stay_a_diff() {
+        let registry = registry();
+        let mut graph = crate::brush::default_graph();
+        let circle = graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.type_id == "circle")
+            .map(|(id, _)| id.clone())
+            .expect("default has a circle node");
+
+        let clean = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        assert!(!serde_yaml_ng::to_string(&clean).unwrap().contains("curves"));
+
+        graph
+            .set_port_travel_exponent(&circle, "softness", 2.5)
+            .unwrap();
+
+        let portable = PortableBrush::from_graph_only(&graph, registry).unwrap();
+        let yaml = serde_yaml_ng::to_string(&portable).unwrap();
+        let restored = serde_yaml_ng::from_str::<PortableBrush>(&yaml)
+            .unwrap()
+            .into_graph(registry)
+            .unwrap();
+        let port = restored
+            .nodes()
+            .values()
+            .find(|n| n.type_id == "circle")
+            .expect("restored graph has a circle node")
+            .ports
+            .iter()
+            .find(|p| p.name == "softness")
+            .unwrap();
+        assert_eq!(port.travel_exponent, 2.5);
     }
 
     /// An inverted brush-bar entry survives the yaml round trip, and an

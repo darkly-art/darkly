@@ -1,0 +1,333 @@
+---
+/*
+ * The docs shell: header, sidebar, article, contents rail.
+ *
+ * Inside BaseLayout, which owns the document, <head> and the theme; this adds
+ * everything that is the docs' own, including the pre-paint state of the
+ * sidebar and of the hotkey choice.
+ *
+ * The sidebar pane lives here rather than in DocsSidebar because the pane is
+ * layout (the rail width, the collapse control, the mobile drawer) while
+ * DocsSidebar is the tree that goes inside it, at every depth.
+ */
+import BaseLayout from '../shared/BaseLayout.astro';
+import DocsHeader from '../components/docs/DocsHeader.astro';
+import DocsSidebar from '../components/docs/DocsSidebar.astro';
+import TableOfContents from '../components/docs/TableOfContents.astro';
+import type { NavItem, NavLink } from '../lib/docs-nav';
+import { ATTR, MAC_UA, STORAGE_KEY, choiceToken, choices, defaultPreset } from '../lib/hotkeys';
+import actions from '../generated/docs-actions.json';
+import '../shared/styles/prose.css';
+import '../styles/docs.css';
+// Which hotkey variant shows, per choice; written by gen-docs.mjs from the
+// export's presets.
+import '../generated/hotkeys.css';
+
+interface Props {
+    title: string;
+    description?: string;
+    nav: NavItem[];
+    /** Collection id of the page being viewed. */
+    current: string;
+    headings: { depth: number; slug: string; text: string }[];
+    prev: NavLink | null;
+    next: NavLink | null;
+}
+
+const { title, description, nav, current, headings, prev, next } = Astro.props;
+
+const preset = defaultPreset(actions.presets);
+const hk = {
+    key: STORAGE_KEY,
+    attr: ATTR,
+    mac: MAC_UA,
+    tokens: choices(actions.presets).map((c) => c.token),
+    fallback: { mac: choiceToken(preset, 'mac'), other: choiceToken(preset, 'other') },
+};
+---
+
+<BaseLayout title={`${title} - Darkly Docs`} description={description}>
+    {/* Inline, and ahead of the header, so the stored state is applied before
+        anything it styles is parsed: a collapsed rail never flashes open, and
+        no key (the header's preset label included) paints in one preset and
+        then switches to another. The hotkey constants come from lib/hotkeys.ts,
+        so none is written twice. */}
+    <script is:inline define:vars={{ hk }}>
+        const root = document.documentElement;
+        let stored = null;
+        try {
+            if (localStorage.getItem('darkly-docs-sidebar') === 'collapsed') {
+                root.setAttribute('data-sidebar-collapsed', '');
+            }
+            stored = localStorage.getItem(hk.key);
+        } catch {}
+        // The stored choice if this build still offers it, else the default
+        // preset in the convention this browser implies.
+        const os = new RegExp(hk.mac, 'i').test(navigator.userAgent) ? 'mac' : 'other';
+        root.setAttribute(hk.attr, hk.tokens.includes(stored) ? stored : hk.fallback[os]);
+    </script>
+
+    <DocsHeader />
+
+    <div class="docs-shell">
+        {/* Mobile only; styles/docs.css gives it presence below 50em. */}
+        <div class="docs-backdrop"></div>
+
+        <aside class="docs-sidebar">
+            {/* Mobile only. The drawer covers the header, hamburger included, so
+                without this the only way out by touch is the sliver of backdrop
+                beside it, and Escape is not a gesture a phone has. */}
+            <button type="button" class="docs-drawer-close" aria-label="Close navigation">
+                <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    aria-hidden="true"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+
+            <nav class="docs-nav" id="docs-nav" aria-label="Docs">
+                <DocsSidebar nav={nav} current={current} />
+            </nav>
+        </aside>
+
+        <div class="docs-main">
+            <div class="docs-content">
+                {/* Pagefind indexes exactly what is inside this element. Header,
+                    sidebar and the pager below all sit outside it, so no
+                    result's excerpt is ever made of navigation. */}
+                <article class="docs-article prose" data-pagefind-body>
+                    <h1>{title}</h1>
+                    <slot />
+                </article>
+
+                {
+                    (prev || next) && (
+                        <nav class="docs-pager" aria-label="Page navigation">
+                            {prev && (
+                                <a href={prev.href} rel="prev">
+                                    <small>Previous</small>
+                                    <span>{prev.label}</span>
+                                </a>
+                            )}
+                            {next && (
+                                <a href={next.href} rel="next" class="docs-pager-next">
+                                    <small>Next</small>
+                                    <span>{next.label}</span>
+                                </a>
+                            )}
+                        </nav>
+                    )
+                }
+            </div>
+
+            <TableOfContents headings={headings} />
+        </div>
+    </div>
+
+    {/*
+        Rendered previews play on demand, never by themselves.
+
+        A reference page carries up to sixteen of them, and sixteen videos
+        autoplaying at once is both unreadable and a few megabytes nobody asked
+        for, so each one sits on its poster (`preload="none"`, so the video is
+        not even fetched) until it is hovered, focused or tapped. That is the
+        editor's own answer in its pickers, and the reason the encoder
+        nominates a poster frame at all.
+
+        Everything here is enhancement: with no JavaScript the poster is simply
+        what the element shows, which is why the generator emits a `<video>`
+        with a poster rather than an `<img>` a script has to swap.
+
+        Delegated, and on the capture phase: `play`, `pause` and the pointer
+        events on media do not bubble, and delegation is what lets this ignore
+        how many previews a page has, or whether any.
+    */}
+    <script is:inline>
+        (() => {
+            const still = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+            const preview = (event) => {
+                const el = event.target;
+                return el instanceof HTMLVideoElement && el.classList.contains('docs-preview')
+                    ? el
+                    : null;
+            };
+
+            const play = (video) => {
+                // Honoring the preference here rather than by not binding at
+                // all: it can change while the page is open, and a click is an
+                // explicit request that should work either way.
+                if (still.matches) return;
+                video.play().catch(() => {});
+            };
+
+            /*
+             * Back to the poster: `load()`, not `currentTime = 0`.
+             *
+             * Those are not the same picture. A poster is the frame the entry
+             * *declared* as representative, which for every blend mode is the
+             * middle of the sweep, and for the three veils whose loop is closed
+             * by a crossfade is not even at the same index in the encoded file.
+             * Seeking to zero therefore left a different image behind than the
+             * one the row had before it was hovered, and it stayed there,
+             * because a poster is only shown while the element has no frame of
+             * its own to show.
+             *
+             * `load()` puts it back in exactly that state, so what a row looks
+             * like at rest is one thing rather than two, and the consumer needs
+             * to know nothing about where in the clip the poster came from.
+             * Nothing is refetched until the next play: `preload` is still
+             * `none`, and by then the file is in the HTTP cache anyway.
+             */
+            const stop = (video) => {
+                video.pause();
+                video.load();
+            };
+
+            /*
+             * `:focus-visible`, not `focus`, the same distinction the sidebar
+             * peek makes, and here it is load-bearing rather than tidy. A tap
+             * focuses *and* clicks: focus would start the video and the click
+             * below would immediately toggle it off, so a tap would do nothing
+             * at all. Only a real keyboard tab-in plays on focus.
+             */
+            const focused = (video) => {
+                if (video.matches(':focus-visible')) play(video);
+            };
+
+            /*
+             * Hover means a mouse. A tap fires the whole pointer sequence
+             * against a pointer that is gone by the time the finger lifts:
+             * `pointerenter`, then `pointerleave` before the click, so
+             * unfiltered, every tap played the video, stopped it, and played it
+             * again, and tapping a second time to stop it was impossible.
+             * Touch gets the click handler below and nothing else.
+             */
+            const hovered = (fn) => (video, event) => {
+                if (event.pointerType === 'mouse') fn(video);
+            };
+
+            for (const [type, fn] of [
+                ['pointerenter', hovered(play)],
+                ['pointerleave', hovered(stop)],
+                ['focus', focused],
+                ['blur', stop],
+            ]) {
+                document.addEventListener(
+                    type,
+                    (event) => {
+                        const video = preview(event);
+                        if (video) fn(video, event);
+                    },
+                    true,
+                );
+            }
+
+            // What a touch has instead of hover, and what a keyboard has instead
+            // of a pointer. The element is focusable for the same reason: the
+            // generator leaves it out of the tab order, so it is added here,
+            // where the behavior that justifies it lives.
+            document.addEventListener('click', (event) => {
+                const video = preview(event);
+                if (!video) return;
+                if (video.paused) play(video);
+                else stop(video);
+            });
+
+            document.addEventListener('keydown', (event) => {
+                const video = preview(event);
+                if (!video || (event.key !== 'Enter' && event.key !== ' ')) return;
+                event.preventDefault();
+                if (video.paused) play(video);
+                else stop(video);
+            });
+
+            for (const video of document.querySelectorAll('video.docs-preview')) {
+                video.tabIndex = 0;
+            }
+        })();
+    </script>
+
+    {/*
+        Showing and hiding the navigation: the rail on desktop, the drawer on
+        mobile. One button in the header means both, so the branch on width is
+        here rather than in two separate controls.
+
+        Delegated from `document` rather than bound to each element. The toggle
+        is in the header, which is parsed before this markup, so binding it
+        directly would mean caring which script runs first, and getting that
+        wrong is silent: the button still lights up on hover, it just does
+        nothing.
+    */}
+    <script is:inline>
+        (() => {
+            const root = document.documentElement;
+            const DRAWER = 'data-drawer-open';
+            const RAIL = 'data-sidebar-collapsed';
+            const desktop = () => window.matchMedia('(min-width: 50em)').matches;
+
+            const sync = () => {
+                const shown = desktop() ? !root.hasAttribute(RAIL) : root.hasAttribute(DRAWER);
+                document
+                    .querySelector('.docs-nav-toggle')
+                    ?.setAttribute('aria-expanded', String(shown));
+            };
+
+            const setDrawer = (next) => {
+                root.toggleAttribute(DRAWER, next);
+                sync();
+            };
+
+            document.addEventListener('click', (event) => {
+                const target = event.target;
+                if (!(target instanceof Element)) return;
+
+                if (target.closest('.docs-nav-toggle')) {
+                    if (desktop()) {
+                        const collapsed = !root.hasAttribute(RAIL);
+                        root.toggleAttribute(RAIL, collapsed);
+                        try {
+                            localStorage.setItem(
+                                'darkly-docs-sidebar',
+                                collapsed ? 'collapsed' : 'expanded',
+                            );
+                        } catch {}
+                        sync();
+                    } else {
+                        setDrawer(!root.hasAttribute(DRAWER));
+                    }
+                } else if (target.closest('.docs-drawer-close, .docs-backdrop')) {
+                    setDrawer(false);
+                } else if (target.closest('.docs-sidebar a')) {
+                    // Tapping a section is the whole reason the drawer was
+                    // opened; it should not still be covering the page on
+                    // arrival.
+                    setDrawer(false);
+                }
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && root.hasAttribute(DRAWER)) setDrawer(false);
+            });
+
+            // Rotating a phone crosses the breakpoint, and the two sides read
+            // different state, so the button's label has to be recomputed, and
+            // a drawer left open must not linger as the layout becomes a rail.
+            window.matchMedia('(min-width: 50em)').addEventListener('change', () => {
+                root.removeAttribute(DRAWER);
+                sync();
+            });
+
+            sync();
+        })();
+    </script>
+</BaseLayout>

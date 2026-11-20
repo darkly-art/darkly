@@ -1,0 +1,89 @@
+---
+/*
+ * The docs navigation tree.
+ *
+ * One component renders every level. That is the point of it. A separate
+ * component per level carries a different Astro scope class, so item spacing,
+ * the current-page highlight and the indent guides would apply on one side of
+ * the group boundary and not the other, two styling systems no amount of CSS
+ * reconciles. The recursion below is one component, one set of selectors, all
+ * of them in styles/docs.css.
+ *
+ * The pane around this (the rail, the collapse control, the mobile drawer)
+ * belongs to DocsLayout.
+ */
+import type { NavItem } from '../../lib/docs-nav';
+
+interface Props {
+    nav: NavItem[];
+    /** Collection id of the page being viewed, for the current-page highlight. */
+    current: string;
+    /** Only the top level sits flush; deeper lists draw the indent guide. */
+    depth?: number;
+}
+
+const { nav, current, depth = 0 } = Astro.props;
+
+const CARET = '<polyline points="9 18 15 12 9 6" />';
+---
+
+<ul class={depth === 0 ? 'docs-toplist' : 'docs-sublist'}>
+    {
+        nav.map((item) =>
+            item.type === 'link' ? (
+                <li>
+                    <a
+                        class="docs-item"
+                        href={item.href}
+                        aria-current={item.id === current ? 'page' : undefined}
+                    >
+                        {item.icon && (
+                            <svg
+                                class="docs-icon-rail"
+                                viewBox={item.icon.box}
+                                aria-hidden="true"
+                                set:html={item.icon.body}
+                            />
+                        )}
+                        <span class="docs-label">{item.label}</span>
+                    </a>
+                </li>
+            ) : (
+                <li>
+                    {/* Open by default. There are two groups holding nine pages
+                        between them; the whole reference fits on screen at
+                        once, so showing it beats making someone open a group to
+                        find out what is in it. Still collapsible by hand;
+                        nothing persists that across a navigation. */}
+                    <details open>
+                        <summary>
+                            <span class="docs-item">
+                                <svg
+                                    class="docs-icon-rail"
+                                    viewBox={item.icon.box}
+                                    aria-hidden="true"
+                                    set:html={item.icon.body}
+                                />
+                                <span class="docs-label">{item.label}</span>
+                                <svg
+                                    class="docs-caret"
+                                    viewBox="0 0 24 24"
+                                    width="16"
+                                    height="16"
+                                    aria-hidden="true"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    set:html={CARET}
+                                />
+                            </span>
+                        </summary>
+                        <Astro.self nav={item.entries} current={current} depth={depth + 1} />
+                    </details>
+                </li>
+            ),
+        )
+    }
+</ul>
