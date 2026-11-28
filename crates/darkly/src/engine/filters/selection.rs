@@ -442,7 +442,7 @@ impl DarklyEngine {
         self.set_selection_active(false);
         self.invalidate_selection_cpu_cache();
 
-        let entry = self.commit_selection_undo_entry(rect)?;
+        let entry = self.commit_selection_undo_entry()?;
         self.clear_channel_overlay(OverlayChannel::Selection);
         Some((was_active, entry))
     }
@@ -467,7 +467,7 @@ impl DarklyEngine {
         };
         self.upload_selection_replace(&mask);
 
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
         self.generate_contours_from_mask(&mask);
     }
 
@@ -488,7 +488,7 @@ impl DarklyEngine {
         }
         self.set_selection_pixel_bounds(None);
         self.invalidate_selection_cpu_cache();
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
         self.kick_selection_readback();
     }
 
@@ -518,7 +518,7 @@ impl DarklyEngine {
         if let Some(state) = self.compositor.selection_state_mut() {
             self.selection_pipelines.border(&self.gpu, state, radius);
         }
-        self.finish_selection_edit(was_active, rect);
+        self.finish_selection_edit(was_active);
     }
 
     /// Smooth the active selection: a morphological open then close (`erode N →
@@ -535,7 +535,7 @@ impl DarklyEngine {
         self.run_morph_steps(MorphOp::Erode, radius);
         self.run_morph_steps(MorphOp::Dilate, 2 * radius);
         self.run_morph_steps(MorphOp::Erode, radius);
-        self.finish_selection_edit(was_active, rect);
+        self.finish_selection_edit(was_active);
     }
 
     /// Feather (Gaussian-blur) the active selection edge by `radius` pixels.
@@ -568,7 +568,7 @@ impl DarklyEngine {
         self.save_selection_for_undo(rect);
         let was_active = self.has_selection();
         self.run_morph_steps(op, radius);
-        self.finish_selection_edit(was_active, rect);
+        self.finish_selection_edit(was_active);
     }
 
     /// Run `count` single-pixel morphology steps over the selection mask,
@@ -617,16 +617,16 @@ impl DarklyEngine {
                 });
             }
         }
-        self.finish_selection_edit(was_active, rect);
+        self.finish_selection_edit(was_active);
     }
 
     /// Post-edit bookkeeping shared by the GPU selection-modify ops: drop the
     /// cached pixel bounds and CPU mirror (an async readback repopulates them),
     /// commit the undo step, and kick the readback for marching ants.
-    fn finish_selection_edit(&mut self, was_active: bool, rect: CanvasRect) {
+    fn finish_selection_edit(&mut self, was_active: bool) {
         self.set_selection_pixel_bounds(None);
         self.invalidate_selection_cpu_cache();
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
         self.kick_selection_readback();
     }
 
@@ -670,7 +670,7 @@ impl DarklyEngine {
             }
         }
 
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
     }
 
     /// Generate marching ants contours directly from a RasterizedMask (no readback).
@@ -728,8 +728,7 @@ impl DarklyEngine {
             }
         }
 
-        let rect = self.selection_full_canvas_rect();
-        self.commit_selection_undo(was_active, rect);
+        self.commit_selection_undo(was_active);
         self.kick_selection_readback();
     }
 
@@ -809,7 +808,7 @@ impl DarklyEngine {
             Some(s) => s.canvas_frame(),
             None => return,
         };
-        let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
+        self.pending_selection_snapshot = self.gpu.encode_ret("sel-undo-save", |encoder| {
             self.region_scratch.save_region(
                 &self.gpu.device,
                 encoder,
@@ -818,22 +817,20 @@ impl DarklyEngine {
                 rect,
             )
         });
-        self.pending_selection_snapshot = Some(snap);
     }
 
-    pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: CanvasRect) {
-        if let Some(entry) = self.commit_selection_undo_entry(rect) {
+    pub(crate) fn commit_selection_undo(&mut self, was_active: bool) {
+        if let Some(entry) = self.commit_selection_undo_entry() {
             self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
         }
     }
 
     /// Build the selection's GPU undo entry from the pending snapshot (paired
     /// with a prior [`save_selection_for_undo`](Self::save_selection_for_undo))
-    /// without pushing an action. Returns `None` if the snapshot or selection
-    /// filter is missing.
+    /// without pushing an action. The entry covers exactly the saved rect.
+    /// Returns `None` if the snapshot or selection filter is missing.
     pub(crate) fn commit_selection_undo_entry(
         &mut self,
-        rect: CanvasRect,
     ) -> Option<crate::gpu::region_store::UndoRegionEntry> {
         let Some(snap) = self.pending_selection_snapshot.take() else {
             debug_assert!(false, "commit_selection_undo without a paired save");
@@ -855,7 +852,6 @@ impl DarklyEngine {
             "sel-undo-commit",
             filter_id,
             &snap,
-            rect,
         ))
     }
 
@@ -871,9 +867,7 @@ impl DarklyEngine {
     }
 
     /// Undo rect that covers both the current (pre-op) selection and a new
-    /// shape that's about to be applied. Save and commit must use the same
-    /// rect; otherwise stale bytes outside the save rect leak into the
-    /// commit and corrupt the selection on undo.
+    /// shape that's about to be applied.
     pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> CanvasRect {
         let cw = self.doc.width;
         let ch = self.doc.height;

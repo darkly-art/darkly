@@ -851,6 +851,11 @@ impl CombineMode {
 /// paint reads it in a fragment shader, brush nodes also read it from compute
 /// shaders. A render pipeline may legally use a layout whose visibility is a
 /// superset of the stages it actually uses, so this single layout serves both.
+///
+/// Binding 2 is the value the mask reads outside its texture
+/// ([`MaskOutside`]), consumed by `sample_selection` in
+/// `shaders/lib/canvas.wgsl`. Build bind groups through
+/// [`selection_mask_bind_group`].
 pub fn selection_mask_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("selection-mask-bgl"),
@@ -871,8 +876,113 @@ pub fn selection_mask_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     })
+}
+
+/// What a selection-mask bind group reads outside its texture: past the
+/// canvas window a selection is anchored to, or past the region a cropped
+/// coverage mask spans. The mask owns this fact, so every shader that samples
+/// it through `sample_selection` agrees on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskOutside {
+    /// A selection or coverage mask: nothing past its edge is covered.
+    Uncovered,
+    /// The no-selection default: everything is selected, everywhere.
+    Covered,
+}
+
+/// A [`selection_mask_bgl`] bind group over `view`, reading `outside` past
+/// the texture's edge.
+pub fn selection_mask_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    outside: MaskOutside,
+) -> wgpu::BindGroup {
+    use wgpu::util::DeviceExt;
+    let value: f32 = match outside {
+        MaskOutside::Uncovered => 0.0,
+        MaskOutside::Covered => 1.0,
+    };
+    // A `vec4f` uniform (16 bytes) so the WGSL side needs no padded struct.
+    let outside_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("selection-mask-outside"),
+        contents: bytemuck::cast_slice(&[value, 0.0, 0.0, 0.0]),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("selection-mask-bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: outside_buf.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+/// The bind group a pipeline samples when no selection is active: a 1x1
+/// white mask that reads covered everywhere, inside the window and past it.
+pub fn select_everything_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+) -> wgpu::BindGroup {
+    let (texture, view) = crate::gpu::create_texture_with_view(
+        device,
+        1,
+        1,
+        wgpu::TextureFormat::R8Unorm,
+        "select-everything",
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[255u8],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(1),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("select-everything-sampler"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    selection_mask_bind_group(device, layout, &view, &sampler, MaskOutside::Covered)
 }
 
 /// Ping-pong R8 textures + the selection mask bind group for the document's
@@ -1248,19 +1358,6 @@ impl SelectionState {
         sampler: &wgpu::Sampler,
         layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sel-bg"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
+        selection_mask_bind_group(device, layout, view, sampler, MaskOutside::Uncovered)
     }
 }

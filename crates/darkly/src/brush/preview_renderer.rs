@@ -225,9 +225,10 @@ impl BrushStrokePreviewRenderer {
             spacing,
             base_size,
             Box::new(PassThrough::new()),
+            None,
             // A preview renders its path once and never diffs, so the
-            // epsilon is unused; the reference scale is the honest value.
-            crate::brush::stroke_engine::DIVERGENCE_EPSILON,
+            // tolerance is unused; the reference scale is the honest value.
+            crate::brush::stroke_engine::DivergenceTolerance::at_scale(1.0),
             clone_source_anchor,
             PREVIEW_STROKE_SEED,
             brush_settings::stamp_angle_rate(graph),

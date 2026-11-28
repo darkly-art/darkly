@@ -79,6 +79,8 @@ pub struct BrushPerfCounters {
     pub dispatches: u32,
     /// Sum of `union_w * union_h` across every dab flush.
     pub dab_union_bbox_area: u64,
+    /// Checkpoint saves that copied a slot's whole layer-sized frame.
+    pub checkpoint_full_copies: u32,
     /// Per-flush dab counts. One entry per `flush_dabs` call. Drained
     /// per-event by the bench harness; production paths never read this.
     pub dabs_per_flush: Vec<u32>,
@@ -133,6 +135,9 @@ impl std::ops::AddAssign for BrushPerfCounters {
         self.dab_union_bbox_area = self
             .dab_union_bbox_area
             .saturating_add(rhs.dab_union_bbox_area);
+        self.checkpoint_full_copies = self
+            .checkpoint_full_copies
+            .saturating_add(rhs.checkpoint_full_copies);
         self.dabs_per_flush.append(&mut rhs.dabs_per_flush);
         self.dab_union_bbox_area_per_flush
             .append(&mut rhs.dab_union_bbox_area_per_flush);

@@ -10,6 +10,16 @@ pub enum PixelValue {
     White,
 }
 
+impl PixelValue {
+    /// The value as a render-pass clear color.
+    pub fn clear_color(self) -> wgpu::Color {
+        match self {
+            PixelValue::Transparent => wgpu::Color::TRANSPARENT,
+            PixelValue::White => wgpu::Color::WHITE,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PixelTransformBoundsPolicy {
     AlphaContent,

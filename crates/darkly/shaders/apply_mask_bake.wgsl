@@ -48,8 +48,8 @@ struct VertexOutput {
 }
 
 @vertex fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    // Full-screen triangle trick: 3 vertices cover the [0,1]² square.
-    let unit = vec2f(f32((idx << 1u) & 2u), f32(idx & 2u));
+    // Six vertices, two triangles: exactly the paint region.
+    let unit = quad_corner(idx);
 
     // Map unit quad to the paint region's canvas-space rectangle.
     let canvas_pos = uniforms.origin + unit * uniforms.size;

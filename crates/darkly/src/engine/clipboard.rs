@@ -109,29 +109,22 @@ impl DarklyEngine {
         // so they lift it by `canvas_origin` (identity for an un-cropped doc).
         let canvas_origin = self.doc.canvas_origin;
 
-        // Resolve the node's CanvasFrame once for the cut undo save below and
-        // the undo rect it shares with the matching commit further down.
-        let target_frame = self
-            .compositor
-            .node_texture(layer_id)
-            .map(|t| t.canvas_frame());
-        let undo_rect = target_frame
-            .map(|f| f.canvas_extent)
-            .unwrap_or_else(|| self.doc.canvas_rect());
-
-        // Save undo state for cut before any modification.
+        // Save the whole node for the cut's undo before any modification.
         let cut_snapshot = if is_cut {
-            target_frame.map(|frame| {
-                self.gpu.encode_ret("cut-save", |encoder| {
-                    self.region_scratch.save_region(
-                        &self.gpu.device,
-                        encoder,
-                        &frame,
-                        format,
-                        undo_rect,
-                    )
+            self.compositor
+                .node_texture(layer_id)
+                .map(|t| t.canvas_frame())
+                .and_then(|frame| {
+                    self.gpu.encode_ret("cut-save", |encoder| {
+                        self.region_scratch.save_region(
+                            &self.gpu.device,
+                            encoder,
+                            &frame,
+                            format,
+                            frame.canvas_extent,
+                        )
+                    })
                 })
-            })
         } else {
             None
         };
@@ -266,7 +259,6 @@ impl DarklyEngine {
                 "cut-commit",
                 layer_id,
                 &snap,
-                undo_rect,
             );
             self.push_undo(Box::new(GpuRegionAction::new(entry)));
             self.compositor.mark_node_pixels_dirty(layer_id);
@@ -286,20 +278,27 @@ impl DarklyEngine {
         let [rx, ry, rw, rh] = region;
         // `region` is the canvas window in window-local coords; lift it to plane
         // (`+ canvas_origin`), then translate to the layer texture's own texel
-        // frame (it may sit at a non-zero plane offset). Layers disjoint from the
-        // requested region yield nothing.
-        let (texture, layer_rect) = {
+        // frame (it may sit at a non-zero plane offset). Only the part the
+        // texture holds is read, and the clip is labelled with that part, not
+        // the request. Layers disjoint from the requested region yield nothing.
+        let canvas_origin = self.doc.canvas_origin;
+        let (texture, layer_rect, read) = {
             let layer_tex = self
                 .compositor
                 .node_texture(layer_id)
                 .expect("node texture missing for copy");
             let region_plane = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
-                .to_canvas(self.doc.canvas_origin);
+                .to_canvas(canvas_origin);
             match layer_tex.canvas_to_layer_rect(region_plane) {
-                Some(lr) => (layer_tex.texture(), lr),
+                Some(lr) => (
+                    layer_tex.texture(),
+                    lr,
+                    layer_tex.layer_to_canvas_rect(lr).to_window(canvas_origin),
+                ),
                 None => return,
             }
         };
+        let region = [read.x0() as u32, read.y0() as u32, read.width, read.height];
 
         self.gpu.encode("copy-readback", |encoder| {
             let request =

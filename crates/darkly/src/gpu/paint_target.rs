@@ -715,7 +715,7 @@ impl<'a> GpuPaintTarget<'a> {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &pipelines.gradient_uniform_bind_group, &[0]);
         pass.set_bind_group(1, sel, &[]);
-        pass.draw(0..3, 0..1);
+        pass.draw(0..6, 0..1);
     }
 
     // --- Internal ---
@@ -829,7 +829,7 @@ impl<'a> GpuPaintTarget<'a> {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &chunk.bind_group, &[offset]);
         pass.set_bind_group(1, sel, &[]);
-        pass.draw(0..3, 0..1);
+        pass.draw(0..6, 0..1);
     }
 }
 
@@ -863,7 +863,8 @@ pub struct PaintPipelines {
     gradient_uniform_buf: wgpu::Buffer,
     gradient_uniform_bind_group: wgpu::BindGroup,
 
-    /// 1×1 white selection texture, binds when no selection is active.
+    /// Binds when no selection is active: covered everywhere
+    /// ([`select_everything_bind_group`](crate::gpu::selection::select_everything_bind_group)).
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -953,63 +954,8 @@ impl PaintPipelines {
             }],
         });
 
-        // --- Default selection texture (1×1 white = fully selected) ---
-        let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("default-selection"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &sel_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255u8],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(1),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let sel_view = sel_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("paint-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let default_selection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("paint-default-selection-bg"),
-            layout: &selection_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&sel_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+        let default_selection_bind_group =
+            crate::gpu::selection::select_everything_bind_group(device, queue, &selection_bgl);
 
         // --- Build pipeline variants ---
         let make_pipeline = |label: &str,
@@ -1326,26 +1272,22 @@ impl PaintPipelines {
     }
 
     /// Create a bind group for a custom selection mask texture.
+    ///
+    /// The mask covers nothing past its texture's edge
+    /// ([`MaskOutside::Uncovered`](crate::gpu::selection::MaskOutside)).
     pub fn create_selection_bind_group(
         &self,
         device: &wgpu::Device,
         selection_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("paint-selection-bg"),
-            layout: &self.selection_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(selection_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
+        crate::gpu::selection::selection_mask_bind_group(
+            device,
+            &self.selection_bind_group_layout,
+            selection_view,
+            sampler,
+            crate::gpu::selection::MaskOutside::Uncovered,
+        )
     }
 
     fn composite_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {

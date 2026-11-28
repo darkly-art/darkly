@@ -24,6 +24,7 @@ pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;
 pub mod portable;
+pub mod pressure_settle;
 pub mod preview_renderer;
 pub mod read_mirror_terminal;
 pub mod resampler;

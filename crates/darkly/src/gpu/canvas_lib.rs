@@ -9,7 +9,8 @@
 pub const CANVAS_LIB: &str = include_str!("../../shaders/lib/canvas.wgsl");
 
 /// Prepend the canvas helper library to a shader source so its functions
-/// (`plane_to_selection_uv`, `window_uv_to_plane`) are in scope.
+/// (`plane_to_selection_uv`, `sample_selection`, `window_uv_to_plane`, …) are
+/// in scope.
 pub fn with_canvas_lib(src: &str) -> String {
     format!("{CANVAS_LIB}\n{src}")
 }

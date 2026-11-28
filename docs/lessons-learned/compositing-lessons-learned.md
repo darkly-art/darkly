@@ -122,7 +122,7 @@ The full-screen triangle trick (vertices at unit coords (0,0), (2,0), (0,2)) als
 
 **Fix**: Two changes:
 
-1. **Proper quad geometry**: Replace the full-screen triangle trick with a 6-vertex quad (two triangles at unit corners (0,0), (1,0), (0,1), (1,1)). The rendered region now matches the intended composite area exactly. This is better than a scissor rect because future effects (e.g. liquify) may legitimately need a larger output region; the quad and canvas copy should grow together, not be artificially clipped.
+1. **Proper quad geometry**: Replace the full-screen triangle trick with a 6-vertex quad (two triangles at unit corners (0,0), (1,0), (0,1), (1,1)). The rendered region now matches the intended composite area exactly. This is better than a scissor rect because future effects (e.g. liquify) may legitimately need a larger output region; the quad and canvas copy should grow together, not be artificially clipped. The quad is `quad_corner` in `shaders/lib/canvas.wgsl`, shared by the brush stages and the paint passes (`paint_circle`, `gradient`, `apply_mask_bake`). The paint passes kept the oversized triangle long after this fix, and it went unnoticed because they ran on canvas-sized layers, where the texture edge clips the overhang; on a layer larger than the rect it filled or cleared, the overhang wrote past the rect.
 
 2. **Per-dab submit**: `BrushGpuContext::submit_and_reset()` finishes the current encoder, submits it, and creates a fresh encoder. Called after each dab in `place_dab()`. This ensures each dab's `write_buffer` uniforms are consumed by `submit()` before the next dab overwrites them.
 

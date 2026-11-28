@@ -131,3 +131,21 @@ pub fn assert_same(
     }
     bounds
 }
+
+/// Overrides a config key until dropped, then removes the override.
+/// `config` is a thread-local store and the GPU tests share one thread, so
+/// an override left behind would leak into every test that runs after.
+pub struct ConfigGuard(&'static str);
+
+impl ConfigGuard {
+    pub fn set(key: &'static str, value: f64) -> Self {
+        darkly::config::set(key, darkly::config::ConfigValue::Float(value));
+        ConfigGuard(key)
+    }
+}
+
+impl Drop for ConfigGuard {
+    fn drop(&mut self) {
+        darkly::config::reset(self.0);
+    }
+}

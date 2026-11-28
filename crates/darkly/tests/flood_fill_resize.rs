@@ -5,8 +5,9 @@
 //! window) against a scratch snapshot saved over the layer extent, which
 //! `resize_canvas` leaves put in the plane. After expanding upward the canvas
 //! rect is taller and offset above the layer, so `commit_region`'s containment
-//! assert fired. The fill can only touch the layer texture, so the layer extent
-//! is the correct commit rect.
+//! assert fired. The fill now claims the window, growing the layer to cover it
+//! before the scratch snapshot is taken, so the commit is the diff of that
+//! snapshot.
 //!
 //! Run with: cargo test -p darkly --test flood_fill_resize --features darkly/testing -- --test-threads=1
 
@@ -42,6 +43,30 @@ fn flood_fill(engine: &mut DarklyEngine, layer: LayerId, x: f32, y: f32, color: 
     engine.render(0.0);
 }
 
+/// The layer's RGBA at plane `(x, y)`: its texel inside its texture,
+/// transparent past it. The fill may grow the texture, so reads go by plane
+/// position, never by the texture's own layout.
+fn pixel_at(engine: &DarklyEngine, layer: LayerId, x: i32, y: i32) -> [u8; 4] {
+    let ext = engine.test_node_extent(layer);
+    if !ext.contains(CanvasRect::from_xywh(x, y, 1, 1)) {
+        return [0; 4];
+    }
+    let px = engine.test_readback_layer(layer);
+    let i = ((y - ext.y0()) as usize * ext.width as usize + (x - ext.x0()) as usize) * 4;
+    px[i..i + 4].try_into().unwrap()
+}
+
+/// The layer's content over the canvas window, extent-independent.
+fn window_content(engine: &DarklyEngine, layer: LayerId, window: CanvasRect) -> Vec<u8> {
+    let mut out = Vec::new();
+    for y in window.y0()..window.y1() {
+        for x in window.x0()..window.x1() {
+            out.extend_from_slice(&pixel_at(engine, layer, x, y));
+        }
+    }
+    out
+}
+
 /// Fill a layer whose texture extent is smaller than the canvas window after an
 /// upward resize. The commit must stay within the saved (layer-extent) snapshot.
 #[test]
@@ -59,17 +84,11 @@ fn flood_fill_after_upward_resize_does_not_panic() {
     // Fill inside the surviving layer extent (canvas y in [0, h)).
     flood_fill(&mut engine, layer, 32.0, 16.0, [0, 255, 0, 255]);
 
-    // The seeded pixel (layer-local (32,16)) is now opaque green.
-    let px = engine.test_readback_layer(layer);
-    let idx = ((16u32 * w + 32u32) * 4) as usize;
-    assert!(
-        px[idx] < 50 && px[idx + 1] > 200 && px[idx + 3] > 200,
-        "seed pixel must be opaque green, got ({},{},{},{})",
-        px[idx],
-        px[idx + 1],
-        px[idx + 2],
-        px[idx + 3]
-    );
+    // The seeded pixel is now opaque green, and so is the window area the
+    // resize exposed above the layer: the layer's (transparent) content there
+    // is connected to the seed.
+    assert_eq!(pixel_at(&engine, layer, 32, 16), [0, 255, 0, 255]);
+    assert_eq!(pixel_at(&engine, layer, 32, -16), [0, 255, 0, 255]);
 }
 
 /// Undo restores the pre-fill pixels; redo re-applies the fill. Exercises the
@@ -79,11 +98,12 @@ fn flood_fill_after_upward_resize_undo_redo_round_trips() {
     let (w, h) = (64u32, 32u32);
     let mut engine = test_engine(w, h);
     let layer = engine.add_raster_layer(None);
-    engine.resize_canvas(CanvasRect::from_xywh(0, -(h as i32), w, 2 * h));
+    let window = CanvasRect::from_xywh(0, -(h as i32), w, 2 * h);
+    engine.resize_canvas(window);
 
-    let before = engine.test_readback_layer(layer);
+    let before = window_content(&engine, layer, window);
     flood_fill(&mut engine, layer, 32.0, 16.0, [0, 255, 0, 255]);
-    let filled = engine.test_readback_layer(layer);
+    let filled = window_content(&engine, layer, window);
     assert_ne!(before, filled, "fill must change the layer pixels");
 
     // Let the undo region entry's readback reach `Ready` before restoring.
@@ -92,7 +112,7 @@ fn flood_fill_after_upward_resize_undo_redo_round_trips() {
     }
     engine.undo();
     engine.render(0.0);
-    let after_undo = engine.test_readback_layer(layer);
+    let after_undo = window_content(&engine, layer, window);
     assert_eq!(
         after_undo, before,
         "undo must restore the pre-fill layer pixels"
@@ -101,6 +121,6 @@ fn flood_fill_after_upward_resize_undo_redo_round_trips() {
     engine.redo();
     engine.render(0.0);
     engine.test_flush_readbacks();
-    let after_redo = engine.test_readback_layer(layer);
+    let after_redo = window_content(&engine, layer, window);
     assert_eq!(after_redo, filled, "redo must re-apply the fill");
 }

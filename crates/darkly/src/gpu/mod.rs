@@ -44,6 +44,14 @@ pub fn default_fill(format: wgpu::TextureFormat) -> wgpu::Color {
     }
 }
 
+/// [`default_fill`] as the bytes of one texel of `format`: the value a node
+/// holds wherever its texture does not reach.
+pub fn default_texel(format: wgpu::TextureFormat) -> Vec<u8> {
+    let c = default_fill(format);
+    let rgba = [c.r, c.g, c.b, c.a].map(|v| (v * 255.0).round() as u8);
+    rgba[..region_runs::bytes_per_pixel(format) as usize].to_vec()
+}
+
 /// Create a 2D texture and its default view in one call. Wraps the
 /// `TextureDescriptor` + `create_view` pair that recurs at every transient
 /// (staging / scratch / crop) texture allocation.

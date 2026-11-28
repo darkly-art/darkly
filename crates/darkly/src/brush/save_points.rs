@@ -84,6 +84,17 @@ impl SavePointStore {
             .fold(CanvasRect::empty(), |union, sp| union.union(sp.canvas_bbox))
     }
 
+    /// Union of the footprints of the dabs with index in `0..=through`, in
+    /// canvas pixels: the region in which the scratch after dab `through`
+    /// differs from the stroke's baseline.
+    pub fn dirty_through(&self, through: usize) -> CanvasRect {
+        self.points
+            .get(..=through)
+            .unwrap_or(&[])
+            .iter()
+            .fold(CanvasRect::empty(), |union, sp| union.union(sp.canvas_bbox))
+    }
+
     /// Union of the footprints of every dab after `after`, in canvas
     /// pixels: what a rewind to dab `after` has to undo.
     pub fn dirty_after(&self, after: usize) -> CanvasRect {

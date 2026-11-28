@@ -69,7 +69,9 @@ fn region_store_save_restore_round_trip() {
 
     // Save region.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     let (entry, _req) = store.commit_region(
         &mut enc,
         &device,
@@ -118,7 +120,9 @@ fn region_store_partial_rect() {
 
     // Save only inner 64×64 rect at (32, 32).
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(32, 32, 64, 64));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(32, 32, 64, 64))
+        .expect("rect overlaps the source");
     let (entry, _req) = store.commit_region(
         &mut enc,
         &device,
@@ -176,7 +180,9 @@ fn region_store_redo_round_trip() {
 
     // Save red state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     let (entry_a, _req) = store.commit_region(
         &mut enc,
         &device,
@@ -222,7 +228,9 @@ fn region_store_r8_format() {
 
     // Save.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     let (entry, _req) = store.commit_region(
         &mut enc,
         &device,
@@ -288,7 +296,9 @@ fn region_store_save_full_commit_subrect() {
 
     // Stroke begin: save the full layer.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Simulate dabs landing on the green center, turning it white.
@@ -357,13 +367,15 @@ fn region_store_grow_offset_does_not_overflow_scratch() {
         format,
     );
     let mut enc = encoder(&device);
-    let mut snapshot = store.save_region(
-        &device,
-        &mut enc,
-        &frame(&layer, lw, lh),
-        format,
-        cr(0, 0, lw, lh),
-    );
+    let mut snapshot = store
+        .save_region(
+            &device,
+            &mut enc,
+            &frame(&layer, lw, lh),
+            format,
+            cr(0, 0, lw, lh),
+        )
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -412,13 +424,15 @@ fn assert_grow_clears_stale(
         create_test_texture_with_format(&device, &queue, cap_w, cap_h, &stale, format);
     let stale_frame = frame(&stale_tex, cap_w, cap_h);
     let mut enc = encoder(&device);
-    store.save_region(
-        &device,
-        &mut enc,
-        &stale_frame,
-        format,
-        cr(0, 0, cap_w, cap_h),
-    );
+    store
+        .save_region(
+            &device,
+            &mut enc,
+            &stale_frame,
+            format,
+            cr(0, 0, cap_w, cap_h),
+        )
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // A new stroke on a smaller layer overwrites only its live extent.
@@ -428,7 +442,9 @@ fn assert_grow_clears_stale(
         create_test_texture_with_format(&device, &queue, lw, lh, &live_data, format);
     let live_frame = frame(&live_tex, lw, lh);
     let mut enc = encoder(&device);
-    let mut snapshot = store.save_region(&device, &mut enc, &live_frame, format, old_extent);
+    let mut snapshot = store
+        .save_region(&device, &mut enc, &live_frame, format, old_extent)
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Grow, then read back the whole rebased snapshot.
@@ -526,7 +542,9 @@ fn region_store_commit_outside_saved_panics() {
     let mut store = RegionScratch::new(&device, w, h);
 
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, 32, 32));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, 32, 32))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Commit at a rect that is NOT contained in the saved (0,0,32,32) area.
@@ -564,7 +582,9 @@ fn two_run_entry_restores_from_pending_and_ready() {
     assert_eq!(runs.rects(), &[cr(0, 0, 64, 64), cr(192, 192, 64, 64)]);
 
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     let (entry, req) = store.commit_region(
         &mut enc,
         &device,
@@ -616,11 +636,15 @@ fn held_snapshot_survives_a_later_save() {
     let mut store = RegionScratch::new(&device, w, h);
 
     let mut enc = encoder(&device);
-    let held = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let held = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
     write_texture(&queue, &tex, w, h, 4, &blue);
     let mut enc = encoder(&device);
-    let later = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let later = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     assert!(!std::ptr::eq(held.frame().texture, later.frame().texture));
@@ -637,7 +661,9 @@ fn held_snapshot_survives_a_later_save() {
     drop(held);
     drop(later);
     let mut enc = encoder(&device);
-    let next = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
+    let next = store
+        .save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
     assert!(
         std::ptr::eq(next.frame().texture, slot_texture),

@@ -42,6 +42,8 @@
 //! so it remains valid across layer growth (the Storage Frame Rule), and a
 //! snapshot translates through its own origin rather than the layer's live
 //! frame, so a commit stays correct even after the layer has grown.
+//! `Snapshot.saved` always lies inside the source it was taken from, so every
+//! entry's runs lie inside the node's extent at commit time.
 //!
 //! An entry's buffer holds its runs back to back, each as rows padded to
 //! `COPY_BYTES_PER_ROW_ALIGNMENT` ([`RegionRuns::layout`]).
@@ -179,8 +181,14 @@ impl RegionScratch {
         }
     }
 
-    /// Copy a canvas-space rect from a layer/mask texture into a scratch
-    /// texture and return the [`Snapshot`] that holds it.
+    /// Copy the part of a canvas-space rect that `source` holds into a
+    /// scratch texture and return the [`Snapshot`] that holds it, or `None`
+    /// when the rect and `source` are disjoint.
+    ///
+    /// `Snapshot.saved` is `canvas_rect` clipped to `source`'s extent: texels
+    /// outside the texture do not exist, so there is nothing there to save or
+    /// restore. A commit of the snapshot can therefore only ever describe
+    /// pixels it holds.
     ///
     /// The scratch is texture-aligned to `source`: the snapshot lands at the
     /// same texture-local `(x, y)` it came from, so the snapshot's origin is
@@ -194,10 +202,9 @@ impl RegionScratch {
         source: &CanvasFrame<'_>,
         format: wgpu::TextureFormat,
         canvas_rect: CanvasRect,
-    ) -> Snapshot {
-        let layer_rect = source
-            .canvas_to_layer_rect(canvas_rect)
-            .expect("save_region rect must overlap the source's canvas extent");
+    ) -> Option<Snapshot> {
+        let saved = source.canvas_extent.intersect(canvas_rect)?;
+        let layer_rect = source.canvas_to_layer_rect(saved)?;
         let slot = self.slot_mut(format);
         if Rc::strong_count(slot) > 1
             || slot.width() < layer_rect.x1()
@@ -208,13 +215,13 @@ impl RegionScratch {
             *slot = Rc::new(create_scratch(device, w, h, format));
         }
         let snapshot = Snapshot {
-            saved: canvas_rect,
+            saved,
             format,
             origin: source.canvas_extent.origin,
             texture: Rc::clone(slot),
         };
-        source.copy_rect_to(encoder, &snapshot.frame(), canvas_rect);
-        snapshot
+        source.copy_rect_to(encoder, &snapshot.frame(), saved);
+        Some(snapshot)
     }
 
     /// Re-anchor `snapshot` to a layer that grew from the snapshot's extent

@@ -255,7 +255,9 @@ fn gpu_clear_selection_undo() {
 
     // Save for undo.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store
+        .save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h))
+        .expect("rect overlaps the source");
     submit(&queue, enc);
 
     // Erase within selection.

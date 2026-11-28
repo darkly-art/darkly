@@ -111,10 +111,12 @@ impl DarklyEngine {
             .node_texture(node_id)
             .expect("checked above")
             .canvas_frame();
-        let snap = self.gpu.encode_ret("flip-node-save", |enc| {
+        let Some(snap) = self.gpu.encode_ret("flip-node-save", |enc| {
             self.region_scratch
                 .save_region(&self.gpu.device, enc, &frame, format, region)
-        });
+        }) else {
+            return false;
+        };
         let entry = commit_undo_region(
             &self.gpu,
             &self.region_scratch,
@@ -122,7 +124,6 @@ impl DarklyEngine {
             "flip-node-commit",
             node_id,
             &snap,
-            region,
         );
 
         // Permute the region in place, masked to the selection shape when present.

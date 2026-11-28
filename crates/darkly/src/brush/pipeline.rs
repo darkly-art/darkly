@@ -501,61 +501,8 @@ impl BrushPipelines {
                 }],
             });
 
-        // ── Default selection (1×1 white = fully selected) ─────────
-        let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("brush-default-selection"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &sel_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255u8],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(1),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let sel_view = sel_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sel_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("brush-selection-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let default_selection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-default-selection-bg"),
-            layout: &selection_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&sel_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sel_sampler),
-                },
-            ],
-        });
+        let default_selection_bind_group =
+            crate::gpu::selection::select_everything_bind_group(device, queue, &selection_bgl);
 
         // Linear sampler shared by every Scratch's read-mirror bind group
         // and the format-bridging blits.  Linear because liquify reads at

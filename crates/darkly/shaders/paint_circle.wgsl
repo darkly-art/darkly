@@ -28,6 +28,8 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(0) var t_selection: texture_2d<f32>;
 @group(1) @binding(1) var t_sampler: sampler;
+// `.x` is the selection's value past the canvas window (see `sample_selection`).
+@group(1) @binding(2) var<uniform> t_selection_outside: vec4f;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -35,8 +37,8 @@ struct VertexOutput {
 }
 
 @vertex fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    // Full-screen triangle trick: 3 vertices cover the [0,1]² square.
-    let unit = vec2f(f32((idx << 1u) & 2u), f32(idx & 2u));
+    // Six vertices, two triangles: exactly the paint region.
+    let unit = quad_corner(idx);
 
     // Map unit quad to the paint region's canvas-space rectangle.
     let canvas_pos = uniforms.origin + unit * uniforms.size;
@@ -69,9 +71,14 @@ struct VertexOutput {
 
     // Selection masking: map the plane position to the window-anchored
     // selection mask before sampling (see shaders/lib/canvas.wgsl).
-    let sel_uv = plane_to_selection_uv(in.canvas_pos, uniforms.canvas_origin, uniforms.canvas_size);
-    let sel = textureSample(t_selection, t_sampler, sel_uv).r;
-    coverage *= sel;
+    coverage *= sample_selection(
+        t_selection,
+        t_sampler,
+        in.canvas_pos,
+        uniforms.canvas_origin,
+        uniforms.canvas_size,
+        t_selection_outside.x,
+    );
 
     return vec4f(uniforms.color.rgb, uniforms.color.a * coverage);
 }

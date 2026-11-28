@@ -51,8 +51,10 @@ pub struct CheckpointRestore {
 /// What a slot's textures are known to hold.
 struct SlotContent {
     /// The textures equal the scratch as of this save point, relative to
-    /// the current dab list, everywhere in the frame outside `stale`.
-    save_point_index: usize,
+    /// the current dab list, everywhere in the frame outside `stale`; `None`
+    /// for the stroke's baseline, before its first dab, which orders below
+    /// every save point.
+    save_point_index: Option<usize>,
     /// Where they do not: the footprint of dabs a rewind discarded after
     /// this slot was written. Copied along with the dirtied range on the
     /// next save into the slot.
@@ -198,9 +200,12 @@ impl CheckpointSlot {
     /// restore point's own index.
     fn copy_region(&self, save_points: &SavePointStore, save_point_index: usize) -> CanvasRect {
         match &self.content {
-            Some(c) if c.save_point_index <= save_point_index => c
+            Some(c) if c.save_point_index <= Some(save_point_index) => c
                 .stale
-                .union(save_points.dirty_between(c.save_point_index, save_point_index))
+                .union(match c.save_point_index {
+                    Some(after) => save_points.dirty_between(after, save_point_index),
+                    None => save_points.dirty_through(save_point_index),
+                })
                 .intersect(self.frame)
                 .unwrap_or(CanvasRect::empty()),
             _ => {
@@ -251,7 +256,9 @@ impl CheckpointSlot {
 ///    A save copies `c.stale` plus the range dirtied since `c`; a rewind
 ///    that discards dabs after a slot's index rewrites `c` to the restore
 ///    point and adds the discarded footprint to `c.stale`; a reallocation
-///    or `clear()` sets `content = None`.
+///    or `clear()` sets `content = None`. A rewind to the stroke's
+///    baseline ([`CheckpointRing::rewind_to_baseline`]) is a rewind to a
+///    point before every save point.
 ///
 /// The eviction policy in [`pick_slot`] protects the sole anchor while it
 /// is the only slot satisfying the coverage invariant, then picks the
@@ -395,7 +402,7 @@ impl CheckpointRing {
         render_state: RenderCheckpoint,
         tip_vi: usize,
         max_div_window: usize,
-    ) {
+    ) -> bool {
         let extra_formats: Vec<wgpu::TextureFormat> = extra.iter().map(|t| t.format()).collect();
         let slot_idx = self.pick_slot(tip_vi, max_div_window, vector_index);
         let slot = &mut self.slots[slot_idx];
@@ -425,8 +432,9 @@ impl CheckpointRing {
             }
         }
 
+        let whole_frame = region == slot.frame;
         slot.content = Some(SlotContent {
-            save_point_index,
+            save_point_index: Some(save_point_index),
             stale: CanvasRect::empty(),
         });
         slot.save_point_index = save_point_index;
@@ -448,6 +456,7 @@ impl CheckpointRing {
                 .map(|s| s.vector_index)
                 .collect::<Vec<_>>()
         );
+        whole_frame
     }
 
     /// Whether the ring has at least one valid slot. Used by the engine to
@@ -585,10 +594,26 @@ impl CheckpointRing {
                 continue;
             }
             if let Some(c) = slot.content.as_mut() {
-                if c.save_point_index > rewind.save_point_index {
-                    c.save_point_index = rewind.save_point_index;
+                if c.save_point_index > Some(rewind.save_point_index) {
+                    c.save_point_index = Some(rewind.save_point_index);
                     c.stale = c.stale.union(rewind.region);
                 }
+            }
+        }
+    }
+
+    /// Invalidate every checkpoint for a rewind to the stroke's baseline,
+    /// the scratch as the terminal's whole-scratch prologue leaves it, and
+    /// record on every slot that it now equals that baseline everywhere
+    /// outside `region`, the footprint of every dab discarded (content
+    /// invariant 4). The next save into a slot then copies what changed,
+    /// as after any other rewind, rather than its whole frame.
+    pub fn rewind_to_baseline(&mut self, region: CanvasRect) {
+        for slot in &mut self.slots {
+            slot.valid = false;
+            if let Some(c) = slot.content.as_mut() {
+                c.save_point_index = None;
+                c.stale = c.stale.union(region);
             }
         }
     }
@@ -687,7 +712,7 @@ mod tests {
         let s = &mut ring.slots[slot];
         s.frame = frame;
         s.content = Some(SlotContent {
-            save_point_index: sp,
+            save_point_index: Some(sp),
             stale: CanvasRect::empty(),
         });
         s.save_point_index = sp;
@@ -695,7 +720,7 @@ mod tests {
         s.valid = true;
     }
 
-    fn content_of(ring: &CheckpointRing, slot: usize) -> Option<(usize, CanvasRect)> {
+    fn content_of(ring: &CheckpointRing, slot: usize) -> Option<(Option<usize>, CanvasRect)> {
         ring.slots[slot]
             .content
             .as_ref()
@@ -735,12 +760,12 @@ mod tests {
             },
         );
         assert!(!ring.slots[2].valid);
-        assert_eq!(content_of(&ring, 2), Some((2, region)));
+        assert_eq!(content_of(&ring, 2), Some((Some(2), region)));
         assert!(
             ring.slots[0].valid,
             "a slot below the divergence keeps its content"
         );
-        assert_eq!(content_of(&ring, 0), Some((1, CanvasRect::empty())));
+        assert_eq!(content_of(&ring, 0), Some((Some(1), CanvasRect::empty())));
 
         // The replay rewrites dabs 3 and 4 elsewhere.
         store.truncate(3);
@@ -762,14 +787,14 @@ mod tests {
                 region: region2,
             },
         );
-        assert_eq!(content_of(&ring, 2), Some((0, region.union(region2))));
-        assert_eq!(content_of(&ring, 0), Some((0, region2)));
+        assert_eq!(content_of(&ring, 2), Some((Some(0), region.union(region2))));
+        assert_eq!(content_of(&ring, 0), Some((Some(0), region2)));
         assert_eq!(content_of(&ring, 1), None);
 
         // The copy is clipped to the frame.
         ring.slots[3].frame = r(0, 0, 64, 64);
         ring.slots[3].content = Some(SlotContent {
-            save_point_index: 0,
+            save_point_index: Some(0),
             stale: CanvasRect::empty(),
         });
         assert_eq!(ring.slots[3].copy_region(&store, 4), r(10, 0, 54, 10));
@@ -780,6 +805,35 @@ mod tests {
             assert_eq!(content_of(&ring, i), None);
             assert_eq!(ring.slots[i].copy_region(&store, 4), ring.slots[i].frame);
         }
+    }
+
+    /// A rewind to the stroke's baseline invalidates every slot but keeps
+    /// what each holds: the baseline outside its stale rect and the
+    /// discarded dabs, so the next save copies those plus the dabs replayed
+    /// since, not the whole frame. A slot with unknown content stays so.
+    #[test]
+    fn a_baseline_rewind_keeps_slot_content() {
+        let mut store = SavePointStore::new();
+        for i in 0..6 {
+            store.push(r(i as i32 * 10, 0, 10, 10), i, cp());
+        }
+        let frame = r(0, 0, 256, 256);
+        let mut ring = CheckpointRing::new();
+        seed_content(&mut ring, 0, 1, frame);
+        seed_content(&mut ring, 2, 4, frame);
+        ring.slots[1].frame = frame;
+        let discarded = store.full_bbox().unwrap();
+        ring.rewind_to_baseline(discarded);
+        assert!(!ring.has_any_valid());
+        assert_eq!(content_of(&ring, 0), Some((None, discarded)));
+        assert_eq!(content_of(&ring, 2), Some((None, discarded)));
+        assert_eq!(content_of(&ring, 1), None);
+        // The replay draws two dabs elsewhere.
+        store.clear();
+        store.push(r(100, 0, 10, 10), 0, cp());
+        store.push(r(110, 0, 10, 10), 1, cp());
+        assert_eq!(ring.slots[0].copy_region(&store, 1), r(0, 0, 120, 10));
+        assert_eq!(ring.slots[1].copy_region(&store, 1), frame);
     }
 
     /// On a device: a slot invalidated by a rewind still holds the texels
