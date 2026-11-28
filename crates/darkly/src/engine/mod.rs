@@ -171,10 +171,15 @@ pub(crate) enum ReadbackContext {
         snapshot: crate::gpu::region_store::Snapshot,
     },
     ColorPick,
+    /// Readback of the part of a node a copy or cut reads; the completion
+    /// handler projects it into the clip over the plane rect `region`.
     Copy {
-        node_id: LayerId,
-        region: [u32; 4],
-        is_cut: bool,
+        region: crate::coord::CanvasRect,
+        /// The texels read, as `FloodFill::extent`.
+        extent: crate::gpu::layer_readback::LayerReadbackExtent,
+        /// The selection over `region` at copy time, scaling the clip's
+        /// coverage.
+        selection: Option<Vec<u8>>,
     },
     MagicWand {
         was_active: bool,

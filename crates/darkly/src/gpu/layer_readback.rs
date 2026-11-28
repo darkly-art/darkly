@@ -22,6 +22,9 @@
 //!   paint-bucket fill tool, via the scanline fills in [`crate::gpu::flood_fill`].
 //! - [`LayerReadbackExtent::opacity_to_canvas_mask`] - "alpha to selection",
 //!   the per-pixel opacity of the node.
+//! - [`LayerReadbackExtent::clip_rgba`] - copy and cut: the node's content
+//!   over the copied region as a clipboard clip, read through
+//!   [`request_layer_region_readback`] so only the region is read back.
 
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback::{self, ReadbackRequest};
@@ -117,25 +120,59 @@ impl LayerReadbackExtent {
         }
     }
 
-    /// The node's content over the canvas window: a **window-local** buffer
-    /// sized `canvas_width × canvas_height` in the texture's own format (the
-    /// frame the selection texture is indexed in, see `crate::coord`). Window
-    /// pixels the texture covers take its texels; the rest take the format's
-    /// uncovered value ([`crate::gpu::default_texel`]).
-    fn window_content(&self, pixels: &[u8]) -> Vec<u8> {
-        let bpp = crate::gpu::region_runs::bytes_per_pixel(self.format) as usize;
-        let cw = self.canvas_width as usize;
-        let ch = self.canvas_height as usize;
-        let mut content = crate::gpu::default_texel(self.format).repeat(cw * ch);
+    /// The node's content over `region` as a clipboard clip, row-major over
+    /// `region`: straight-alpha RGBA whose RGB is the node's value and whose
+    /// alpha is coverage. An R8 node's value `v` becomes opaque gray
+    /// `[v, v, v, 255]`, so a mask's black copies as black and the white past
+    /// its texture travels with the clip; an RGBA node's texels pass through.
+    /// `selection`, an R8 buffer over `region`, scales alpha only.
+    pub fn clip_rgba(
+        &self,
+        pixels: &[u8],
+        region: crate::coord::CanvasRect,
+        selection: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let content = self.region_content(pixels, region);
+        let mut rgba = match self.format {
+            wgpu::TextureFormat::R8Unorm => content.iter().flat_map(|&v| [v, v, v, 255]).collect(),
+            _ => content,
+        };
+        if let Some(selection) = selection {
+            for (px, &s) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(selection) {
+                px[3] = ((px[3] as u16 * s as u16 + 127) / 255) as u8;
+            }
+        }
+        rgba
+    }
 
-        let (cox, coy) = (self.canvas_origin_x, self.canvas_origin_y);
-        // Plane-space bounds of the layer footprint clipped to the canvas
-        // WINDOW `[canvas_origin, canvas_origin + canvas_size]`; the output is
-        // written at the window-local texel `plane − canvas_origin`.
-        let x0 = self.offset_x.max(cox);
-        let y0 = self.offset_y.max(coy);
-        let x1 = (self.offset_x + self.width as i32).min(cox + self.canvas_width as i32);
-        let y1 = (self.offset_y + self.height as i32).min(coy + self.canvas_height as i32);
+    /// The node's content over the canvas window: a **window-local** buffer
+    /// (the frame the selection texture is indexed in, see `crate::coord`).
+    fn window_content(&self, pixels: &[u8]) -> Vec<u8> {
+        let window = crate::coord::CanvasRect::from_xywh(
+            self.canvas_origin_x,
+            self.canvas_origin_y,
+            self.canvas_width,
+            self.canvas_height,
+        );
+        self.region_content(pixels, window)
+    }
+
+    /// The node's content over the plane rect `region`: a buffer sized to
+    /// `region` in the texture's own format, row-major from its top-left.
+    /// Pixels the read texels cover take them; the rest take the format's
+    /// uncovered value ([`crate::gpu::default_texel`]).
+    fn region_content(&self, pixels: &[u8], region: crate::coord::CanvasRect) -> Vec<u8> {
+        let bpp = crate::gpu::region_runs::bytes_per_pixel(self.format) as usize;
+        let rw = region.width as usize;
+        let mut content =
+            crate::gpu::default_texel(self.format).repeat(rw * region.height as usize);
+
+        // Plane-space bounds of the read texels clipped to `region`; the output
+        // is written at `plane − region origin`.
+        let x0 = self.offset_x.max(region.x0());
+        let y0 = self.offset_y.max(region.y0());
+        let x1 = (self.offset_x + self.width as i32).min(region.x0() + region.width as i32);
+        let y1 = (self.offset_y + self.height as i32).min(region.y0() + region.height as i32);
         if x0 >= x1 || y0 >= y1 {
             return content;
         }
@@ -143,12 +180,12 @@ impl LayerReadbackExtent {
         let stride = self.width as usize;
         let row_bytes = (x1 - x0) as usize * bpp;
         let tx = (x0 - self.offset_x) as usize; // layer-local col
-        let wx = (x0 - cox) as usize; // window-local col
+        let rx = (x0 - region.x0()) as usize; // region-local col
         for py in y0..y1 {
             let ty = (py - self.offset_y) as usize; // layer-local row
-            let wy = (py - coy) as usize; // window-local row
+            let ry = (py - region.y0()) as usize; // region-local row
             let src = (ty * stride + tx) * bpp;
-            let dst = (wy * cw + wx) * bpp;
+            let dst = (ry * rw + rx) * bpp;
             content[dst..dst + row_bytes].copy_from_slice(&pixels[src..src + row_bytes]);
         }
 
@@ -178,6 +215,36 @@ pub fn request_layer_readback(
         target.layer_extent(),
     );
     (request, extent)
+}
+
+/// Encode a readback of the part of a node's texture inside the plane rect
+/// `region`, for producers that need only that part (copy). The extent
+/// describes the texels read, so the projections place them the same way they
+/// place a full-extent read. The request is `None` when the texture does not
+/// reach `region`: the producer still runs, on no texels, and sees only the
+/// node's uncovered value.
+pub fn request_layer_region_readback(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &GpuPaintTarget<'_>,
+    region: crate::coord::CanvasRect,
+) -> (Option<ReadbackRequest>, LayerReadbackExtent) {
+    let mut extent = LayerReadbackExtent::from_target(target);
+    let Some(read) = target.canvas_extent().intersect(region) else {
+        (extent.width, extent.height) = (0, 0);
+        return (None, extent);
+    };
+    let local = crate::coord::LayerRect::from_xywh(
+        (read.x0() - extent.offset_x) as u32,
+        (read.y0() - extent.offset_y) as u32,
+        read.width,
+        read.height,
+    );
+    (extent.offset_x, extent.offset_y) = (read.x0(), read.y0());
+    (extent.width, extent.height) = (read.width, read.height);
+    let request =
+        readback::request_readback(device, encoder, target.texture(), target.format(), local);
+    (Some(request), extent)
 }
 
 #[cfg(test)]
@@ -278,6 +345,40 @@ mod tests {
         assert_eq!(at(0, 0), 255, "the seed, outside the texture");
         assert_eq!(at(5, 5), 255, "the far corner of the window");
         assert_eq!(at(1, 1), 0, "the opaque layer bounds the fill");
+    }
+
+    /// A mask's clip is opaque gray everywhere in the region: black stays
+    /// black (not "nothing copied"), and the region past the texture carries
+    /// the mask's white.
+    #[test]
+    fn mask_clip_is_opaque_gray_with_white_past_the_texture() {
+        let pixels = vec![0u8, 64, 255, 32];
+        let ext = cropped_extent(wgpu::TextureFormat::R8Unorm);
+        // Plane (2, 2)..(5, 3): one pixel left of the texture, then its top row.
+        let clip = ext.clip_rgba(
+            &pixels,
+            crate::coord::CanvasRect::from_xywh(2, 2, 3, 1),
+            None,
+        );
+        assert_eq!(
+            clip,
+            [[255, 255, 255, 255], [0, 0, 0, 255], [64, 64, 64, 255]].concat()
+        );
+    }
+
+    /// A layer's clip carries its texels, transparent past the texture, and a
+    /// selection scales coverage only, never the value.
+    #[test]
+    fn clip_selection_scales_alpha_only() {
+        let pixels = [200u8, 100, 50, 255].repeat(4);
+        let ext = cropped_extent(wgpu::TextureFormat::Rgba8Unorm);
+        let region = crate::coord::CanvasRect::from_xywh(2, 2, 2, 1);
+        let clip = ext.clip_rgba(&pixels, region, Some(&[255, 128]));
+        assert_eq!(clip, [[0, 0, 0, 0], [200, 100, 50, 128]].concat());
+
+        let mask = cropped_extent(wgpu::TextureFormat::R8Unorm);
+        let clip = mask.clip_rgba(&[0u8, 64, 255, 32], region, Some(&[64, 128]));
+        assert_eq!(clip, [[255, 255, 255, 64], [0, 0, 0, 128]].concat());
     }
 
     /// A layer entirely outside the canvas window projects to an empty mask

@@ -367,11 +367,11 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::Copy {
-                node_id,
                 region,
-                is_cut,
+                extent,
+                selection,
             } => {
-                self.complete_copy(node_id, region, is_cut, pixels);
+                self.complete_copy(region, extent, selection, pixels);
             }
             ReadbackContext::MagicWand {
                 was_active,

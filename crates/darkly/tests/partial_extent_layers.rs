@@ -254,6 +254,8 @@ fn cut_without_selection_on_layer_partly_covering_canvas() {
 
 /// REGRESSION: the same mislabelled readback on a mask indexed past the end of
 /// the R8 buffer while widening it to RGBA (a panic in release builds too).
+/// A mask's white past its texture is content, so the clip is the whole
+/// window, white where the mask's texture does not reach.
 #[test]
 fn copy_mask_without_selection_on_host_partly_covering_canvas() {
     // A mask takes the window it was added in; moving the window afterwards
@@ -271,7 +273,25 @@ fn copy_mask_without_selection_on_host_partly_covering_canvas() {
     e.copy(mask);
     settle(&mut e);
     let clip = e.poll_copy_result().expect("copy produced a clip");
-    assert_eq!((clip.width, clip.height), (overlap.width, overlap.height));
+    let window = WINDOWS[1];
+    assert_eq!(
+        (clip.offset_x, clip.offset_y, clip.width, clip.height),
+        (window.x0(), window.y0(), window.width, window.height)
+    );
+    // A window pixel the mask's texture does not reach.
+    let (x, y) = (0..window.height as i32)
+        .flat_map(|y| (0..window.width as i32).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            !overlap.contains(CanvasRect::from_xywh(
+                window.x0() + x,
+                window.y0() + y,
+                1,
+                1,
+            ))
+        })
+        .expect("the window reaches past the mask");
+    let i = (y as usize * window.width as usize + x as usize) * 4;
+    assert_eq!(clip.rgba[i..i + 4], [255, 255, 255, 255]);
 }
 
 /// REGRESSION: paste-in-place that grew its target (here left and up, from a
