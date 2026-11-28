@@ -1354,3 +1354,114 @@ fn cancel_floating_after_layer_grow() {
         buggy[3],
     );
 }
+
+/// An engine under a cropped window holding an opaque 32x32 red/blue checker
+/// of 4x4 cells at plane (20, 12), and an empty raster to paste it onto.
+/// Returns `(engine, source, target, checker)`.
+fn checker_engine() -> (darkly::engine::DarklyEngine, LayerId, LayerId, Vec<u8>) {
+    let (device, queue) = test_device();
+    let mut e = darkly::engine::DarklyEngine::new(
+        darkly::gpu::context::GpuContext::new_headless(device, queue),
+        64,
+        64,
+    );
+    e.resize_canvas(CanvasRect::from_xywh(8, 8, 64, 48));
+    let checker: Vec<u8> = (0..32 * 32)
+        .flat_map(|i| {
+            let (x, y) = (i % 32, i / 32);
+            if (x / 4 + y / 4) % 2 == 0 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        })
+        .collect();
+    let source = e.paste_image(32, 32, &checker, 20, 12, None);
+    let target = e.add_raster_layer(None);
+    settle_engine(&mut e);
+    (e, source, target, checker)
+}
+
+fn settle_engine(e: &mut darkly::engine::DarklyEngine) {
+    for _ in 0..8 {
+        e.test_flush_readbacks();
+        e.render(0.0);
+    }
+}
+
+/// Plane-space texel of a node, or `None` outside its texture.
+fn texel(e: &darkly::engine::DarklyEngine, id: LayerId, x: i32, y: i32) -> Option<[u8; 4]> {
+    let ext = e.test_node_extent(id);
+    if !ext.contains(CanvasRect::from_xywh(x, y, 1, 1)) {
+        return None;
+    }
+    let px = e.test_readback_layer(id);
+    let i = ((y - ext.y0()) as usize * ext.width as usize + (x - ext.x0()) as usize) * 4;
+    Some(px[i..i + 4].try_into().unwrap())
+}
+
+/// Every checker texel of `target`, offset by `(dx, dy)`, that differs from
+/// the checker, described for the failure message.
+fn checker_mismatches(
+    e: &darkly::engine::DarklyEngine,
+    target: LayerId,
+    checker: &[u8],
+    (dx, dy): (i32, i32),
+) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for y in 0..32 {
+        for x in 0..32 {
+            let i = (y * 32 + x) as usize * 4;
+            let want: [u8; 4] = checker[i..i + 4].try_into().unwrap();
+            let (px, py) = (20 + x + dx, 12 + y + dy);
+            let got = texel(e, target, px, py);
+            if got != Some(want) {
+                wrong.push(format!("plane ({px}, {py}): want {want:?}, got {got:?}"));
+            }
+        }
+    }
+    wrong
+}
+
+/// REGRESSION: paste in place at identity must land texel for texel. The
+/// commit's rotated-grid supersample blurred every edge of the content even
+/// when nothing moved.
+#[test]
+fn paste_in_place_at_identity_is_texel_exact() {
+    let (mut e, source, target, checker) = checker_engine();
+    e.copy(source);
+    settle_engine(&mut e);
+    e.paste_in_place(Some(target)).expect("paste in place");
+    settle_engine(&mut e);
+
+    let wrong = checker_mismatches(&e, target, &checker, (0, 0));
+    assert!(
+        wrong.is_empty(),
+        "{} of 1024 texels differ; first {:?}",
+        wrong.len(),
+        wrong.first()
+    );
+}
+
+/// A floating paste dragged by whole pixels lands texel for texel at the
+/// moved-to position.
+#[test]
+fn whole_pixel_drag_commits_texel_exact() {
+    let (mut e, source, target, checker) = checker_engine();
+    e.copy(source);
+    settle_engine(&mut e);
+    assert!(e.paste_in_place_floating(target), "paste must float");
+    e.update_floating_matrix(darkly::transform::Transform::from_affine(affine_translate(
+        5.0, -3.0,
+    )));
+    e.commit_floating();
+    settle_engine(&mut e);
+
+    let wrong = checker_mismatches(&e, target, &checker, (5, -3));
+    assert!(
+        wrong.is_empty(),
+        "{} of 1024 texels differ; first {:?}",
+        wrong.len(),
+        wrong.first()
+    );
+}

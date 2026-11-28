@@ -391,3 +391,199 @@ fn paste_does_not_seed_mask_from_active_selection() {
          active selection"
     );
 }
+
+/// The cropped window the paste-in-place fixtures copy and paste under: plane
+/// `x` 8..72, so a mask stored over plane `(0, 0, 64, 64)` leaves the window's
+/// right strip uncovered (`docs/coordinate-systems.md`: test with a moved
+/// window and a node that only partly covers it).
+const WINDOW: darkly::coord::CanvasRect = darkly::coord::CanvasRect::from_xywh(8, 8, 64, 48);
+
+/// A mask's content over [`WINDOW`], row-major: its texel inside the mask
+/// texture, its uncovered value (white) past it.
+fn mask_over_window(e: &DarklyEngine, mask: LayerId) -> Vec<u8> {
+    let ext = e.test_node_extent(mask);
+    let px = e.test_readback_layer(mask);
+    let mut out = Vec::with_capacity((WINDOW.width * WINDOW.height) as usize);
+    for y in WINDOW.y0()..WINDOW.y0() + WINDOW.height as i32 {
+        for x in WINDOW.x0()..WINDOW.x0() + WINDOW.width as i32 {
+            let inside = ext.contains(darkly::coord::CanvasRect::from_xywh(x, y, 1, 1));
+            out.push(if inside {
+                px[(y - ext.y0()) as usize * ext.width as usize + (x - ext.x0()) as usize]
+            } else {
+                255
+            });
+        }
+    }
+    out
+}
+
+/// Two masks to copy between, under [`WINDOW`]. A's is seeded from a feathered
+/// rect, so it holds 0, a ramp, and 255, and stops short of the window's right
+/// edge. B's is seeded from a hard rect after the window moved, so it covers
+/// the window and holds both 0 and 255: a pixel B keeps is told apart from
+/// one A wrote.
+fn two_masks() -> (DarklyEngine, LayerId, LayerId) {
+    let mut e = test_engine(64, 64);
+    let a = e.add_raster_layer(None);
+    e.select_rect(16.0, 16.0, 16.0, 14.0, SelectionMode::Replace, true, 3.0);
+    settle(&mut e);
+    e.add_mask(a).expect("add mask");
+    e.clear_selection();
+    settle(&mut e);
+
+    e.resize_canvas(WINDOW);
+    let b = e.add_raster_layer(None);
+    e.select_rect(8.0, 30.0, 48.0, 26.0, SelectionMode::Replace, false, 0.0);
+    settle(&mut e);
+    e.add_mask(b).expect("add mask");
+    e.clear_selection();
+    settle(&mut e);
+
+    let mask_a = e.test_mask_id(a).expect("A has a mask");
+    let mask_b = e.test_mask_id(b).expect("B has a mask");
+    let ext_a = e.test_node_extent(mask_a);
+    assert!(
+        ext_a.x0() + ext_a.width as i32 <= 64,
+        "A's mask must stop short of the window, at plane x = 64"
+    );
+    let over_a = mask_over_window(&e, mask_a);
+    assert!(over_a.contains(&0) && over_a.iter().any(|&v| v != 0 && v != 255));
+    let over_b = mask_over_window(&e, mask_b);
+    assert!(over_b.contains(&0) && over_b.contains(&255));
+    (e, mask_a, mask_b)
+}
+
+/// Window-local index of plane `(x, y)` in a [`mask_over_window`] buffer.
+fn window_index(x: i32, y: i32) -> usize {
+    (y - WINDOW.y0()) as usize * WINDOW.width as usize + (x - WINDOW.x0()) as usize
+}
+
+/// Paste the clipboard in place onto `mask`, through the floating session
+/// (`floating`) or the committed verb, and settle.
+fn paste_onto(e: &mut DarklyEngine, mask: LayerId, floating: bool) {
+    if floating {
+        assert!(e.paste_in_place_floating(mask), "paste must float");
+        e.commit_floating();
+    } else {
+        e.paste_in_place(Some(mask)).expect("paste in place");
+    }
+    settle(e);
+}
+
+/// REGRESSION: a mask copied and pasted in place into another mask must land
+/// identically. The copy dropped A's black (0 became "nothing copied"), left
+/// out the white past A's texture, and the paste blurred the rest.
+#[test]
+fn mask_paste_in_place_lands_identically() {
+    for floating in [true, false] {
+        let (mut e, mask_a, mask_b) = two_masks();
+        let expected = mask_over_window(&e, mask_a);
+        copy_into_clipboard(&mut e, mask_a);
+        paste_onto(&mut e, mask_b, floating);
+
+        let got = mask_over_window(&e, mask_b);
+        let wrong: Vec<_> = (0..got.len()).filter(|&i| got[i] != expected[i]).collect();
+        assert!(
+            wrong.is_empty(),
+            "floating {floating}: {} of {} window pixels differ from A's mask; first at \
+             window-local {:?}: A {} B {}",
+            wrong.len(),
+            got.len(),
+            wrong
+                .first()
+                .map(|&i| (i % WINDOW.width as usize, i / WINDOW.width as usize)),
+            wrong.first().map_or(0, |&i| expected[i]),
+            wrong.first().map_or(0, |&i| got[i]),
+        );
+    }
+}
+
+/// REGRESSION: a mask copied through a hard selection lands identically
+/// inside the selection and leaves the target alone outside it. The
+/// selection spans A's ramp and black and crosses A's texture edge into the
+/// white past it.
+#[test]
+fn mask_paste_in_place_of_a_selection_lands_inside_it() {
+    let (mut e, mask_a, mask_b) = two_masks();
+    let a = mask_over_window(&e, mask_a);
+    let b = mask_over_window(&e, mask_b);
+    let (sx, sy, sw, sh) = (24, 12, 46, 30);
+    let selected = |x: i32, y: i32| x >= sx && x < sx + sw && y >= sy && y < sy + sh;
+    e.select_rect(
+        sx as f32,
+        sy as f32,
+        sw as f32,
+        sh as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    settle(&mut e);
+    copy_into_clipboard(&mut e, mask_a);
+    e.clear_selection();
+    settle(&mut e);
+    paste_onto(&mut e, mask_b, true);
+
+    let got = mask_over_window(&e, mask_b);
+    let mut wrong = Vec::new();
+    for y in WINDOW.y0()..WINDOW.y0() + WINDOW.height as i32 {
+        for x in WINDOW.x0()..WINDOW.x0() + WINDOW.width as i32 {
+            let i = window_index(x, y);
+            let want = if selected(x, y) { a[i] } else { b[i] };
+            if got[i] != want {
+                wrong.push((x, y, want, got[i]));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} pixels differ; first (plane x, y, want, got): {:?}",
+        wrong.len(),
+        wrong.first()
+    );
+}
+
+/// REGRESSION: a soft selection feathers where the copied mask lands; it must
+/// not darken the copied values. Each pixel is A's value blended over B's by
+/// the selection, within float rounding.
+#[test]
+fn mask_paste_in_place_of_a_soft_selection_feathers_where_it_lands() {
+    let (mut e, mask_a, mask_b) = two_masks();
+    let a = mask_over_window(&e, mask_a);
+    let b = mask_over_window(&e, mask_b);
+    e.select_rect(26.0, 20.0, 30.0, 24.0, SelectionMode::Replace, true, 4.0);
+    settle(&mut e);
+    let sel = e
+        .test_selection_cpu_cache()
+        .expect("selection cache")
+        .to_vec();
+    assert!(
+        sel.iter().any(|&s| s != 0 && s != 255),
+        "the selection must be soft"
+    );
+    copy_into_clipboard(&mut e, mask_a);
+    e.clear_selection();
+    settle(&mut e);
+    paste_onto(&mut e, mask_b, true);
+
+    let got = mask_over_window(&e, mask_b);
+    let mut wrong = Vec::new();
+    for (i, &s) in sel.iter().enumerate() {
+        let s = s as f32 / 255.0;
+        let want = (a[i] as f32 * s + b[i] as f32 * (1.0 - s)).round() as u8;
+        if got[i].abs_diff(want) > 1 {
+            wrong.push((
+                i % WINDOW.width as usize,
+                i / WINDOW.width as usize,
+                want,
+                got[i],
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} pixels off by more than 1; first (window x, y, want, got): {:?}",
+        wrong.len(),
+        wrong.first()
+    );
+}

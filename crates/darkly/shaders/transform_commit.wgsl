@@ -49,6 +49,9 @@ struct Uniforms {
     // Format flag: 0.0 = RGBA passthrough, 1.0 = R8 (output the R channel
     // straight; see the fix in fs_main).
     is_r8: f32,
+    // 1.0 for identity or a whole-pixel translation: each destination pixel
+    // centre maps onto a source texel centre, read exactly (see fs_main).
+    pixel_aligned: f32,
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
 @group(0) @binding(3) var t_coverage: texture_2d<f32>;
@@ -84,6 +87,22 @@ fn sample_src(local: vec2f) -> SourceSample {
     );
 }
 
+// The source texel under destination-local `local`, unfiltered, for a
+// pixel-aligned transform. Coverage is read at the same texel, clamped so a
+// 1x1 opaque fallback coverage texture reads its one texel.
+fn load_src(local: vec2f) -> SourceSample {
+    let pre = proj_local(u.inv_row0, u.inv_row1, u.inv_row2, local);
+    let texel = vec2i(floor(pre.xy));
+    if (pre.z < 0.5 || any(texel < vec2i(0)) || any(vec2f(texel) >= u.source_size)) {
+        return SourceSample(vec4f(0.0), 0.0);
+    }
+    let cov_max = vec2i(textureDimensions(t_coverage)) - vec2i(1);
+    return SourceSample(
+        textureLoad(t_source, texel, 0),
+        textureLoad(t_coverage, min(texel, cov_max), 0).r,
+    );
+}
+
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Convert target UV to canvas pixel position via the target's canvas-space
     // origin and size. For paste-extent layers, target_offset != 0.
@@ -96,10 +115,27 @@ fn sample_src(local: vec2f) -> SourceSample {
     // minified / far edge of a perspective warp (both Krita's worker and GIMP
     // supersample). Averaging four premultiplied taps over a rotated grid
     // anti-aliases the warped edge and also softens affine minification.
-    let s0 = sample_src(local + vec2f(-0.375, -0.125));
-    let s1 = sample_src(local + vec2f( 0.125, -0.375));
-    let s2 = sample_src(local + vec2f( 0.375,  0.125));
-    let s3 = sample_src(local + vec2f(-0.125,  0.375));
+    //
+    // A pixel-aligned transform has nothing to anti-alias, and the taps would
+    // only blur neighbouring texels in, so all four read the one texel under
+    // the pixel centre and the averages below collapse to it. Krita likewise
+    // bitBlts identity and translation instead of resampling
+    // (KisPerspectiveTransformWorker::runPartialDst).
+    var s0: SourceSample;
+    var s1: SourceSample;
+    var s2: SourceSample;
+    var s3: SourceSample;
+    if (u.pixel_aligned > 0.5) {
+        s0 = load_src(local);
+        s1 = s0;
+        s2 = s0;
+        s3 = s0;
+    } else {
+        s0 = sample_src(local + vec2f(-0.375, -0.125));
+        s1 = sample_src(local + vec2f( 0.125, -0.375));
+        s2 = sample_src(local + vec2f( 0.375,  0.125));
+        s3 = sample_src(local + vec2f(-0.125,  0.375));
+    }
     let coverage = 0.25 * (s0.coverage + s1.coverage + s2.coverage + s3.coverage);
 
     if (coverage <= 0.0) {

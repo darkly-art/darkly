@@ -159,7 +159,7 @@ impl FloatingContent {
 // TransformPass: GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-commit shader (96 bytes, std140-aligned).
+/// Uniforms for the transform-commit shader (112 bytes, std140-aligned).
 ///
 /// One uniform struct; one shader (commit). The preview is now a derived
 /// view of the target node's texture, rebuilt by running the same commit
@@ -189,6 +189,12 @@ pub struct TransformBlendUniforms {
     /// Format flag (0.0 = RGBA, 1.0 = R8). The shader uses this to pick the
     /// output channel layout; it's a format property, not a mask concept.
     pub is_r8: f32,
+    /// 1.0 when the matrix is identity or a whole-pixel translation
+    /// ([`crate::transform::is_integer_translation`]): every destination pixel
+    /// then maps onto one source texel, which the shader reads exactly instead
+    /// of supersampling.
+    pub pixel_aligned: f32,
+    pub _pad: [f32; 3],
 }
 
 /// GPU resources for an active floating content.
@@ -997,6 +1003,12 @@ impl TransformPass {
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             is_r8,
+            pixel_aligned: if crate::transform::is_integer_translation(matrix) {
+                1.0
+            } else {
+                0.0
+            },
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
     }

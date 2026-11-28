@@ -14,8 +14,8 @@
 
 pub mod mat3;
 pub use mat3::{
-    affine_to_mat3, homography_from_corners, mat3_apply, mat3_inverse, mat3_multiply, Mat3,
-    MAT3_IDENTITY,
+    affine_to_mat3, homography_from_corners, is_integer_translation, mat3_apply, mat3_inverse,
+    mat3_multiply, Mat3, MAT3_IDENTITY,
 };
 
 use crate::coord::{CanvasPoint, CanvasRect};

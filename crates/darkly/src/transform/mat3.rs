@@ -81,6 +81,21 @@ pub fn mat3_inverse(m: &Mat3) -> Option<Mat3> {
     ])
 }
 
+/// Whether `m` moves every pixel centre onto another pixel centre: identity or
+/// a translation by whole pixels, within float noise. Resampling such a
+/// transform can only blur, so samplers read the source texel directly.
+pub fn is_integer_translation(m: &Mat3) -> bool {
+    const EPS: f32 = 1e-4;
+    let near = |v: f32, want: f32| (v - want).abs() < EPS;
+    let linear = [m[0], m[1], m[3], m[4], m[6], m[7], m[8]];
+    linear
+        .iter()
+        .zip([1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+        .all(|(&v, want)| near(v, want))
+        && near(m[2], m[2].round())
+        && near(m[5], m[5].round())
+}
+
 /// Build the homography mapping the source rect `[0, src_w] × [0, src_h]` onto
 /// four destination corners `[TL, TR, BR, BL]` (the source rect's corners at
 /// `(0,0)`, `(w,0)`, `(w,h)`, `(0,h)`).
@@ -192,6 +207,23 @@ mod tests {
         approx_pt(mat3_apply(&m, w, 0.0), 80.0, 0.0);
         approx_pt(mat3_apply(&m, w, h), 100.0, 80.0);
         approx_pt(mat3_apply(&m, 0.0, h), 0.0, 80.0);
+    }
+
+    #[test]
+    fn integer_translation_is_identity_or_whole_pixel_moves() {
+        assert!(is_integer_translation(&MAT3_IDENTITY));
+        assert!(is_integer_translation(&[
+            1.0, 0.0, 3.0, 0.0, 1.0, -7.0, 0.0, 0.0, 1.0
+        ]));
+        assert!(!is_integer_translation(&[
+            1.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0
+        ]));
+        assert!(!is_integer_translation(&[
+            2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0
+        ]));
+        let corners = [(10.0, 5.0), (90.0, -10.0), (110.0, 70.0), (-5.0, 95.0)];
+        let perspective = homography_from_corners(100.0, 80.0, corners).expect("non-degenerate");
+        assert!(!is_integer_translation(&perspective));
     }
 
     #[test]

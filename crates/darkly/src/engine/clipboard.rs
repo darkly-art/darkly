@@ -9,9 +9,10 @@ use crate::clipboard::{
     Clipboard, ClipboardRect, ImageClip, LayerClipboard, MaskClipboard,
     LAYER_CLIPBOARD_SCHEMA_VERSION,
 };
+use crate::document::PixelTransformBoundsPolicy;
 use crate::gpu::blend_mode;
+use crate::gpu::layer_readback::{self, LayerReadbackExtent};
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
 use crate::undo::GpuRegionAction;
 
@@ -50,26 +51,30 @@ impl DarklyEngine {
         self.pending_copy_result.take()
     }
 
-    /// Start a GPU readback for copy (or cut).
+    /// Start the readback for copy (or cut).
     ///
-    /// When a selection is active, masking is done entirely on GPU:
-    /// 1. Copy the layer region to a staging texture
-    /// 2. Multiply staging by the cropped selection mask (`layer * sel`)
-    /// 3. Async readback the staging texture (pre-masked pixels for clipboard)
-    /// 4. If cut: erase selected pixels on the layer (`layer *= (1 - sel)`)
+    /// The clip is the node's content over the copied region (the selection's
+    /// bounds, or the window), built on the CPU by
+    /// [`LayerReadbackExtent::clip_rgba`] once the readback lands, with the
+    /// selection scaling its coverage. A node whose transform extraction spans
+    /// its whole document extent (a mask, whose white past its texture is
+    /// content) carries the whole region; any other node carries only what its
+    /// texture holds.
     ///
-    /// Both extraction and erase use GPU float math on the same selection
-    /// texture, guaranteeing `extracted + remaining == original`.
+    /// A cut erases the node in the same submit, after the read: through the
+    /// selection (`node.a *= 1 - sel`) with a whole-node undo snapshot, or the
+    /// whole node without one.
     pub(crate) fn start_copy_readback(&mut self, layer_id: LayerId, is_cut: bool) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
+        let canvas_origin = self.doc.canvas_origin;
 
-        // Determine format from the unified node-texture pool: both raster
-        // (RGBA8) and mask filter (R8) targets resolve through the same
-        // call. Caller's id alone selects the surface; format follows.
-        let format = match self.compositor.node_texture(layer_id) {
-            Some(t) => t.format(),
-            None => return,
+        let Some((node_extent, format)) = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| (t.canvas_extent(), t.format()))
+        else {
+            return;
         };
 
         // Compute copy region from selection bounds (or full canvas).
@@ -81,36 +86,36 @@ impl DarklyEngine {
                 return;
             }
         };
-        let [_, _, rw, rh] = region;
+        let [rx, ry, rw, rh] = region;
         if rw == 0 || rh == 0 {
             return;
         }
-
-        if self.has_selection() {
-            self.copy_with_selection(layer_id, region, is_cut, format);
+        let region_plane = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
+            .to_canvas(canvas_origin);
+        let carries_uncovered = self
+            .doc
+            .pixel_transform_semantics(layer_id)
+            .is_some_and(|s| s.bounds_policy == PixelTransformBoundsPolicy::DocumentExtent);
+        let clip = if carries_uncovered {
+            region_plane
         } else {
-            self.copy_without_selection(layer_id, region, is_cut, format);
-        }
-    }
+            match node_extent.intersect(region_plane) {
+                Some(r) => r,
+                None => return,
+            }
+        };
+        let clip_window = clip.to_window(canvas_origin);
+        // `copy` and `cut` wait for the selection's CPU cache, so with a
+        // selection active this is always `Some`.
+        let selection = self.cropped_selection_pixels(
+            (clip_window.x0(), clip_window.y0()),
+            clip.width,
+            clip.height,
+        );
+        let erase_selection = is_cut && selection.is_some();
 
-    /// Copy/cut path when a selection is active: mask the layer region by the
-    /// selection entirely on GPU, then async-read the pre-masked staging
-    /// texture. On cut, the same selection texture erases the layer in place,
-    /// guaranteeing `extracted + remaining == original`.
-    fn copy_with_selection(
-        &mut self,
-        layer_id: LayerId,
-        region: [u32; 4],
-        is_cut: bool,
-        format: wgpu::TextureFormat,
-    ) {
-        let [rx, ry, rw, rh] = region;
-        // The copy `region` is window-local; layer reads operate in plane space,
-        // so they lift it by `canvas_origin` (identity for an un-cropped doc).
-        let canvas_origin = self.doc.canvas_origin;
-
-        // Save the whole node for the cut's undo before any modification.
-        let cut_snapshot = if is_cut {
+        // Save the whole node for the selection cut's undo before any modification.
+        let cut_snapshot = if erase_selection {
             self.compositor
                 .node_texture(layer_id)
                 .map(|t| t.canvas_frame())
@@ -129,128 +134,48 @@ impl DarklyEngine {
             None
         };
 
-        let (staging_tex, staging_view) = crate::gpu::create_texture_with_view(
-            &self.gpu.device,
-            rw,
-            rh,
-            format,
-            "copy-staging",
-            wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-        );
-
-        // Crop the live selection to the copy region (nearest, pixel-exact).
-        let region_window = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh);
-        let sel_crop_bg = self
-            .selection_region_bind_group(region_window, wgpu::FilterMode::Nearest)
-            .expect("has_selection true → selection_state allocated");
-
-        // Get texture references before entering the encode closure.
-        let layer_node = self.compositor.node_texture(layer_id).unwrap();
-        let layer_tex = layer_node.texture();
-        // The selection region in PLANE space, and the portion of it the layer
-        // texture actually holds, translated to layer-local texels. The layer is
-        // plane-anchored at its own extent (which need not be the canvas
-        // window), so the copy source must come through `canvas_to_layer_rect`,
-        // not the raw window-local `(rx, ry)`.
-        let region_plane = region_window.to_canvas(canvas_origin);
-        let layer_copy = layer_node
-            .canvas_extent()
-            .intersect(region_plane)
-            .and_then(|ov| layer_node.canvas_to_layer_rect(ov).map(|lr| (ov, lr)));
-
-        let sel_paint_bg = self
+        let target = self
             .compositor
-            .selection_state()
-            .expect("has_selection true → selection_state allocated")
-            .selection_bind_group();
-
+            .node_texture(layer_id)
+            .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
+            .expect("node texture checked above");
         let mut encoder = crate::gpu::paint_target::PaintCommandEncoder::new(
             &self.gpu.device,
             &self.gpu.queue,
             &self.paint_pipelines,
-            "copy-gpu-extract",
-            if is_cut { 2 } else { 1 },
+            "copy",
+            1,
         );
-        encoder.with_raw(|raw| {
-            // 1. Copy the layer's covered portion of the selected region into
-            //    the staging texture. Clear first so any part of the region the
-            //    layer does NOT cover stays transparent (else the masked
-            //    multiply below would scale uninitialized texels).
-            crate::gpu::clear_view_transparent(raw, &staging_view, "copy-staging-clear");
-            if let Some((ov, lr)) = layer_copy {
-                // Staging is indexed by the selection region, so the destination
-                // is the overlap's offset within it.
-                crate::gpu::blit_region(
-                    raw,
-                    layer_tex,
-                    (lr.x0(), lr.y0()),
-                    &staging_tex,
-                    (
-                        (ov.x0() - region_plane.x0()) as u32,
-                        (ov.y0() - region_plane.y0()) as u32,
-                    ),
-                    ov.width,
-                    ov.height,
-                );
-            }
+        let (request, extent) = encoder.with_raw(|raw| {
+            layer_readback::request_layer_region_readback(&self.gpu.device, raw, &target, clip)
         });
-
-        // 2. Multiply staging alpha by cropped selection: staging.a *= sel.
-        //    RGB stays unchanged: straight-alpha convention (see
-        //    docs/lessons-learned/compositing-lessons-learned.md §1).
-        let staging_target = GpuPaintTarget::from_canvas_texture(
-            &staging_tex,
-            &staging_view,
-            format,
-            crate::coord::CanvasRect::from_xywh(0, 0, rw, rh),
-        );
-        staging_target.multiply_alpha_by_mask(
-            &mut encoder,
-            &self.paint_pipelines,
-            &self.gpu.queue,
-            &sel_crop_bg,
-        );
-
-        // 3. If cut: reduce layer alpha by selection on selected pixels.
-        //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
-        if is_cut {
-            let layer_target = self
-                .compositor
-                .node_texture(layer_id)
-                .map(|t| GpuPaintTarget::from_node(t, self.doc.canvas_rect()))
-                .expect("node texture missing for cut target");
-            layer_target.multiply_alpha_by_inverse_mask(
+        if erase_selection {
+            target.multiply_alpha_by_inverse_mask(
                 &mut encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                sel_paint_bg,
+                self.compositor
+                    .selection_state()
+                    .expect("has_selection true → selection_state allocated")
+                    .selection_bind_group(),
             );
         }
+        if let Some(request) = request {
+            self.readbacks.submit(
+                request,
+                ReadbackContext::Copy {
+                    region: clip,
+                    extent,
+                    selection,
+                },
+            );
+            encoder.submit();
+        } else {
+            // The texture does not reach the clip: it is all uncovered value.
+            encoder.submit();
+            self.complete_copy(clip, extent, selection, Vec::new());
+        }
 
-        // 4. Kick async readback of the masked staging texture.
-        let request = encoder.with_raw(|raw| {
-            readback::request_readback(
-                &self.gpu.device,
-                raw,
-                &staging_tex,
-                format,
-                crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
-            )
-        });
-        self.readbacks.submit(
-            request,
-            ReadbackContext::Copy {
-                node_id: layer_id,
-                region,
-                is_cut,
-            },
-        );
-        encoder.submit();
-
-        // Commit undo for cut.
         if let Some(snap) = cut_snapshot {
             let entry = commit_undo_region(
                 &self.gpu,
@@ -262,58 +187,7 @@ impl DarklyEngine {
             );
             self.push_undo(Box::new(GpuRegionAction::new(entry)));
             self.compositor.mark_node_pixels_dirty(layer_id);
-        }
-    }
-
-    /// Copy/cut path with no selection: read the layer's covered portion of the
-    /// requested region straight back, no masking. On cut, clear the whole
-    /// layer (which handles its own undo).
-    fn copy_without_selection(
-        &mut self,
-        layer_id: LayerId,
-        region: [u32; 4],
-        is_cut: bool,
-        format: wgpu::TextureFormat,
-    ) {
-        let [rx, ry, rw, rh] = region;
-        // `region` is the canvas window in window-local coords; lift it to plane
-        // (`+ canvas_origin`), then translate to the layer texture's own texel
-        // frame (it may sit at a non-zero plane offset). Only the part the
-        // texture holds is read, and the clip is labelled with that part, not
-        // the request. Layers disjoint from the requested region yield nothing.
-        let canvas_origin = self.doc.canvas_origin;
-        let (texture, layer_rect, read) = {
-            let layer_tex = self
-                .compositor
-                .node_texture(layer_id)
-                .expect("node texture missing for copy");
-            let region_plane = crate::coord::WindowRect::from_xywh(rx as i32, ry as i32, rw, rh)
-                .to_canvas(canvas_origin);
-            match layer_tex.canvas_to_layer_rect(region_plane) {
-                Some(lr) => (
-                    layer_tex.texture(),
-                    lr,
-                    layer_tex.layer_to_canvas_rect(lr).to_window(canvas_origin),
-                ),
-                None => return,
-            }
-        };
-        let region = [read.x0() as u32, read.y0() as u32, read.width, read.height];
-
-        self.gpu.encode("copy-readback", |encoder| {
-            let request =
-                readback::request_readback(&self.gpu.device, encoder, texture, format, layer_rect);
-            self.readbacks.submit(
-                request,
-                ReadbackContext::Copy {
-                    node_id: layer_id,
-                    region,
-                    is_cut,
-                },
-            );
-        });
-
-        if is_cut {
+        } else if is_cut && !erase_selection {
             // gpu_clear_layer handles its own undo save/commit.
             self.gpu_clear_layer(layer_id);
         }
@@ -348,48 +222,19 @@ impl DarklyEngine {
         }
     }
 
-    /// Complete a pending copy once GPU readback data is available.
-    /// Pixels arrive pre-masked from the GPU staging texture (when selection
-    /// was active) or raw from the layer (when no selection).
+    /// Complete a pending copy once its readback is available: project the
+    /// node's texels into the clip over the plane rect `region`, which is also
+    /// the clip's plane position (paste in place lands it there).
     pub(crate) fn complete_copy(
         &mut self,
-        node_id: LayerId,
-        region: [u32; 4],
-        is_cut: bool,
+        region: crate::coord::CanvasRect,
+        extent: LayerReadbackExtent,
+        selection: Option<Vec<u8>>,
         pixels: Vec<u8>,
     ) {
-        let [rx, ry, rw, rh] = region;
-
-        // Build RGBA bytes from the readback data; format dispatch is now
-        // driven by the source node's texture format, not a sidecar boolean.
-        let is_r8 = self
-            .compositor
-            .node_texture(node_id)
-            .map(|t| t.format() == wgpu::TextureFormat::R8Unorm)
-            .unwrap_or(false);
-        let rgba = if is_r8 {
-            // R8 readback → convert to grayscale RGBA: [v, v, v, 255]
-            let mut rgba = vec![0u8; (rw * rh * 4) as usize];
-            for i in 0..(rw * rh) as usize {
-                let v = pixels[i];
-                if v > 0 {
-                    rgba[i * 4] = v;
-                    rgba[i * 4 + 1] = v;
-                    rgba[i * 4 + 2] = v;
-                    rgba[i * 4 + 3] = 255;
-                }
-            }
-            rgba
-        } else {
-            // RGBA readback, already masked by GPU if selection was active.
-            pixels
-        };
-
-        // `region`'s `(rx, ry)` is window-local; the clipboard offset is a plane
-        // position (paste-in-place re-creates the layer at `from_xywh(offset, …)`
-        // in plane space), so lift it by `canvas_origin`.
-        let o = self.doc.canvas_origin;
-        let clip = ImageClip::from_rgba(rw, rh, rgba, rx as i32 + o.x, ry as i32 + o.y);
+        let rgba = extent.clip_rgba(&pixels, region, selection.as_deref());
+        let clip =
+            ImageClip::from_rgba(region.width, region.height, rgba, region.x0(), region.y0());
         let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
         self.pending_copy_result = Some(ClipboardExport {
             rgba: export_rgba.to_vec(),
@@ -436,8 +281,6 @@ impl DarklyEngine {
         } else {
             self.clipboard = Some(Clipboard::ImageData(clip));
         }
-
-        let _ = is_cut;
     }
 
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
