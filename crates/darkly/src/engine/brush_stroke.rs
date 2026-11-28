@@ -304,8 +304,9 @@ impl DarklyEngine {
         let settle = (settle_ms > 0.0)
             .then(|| crate::brush::pressure_settle::PressureSettle::new(settle_ms / 1000.0));
         // What counts as a move is measured on screen too.
-        let divergence =
-            crate::brush::stroke_engine::DivergenceTolerance::at_scale(conditions.canvas_per_css_px);
+        let divergence = crate::brush::stroke_engine::DivergenceTolerance::at_scale(
+            conditions.canvas_per_css_px,
+        );
         #[cfg(any(test, feature = "testing"))]
         let divergence = if self.test_exact_divergence {
             crate::brush::stroke_engine::DivergenceTolerance::EXACT

@@ -430,8 +430,7 @@ impl StrokeEngine {
         let events = &self.record.events;
         match self.settle {
             Some(settle)
-                if self.pen_is_up != self.pen_up_fed
-                    || !settle.start_settled(&events[..fed]) =>
+                if self.pen_is_up != self.pen_up_fed || !settle.start_settled(&events[..fed]) =>
             {
                 let mut was = events[..fed].to_vec();
                 settle.apply(&mut was, self.pen_up_fed);
@@ -505,11 +504,7 @@ impl StrokeEngine {
     /// stroke.
     fn settle_floor(&self, settle: &PressureSettle) -> usize {
         let fed = &self.record.events[..self.stabilized_events];
-        let Some(passed) = settle
-            .final_before(fed)
-            .checked_sub(1)
-            .map(|k| fed[k].time)
-        else {
+        let Some(passed) = settle.final_before(fed).checked_sub(1).map(|k| fed[k].time) else {
             return 0;
         };
         self.stabilizer

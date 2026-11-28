@@ -191,7 +191,13 @@ mod tests {
     #[test]
     fn the_boundaries_keep_their_readings() {
         let drawn: Vec<PaintInformation> = (0..100)
-            .map(|i| sample(i as f32, (i as f32 / 20.0).min(1.0) * 0.5 + 0.1, i as f32 * DT))
+            .map(|i| {
+                sample(
+                    i as f32,
+                    (i as f32 / 20.0).min(1.0) * 0.5 + 0.1,
+                    i as f32 * DT,
+                )
+            })
             .collect();
         let s = SETTLE.start_boundary(&drawn).unwrap();
         let e = SETTLE.end_boundary(&drawn);
@@ -263,9 +269,15 @@ mod tests {
             assert!(from >= previous, "{len} samples: {from} after {previous}");
             previous = from;
             let down = settled(raws, false);
-            for later in [settled(raws, true), settled(&drawn[..(len + 5).min(300)], false)] {
+            for later in [
+                settled(raws, true),
+                settled(&drawn[..(len + 5).min(300)], false),
+            ] {
                 if let Some(first) = later.iter().zip(&down).position(|(a, b)| a != b) {
-                    assert!(from <= first, "{len} samples: final before {from}, rewritten {first}");
+                    assert!(
+                        from <= first,
+                        "{len} samples: final before {from}, rewritten {first}"
+                    );
                 }
             }
         }

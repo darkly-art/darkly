@@ -413,8 +413,8 @@ pub struct StabilizerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brush::stroke_engine::{DivergenceDiff, DivergenceTolerance, DIVERGENCE_EPSILON};
     use crate::brush::pressure_settle::PressureSettle;
+    use crate::brush::stroke_engine::{DivergenceDiff, DivergenceTolerance, DIVERGENCE_EPSILON};
 
     #[test]
     fn pass_through_identity() {

@@ -219,7 +219,8 @@ fn a_slow_let_up_keeps_the_comet_head() {
             let reference = paint_unsettled(stabilize, &comet(n, Lift::Held));
             // Just behind where the let-up starts.
             let head = x_at(n - 1) - 10.0;
-            let (height, reference_height) = (height_at(&let_up, head), height_at(&reference, head));
+            let (height, reference_height) =
+                (height_at(&let_up, head), height_at(&reference, head));
             assert_same(&what, "let up", let_up, "held", held);
             assert_eq!(
                 height, reference_height,
@@ -377,6 +378,9 @@ fn an_unstabilized_stroke_rewinds_only_for_its_ends() {
         "the stroke rewound after its start settled"
     );
     engine.end_stroke();
-    assert!(engine.test_stroke_rewinds() > settled, "the pen-up never rewound");
+    assert!(
+        engine.test_stroke_rewinds() > settled,
+        "the pen-up never rewound"
+    );
     assert_eq!(engine.test_stroke_full_rerender_events(), 0);
 }

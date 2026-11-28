@@ -1079,7 +1079,10 @@ impl DarklyEngine {
                 }
                 // Read before the save points are cleared: the slots now
                 // hold the baseline outside every dab discarded.
-                let discarded = engine.save_points.full_bbox().unwrap_or(CanvasRect::empty());
+                let discarded = engine
+                    .save_points
+                    .full_bbox()
+                    .unwrap_or(CanvasRect::empty());
                 {
                     let mut gpu_ctx = setup.ctx(stroke_buffer, "brush-begin-stroke-rewind");
                     engine.begin_stroke(&mut gpu_ctx, None);
